@@ -18,23 +18,23 @@ module.exports = {
           fields: [{
             inline: true,
             name: 'Open Source',
-            value: 'See https://github.com/curtisf/logger for current code.'
+            value: 'See https://github.com/tizzysaurus/logger for current code.'
           }, {
             inline: true,
             name: 'Dashboard',
-            value: 'Accessible at [https://logger.bot](https://logger.bot)'
+            value: 'There are currently no plans for a dashboard, as I don\'t have a website to host it on.'
           }, {
             inline: false,
             name: 'Privacy Policy',
-            value: 'You can view the privacy policy [here](https://gist.github.com/curtisf/0598b0930c11363d24e29300cf21d572). If you want updates when it changes, join my support server and follow the #privacy-policy channel.'
+            value: 'Please contact \`@tizzysaurus\` for privacy information'
           }, {
             inline: true,
             name: 'Support',
-            value: 'See `/help event: eventname` for any event you want further clarification on. If something is going terribly wrong, go ahead and join [my support server](https://discord.gg/ed7Gaa3)'
+            value: 'See `/help event: eventname` for any event you want further clarification on. If something is going terribly wrong, please contact \`@tizzysaurus\`'
           }, {
             inline: false,
-            name: 'Patreon',
-            value: 'If you like me and want to support my owner (or want patron bot features), check out [my Patreon page](https://patreon.com/logger).\nSome patron features include: image logging, see who deletes messages, ignore users, prettified archive & bulk delete logs, archive up to 10,000 messages, and messages are cached for a week instead of two days.'
+            name: 'Donations',
+            value: 'If you like me and want to support my owner, you can contact \`@tizzysaurus\`).'
           }],
           footer: getEmbedFooter(global.bot.user)
         }],
@@ -45,7 +45,7 @@ module.exports = {
         embeds: [{
           title: 'Usage Guide',
           color: EMBED_COLORS.PURPLED_BLUE,
-          description: `**__How does ${global.bot.user.username} work for me?__**\nMost actions on Discord (ban, message edit, member join, etc) are available to be set individually or as a preset to any channel you choose and have \`Manage Webhook\` permissions in.\n\n**__To setup logging__**\nUse \`/setup\` in the text channel you want to have the selected events log to. Select \`via_presets\` (set many events at once - joinlog, messages, ...) or \`via_individual_event\` (configure logging individually). Once all the desired presets or events you want to log to the current channel are selected, close the selection box and the bot will start logging your selection of events. If you want more information about an event, select it using \`/help event\`\n\n*Is something not working?* See the requirements below to ensure success in configuring ${global.bot.user.username}. If you need additional help, join [my support server](https://discord.gg/ed7Gaa3).`,
+          description: `**__How does ${global.bot.user.username} work for me?__**\nMost actions on Discord (ban, message edit, member join, etc) are available to be set individually or as a preset to any channel you choose and have \`Manage Webhook\` permissions in.\n\n**__To setup logging__**\nUse \`/setup\` in the text channel you want to have the selected events log to. Select \`via_presets\` (set many events at once - joinlog, messages, ...) or \`via_individual_event\` (configure logging individually). Once all the desired presets or events you want to log to the current channel are selected, close the selection box and the bot will start logging your selection of events. If you want more information about an event, select it using \`/help event\`\n\n*Is something not working?* See the requirements below to ensure success in configuring ${global.bot.user.username}. If you need additional help, please contact \`@tizzysaurus\``,
           fields: [{
             inline: true,
             name: '__Permissions: Logging member joins__',
@@ -53,7 +53,7 @@ module.exports = {
           }, {
             inline: true,
             name: '__Time: Message logging__',
-            value: `${global.bot.user.username} cannot log messages upon deletion that it didn't see created first. Additionally, messages are kept for two days (see [privacy policy](https://gist.github.com/curtisf/0598b0930c11363d24e29300cf21d572)), so messages older than two days old will not be logged upon deletion.`
+            value: `${global.bot.user.username} cannot log messages upon deletion that it didn't see created first. Additionally, messages are kept for ${process.env.MESSAGE_HISTORY_DAYS} days, so messages older than that will not be logged upon deletion.`
           }],
           footer: getEmbedFooter(global.bot.user),
           author: getAuthorField(interaction.member.user),
@@ -74,7 +74,7 @@ module.exports = {
           color: EMBED_COLORS.PURPLED_BLUE,
           footer: getEmbedFooter(global.bot.user),
           author: getAuthorField(interaction.member.user),
-          description: `__**Description**__\n${EVENT_HELP[eventName]}\n\n*Not what you're looking for? Join the [support server](https://discord.gg/ed7Gaa3)*.`
+          description: `__**Description**__\n${EVENT_HELP[eventName]}\n\n*Not what you're looking for? Contact \`@tizzysaurus\`*.`
         }],
         flags: Eris.Constants.MessageFlags.EPHEMERAL
       })
