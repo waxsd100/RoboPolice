@@ -2,6 +2,7 @@ const sa = require('superagent')
 
 module.exports = {
   func: async (message, suffix) => {
+    if (!process.env.PASTE_CREATE_ENDPOINT) return message.channel.createMessage('The bot owner hasn\'t yet configured the paste site, so this command is unavailable.')
     if (!suffix || isNaN(suffix)) return message.channel.createMessage('That isn\'t a valid suffix! Please provide any number between 5 and 1000 (10,000 if Patreon).')
     const num = parseInt(suffix)
     if (num < 5 || num > 1000) return message.channel.createMessage('That number is invalid! Please provide any number between 5 and 1000 (10,000 if Patreon)')

@@ -7,6 +7,18 @@ module.exports = {
   botPerms: ['readMessageHistory'],
   userPerms: ['readMessageHistory', 'manageMessages'],
   func: async interaction => {
+    if (!process.env.PASTE_CREATE_ENDPOINT) return interaction.createMessage({
+      embeds: [{
+        title: 'Unsuccessful',
+        description: 'The bot owner hasn\'t yet configured the paste site, so this command is unavailable.',
+        thumbnail: {
+          url: interaction.member.user.dynamicAvatarURL(null, 64)
+        },
+        color: EMBED_COLORS.RED,
+        footer: getEmbedFooter(global.bot.user),
+        author: getAuthorField(interaction.member.user)
+      }]
+    }).catch(() => {})
     if (!interaction.data.options || !interaction.data.options[0] || interaction.data.options[0].value > 1000 || interaction.data.options[0].value < 5) {
       interaction.createMessage({
         embeds: [{
