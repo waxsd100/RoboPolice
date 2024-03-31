@@ -75,7 +75,7 @@ module.exports = {
             }, {
               inline: false,
               name: 'Donations',
-              value: 'If you like me and want to support my owner, you can contact \`@tizzysaurus\`).'
+              value: 'If you like me and want to support my owner, you can contact \`@tizzysaurus\`.'
             }],
           }]
         })
