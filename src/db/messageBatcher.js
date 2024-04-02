@@ -4,6 +4,7 @@ const pool = require('./clients/postgres')
 const aes = require('./aes')
 const BATCH_SIZE = process.env.MESSAGE_BATCH_SIZE || 1000
 const batch = []
+global.timesSubmitted = 0
 
 async function addItem (messageAsArray) {
   batch.push(messageAsArray)
@@ -17,7 +18,8 @@ async function submitBatch () {
   const poolClient = await pool.getPostgresClient()
   await poolClient.query(format('INSERT INTO messages (id, author_id, content, attachment_b64, ts) VALUES %L ON CONFLICT DO NOTHING', toSubmit))
   poolClient.release()
-  global.logger.info(`Submitted batch of ${toSubmit.length} messages.`);
+  global.timesSubmitted += 1
+  global.logger.info(`Submitted ${toSubmit.length} messages within batch #${global.timesSubmitted}.`);
   return toSubmit.length
 }
 
