@@ -71,7 +71,7 @@ module.exports = {
             }, {
               inline: true,
               name: 'Support',
-              value: `See \`/help event: eventname\` for any event you want further clarification on. If something is going terribly wrong, go ahead and join [my support server](${process.env.DISCORD_SUPPORT_SERVER})\``
+              value: `See \`/help event: eventname\` for any event you want further clarification on. If something is going terribly wrong, go ahead and join [my support server](${process.env.DISCORD_SUPPORT_SERVER})`
             }, {
               inline: false,
               name: 'Donations',
