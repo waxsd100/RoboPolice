@@ -34,7 +34,8 @@ function getMessage (messageID) {
     id: message[0],
     author_id: message[1],
     content: aes.decrypt(message[2]),
-    attachment_b64: message[3] ? aes.decrypt(message[3]) : '',
+    // Note that we can use '|' as a separator since base64url encoded strings (the output of aes.decrypt) cannot contain the '|' character.
+    attachment_b64: message[3] ? message[3].split("|").map(encrypted_img_url => aes.decrypt(encrypted_img_url)).join("|") : '',
     ts: Date.parse(message[4])
   }
 }

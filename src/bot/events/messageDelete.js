@@ -66,7 +66,14 @@ module.exports = {
     })
 
     if (cachedMessage.attachment_b64) {
-      messageDeleteEvent.embeds[0].image = {url: Buffer.from(cachedMessage.attachment_b64, "base64url").toString("utf-8")}
+      attachment_b64urls = cachedMessage.attachment_b64.split("|")
+      attachment_b64urls.forEach(
+        (base64url, indx) => messageDeleteEvent.embeds[indx] = {
+          ...messageDeleteEvent.embeds[indx],
+          image: { url: Buffer.from(base64url, "base64url").toString("utf-8") },
+          url: "https://example.com"
+        }
+      )
     }
     await send(messageDeleteEvent)
   }

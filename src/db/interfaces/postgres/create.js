@@ -45,11 +45,19 @@ async function cacheMessage (message) {
   } else {
     message.content = aes.encrypt(escape(message.content.replace(/~/g, '\\~'), ['angle brackets']))
   }
-  // Encrypt Attachments
-  if (message.attachments.length === 0 || !message.attachments[0].content_type.startsWith("image"))
+  // Encrypt Images (max 10)
+  let images = message.attachments.filter(attachment => attachment.content_type.startsWith("image"))
+  if (images.length === 0)
     message.attachment_b64 = ""
-  else
-    message.attachment_b64 = aes.encrypt(Buffer.from(message.attachments[0].url).toString("base64url"))
+  else if (images.length > 10) {
+    // Discord only allows 10 embeds per message, and since we send 1 image per embed we can't have more than 10 images.
+    // Rather than just sending the first 10, we check to see if there's any duplicates, and if so, remove them.
+    const uniqueImages = Array.from(new Set(images.map(image => image.url))).map(url => images.find(image => image.url === url))
+    images = uniqueImages.slice(0, 10);
+  }
+  // Note that we can use '|' as a separator since base64 encoded strings (the output of aes.encrypt) cannot contain the '|' character.
+  message.attachment_b64 = images.map(attachment => aes.encrypt(Buffer.from(attachment.url).toString("base64url"))).join("|")
+
   batchHandler.addItem([message.id, message.author.id, message.content, message.attachment_b64, new Date().toISOString()])
 }
 
