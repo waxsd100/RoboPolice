@@ -30,7 +30,7 @@ module.exports = {
           }, {
             inline: true,
             name: 'Support',
-            value: `See \`/help event: eventname\` for any event you want further clarification on. If something is going terribly wrong, please contact \`@${process.env.BOT_CREATOR_NAME}\``
+            value: `See \`/help event: eventname\` for any event you want further clarification on. If something is going terribly wrong, go ahead and join [my support server](${process.env.DISCORD_SUPPORT_SERVER})\``
           }, {
             inline: false,
             name: 'Donations',
@@ -74,7 +74,7 @@ module.exports = {
           color: EMBED_COLORS.PURPLED_BLUE,
           footer: getEmbedFooter(global.bot.user),
           author: getAuthorField(interaction.member.user),
-          description: `__**Description**__\n${EVENT_HELP[eventName]}\n\n*Not what you're looking for? Contact \`@${process.env.BOT_CREATOR_NAME}\`*.`
+          description: `__**Description**__\n${EVENT_HELP[eventName]}\n\n*Not what you're looking for? Join [my support server](${process.env.DISCORD_SUPPORT_SERVER})*.`
         }],
         flags: Eris.Constants.MessageFlags.EPHEMERAL
       })
