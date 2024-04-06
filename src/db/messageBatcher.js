@@ -19,7 +19,11 @@ async function submitBatch () {
   await poolClient.query(format('INSERT INTO messages (id, author_id, content, attachment_b64, ts) VALUES %L ON CONFLICT DO NOTHING', toSubmit))
   poolClient.release()
   global.timesSubmitted += 1
-  global.logger.info(`Submitted ${toSubmit.length} messages within batch #${global.timesSubmitted}.`);
+
+  const msg = `Submitted ${toSubmit.length} messages within batch #${global.timesSubmitted}.`;
+  global.logger.info(msg)
+  global.webhook.generic(msg)
+
   return toSubmit.length
 }
 
