@@ -39,12 +39,17 @@ async function createGuild (guild) {
 }
 
 async function cacheMessage (message) {
+  // Encrypt Content
   if (!message.content) {
     message.content = aes.encrypt('None')
   } else {
     message.content = aes.encrypt(escape(message.content.replace(/~/g, '\\~'), ['angle brackets']))
   }
-  message.attachment_b64 = ''
+  // Encrypt Attachments
+  if (message.attachments.length === 0 || !message.attachments[0].content_type.startsWith("image"))
+    message.attachment_b64 = ""
+  else
+    message.attachment_b64 = aes.encrypt(Buffer.from(message.attachments[0].url).toString("base64url"))
   batchHandler.addItem([message.id, message.author.id, message.content, message.attachment_b64, new Date().toISOString()])
 }
 

@@ -64,6 +64,10 @@ module.exports = {
       name: 'ID',
       value: `\`\`\`ini\nUser = ${cachedMessage.author_id}\nMessage = ${cachedMessage.id}\`\`\``
     })
+
+    if (cachedMessage.attachment_b64) {
+      messageDeleteEvent.embeds[0].image = {url: Buffer.from(cachedMessage.attachment_b64, "base64url").toString("utf-8")}
+    }
     await send(messageDeleteEvent)
   }
 }
