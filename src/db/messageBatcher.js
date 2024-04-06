@@ -20,7 +20,7 @@ async function submitBatch () {
   poolClient.release()
   global.timesSubmitted += 1
 
-  const msg = `Submitted ${toSubmit.length} messages within batch #${global.timesSubmitted}.`;
+  const msg = `Submitted ${toSubmit.length} messages within batch #${global.timesSubmitted} (approx. ${toSubmit.length * global.timesSubmitted} total).`;
   global.logger.info(msg)
   global.webhook.generic(msg)
 
