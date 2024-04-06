@@ -45,7 +45,7 @@ module.exports = {
         // handles large message nitro editing and helps make huge message edits look nicer.
         messageUpdateEvent.embeds[0].fields.splice(1) // nuke all fields but essential message info
         secondMessageUpdatePayload = JSON.parse(JSON.stringify(messageUpdateEvent)) // deep copy initial payload
-        messageUpdateEvent.embeds[0].description += `\n\n**__Now__**:\n${escape(newMessage.content.replace(/~/g, '\\~') || "None", ['angle brackets']).replace(/\"/g, '"').replace(/`/g, '')}`
+        messageUpdateEvent.embeds[0].description += `\n\n**__Now__**:\n${escape(newMessage.content.replace(/~/g, '\\~'), ['angle brackets']).replace(/\"/g, '"').replace(/`/g, '') || "None"}`
         messageUpdateEvent.embeds[0].fields = []
         delete secondMessageUpdatePayload.embeds[0].author
         secondMessageUpdatePayload.embeds[0].description = `**__Previously__**:\n${oldMessage.content}`
@@ -56,7 +56,7 @@ module.exports = {
         messageUpdateEvent.noFooter = true
       } else {
         let nowChunks, beforeChunks
-        const escapedNewContents = escape(newMessage.content.replace(/~/g, '\\~'), ['angle brackets']).replace(/\"/g, '"').replace(/`/g, '')
+        const escapedNewContents = escape(newMessage.content.replace(/~/g, '\\~'), ['angle brackets']).replace(/\"/g, '"').replace(/`/g, '') || "None"
         if (escapedNewContents.length > 1000) {
           nowChunks = chunkify(escapedNewContents)
         } else {
