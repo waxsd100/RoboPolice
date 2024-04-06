@@ -67,15 +67,15 @@ module.exports = {
             }, {
               inline: false,
               name: 'Privacy Policy',
-              value: 'Please contact \`@tizzysaurus\` for privacy information'
+              value: `Please contact \`@${process.env.BOT_CREATOR_NAME}\` for privacy information`
             }, {
               inline: true,
               name: 'Support',
-              value: 'See `/help event: eventname` for any event you want further clarification on. If something is going terribly wrong, please contact \`@tizzysaurus\`'
+              value: `See \`/help event: eventname\` for any event you want further clarification on. If something is going terribly wrong, please contact \`@${process.env.BOT_CREATOR_NAME}\``
             }, {
               inline: false,
               name: 'Donations',
-              value: 'If you like me and want to support my owner, you can contact \`@tizzysaurus\`.'
+              value: `If you like me and want to support my owner, you can contact \`@${process.env.BOT_CREATOR_NAME}\`.`
             }],
           }]
         })

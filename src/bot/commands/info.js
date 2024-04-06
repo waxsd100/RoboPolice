@@ -24,7 +24,7 @@ module.exports = {
           },
           {
             name: 'The Author',
-            value: 'TizyLog is a fork of [Logger](https://github.com/curtisf/logger), developed and maintained by \`@tizzysaurus\`.'
+            value: `${global.bot.user.username} is a fork of [Logger](https://github.com/curtisf/logger), developed and maintained by \`@${process.env.BOT_CREATOR_NAME}\`.`
           },
           {
             name: 'Shard Info',
@@ -32,7 +32,7 @@ module.exports = {
           },
           {
             name: 'Privacy Policy',
-            value: 'For up-to-date privacy information, please contact \`@tizzysaurus\`.'
+            value: `For up-to-date privacy information, please contact \`@${process.env.BOT_CREATOR_NAME}\`.`
           }
         ]
       }]

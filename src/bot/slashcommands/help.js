@@ -26,15 +26,15 @@ module.exports = {
           }, {
             inline: false,
             name: 'Privacy Policy',
-            value: 'Please contact \`@tizzysaurus\` for privacy information'
+            value: `Please contact \`@${process.env.BOT_CREATOR_NAME}\` for privacy information`
           }, {
             inline: true,
             name: 'Support',
-            value: 'See `/help event: eventname` for any event you want further clarification on. If something is going terribly wrong, please contact \`@tizzysaurus\`'
+            value: `See \`/help event: eventname\` for any event you want further clarification on. If something is going terribly wrong, please contact \`@${process.env.BOT_CREATOR_NAME}\``
           }, {
             inline: false,
             name: 'Donations',
-            value: 'If you like me and want to support my owner, you can contact \`@tizzysaurus\`.'
+            value: `If you like me and want to support my owner, you can contact \`@${process.env.BOT_CREATOR_NAME}\`.`
           }],
           footer: getEmbedFooter(global.bot.user)
         }],
@@ -45,7 +45,7 @@ module.exports = {
         embeds: [{
           title: 'Usage Guide',
           color: EMBED_COLORS.PURPLED_BLUE,
-          description: `**__How does ${global.bot.user.username} work for me?__**\nMost actions on Discord (ban, message edit, member join, etc) are available to be set individually or as a preset to any channel you choose and have \`Manage Webhook\` permissions in.\n\n**__To setup logging__**\nUse \`/setup\` in the text channel you want to have the selected events log to. Select \`via_presets\` (set many events at once - joinlog, messages, ...) or \`via_individual_event\` (configure logging individually). Once all the desired presets or events you want to log to the current channel are selected, close the selection box and the bot will start logging your selection of events. If you want more information about an event, select it using \`/help event\`\n\n*Is something not working?* See the requirements below to ensure success in configuring ${global.bot.user.username}. If you need additional help, please contact \`@tizzysaurus\``,
+          description: `**__How does ${global.bot.user.username} work for me?__**\nMost actions on Discord (ban, message edit, member join, etc) are available to be set individually or as a preset to any channel you choose and have \`Manage Webhook\` permissions in.\n\n**__To setup logging__**\nUse \`/setup\` in the text channel you want to have the selected events log to. Select \`via_presets\` (set many events at once - joinlog, messages, ...) or \`via_individual_event\` (configure logging individually). Once all the desired presets or events you want to log to the current channel are selected, close the selection box and the bot will start logging your selection of events. If you want more information about an event, select it using \`/help event\`\n\n*Is something not working?* See the requirements below to ensure success in configuring ${global.bot.user.username}. If you need additional help, please contact \`@${process.env.BOT_CREATOR_NAME}\``,
           fields: [{
             inline: true,
             name: '__Permissions: Logging member joins__',
@@ -74,7 +74,7 @@ module.exports = {
           color: EMBED_COLORS.PURPLED_BLUE,
           footer: getEmbedFooter(global.bot.user),
           author: getAuthorField(interaction.member.user),
-          description: `__**Description**__\n${EVENT_HELP[eventName]}\n\n*Not what you're looking for? Contact \`@tizzysaurus\`*.`
+          description: `__**Description**__\n${EVENT_HELP[eventName]}\n\n*Not what you're looking for? Contact \`@${process.env.BOT_CREATOR_NAME}\`*.`
         }],
         flags: Eris.Constants.MessageFlags.EPHEMERAL
       })
