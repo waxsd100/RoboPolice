@@ -7,7 +7,7 @@ global.timesSubmitted = 0
 global.totalMessagesSubmitted = 0
 
 function getBatchSize() {
-  return process.env.MESSAGE_BATCH_SIZE || 1000
+  return +process.env.MESSAGE_BATCH_SIZE || 1000
 }
 
 async function addItem (messageAsArray) {

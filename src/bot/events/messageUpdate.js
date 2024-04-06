@@ -92,23 +92,24 @@ module.exports = {
         })
       }
 
-      oldImageUrls = oldMessage.attachment_b64.split("|").map(base64url => Buffer.from(base64url, "base64url").toString("utf-8"))
-      newAttachmentImages = newMessage.attachments.filter(attachment => attachment.content_type.startsWith("image"))
       let newUrls = [];
-      console.log(JSON.stringify(oldImageUrls), JSON.stringify(newAttachmentImages.map(img => img.url)))
-      if (oldImageUrls.length > newAttachmentImages.length) {
-        // Removed at least one image from the message
-        newUrls = newAttachmentImages.map(img => img.url)
-        const removedImageUrls = oldImageUrls.filter(url => !newUrls.includes(url))
-        removedImageUrls.forEach( (url, indx) => messageUpdateEvent.embeds[indx] = {
-          ...messageUpdateEvent.embeds[indx],
-          image: { url },
-          url: "https://example.com"
-        })
-        messageUpdateEvent.embeds[0].fields.push({
-          name: `Deleted Image${(removedImageUrls.length > 1) ? 's' : ''}`,
-          value: "See below"
-        })
+      if (oldMessage.attachment_b64) {
+        const oldImageUrls = oldMessage.attachment_b64.split("|").map(base64url => Buffer.from(base64url, "base64url").toString("utf-8")).filter(Boolean)
+        newAttachmentImages = newMessage.attachments.filter(attachment => attachment.content_type.startsWith("image"))
+        if (oldImageUrls.length > newAttachmentImages.length) {
+          // Removed at least one image from the message
+          newUrls = newAttachmentImages.map(img => img.url)
+          const removedImageUrls = oldImageUrls.filter(url => !newUrls.includes(url))
+          removedImageUrls.forEach( (url, indx) => messageUpdateEvent.embeds[indx] = {
+            ...messageUpdateEvent.embeds[indx],
+            image: { url },
+            url: "https://example.com"
+          })
+          messageUpdateEvent.embeds[0].fields.push({
+            name: `Deleted Image${(removedImageUrls.length > 1) ? 's' : ''}`,
+            value: "See below"
+          })
+        }
       }
 
       let changedAttrs = {}
