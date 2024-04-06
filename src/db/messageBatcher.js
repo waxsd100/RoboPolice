@@ -2,19 +2,23 @@ global.logger = require('../miscellaneous/logger');
 const format = require('pg-format')
 const pool = require('./clients/postgres')
 const aes = require('./aes')
-const BATCH_SIZE = process.env.MESSAGE_BATCH_SIZE || 1000
 const batch = []
 global.timesSubmitted = 0
 
+function getBatchSize() {
+  return process.env.MESSAGE_BATCH_SIZE || 1000
+}
+
 async function addItem (messageAsArray) {
   batch.push(messageAsArray)
-  if (batch.length >= BATCH_SIZE) {
-    await submitBatch()
+  const batchSize = getBatchSize()
+  if (batch.length >= batchSize) {
+    await submitBatch(batchSize)
   }
 }
 
-async function submitBatch () {
-  const toSubmit = batch.splice(0, BATCH_SIZE)
+async function submitBatch (batchSize) {
+  const toSubmit = batch.splice(0, batchSize)
   const poolClient = await pool.getPostgresClient()
   await poolClient.query(format('INSERT INTO messages (id, author_id, content, attachment_b64, ts) VALUES %L ON CONFLICT DO NOTHING', toSubmit))
   poolClient.release()
