@@ -18,11 +18,9 @@ module.exports = {
       oldMessage = await getMessageFromDB(newMessage.id)
     }
     if (!oldMessage) return
-    if (newMessage.author.bot) {
-      if (global.bot.global.guildSettingsCache[newMessage.channel.guild.id].isLogBots()) await processMessage(newMessage, oldMessage)
-    } else if (newMessage.content !== oldMessage.content) {
-      await processMessage(newMessage, oldMessage)
-    }
+    if (newMessage.author.bot && !global.bot.global.guildSettingsCache[newMessage.channel.guild.id].isLogBots()) return
+    await processMessage(newMessage, oldMessage)
+
     async function processMessage (newMessage, oldMessage) {
       const messageUpdateEvent = {
         guildID: newMessage.channel.guild.id,
@@ -33,20 +31,21 @@ module.exports = {
             icon_url: newMessage.author.avatarURL
           },
           description: `**${newMessage.author.username}#${newMessage.author.discriminator}** ${member && member.nick ? `(${member.nick})` : ''} updated their message in: ${newMessage.channel.name}.`,
-          fields: [{
-            name: `${newMessage.channel.type === 10 || newMessage.channel.type === 11 || newMessage.channel.type === 12 ? 'Thread' : 'Channel'}`,
-            value: `<#${newMessage.channel.id}> (${newMessage.channel.name})\n[Go To Message](https://discord.com/channels/${newMessage.channel.guild.id}/${newMessage.channel.id}/${newMessage.id})`
-          }],
+          fields: [
+            {
+              name: `${newMessage.channel.type === 10 || newMessage.channel.type === 11 || newMessage.channel.type === 12 ? 'Thread' : 'Channel'}`,
+              value: `<#${newMessage.channel.id}> (${newMessage.channel.name})\n[Go To Message](https://discord.com/channels/${newMessage.channel.guild.id}/${newMessage.channel.id}/${newMessage.id})`
+            },
+          ],
           color: 15084269
         }]
       }
-      if (!newMessage.content) return // if no content why log it? normal users don't have image logging anyways
       let secondMessageUpdatePayload
       if (newMessage.content.length + oldMessage.content.length > 4000) {
         // handles large message nitro editing and helps make huge message edits look nicer.
         messageUpdateEvent.embeds[0].fields.splice(1) // nuke all fields but essential message info
         secondMessageUpdatePayload = JSON.parse(JSON.stringify(messageUpdateEvent)) // deep copy initial payload
-        messageUpdateEvent.embeds[0].description += `\n\n**__Now__**:\n${escape(newMessage.content.replace(/~/g, '\\~'), ['angle brackets']).replace(/\"/g, '"').replace(/`/g, '')}`
+        messageUpdateEvent.embeds[0].description += `\n\n**__Now__**:\n${escape(newMessage.content.replace(/~/g, '\\~') || "None", ['angle brackets']).replace(/\"/g, '"').replace(/`/g, '')}`
         messageUpdateEvent.embeds[0].fields = []
         delete secondMessageUpdatePayload.embeds[0].author
         secondMessageUpdatePayload.embeds[0].description = `**__Previously__**:\n${oldMessage.content}`
@@ -92,7 +91,32 @@ module.exports = {
           value: `\`\`\`ini\nUser = ${newMessage.author.id}\nMessage = ${newMessage.id}\`\`\``
         })
       }
-      await updateMessageByID(newMessage.id, newMessage.content)
+
+      oldImageUrls = oldMessage.attachment_b64.split("|").map(base64url => Buffer.from(base64url, "base64url").toString("utf-8"))
+      newAttachmentImages = newMessage.attachments.filter(attachment => attachment.content_type.startsWith("image"))
+      let newUrls = [];
+      console.log(JSON.stringify(oldImageUrls), JSON.stringify(newAttachmentImages.map(img => img.url)))
+      if (oldImageUrls.length > newAttachmentImages.length) {
+        // Removed at least one image from the message
+        newUrls = newAttachmentImages.map(img => img.url)
+        const removedImageUrls = oldImageUrls.filter(url => !newUrls.includes(url))
+        removedImageUrls.forEach( (url, indx) => messageUpdateEvent.embeds[indx] = {
+          ...messageUpdateEvent.embeds[indx],
+          image: { url },
+          url: "https://example.com"
+        })
+        messageUpdateEvent.embeds[0].fields.push({
+          name: `Deleted Image${(removedImageUrls.length > 1) ? 's' : ''}`,
+          value: "See below"
+        })
+      }
+
+      let changedAttrs = {}
+      if (newMessage.content !== oldMessage.content)
+        changedAttrs.content = newMessage.content
+      if (newUrls.length)
+        changedAttrs.imageUrls = newUrls
+      await updateMessageByID(newMessage.id, changedAttrs)
       await send(messageUpdateEvent)
       if (secondMessageUpdatePayload) {
         await send(secondMessageUpdatePayload)

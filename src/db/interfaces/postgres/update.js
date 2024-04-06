@@ -144,12 +144,27 @@ async function toggleLogBots (guildID) {
   return !doc.log_bots
 }
 
-async function updateMessageByID (id, content) {
-  const batchMessage = await getMessageFromBatch(id)
+async function updateMessageByID (id, changedAttrs) {
+  const batchMessage = getMessageFromBatch(id)
   if (!batchMessage) {
-    return await pool.query('UPDATE messages SET content=$1 WHERE id=$2', [aes.encrypt(content || 'EMPTY STRING'), id])
+    if ('imageUrls' in changedAttrs) {
+      const newAttachmentB64 = changedAttrs.imageUrls.map(url => aes.encrypt(Buffer.from(url).toString("base64url"))).join("|")
+      if ('content' in changedAttrs) {
+        // Image(s) and content changed
+        return await pool.query('UPDATE messages SET content=$1, attachment_b64=$2  WHERE id=$3', [aes.encrypt(changedAttrs.content || 'None'), newAttachmentB64, id])
+      }
+      // Just image(s) changed
+      return await pool.query('UPDATE messages SET attachment_b64=$1 WHERE id=$2', [newAttachmentB64, id])
+    } else if ('content' in changedAttrs) {
+      // Just content changed
+      return await pool.query('UPDATE messages SET content=$1 WHERE id=$2', [aes.encrypt(changedAttrs.content || 'None'), id])
+    } else {
+      const msg = `updateMessageById called with unsupported changedAttrs: ${JSON.stringify(changedAttrs)}`
+      global.logger.warn(msg)
+      global.webhook.warn(msg);
+    }
   } else {
-    updateBatchMessage(id, content)
+    updateBatchMessage(id, changedAttrs)
   }
 }
 
