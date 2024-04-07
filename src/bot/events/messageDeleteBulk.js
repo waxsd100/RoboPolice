@@ -52,7 +52,6 @@ async function paste (messages, guildID) {
   if (pasteString) {
     sa
       .post(`${process.env.PASTE_SITE_ROOT_URL}/documents`)
-      .set('Authorization', process.env.PASTE_CREATE_TOKEN)
       .set('Content-Type', 'text/plain')
       .send(pasteString || 'An error has occurred while fetching pastes. Please contact the bot author.')
       .end((err, res) => {
