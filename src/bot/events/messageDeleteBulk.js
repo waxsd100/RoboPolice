@@ -9,7 +9,7 @@ module.exports = {
   handle: async messages => {
     if (messages.length === 0) return // TODO: TEST!
 
-    if (!process.env.PASTE_CREATE_ENDPOINT) {
+    if (!process.env.PASTE_SITE_ROOT_URL) {
       if (!messages[0].guildId) return;
   
       return send({
@@ -51,7 +51,7 @@ async function paste (messages, guildID) {
   }).join('\r\n')
   if (pasteString) {
     sa
-      .post(process.env.PASTE_CREATE_ENDPOINT)
+      .post(`${process.env.PASTE_SITE_ROOT_URL}/documents`)
       .set('Authorization', process.env.PASTE_CREATE_TOKEN)
       .set('Content-Type', 'text/plain')
       .send(pasteString || 'An error has occurred while fetching pastes. Please contact the bot author.')
@@ -59,7 +59,7 @@ async function paste (messages, guildID) {
         if (!err && res.body && res.statusCode === 200 && res.body.key) {
           messageDeleteBulkEvent.embeds[0].fields.push({
             name: 'Link',
-            value: `https://haste.logger.bot/${res.body.key}.txt`
+            value: `${process.env.PASTE_ROOT_URL}/${res.body.key}.txt`
           })
           send(messageDeleteBulkEvent)
         } else {
