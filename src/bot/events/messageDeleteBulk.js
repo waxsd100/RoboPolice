@@ -1,12 +1,27 @@
 const sa = require('superagent')
 const getMessagesByIds = require('../../db/interfaces/postgres/read').getMessagesByIds
 const send = require('../modules/webhooksender')
+const { EMBED_COLORS } = require('../utils/constants')
 
 module.exports = {
   name: 'messageDeleteBulk',
   type: 'on',
   handle: async messages => {
     if (messages.length === 0) return // TODO: TEST!
+
+    if (!process.env.PASTE_SITE_ROOT_URL) {
+      if (!messages[0].guildId) return;
+  
+      return send({
+        guildID: messages[0].guildId,
+        eventName: 'messageDeleteBulk',
+        embeds: [{
+            description: `${messages.length} messages were bulk deleted. :warning: The bot owner hasn't configured a paste site so contents of deleted messages not shown. :warning:`,
+            color: EMBED_COLORS.YELLOW_ORANGE,
+        }]
+      });
+    }
+
     const dbMessages = await getMessagesByIds(messages.map(m => m.id))
     await paste(dbMessages, messages[0].channel.guild.id)
   }
@@ -36,15 +51,14 @@ async function paste (messages, guildID) {
   }).join('\r\n')
   if (pasteString) {
     sa
-      .post(process.env.PASTE_CREATE_ENDPOINT)
-      .set('Authorization', process.env.PASTE_CREATE_TOKEN)
+      .post(`${process.env.PASTE_SITE_ROOT_URL}/documents`)
       .set('Content-Type', 'text/plain')
       .send(pasteString || 'An error has occurred while fetching pastes. Please contact the bot author.')
       .end((err, res) => {
         if (!err && res.body && res.statusCode === 200 && res.body.key) {
           messageDeleteBulkEvent.embeds[0].fields.push({
             name: 'Link',
-            value: `https://haste.logger.bot/${res.body.key}.txt`
+            value: `${process.env.PASTE_ROOT_URL}/${res.body.key}.txt`
           })
           send(messageDeleteBulkEvent)
         } else {

@@ -52,7 +52,7 @@ module.exports = {
             field.value += `\n− ${perm}`
           }
         } else if (!role.permissions.json.hasOwnProperty(perm) && oldRole.permissions.json.hasOwnProperty(perm)) {
-          field.value += `\n- ${perm}`
+          field.value += `\n− ${perm}`
         }
       })
       if (field.value) guildRoleUpdateEvent.embeds[0].fields.push(field)

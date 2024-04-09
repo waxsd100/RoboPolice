@@ -27,6 +27,7 @@ const eventLogs = {
   voiceStateUpdate: '',
   voiceChannelSwitch: '',
   guildEmojisUpdate: '',
+  guildStickersUpdate: '',
   guildMemberNickUpdate: '',
   guildMemberBoostUpdate: ''
 }
@@ -39,12 +40,25 @@ async function createGuild (guild) {
 }
 
 async function cacheMessage (message) {
+  // Encrypt Content
   if (!message.content) {
     message.content = aes.encrypt('None')
   } else {
     message.content = aes.encrypt(escape(message.content.replace(/~/g, '\\~'), ['angle brackets']))
   }
-  message.attachment_b64 = ''
+  // Encrypt Images (max 10)
+  let images = message.attachments.filter(attachment => attachment.content_type.startsWith("image"))
+  if (images.length === 0)
+    message.attachment_b64 = ""
+  else if (images.length > 10) {
+    // Discord only allows 10 embeds per message, and since we send 1 image per embed we can't have more than 10 images.
+    // Rather than just sending the first 10, we check to see if there's any duplicates, and if so, remove them.
+    const uniqueImages = Array.from(new Set(images.map(image => image.url))).map(url => images.find(image => image.url === url))
+    images = uniqueImages.slice(0, 10);
+  }
+  // Note that we can use '|' as a separator since base64 encoded strings (the output of aes.encrypt) cannot contain the '|' character.
+  message.attachment_b64 = images.map(attachment => aes.encrypt(Buffer.from(attachment.url).toString("base64url"))).join("|")
+
   batchHandler.addItem([message.id, message.author.id, message.content, message.attachment_b64, new Date().toISOString()])
 }
 

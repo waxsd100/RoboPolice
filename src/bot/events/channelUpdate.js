@@ -171,15 +171,15 @@ module.exports = {
             }
             if (newOverwrite.json.hasOwnProperty(perm) && oldOverwrite.json.hasOwnProperty(perm)) {
               if (newOverwrite.json[perm] === true && oldOverwrite.json[perm] === false) {
-                fields[counter].value += `\n${canUseExternal(channel.guild) ? '<:onswitch:827651433750855710>' : 'ALLOW'} ${perm}`
+                fields[counter].value += `\n${canUseExternal(channel.guild) ? '<:onswitch:1223589267398328402>' : 'ALLOW'} ${perm}`
               } else if (newOverwrite.json[perm] === false && oldOverwrite.json[perm] === true) {
-                fields[counter].value += `\n${canUseExternal(channel.guild) ? '<:offswitch:827651237293981736>' : 'DENY'} ${perm}`
+                fields[counter].value += `\n${canUseExternal(channel.guild) ? '<:offswitch:1223589245827154082>' : 'DENY'} ${perm}`
               }
             } else if (newOverwrite.json.hasOwnProperty(perm) && !oldOverwrite.json.hasOwnProperty(perm)) {
               if (newOverwrite.json[perm]) {
-                fields[counter].value += `\n${canUseExternal(channel.guild) ? '<:onswitch:827651433750855710>' : 'ALLOW'} ${perm}`
+                fields[counter].value += `\n${canUseExternal(channel.guild) ? '<:onswitch:1223589267398328402>' : 'ALLOW'} ${perm}`
               } else {
-                fields[counter].value += `\n${canUseExternal(channel.guild) ? '<:offswitch:827651237293981736>' : 'DENY'} ${perm}`
+                fields[counter].value += `\n${canUseExternal(channel.guild) ? '<:offswitch:1223589245827154082>' : 'DENY'} ${perm}`
               }
             } else if (!newOverwrite.json.hasOwnProperty(perm) && oldOverwrite.json.hasOwnProperty(perm)) {
               fields[counter].value += `\n⚖️ neutral/inherit ${perm}`

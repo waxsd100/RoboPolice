@@ -7,6 +7,18 @@ module.exports = {
   botPerms: ['readMessageHistory'],
   userPerms: ['readMessageHistory', 'manageMessages'],
   func: async interaction => {
+    if (!process.env.PASTE_SITE_ROOT_URL) return interaction.createMessage({
+      embeds: [{
+        title: 'Unsuccessful',
+        description: 'The bot owner hasn\'t yet configured the paste site, so this command is unavailable.',
+        thumbnail: {
+          url: interaction.member.user.dynamicAvatarURL(null, 64)
+        },
+        color: EMBED_COLORS.RED,
+        footer: getEmbedFooter(global.bot.user),
+        author: getAuthorField(interaction.member.user)
+      }]
+    }).catch(() => {})
     if (!interaction.data.options || !interaction.data.options[0] || interaction.data.options[0].value > 1000 || interaction.data.options[0].value < 5) {
       interaction.createMessage({
         embeds: [{
@@ -38,8 +50,7 @@ module.exports = {
       })
     } catch (_) {}
     sa
-      .post(process.env.PASTE_CREATE_ENDPOINT)
-      .set('Authorization', process.env.PASTE_CREATE_TOKEN)
+      .post(`${process.env.PASTE_SITE_ROOT_URL}/documents`)
       .set('Content-Type', 'text/plain')
       .send(pasteString || 'No messages were able to be archived')
       .end((err, res) => {
@@ -47,7 +58,7 @@ module.exports = {
           interaction.editOriginalMessage({
             embeds: [{
               title: 'Success',
-              description: `Archived ${fetchedMessages.length} messages: https://haste.logger.bot/${res.body.key}.txt`,
+              description: `Archived ${fetchedMessages.length} messages: ${PASTE_SITE_ROOT_URL}/${res.body.key}.txt`,
               thumbnail: {
                 url: interaction.member.user.dynamicAvatarURL(null, 64)
               },
