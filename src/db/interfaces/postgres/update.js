@@ -97,12 +97,12 @@ async function setEventsLogId (guildID, channelID, events) {
   await cacheGuild(guildID)
 }
 
-// async function setEventsRawLogs (guildID, channelID, events) {
-//   const doc = await getDoc(guildID)
-//   doc.event_logs = { ...doc.event_logs, ...events }
-//   await pool.query('UPDATE guilds SET event_logs=$1 WHERE id=$2', [doc.event_logs, guildID])
-//   await cacheGuild(guildID)
-// }
+async function setEventsRawLogs (guildID, channelID, events) {
+  const doc = await getDoc(guildID)
+  doc.event_logs = { ...doc.event_logs, ...events }
+  await pool.query('UPDATE guilds SET event_logs=$1 WHERE id=$2', [doc.event_logs, guildID])
+  await cacheGuild(guildID)
+}
 
 async function disableEvent (guildID, event) {
   const doc = await getDoc(guildID)
@@ -178,5 +178,5 @@ exports.clearEventByID = clearEventByID
 exports.setAllEventsOneId = setAllEventsOneId
 exports.setEventsLogId = setEventsLogId
 exports.clearIgnoredChannels = clearIgnoredChannels
-// exports.setEventsRawLogs = setEventsRawLogs
+exports.setEventsRawLogs = setEventsRawLogs
 exports.updateMessageByID = updateMessageByID
