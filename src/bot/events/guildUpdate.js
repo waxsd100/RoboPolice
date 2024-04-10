@@ -60,6 +60,7 @@ module.exports = {
         }]
       })
     }).catch(() => {})
+
     // TODO: handle new guild updates, son! (update: will jump on this next, see project board on github)
     function handle (name, logEntry) {
       let after = 'None'
@@ -178,14 +179,14 @@ module.exports = {
           }
         case 'rules_channel_id':
           before = logEntry.before.rules_channel_id ? global.bot.getChannel(logEntry.before.rules_channel_id).name || 'None' : 'None',
-          after = logEntry.after.rules_channel_id ? global.bot.getChannel(logEntry.after.rules_channel_id).name || 'None' : 'None'
+            after = logEntry.after.rules_channel_id ? global.bot.getChannel(logEntry.after.rules_channel_id).name || 'None' : 'None'
           return {
             name: 'Rules Channel Location',
             value: `► Now: **${after}**\n► Was: **${before}**`
           }
         case 'public_updates_channel_id':
           before = logEntry.before.public_updates_channel_id ? global.bot.getChannel(logEntry.before.public_updates_channel_id).name || 'None' : 'None',
-          after = logEntry.after.public_updates_channel_id ? global.bot.getChannel(logEntry.after.public_updates_channel_id).name || 'None' : 'None'
+            after = logEntry.after.public_updates_channel_id ? global.bot.getChannel(logEntry.after.public_updates_channel_id).name || 'None' : 'None'
           return {
             name: 'Public Updates Channel Location',
             value: `► Now: **${after}**\n► Was: **${before}**`

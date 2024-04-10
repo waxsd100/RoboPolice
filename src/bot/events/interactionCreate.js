@@ -39,7 +39,10 @@ module.exports = {
           slashCommands = fs.readdirSync(path.resolve('src', 'bot', 'slashcommands')).map(filename => {
             return require(path.resolve('src', 'bot', 'slashcommands', filename))
           })
-          interaction.createMessage({ content: '🆗 reloaded slash commands', flags: Eris.Constants.MessageFlags.EPHEMERAL }).catch(() => {})
+          interaction.createMessage({
+            content: '🆗 reloaded slash commands',
+            flags: Eris.Constants.MessageFlags.EPHEMERAL
+          }).catch(() => {})
           resolve()
         }
         const command = slashCommands.find(c => c.name === interaction.data.name)

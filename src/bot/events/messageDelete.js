@@ -66,12 +66,12 @@ module.exports = {
     })
 
     if (cachedMessage.attachment_b64) {
-      attachment_b64urls = cachedMessage.attachment_b64.split("|")
+      attachment_b64urls = cachedMessage.attachment_b64.split('|')
       attachment_b64urls.forEach(
         (base64url, indx) => messageDeleteEvent.embeds[indx] = {
           ...messageDeleteEvent.embeds[indx],
-          image: { url: Buffer.from(base64url, "base64url").toString("utf-8") },
-          url: "https://example.com"
+          image: { url: Buffer.from(base64url, 'base64url').toString('utf-8') },
+          url: 'https://example.com'
         }
       )
     }

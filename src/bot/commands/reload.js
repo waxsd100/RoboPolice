@@ -3,7 +3,10 @@ const addBotListeners = require('../utils/addbotlisteners')
 
 module.exports = {
   func: async function (message, suffix) {
-    if (!suffix) return message.channel.createMessage({ content: 'Provide `commands` or `events`', messageReference: { messageID: message.id } })
+    if (!suffix) return message.channel.createMessage({
+      content: 'Provide `commands` or `events`',
+      messageReference: { messageID: message.id }
+    })
     if (suffix === 'commands') {
       try {
         global.bot.commands = {}
@@ -18,7 +21,10 @@ module.exports = {
       try {
         global.bot.removeAllListeners()
         addBotListeners()
-        await message.channel.createMessage({ content: 'Successfully reloaded events', messageReference: { messageID: message.id } })
+        await message.channel.createMessage({
+          content: 'Successfully reloaded events',
+          messageReference: { messageID: message.id }
+        })
       } catch (e) {
         console.error(e)
         await message.channel.createMessage('There was an issue reloading events. The error has been logged, and this cluster is restarting for safety.')

@@ -207,7 +207,10 @@ module.exports = {
       if (channel.type === 13) {
         channelUpdateEvent.embeds[0].description = `Stage Channel **${channel.name}** was ${channel.topic === null ? 'closed' : 'opened'}`
       }
-      channelUpdateEvent.embeds[0].fields.push({ name: 'ID', value: `\`\`\`ini\nUser = ${user.id}\nChannel = ${channel.id}\`\`\`` })
+      channelUpdateEvent.embeds[0].fields.push({
+        name: 'ID',
+        value: `\`\`\`ini\nUser = ${user.id}\nChannel = ${channel.id}\`\`\``
+      })
       await send(channelUpdateEvent)
     } else {
       channelUpdateEvent.embeds[0].fields.push({
@@ -235,7 +238,10 @@ function transformAuditLogEntry (nameOfKey, before, after) {
       return { before: before ? 'enabled' : 'disabled', after: after ? 'enabled' : 'disabled' }
     }
     case 'topic': {
-      return { before: before ? escape(before.replace(/~/g, '\\~'), ['angle brackets']) : '<no topic set>', after: after ? escape(after.replace(/~/g, '\\~'), ['angle brackets']) : '<no topic set>' }
+      return {
+        before: before ? escape(before.replace(/~/g, '\\~'), ['angle brackets']) : '<no topic set>',
+        after: after ? escape(after.replace(/~/g, '\\~'), ['angle brackets']) : '<no topic set>'
+      }
     }
     case 'rate_limit_per_user': {
       return { before: `${before} second(s)`, after: `${after} seconds` }

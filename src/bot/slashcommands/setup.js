@@ -86,9 +86,17 @@ async function handlePresetSetup (interaction, recursionUUID) {
       }
     }
     if (recursionUUID) {
-      await interaction.editOriginalMessage({ embeds: [setupEmbed], flags: Eris.Constants.MessageFlags.EPHEMERAL, components })
+      await interaction.editOriginalMessage({
+        embeds: [setupEmbed],
+        flags: Eris.Constants.MessageFlags.EPHEMERAL,
+        components
+      })
     } else {
-      await interaction.createMessage({ embeds: [setupEmbed], flags: Eris.Constants.MessageFlags.EPHEMERAL, components })
+      await interaction.createMessage({
+        embeds: [setupEmbed],
+        flags: Eris.Constants.MessageFlags.EPHEMERAL,
+        components
+      })
     }
   } catch (e) {
     global.logger.error('error handling preset menu', e)
@@ -168,201 +176,201 @@ async function handleIndividualSetup (interaction, recursionUUID) {
           value: 'all',
           default: !Object.keys(guildEvents).find(geKey => guildEvents[geKey] !== interaction.channel.id)
         },
-        {
-          label: 'Channel Create',
-          description: 'On channel creation',
-          value: 'channelCreate',
-          default: guildEvents
-            .channelCreate ===
-            interaction.channel.id
-        },
-        {
-          label: 'Channel Update',
-          description: 'On channel settings change',
-          value: 'channelUpdate',
-          default: guildEvents
-            .channelUpdate ===
-            interaction.channel.id
-        },
-        {
-          label: 'Channel Delete',
-          description: 'On channel deletion',
-          value: 'channelDelete',
-          default: guildEvents
-            .channelDelete ===
-            interaction.channel.id
-        },
-        {
-          label: 'Member Banned',
-          description: 'On member being banned',
-          value: 'guildBanAdd',
-          default: guildEvents
-            .guildBanAdd ===
-            interaction.channel.id
-        },
-        {
-          label: 'Member Unbanned',
-          description: 'On member being unbanned',
-          value: 'guildBanRemove',
-          default: guildEvents
-            .guildBanRemove ===
-            interaction.channel.id
-        },
-        {
-          label: 'Role Create',
-          description: 'On role creation',
-          value: 'guildRoleCreate',
-          default: guildEvents
-            .guildRoleCreate ===
-            interaction.channel.id
-        },
-        {
-          label: 'Role Delete',
-          description: 'On role deletion',
-          value: 'guildRoleDelete',
-          default: guildEvents
-            .guildRoleDelete ===
-            interaction.channel.id
-        },
-        {
-          label: 'Role Update',
-          description: 'On role update',
-          value: 'guildRoleUpdate',
-          default: guildEvents
-            .guildRoleUpdate ===
-            interaction.channel.id
-        },
-        {
-          label: 'Server Settings Change',
-          description:
-            'On server settings being changed',
+          {
+            label: 'Channel Create',
+            description: 'On channel creation',
+            value: 'channelCreate',
+            default: guildEvents
+                .channelCreate ===
+              interaction.channel.id
+          },
+          {
+            label: 'Channel Update',
+            description: 'On channel settings change',
+            value: 'channelUpdate',
+            default: guildEvents
+                .channelUpdate ===
+              interaction.channel.id
+          },
+          {
+            label: 'Channel Delete',
+            description: 'On channel deletion',
+            value: 'channelDelete',
+            default: guildEvents
+                .channelDelete ===
+              interaction.channel.id
+          },
+          {
+            label: 'Member Banned',
+            description: 'On member being banned',
+            value: 'guildBanAdd',
+            default: guildEvents
+                .guildBanAdd ===
+              interaction.channel.id
+          },
+          {
+            label: 'Member Unbanned',
+            description: 'On member being unbanned',
+            value: 'guildBanRemove',
+            default: guildEvents
+                .guildBanRemove ===
+              interaction.channel.id
+          },
+          {
+            label: 'Role Create',
+            description: 'On role creation',
+            value: 'guildRoleCreate',
+            default: guildEvents
+                .guildRoleCreate ===
+              interaction.channel.id
+          },
+          {
+            label: 'Role Delete',
+            description: 'On role deletion',
+            value: 'guildRoleDelete',
+            default: guildEvents
+                .guildRoleDelete ===
+              interaction.channel.id
+          },
+          {
+            label: 'Role Update',
+            description: 'On role update',
+            value: 'guildRoleUpdate',
+            default: guildEvents
+                .guildRoleUpdate ===
+              interaction.channel.id
+          },
+          {
+            label: 'Server Settings Change',
+            description:
+              'On server settings being changed',
 
-          value: 'guildUpdate',
-          default: guildEvents
-            .guildUpdate ===
-            interaction.channel.id
-        },
-        {
-          label: 'Server Emojis Change',
-          description:
-            'On emojis being added or removed',
-          value: 'guildEmojisUpdate',
-          default: guildEvents
-            .guildEmojisUpdate ===
-            interaction.channel.id
-        },
-        {
-          label: 'Message Delete',
-          description:
-            'On a single message being deleted',
+            value: 'guildUpdate',
+            default: guildEvents
+                .guildUpdate ===
+              interaction.channel.id
+          },
+          {
+            label: 'Server Emojis Change',
+            description:
+              'On emojis being added or removed',
+            value: 'guildEmojisUpdate',
+            default: guildEvents
+                .guildEmojisUpdate ===
+              interaction.channel.id
+          },
+          {
+            label: 'Message Delete',
+            description:
+              'On a single message being deleted',
 
-          value: 'messageDelete',
-          default: guildEvents
-            .messageDelete ===
-            interaction.channel.id
-        },
-        {
-          label: 'Bulk Message Delete',
-          description:
-            'On a message purge or member ban',
-          value: 'messageDeleteBulk',
-          default: guildEvents
-            .messageDeleteBulk ===
-            interaction.channel.id
-        },
-        {
-          label: 'Message Edit',
-          description: 'On message update',
-          value: 'messageUpdate',
-          default: guildEvents
-            .messageUpdate ===
-            interaction.channel.id
-        },
-        {
-          label: 'Member Join',
-          description:
-            'On member joining the server',
-          value: 'guildMemberAdd',
-          default: guildEvents
-            .guildMemberAdd ===
-            interaction.channel.id
-        },
-        {
-          label: 'Member Kick',
-          description: 'On member being kicked',
-          value: 'guildMemberKick',
-          default: guildEvents
-            .guildMemberKick ===
-            interaction.channel.id
-        },
-        {
-          label: 'Member Leave',
-          description:
-            'On member leaving the server',
-          value: 'guildMemberRemove',
-          default: guildEvents
-            .guildMemberRemove ===
-            interaction.channel.id
-        },
-        {
-          label: 'Member Nickname Update',
-          description:
-            'On member updating their nickname (conditional log!)',
-          value: 'guildMemberNickUpdate',
-          default: guildEvents
-            .guildMemberNickUpdate ===
-            interaction.channel.id
-        },
-        {
-          label: 'Member Role Add/Remove',
-          description:
-            'On member getting or losing a role',
-          value: 'guildMemberUpdate',
-          default: guildEvents
-            .guildMemberUpdate ===
-            interaction.channel.id
-        },
-        {
-          label: 'Member Gate Verify',
-          description:
-            'On member accepting community rules',
-          value: 'guildMemberVerify',
-          default: guildEvents
-            .guildMemberVerify ===
-            interaction.channel.id
-        },
-        {
-          label: 'Voice Channel Leave',
-          description:
-            'On member leaving a voice channel',
-          value: 'voiceChannelLeave',
-          default: guildEvents
-            .voiceChannelLeave ===
-            interaction.channel.id
-        },
-        {
-          label: 'Voice Channel Join',
-          description:
-            'On member joining a voice channel',
-          value: 'voiceChannelJoin',
-          default: guildEvents.voiceChannelJoin ===
-            interaction.channel.id
-        },
-        {
-          label: 'Voice Channel Moved',
-          description:
-            'On member getting moved from a voice channel',
-          value: 'voiceChannelSwitch',
-          default: guildEvents.voiceChannelSwitch ===
-            interaction.channel.id
-        },
-        {
-          label: 'Member Voice Muted/Deafened',
-          description:
-            'On member being muted or deafened',
-          value: 'voiceStateUpdate',
-          default: guildEvents.voiceStateUpdate === interaction.channel.id
-        }
+            value: 'messageDelete',
+            default: guildEvents
+                .messageDelete ===
+              interaction.channel.id
+          },
+          {
+            label: 'Bulk Message Delete',
+            description:
+              'On a message purge or member ban',
+            value: 'messageDeleteBulk',
+            default: guildEvents
+                .messageDeleteBulk ===
+              interaction.channel.id
+          },
+          {
+            label: 'Message Edit',
+            description: 'On message update',
+            value: 'messageUpdate',
+            default: guildEvents
+                .messageUpdate ===
+              interaction.channel.id
+          },
+          {
+            label: 'Member Join',
+            description:
+              'On member joining the server',
+            value: 'guildMemberAdd',
+            default: guildEvents
+                .guildMemberAdd ===
+              interaction.channel.id
+          },
+          {
+            label: 'Member Kick',
+            description: 'On member being kicked',
+            value: 'guildMemberKick',
+            default: guildEvents
+                .guildMemberKick ===
+              interaction.channel.id
+          },
+          {
+            label: 'Member Leave',
+            description:
+              'On member leaving the server',
+            value: 'guildMemberRemove',
+            default: guildEvents
+                .guildMemberRemove ===
+              interaction.channel.id
+          },
+          {
+            label: 'Member Nickname Update',
+            description:
+              'On member updating their nickname (conditional log!)',
+            value: 'guildMemberNickUpdate',
+            default: guildEvents
+                .guildMemberNickUpdate ===
+              interaction.channel.id
+          },
+          {
+            label: 'Member Role Add/Remove',
+            description:
+              'On member getting or losing a role',
+            value: 'guildMemberUpdate',
+            default: guildEvents
+                .guildMemberUpdate ===
+              interaction.channel.id
+          },
+          {
+            label: 'Member Gate Verify',
+            description:
+              'On member accepting community rules',
+            value: 'guildMemberVerify',
+            default: guildEvents
+                .guildMemberVerify ===
+              interaction.channel.id
+          },
+          {
+            label: 'Voice Channel Leave',
+            description:
+              'On member leaving a voice channel',
+            value: 'voiceChannelLeave',
+            default: guildEvents
+                .voiceChannelLeave ===
+              interaction.channel.id
+          },
+          {
+            label: 'Voice Channel Join',
+            description:
+              'On member joining a voice channel',
+            value: 'voiceChannelJoin',
+            default: guildEvents.voiceChannelJoin ===
+              interaction.channel.id
+          },
+          {
+            label: 'Voice Channel Moved',
+            description:
+              'On member getting moved from a voice channel',
+            value: 'voiceChannelSwitch',
+            default: guildEvents.voiceChannelSwitch ===
+              interaction.channel.id
+          },
+          {
+            label: 'Member Voice Muted/Deafened',
+            description:
+              'On member being muted or deafened',
+            value: 'voiceStateUpdate',
+            default: guildEvents.voiceStateUpdate === interaction.channel.id
+          }
         ]
       }]
     }]
@@ -375,9 +383,17 @@ async function handleIndividualSetup (interaction, recursionUUID) {
       }
     }
     if (recursionUUID) {
-      await interaction.editOriginalMessage({ embeds: [setupEmbed], flags: Eris.Constants.MessageFlags.EPHEMERAL, components })
+      await interaction.editOriginalMessage({
+        embeds: [setupEmbed],
+        flags: Eris.Constants.MessageFlags.EPHEMERAL,
+        components
+      })
     } else {
-      await interaction.createMessage({ embeds: [setupEmbed], flags: Eris.Constants.MessageFlags.EPHEMERAL, components })
+      await interaction.createMessage({
+        embeds: [setupEmbed],
+        flags: Eris.Constants.MessageFlags.EPHEMERAL,
+        components
+      })
     }
   } catch (e) {
     global.logger.error('Error handling preset menu', e)

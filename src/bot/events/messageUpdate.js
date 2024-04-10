@@ -45,7 +45,7 @@ module.exports = {
         // handles large message nitro editing and helps make huge message edits look nicer.
         messageUpdateEvent.embeds[0].fields.splice(1) // nuke all fields but essential message info
         secondMessageUpdatePayload = JSON.parse(JSON.stringify(messageUpdateEvent)) // deep copy initial payload
-        messageUpdateEvent.embeds[0].description += `\n\n**__Now__**:\n${escape(newMessage.content.replace(/~/g, '\\~'), ['angle brackets']).replace(/\"/g, '"').replace(/`/g, '') || "None"}`
+        messageUpdateEvent.embeds[0].description += `\n\n**__Now__**:\n${escape(newMessage.content.replace(/~/g, '\\~'), ['angle brackets']).replace(/\"/g, '"').replace(/`/g, '') || 'None'}`
         messageUpdateEvent.embeds[0].fields = []
         delete secondMessageUpdatePayload.embeds[0].author
         secondMessageUpdatePayload.embeds[0].description = `**__Previously__**:\n${oldMessage.content}`
@@ -56,7 +56,7 @@ module.exports = {
         messageUpdateEvent.noFooter = true
       } else {
         let nowChunks, beforeChunks
-        const escapedNewContents = escape(newMessage.content.replace(/~/g, '\\~'), ['angle brackets']).replace(/\"/g, '"').replace(/`/g, '') || "None"
+        const escapedNewContents = escape(newMessage.content.replace(/~/g, '\\~'), ['angle brackets']).replace(/\"/g, '"').replace(/`/g, '') || 'None'
         if (escapedNewContents.length > 1000) {
           nowChunks = chunkify(escapedNewContents)
         } else {
@@ -92,22 +92,22 @@ module.exports = {
         })
       }
 
-      let newUrls = [];
+      let newUrls = []
       if (oldMessage.attachment_b64) {
-        const oldImageUrls = oldMessage.attachment_b64.split("|").map(base64url => Buffer.from(base64url, "base64url").toString("utf-8")).filter(Boolean)
-        newAttachmentImages = newMessage.attachments.filter(attachment => attachment.content_type.startsWith("image"))
+        const oldImageUrls = oldMessage.attachment_b64.split('|').map(base64url => Buffer.from(base64url, 'base64url').toString('utf-8')).filter(Boolean)
+        newAttachmentImages = newMessage.attachments.filter(attachment => attachment.content_type.startsWith('image'))
         if (oldImageUrls.length > newAttachmentImages.length) {
           // Removed at least one image from the message
           newUrls = newAttachmentImages.map(img => img.url)
           const removedImageUrls = oldImageUrls.filter(url => !newUrls.includes(url))
-          removedImageUrls.forEach( (url, indx) => messageUpdateEvent.embeds[indx] = {
+          removedImageUrls.forEach((url, indx) => messageUpdateEvent.embeds[indx] = {
             ...messageUpdateEvent.embeds[indx],
             image: { url },
-            url: "https://example.com"
+            url: 'https://example.com'
           })
           messageUpdateEvent.embeds[0].fields.push({
             name: `Deleted Image${(removedImageUrls.length > 1) ? 's' : ''}`,
-            value: "See below"
+            value: 'See below'
           })
         }
       }

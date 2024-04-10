@@ -29,13 +29,13 @@ module.exports = {
           name: 'Creation date',
           value: `<t:${Math.round(((channel.id / 4194304) + 1420070400000) / 1000)}:F>`
         },
-        {
-          name: 'Position',
-          value: channel.position
-        }, {
-          name: 'ID',
-          value: `\`\`\`ini\nUser = Unknown\nChannel = ${channel.id}\`\`\``
-        }],
+          {
+            name: 'Position',
+            value: channel.position
+          }, {
+            name: 'ID',
+            value: `\`\`\`ini\nUser = Unknown\nChannel = ${channel.id}\`\`\``
+          }],
         color: 3553599
       }]
     }

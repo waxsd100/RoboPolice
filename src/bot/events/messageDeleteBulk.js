@@ -10,16 +10,16 @@ module.exports = {
     if (messages.length === 0) return // TODO: TEST!
 
     if (!process.env.PASTE_SITE_ROOT_URL) {
-      if (!messages[0].guildId) return;
-  
+      if (!messages[0].guildId) return
+
       return send({
         guildID: messages[0].guildId,
         eventName: 'messageDeleteBulk',
         embeds: [{
-            description: `${messages.length} messages were bulk deleted. :warning: The bot owner hasn't configured a paste site so contents of deleted messages not shown. :warning:`,
-            color: EMBED_COLORS.YELLOW_ORANGE,
+          description: `${messages.length} messages were bulk deleted. :warning: The bot owner hasn't configured a paste site so contents of deleted messages not shown. :warning:`,
+          color: EMBED_COLORS.YELLOW_ORANGE,
         }]
-      });
+      })
     }
 
     const dbMessages = await getMessagesByIds(messages.map(m => m.id))

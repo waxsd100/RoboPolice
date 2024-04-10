@@ -15,7 +15,7 @@ module.exports = {
   name: 'guildStickersUpdate',
   type: 'on',
   handle: async (guild, stickers, oldStickers) => {
-    console.log("STICKER UPDATED")
+    console.log('STICKER UPDATED')
     let type
     const guildStickersUpdateEvent = {
       guildID: guild.id,

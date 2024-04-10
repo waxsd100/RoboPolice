@@ -88,7 +88,12 @@ module.exports = {
             global.logger.error('Failure to send a legal serverinfo embed', e)
           })
         } else {
-          interaction.createMessage({ embeds: [{ description: 'Emojis continued', fields: emojiFieldsToUse }] }).catch(e => {
+          interaction.createMessage({
+            embeds: [{
+              description: 'Emojis continued',
+              fields: emojiFieldsToUse
+            }]
+          }).catch(e => {
             global.logger.error('Failure to send serverinfo emoji continuation embed', e)
           })
         }

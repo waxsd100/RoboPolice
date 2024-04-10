@@ -75,7 +75,12 @@ module.exports = {
           embed.fields = embed.fields.concat(emojiFieldsToUse)
           await message.channel.createMessage({ embeds: [embed] })
         } else {
-          await message.channel.createMessage({ embeds: [{ description: 'Emojis continued', fields: emojiFieldsToUse }] })
+          await message.channel.createMessage({
+            embeds: [{
+              description: 'Emojis continued',
+              fields: emojiFieldsToUse
+            }]
+          })
         }
       }
     }

@@ -150,7 +150,7 @@ async function updateMessageByID (id, changedAttrs) {
   const batchMessage = getMessageFromBatch(id)
   if (!batchMessage) {
     if ('imageUrls' in changedAttrs) {
-      const newAttachmentB64 = changedAttrs.imageUrls.map(url => aes.encrypt(Buffer.from(url).toString("base64url"))).join("|")
+      const newAttachmentB64 = changedAttrs.imageUrls.map(url => aes.encrypt(Buffer.from(url).toString('base64url'))).join('|')
       if ('content' in changedAttrs) {
         // Image(s) and content changed
         return await pool.query('UPDATE messages SET content=$1, attachment_b64=$2  WHERE id=$3', [aes.encrypt(changedAttrs.content || 'None'), newAttachmentB64, id])
@@ -163,7 +163,7 @@ async function updateMessageByID (id, changedAttrs) {
     } else {
       const msg = `updateMessageById called with unsupported changedAttrs: ${JSON.stringify(changedAttrs)}`
       global.logger.warn(msg)
-      global.webhook.warn(msg);
+      global.webhook.warn(msg)
     }
   } else {
     updateBatchMessage(id, changedAttrs)
