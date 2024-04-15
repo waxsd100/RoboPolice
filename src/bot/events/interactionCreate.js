@@ -63,26 +63,26 @@ module.exports = {
             }).catch(() => {})
             return
           }
-          if (command.userPerms && command.userPerms.length !== 0) {
-            const userChannelPerms = interaction.channel.permissionsOf(interaction.member.user.id).json
-            const missingPermissions = command.userPerms.filter(bpName => !userChannelPerms[bpName])
-            if (missingPermissions.length !== 0) {
-              interaction.createMessage({
-                embeds: [{
-                  title: 'Missing Permissions',
-                  color: EMBED_COLORS.YELLOW_ORANGE,
-                  description: `You are missing the following permissions to run ${command.name}: ${missingPermissions.map(perm => `\`${perm}\``).join(', ')}`,
-                  footer: getEmbedFooter(global.bot.user),
-                  author: getAuthorField(interaction.member.user),
-                  thumbnail: {
-                    url: interaction.member.user.dynamicAvatarURL(null, 64)
-                  }
-                }],
-                flags: Eris.Constants.MessageFlags.EPHEMERAL
-              }).catch(() => {})
-              return
-            }
-          }
+          // if (command.userPerms && command.userPerms.length !== 0) {
+          //   const userChannelPerms = interaction.channel.permissionsOf(interaction.member.user.id).json
+          //   const missingPermissions = command.userPerms.filter(bpName => !userChannelPerms[bpName])
+          //   if (missingPermissions.length !== 0) {
+          //     interaction.createMessage({
+          //       embeds: [{
+          //         title: 'Missing Permissions',
+          //         color: EMBED_COLORS.YELLOW_ORANGE,
+          //         description: `You are missing the following permissions to run ${command.name}: ${missingPermissions.map(perm => `\`${perm}\``).join(', ')}`,
+          //         footer: getEmbedFooter(global.bot.user),
+          //         author: getAuthorField(interaction.member.user),
+          //         thumbnail: {
+          //           url: interaction.member.user.dynamicAvatarURL(null, 64)
+          //         }
+          //       }],
+          //       flags: Eris.Constants.MessageFlags.EPHEMERAL
+          //     }).catch(() => {})
+          //     return
+          //   }
+          // }
           if (command.botPerms && command.botPerms.length !== 0) {
             const botChannelPermissions = interaction.channel.permissionsOf(global.bot.user.id).json
             const missingPermissions = command.botPerms.filter(bpName => !botChannelPermissions[bpName])
