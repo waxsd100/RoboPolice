@@ -15,11 +15,10 @@ module.exports = {
 async function paste (messages, guildID) {
   if (!messages) return
   const messageDeleteBulkEvent = {
-    guildID: guildID,
+    guildID,
     eventName: 'messageDeleteBulk',
     embeds: [{
-      description: `**${messages.length}** message(s) were deleted and known in cache.`,
-      fields: [],
+      description: `**${messages.length}** message(s) were deleted and known in cache`,
       color: 15550861
     }]
   }
@@ -34,23 +33,27 @@ async function paste (messages, guildID) {
     }
     return `${globalUser.username}#${globalUser.discriminator} (${m.author_id}) | (${globalUser.avatarURL}) | ${new Date(m.ts).toUTCString()}: ${m.content}`
   }).join('\r\n')
-  if (pasteString) {
+  if (process.env.PASTE_CREATE_ENDPOINT !== '') {
     sa
       .post(process.env.PASTE_CREATE_ENDPOINT)
       .set('Authorization', process.env.PASTE_CREATE_TOKEN)
       .set('Content-Type', 'text/plain')
-      .send(pasteString || 'An error has occurred while fetching pastes. Please contact the bot author.')
-      .end((err, res) => {
-        if (!err && res.body && res.statusCode === 200 && res.body.key) {
-          messageDeleteBulkEvent.embeds[0].fields.push({
-            name: 'Link',
-            value: `https://haste.logger.bot/${res.body.key}.txt`
-          })
-          send(messageDeleteBulkEvent)
+      .send(pasteString || 'No messages were able to be archived')
+      .end(async (err, res) => {
+        if (!err && res.statusCode === 200 && res.body.key) {
+          messageDeleteBulkEvent.embeds[0].description += `, [link to messages](${process.env.PASTE_BASE_URL}/${res.body.key}.txt)`
+          await send(messageDeleteBulkEvent)
         } else {
-          global.logger.error(err)
-          global.webhook.error('An error has occurred while posting to the paste website. Check logs for more.')
+          global.logger.error(err, res.body)
+          await send(messageDeleteBulkEvent)
         }
       })
+  } else {
+    // having trouble with eris's implementation of executeWebhook
+    // messageDeleteBulkEvent.file = {
+    //   name: 'messageDeleteBulk.txt',
+    //   file: Buffer.from(pasteString ?? 'no content')
+    // }
+    await send(messageDeleteBulkEvent)
   }
 }

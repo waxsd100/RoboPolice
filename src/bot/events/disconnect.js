@@ -7,7 +7,7 @@ module.exports = {
   handle: () => {
     statAggregator.incrementMisc('disconnect')
     reconnects++
-    global.logger.error(`Worker instance hosting ${cluster.worker.rangeForShard} on id ${cluster.worker.id} disconnected from the gateway. ${reconnects} out of 20.`)
+    global.logger.error(`Disconnected from the gateway, ${reconnects} reconnects.`)
     if (reconnects >= 20) {
       global.bot.disconnect({ reconnect: true }) // Disconnect the bot but don't destroy member caches
     }

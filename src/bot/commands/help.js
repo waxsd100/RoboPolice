@@ -58,23 +58,15 @@ module.exports = {
             description: 'Continued help information...',
             fields: [{
               name: 'Open Source',
-              value: 'I am OSS at https://github.com/curtisf/logger'
+              value: 'Using the source code from https://github.com/curtisf/logger'
             },
             {
               name: 'Support',
               value: 'If something is going horribly wrong, go ahead and join [my support server](https://discord.gg/ed7Gaa3)'
             },
             {
-              name: 'Dashboard',
-              value: 'You can customize the bot to your liking at [the dashboard](https://logger.bot) (https://logger.bot).'
-            },
-            {
               name: 'Privacy Policy',
-              value: 'You can view the privacy policy [here](https://gist.github.com/curtisf/0598b0930c11363d24e29300cf21d572). Similarly, if you want updates on when it changes, join my support server and follow the #privacy-policy channel.'
-            },
-            {
-              name: 'Patreon',
-              value: 'If you like me and want to support my owner (or want cool patron bot features), check out [my Patreon page](https://patreon.com/logger)\nSome of what Patrons get: image logging, see who deletes messages, ignore users, see archive and bulk delete logs in a prettified manner, archive up to 10,000 messages, messages are saved longer'
+              value: 'Determined by the selfhosted bot owner'
             }]
           }]
         })

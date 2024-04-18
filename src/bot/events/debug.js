@@ -1,9 +1,8 @@
-const cluster = require('cluster')
-
 module.exports = {
   name: 'debug',
   type: 'once',
   handle: async (message) => {
-    global.logger.debug(`${cluster.worker.rangeForShard} [DEBUG]: ${message}`)
+    // this event is spammy
+    // global.logger.debug(`[DEBUG]: ${message}`)
   }
 }

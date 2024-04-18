@@ -1,10 +1,10 @@
 const Eris = require('eris')
-const cluster = require('cluster')
 const Sentry = require('@sentry/node')
-const redisLock = require('../db/interfaces/redis/redislock')
 const indexCommands = require('../miscellaneous/commandIndexer')
 const cacheGuildInfo = require('./utils/cacheGuildSettings')
 const addBotListeners = require('./utils/addbotlisteners')
+const { generateTables } = require('../miscellaneous/generateDB')
+const logger = require('../miscellaneous/logger')
 
 require('dotenv').config()
 
@@ -17,42 +17,14 @@ if (process.env.SENTRY_URI) {
   global.logger.warn('No Sentry URI provided. Error logging will be restricted to messages only.')
 }
 
-function connect () {
-  redisLock.lock('loggerinit', parseInt(process.env.REDIS_LOCK_TTL)).then(function (lock) {
-    global.logger.startup(`Shards ${cluster.worker.rangeForShard} have obtained a lock and are connecting now. Configured Redis TTL is ${process.env.REDIS_LOCK_TTL}ms.`)
-    global.bot.connect()
-    global.bot.once('ready', () => {
-      lock.unlock().catch(function () {
-        global.logger.warn(cluster.worker.rangeForShard + ' could not unlock, waiting')
-      })
-    })
-  }).catch(e => {
-    setTimeout(() => {
-      connect()
-    }, 10000)
-  }) // throw out not being able to obtain a lock.
-}
-
 async function init () {
-  global.logger.info('Shard init')
+  global.logger.info('Logger is starting up...')
   global.redis = require('../db/clients/redis')
   global.bot = new Eris(process.env.BOT_TOKEN, {
-    firstShardID: cluster.worker.shardStart,
-    lastShardID: cluster.worker.shardEnd,
-    maxShards: cluster.worker.totalShards,
     allowedMentions: {
       everyone: false,
       roles: false,
       users: false
-    },
-    rest: {
-      use_twilight: !!process.env.TWILIGHT_PORT || !!process.env.TWILIGHT_HOST,
-      ...(!!process.env.TWILIGHT_PORT || !!process.env.TWILIGHT_HOST ? {
-        domain: process.env.TWILIGHT_HOST || 'localhost',
-        baseURL: '/api/v9',
-        port: process.env.TWILIGHT_PORT || 8080,
-        requestTimeout: 1000 * 60 * 30 // 1h time
-      } : {})
     },
     restMode: true,
     messageLimit: 0,
@@ -64,35 +36,33 @@ async function init () {
       'guildInvites',
       'guildMembers',
       'guildMessages',
+      'messageContent',
       'guildBans'
     ],
-    defaultImageFormat: 'png',
-    ...(process.env.USE_MAX_CONCURRENCY === 'true' ? { useMaxConcurrency: true } : {})
+    defaultImageFormat: 'png'
   })
 
   global.bot.editStatus('dnd', {
     name: 'Bot is booting'
   })
 
+  try {
+    await generateTables()
+  } catch (e) {
+    logger.error(e)
+    process.exit(1)
+  }
+
   global.bot.commands = {}
   global.bot.ignoredChannels = []
   global.bot.guildSettingsCache = {}
-
-  if (!!process.env.TWILIGHT_PORT || !!process.env.TWILIGHT_HOST) {
-    global.logger.info('Using HTTP proxy...')
-  }
 
   indexCommands() // yes, block the thread while we read commands.
   await cacheGuildInfo()
 
   addBotListeners()
 
-  if (process.env.BEZERK_URI && process.env.BEZERK_SECRET) {
-    global.logger.info('Using bridge for website')
-    require('../miscellaneous/bezerk')
-  }
-
-  connect()
+  global.bot.connect()
 }
 
 process.on('exit', (code) => {
