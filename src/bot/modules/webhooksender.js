@@ -41,6 +41,8 @@ module.exports = async pkg => {
   }
   if (!global.bot.getChannel(guildSettings.getEventByName(pkg.eventName))?.permissionsOf(global.bot.user.id).json.manageWebhooks || !global.bot.getChannel(guildSettings.getEventByName(pkg.eventName)).permissionsOf(global.bot.user.id).json.viewAuditLog) return
   const webhook = await webhookCache.getWebhook(guildSettings.getEventByName(pkg.eventName))
+  console.log(guildSettings.getEventByName(pkg.eventName))
+  console.log(pkg.eventName)
   let webhookID, webhookToken
   if (webhook) {
     const split = webhook.split('|')

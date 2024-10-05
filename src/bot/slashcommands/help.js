@@ -57,7 +57,6 @@ module.exports = {
       }).catch(() => {})
     } else if (interaction.data.options?.find(o => o.name === 'event')) {
       const eventName = interaction.data.options?.find(o => o.name === 'event').value
-      console.log(ALL_EVENTS.includes('guildMemberTimeout'))
       if (!ALL_EVENTS.includes(eventName)) {
         return
       }
