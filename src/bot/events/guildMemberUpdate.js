@@ -17,6 +17,7 @@ module.exports = {
   name: 'guildMemberUpdate',
   type: 'on',
   handle: async (guild, member, oldMember) => {
+    console.log("Firing guildMemberUpdate event")
     if (!global.bot.guilds.get(guild.id)) { // don't try to log something when the bot isn't in the guild
       return
     }
