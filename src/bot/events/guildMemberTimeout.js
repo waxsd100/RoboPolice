@@ -2,7 +2,17 @@ const send = require('../modules/webhooksender')
 const cacheGuild = require('../utils/cacheGuild')
 const markdownEscape = require('markdown-escape')
 
-  module.exports = {
+const canUseExternal = guild => {
+    const logChannelID = global.bot.guildSettingsCache[guild.id].event_logs.guildMemberUpdate
+    if (logChannelID) {
+      const logChannel = global.bot.getChannel(logChannelID)
+      const permOverwrite = !!logChannel.permissionOverwrites.get(guild.id)?.json.useExternalEmojis
+      if (permOverwrite) return true
+    }
+    return !!guild.roles.get(guild.id)?.permissions.json.useExternalEmojis
+}
+
+module.exports = {
     name: 'guildMemberTimeout',
     type: 'on',
     handle: async (guild, member, oldMember) => {
@@ -27,6 +37,9 @@ const markdownEscape = require('markdown-escape')
         if (!global.bot.guildSettingsCache[guild.id]) {
             await cacheGuild(guild.id)
         }
+        if ((oldMember && arrayCompare(member.roles, oldMember.roles) && (member.communicationDisabledUntil === oldMember.communicationDisabledUntil))) return // if roles are the same stop fetching audit logs
+        const logs = await guild.getAuditLog({ limit: 5 })
+        if (!logs.entries[0]) return
         const possibleTimeoutLog = logs.entries.find(e => e.targetID === member.id && e.actionType === 24 && (e.before.communication_disabled_until || e.after.communication_disabled_until) && Date.now() - ((e.id / 4194304) + 1420070400000) < 3000)
         if (possibleTimeoutLog) {
             const embedCopyTL = guildMemberUpdate
@@ -69,4 +82,4 @@ const markdownEscape = require('markdown-escape')
             await send(embedCopyTL)
           }
     }
-  }
+}
