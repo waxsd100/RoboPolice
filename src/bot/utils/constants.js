@@ -15,6 +15,7 @@ exports.ALL_EVENTS = [
   'guildMemberKick',
   'guildMemberRemove',
   'guildMemberUpdate',
+  'guildMemberTimeout',
   'guildMemberNickUpdate',
   'guildMemberVerify',
   'voiceChannelLeave',
@@ -42,6 +43,7 @@ exports.EVENT_HELP = {
   guildMemberKick: 'guildMemberKick is triggered when a member is kicked from the server. The user who performed the kick and the reason (if any) is included.',
   guildMemberRemove: 'guildMemberRemove is triggered when a member leaves the server. If the user who left was kicked, guildMemberKick is triggered instead of guildMemberRemove.',
   guildMemberUpdate: 'guildMemberUpdate is triggered when a member has a role added/removed or they are timed out. The user who performed the role add/remove/timeout and the reason (if any) are included.',
+  guildMemberTimeout: 'guildMemberTimeout is triggered when a member is timed out in the server. The user who performed the timeout and the reason (if any) is included.',
   guildMemberNickUpdate: 'guildMemberNickUpdate is triggered when a member changes or has their nickname changed. Note: this will not log ALL member nickname changes, only those the bot knows first! (ie: the bot saw them make a message)',
   guildMemberVerify: 'guildMemberVerify is triggered when a member accepts the server-provided membership screen.',
   voiceChannelLeave: 'voiceChannelLeave is triggered when a member leaves a voice channel. If there was a member who performed a forceful voice disconnect, the member is NOT included.',
@@ -66,6 +68,7 @@ exports.EVENTS_USING_AUDITLOGS = [
   'guildMemberKick',
   'guildMemberRemove',
   'guildMemberUpdate',
+  'guildMemberTimeout',
   'voiceStateUpdate',
   'guildEmojisUpdate'
 ]
@@ -82,7 +85,7 @@ exports.PRESET_EVENT_MAP = {
   voice: ['voiceChannelLeave', 'voiceChannelJoin', 'voiceChannelSwitch', 'voiceStateUpdate'],
   message: ['messageUpdate', 'messageDelete', 'messageDeleteBulk'],
   member: ['guildMemberUpdate', 'guildMemberNickUpdate', 'guildMemberVerify', 'guildMemberBoostUpdate'],
-  moderation: ['guildBanAdd', 'guildBanRemove', 'guildMemberKick'],
+  moderation: ['guildBanAdd', 'guildBanRemove', 'guildMemberKick', 'guildMemberTimeout'],
   joinlog: ['guildMemberAdd', 'guildMemberRemove'],
   server: ['guildUpdate'],
   role: ['guildRoleUpdate', 'guildRoleCreate', 'guildRoleDelete'],

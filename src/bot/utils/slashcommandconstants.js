@@ -222,6 +222,11 @@ exports.commands = [
           },
           {
             type: ERIS_CONSTANTS.ApplicationCommandOptionTypes.STRING,
+            name: 'Member Timeout',
+            value: 'guildMemberTimeout'
+          },
+          {
+            type: ERIS_CONSTANTS.ApplicationCommandOptionTypes.STRING,
             name: 'Member Gate Verify',
             value: 'guildMemberVerify'
           },

@@ -33,6 +33,7 @@ const eventStatistics = {
   guildMemberKick: 0,
   guildMemberRemove: 0,
   guildMemberUpdate: 0,
+  guildMemberTimeout: 0,
   guildMemberNickUpdate: 0,
   guildMemberVerify: 0,
   guildRoleCreate: 0,
