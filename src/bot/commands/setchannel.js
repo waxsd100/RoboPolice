@@ -17,6 +17,7 @@ const eventList = [
   'messageUpdate',
   'guildMemberAdd',
   'guildMemberKick',
+  'guildMemberTimeout',
   'guildMemberRemove',
   'guildMemberUpdate',
   'voiceChannelLeave',
