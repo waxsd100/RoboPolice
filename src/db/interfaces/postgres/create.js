@@ -21,6 +21,7 @@ const eventLogs = {
   guildMemberKick: '',
   guildMemberRemove: '',
   guildMemberUpdate: '',
+  guildMemberTimeout: '',
   guildMemberVerify: '',
   voiceChannelLeave: '',
   voiceChannelJoin: '',
