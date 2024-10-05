@@ -217,13 +217,13 @@ exports.commands = [
           },
           {
             type: ERIS_CONSTANTS.ApplicationCommandOptionTypes.STRING,
-            name: 'Member Role Add/Remove',
-            value: 'guildMemberUpdate'
+            name: 'Member Timeout',
+            value: 'guildMemberTimeout'
           },
           {
             type: ERIS_CONSTANTS.ApplicationCommandOptionTypes.STRING,
-            name: 'Member Timeout',
-            value: 'guildMemberTimeout'
+            name: 'Member Role Add/Remove',
+            value: 'guildMemberUpdate'
           },
           {
             type: ERIS_CONSTANTS.ApplicationCommandOptionTypes.STRING,
