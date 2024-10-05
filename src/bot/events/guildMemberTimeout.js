@@ -10,7 +10,7 @@ module.exports = {
         if (!global.bot.guilds.get(guild.id)) { // don't try to log something when the bot isn't in the guild
             return
         }
-        const guildMemberUpdate = {
+        const guildMemberTimeout = {
             guildID: guild.id,
             eventName: 'guildMemberTimeout',
             embeds: [{
@@ -34,7 +34,7 @@ module.exports = {
         const possibleTimeoutLog = logs.entries.find(e => e.targetID === member.id && e.actionType === 24 && (e.before.communication_disabled_until || e.after.communication_disabled_until) && Date.now() - ((e.id / 4194304) + 1420070400000) < 3000)
         if (possibleTimeoutLog) {
             console.log("Logging timeout")
-            const embedCopyTL = guildMemberUpdate
+            const embedCopyTL = guildMemberTimeout
             embedCopyTL.eventName = 'guildMemberTimeout'
             embedCopyTL.embeds[0].footer = {
               text: `${possibleTimeoutLog.user.username}#${possibleTimeoutLog.user.discriminator}`,
