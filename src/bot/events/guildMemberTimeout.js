@@ -42,6 +42,7 @@ module.exports = {
         if (!logs.entries[0]) return
         const possibleTimeoutLog = logs.entries.find(e => e.targetID === member.id && e.actionType === 24 && (e.before.communication_disabled_until || e.after.communication_disabled_until) && Date.now() - ((e.id / 4194304) + 1420070400000) < 3000)
         if (possibleTimeoutLog) {
+            console.log("Logging timeout")
             const embedCopyTL = guildMemberUpdate
             embedCopyTL.eventName = 'guildMemberTimeout'
             embedCopyTL.embeds[0].description = `${member.username}#${member.discriminator} (${member.mention}) ${member.communicationDisabledUntil ? 'was timed out' : 'had their timeout removed'}`

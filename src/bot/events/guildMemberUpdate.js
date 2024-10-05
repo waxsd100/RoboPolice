@@ -91,6 +91,7 @@ module.exports = {
     const possibleRoleLog = logs.entries.find(e => e.targetID === member.id && e.actionType === 25 && Date.now() - ((e.id / 4194304) + 1420070400000) < 3000)
     const possibleTimeoutLog = logs.entries.find(e => e.targetID === member.id && e.actionType === 24 && (e.before.communication_disabled_until || e.after.communication_disabled_until) && Date.now() - ((e.id / 4194304) + 1420070400000) < 3000)
     if (possibleRoleLog) {
+      console.log("Logging role change")
       possibleRoleLog.guild = []
       const user = possibleRoleLog.user
       if (user == null) return
@@ -130,6 +131,7 @@ module.exports = {
       if (!guildMemberUpdate.embeds[0].fields[0].value) return
       await send(guildMemberUpdate)
     } else if (possibleTimeoutLog) {
+      console.log("Logging timeout")
       const embedCopyTL = guildMemberUpdate
       //embedCopyTL.eventName = 'guildMemberTimeout'
       embedCopyTL.embeds[0].description = `${member.username}#${member.discriminator} (${member.mention}) ${member.communicationDisabledUntil ? 'was timed out' : 'had their timeout removed'}`
