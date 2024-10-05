@@ -24,6 +24,7 @@
     "dotenv": "^16.3.1",
     "eris": "github:abalabahaha/eris#dev",
     "ioredis": "^5.3.2",
+    "loggerv3": "file:",
     "markdown-escape": "^2.0.0",
     "moment-timezone": "^0.5.43",
     "os-utils": "0.0.14",

@@ -17,7 +17,6 @@ const eventList = [
   'messageUpdate',
   'guildMemberAdd',
   'guildMemberKick',
-  'guildMemberTimeout',
   'guildMemberRemove',
   'guildMemberUpdate',
   'voiceChannelLeave',
@@ -27,7 +26,8 @@ const eventList = [
   'guildMemberNickUpdate',
   'guildMemberVerify',
   'guildEmojisUpdate',
-  'guildMemberBoostUpdate'
+  'guildMemberBoostUpdate',
+  'guildMemberTimeout'
 ]
 
 module.exports = {
