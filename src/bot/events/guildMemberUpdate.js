@@ -113,7 +113,7 @@ module.exports = {
       // Add a + or - emoji when roles are manipulated for a user, stringify it, and assign a field value to it.
       guildMemberUpdate.embeds[0].fields = [{
         name: 'Changes',
-        value: `${added.map(role => `${canUseExternal(guild) ? '<:greenplus:562826499929931776>' : '➕'} **${role.name}**`).join('\n')}${removed.map((role, i) => `${i === 0 && added.length !== 0 ? '\n' : ''}\n:x: **${role.name}**`).join('\n')}`
+        value: `${added.map(role => `${canUseExternal(guild) ? ':white_check_mark:' : '➕'} **${role.name}**`).join('\n')}${removed.map((role, i) => `${i === 0 && added.length !== 0 ? '\n' : ''}\n:x: **${role.name}**`).join('\n')}`
       }]
       if (guildMemberUpdate.embeds[0].fields[0].value.length > 1000) {
         guildMemberUpdate.embeds[0].fields[0].value = guildMemberUpdate.embeds[0].fields[0].value.substring(0, 1020) + '...'
@@ -130,43 +130,44 @@ module.exports = {
       if (!guildMemberUpdate.embeds[0].fields[0].value) return
       await send(guildMemberUpdate)
     } else if (possibleTimeoutLog) {
-      guildMemberUpdate.eventName = 'guildMemberTimeout'
-      guildMemberUpdate.embeds[0].description = `${member.username}#${member.discriminator} (${member.mention}) ${member.communicationDisabledUntil ? 'was timed out' : 'had their timeout removed'}`
-      guildMemberUpdate.embeds[0].author = {
+      const embedCopyTL = guildMemberUpdate
+      embedCopyTL.eventName = 'guildMemberTimeout'
+      embedCopyTL.embeds[0].description = `${member.username}#${member.discriminator} (${member.mention}) ${member.communicationDisabledUntil ? 'was timed out' : 'had their timeout removed'}`
+      embedCopyTL.embeds[0].author = {
         name: `${member.username}#${member.discriminator}`,
         icon_url: member.avatarURL
       }
-      guildMemberUpdate.embeds[0].footer = {
+      embedCopyTL.embeds[0].footer = {
         text: `${possibleTimeoutLog.user.username}#${possibleTimeoutLog.user.discriminator}`,
         icon_url: possibleTimeoutLog.user.avatarURL
       }
-      guildMemberUpdate.embeds[0].fields = []
-      guildMemberUpdate.embeds[0].fields.push({
+      embedCopyTL.embeds[0].fields = []
+      embedCopyTL.embeds[0].fields.push({
         name: 'Timeout Creator',
         value: `${possibleTimeoutLog.user.username}#${possibleTimeoutLog.user.discriminator}`
       })
       if (possibleTimeoutLog.reason) {
-        guildMemberUpdate.embeds[0].fields.push({
+        embedCopyTL.embeds[0].fields.push({
           name: 'Reason',
           value: markdownEscape(possibleTimeoutLog.reason)
         })
       }
       if (member.communicationDisabledUntil) {
-        guildMemberUpdate.embeds[0].fields.push({
+        embedCopyTL.embeds[0].fields.push({
           name: 'Expiration',
           value: `<t:${Math.ceil(member.communicationDisabledUntil / 1000)}> (<t:${Math.ceil(member.communicationDisabledUntil / 1000)}:R>)`
         })
       } else {
-        guildMemberUpdate.embeds[0].fields.push({
+        embedCopyTL.embeds[0].fields.push({
           name: 'Expiration',
           value: `Was until <t:${Math.ceil(Date.parse(possibleTimeoutLog.before.communication_disabled_until) / 1000)}> (<t:${Math.ceil(Date.parse(possibleTimeoutLog.before.communication_disabled_until) / 1000)}:R>)`
         })
       }
-      guildMemberUpdate.embeds[0].fields.push({
+      embedCopyTL.embeds[0].fields.push({
         name: 'ID',
         value: `\`\`\`ini\nUser = ${member.id}\nPerpetrator = ${possibleTimeoutLog.user.id}\`\`\``
       })
-      await send(guildMemberUpdate)
+      await send(embedCopyTL)
     }
   }
 }
