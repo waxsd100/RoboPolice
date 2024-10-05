@@ -2,16 +2,6 @@ const send = require('../modules/webhooksender')
 const cacheGuild = require('../utils/cacheGuild')
 const markdownEscape = require('markdown-escape')
 
-const canUseExternal = guild => {
-    const logChannelID = global.bot.guildSettingsCache[guild.id].event_logs.guildMemberUpdate
-    if (logChannelID) {
-      const logChannel = global.bot.getChannel(logChannelID)
-      const permOverwrite = !!logChannel.permissionOverwrites.get(guild.id)?.json.useExternalEmojis
-      if (permOverwrite) return true
-    }
-    return !!guild.roles.get(guild.id)?.permissions.json.useExternalEmojis
-}
-
 module.exports = {
     name: 'guildMemberTimeout',
     type: 'on',
@@ -28,7 +18,7 @@ module.exports = {
                 name: `${member.username}#${member.discriminator}`,
                 icon_url: member.avatarURL
               },
-              description: `${member.username}#${member.discriminator} ${member.mention} ${member.nick ? `(${member.nick})` : ''} was updated`,
+              description: `${member.username}#${member.discriminator} (${member.mention}) ${member.communicationDisabledUntil ? 'was timed out' : 'had their timeout removed'}`,
               fields: [{
                 name: 'Changes',
                 value: 'Unknown. Look at the footer to see who updated the affected user.'
@@ -46,11 +36,6 @@ module.exports = {
             console.log("Logging timeout")
             const embedCopyTL = guildMemberUpdate
             embedCopyTL.eventName = 'guildMemberTimeout'
-            embedCopyTL.embeds[0].description = `${member.username}#${member.discriminator} (${member.mention}) ${member.communicationDisabledUntil ? 'was timed out' : 'had their timeout removed'}`
-            embedCopyTL.embeds[0].author = {
-              name: `${member.username}#${member.discriminator}`,
-              icon_url: member.avatarURL
-            }
             embedCopyTL.embeds[0].footer = {
               text: `${possibleTimeoutLog.user.username}#${possibleTimeoutLog.user.discriminator}`,
               icon_url: possibleTimeoutLog.user.avatarURL
