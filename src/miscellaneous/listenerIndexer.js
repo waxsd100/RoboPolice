@@ -11,6 +11,7 @@ module.exports = () => {
     }
     const event = require(path.resolve('src', 'bot', 'events', filename))
     event.name = event.name.replace('.js', '')
+    console.log(event.name);
     if (event.type === 'once') {
       once.push({ name: event.name, handle: event.handle })
     } else {

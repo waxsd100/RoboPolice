@@ -28,7 +28,6 @@ module.exports = {
         if (!global.bot.guildSettingsCache[guild.id]) {
             await cacheGuild(guild.id)
         }
-        if ((oldMember && arrayCompare(member.roles, oldMember.roles) && (member.communicationDisabledUntil === oldMember.communicationDisabledUntil))) return // if roles are the same stop fetching audit logs
         const logs = await guild.getAuditLog({ limit: 5 })
         if (!logs.entries[0]) return
         const possibleTimeoutLog = logs.entries.find(e => e.targetID === member.id && e.actionType === 24 && (e.before.communication_disabled_until || e.after.communication_disabled_until) && Date.now() - ((e.id / 4194304) + 1420070400000) < 3000)
