@@ -46,14 +46,14 @@ async function handlePresetSetup (interaction, recursionUUID) {
           default: interaction.channel.id === guildEvents.messageUpdate && interaction.channel.id === guildEvents.messageDelete && interaction.channel.id === guildEvents.messageDeleteBulk
         }, {
           label: 'Member Update Events',
-          description: 'Member role added/removed, nickname changed, boosted server, timed out',
+          description: 'Member role added/removed, nickname changed, and boosted server',
           value: 'member',
           default: interaction.channel.id === guildEvents.guildMemberUpdate && interaction.channel.id === guildEvents.guildMemberBoostUpdate && interaction.channel.id === guildEvents.guildMemberNickUpdate
         }, {
           label: 'Moderation Events',
-          description: 'Member banned/unbanned or kicked',
+          description: 'Member banned/unbanned, kicked, and timed out',
           value: 'moderation',
-          default: interaction.channel.id === guildEvents.guildBanAdd && interaction.channel.id === guildEvents.guildBanRemove && interaction.channel.id === guildEvents.guildMemberKick
+          default: interaction.channel.id === guildEvents.guildBanAdd && interaction.channel.id === guildEvents.guildBanRemove && interaction.channel.id === guildEvents.guildMemberKick && interaction.channel.id === guildEvents.guildMemberTimeout
         }, {
           label: 'Joinlog Events',
           description: '(Requires manage server & manage channels to be accurate) member join/leave',
@@ -293,6 +293,14 @@ async function handleIndividualSetup (interaction, recursionUUID) {
           value: 'guildMemberKick',
           default: guildEvents
             .guildMemberKick ===
+            interaction.channel.id
+        },
+        {
+          label: 'Member Timeout',
+          description: 'On member being timed out',
+          value: 'guildMemberTimeout',
+          default: guildEvents
+            .guildMemberTimeout ===
             interaction.channel.id
         },
         {
