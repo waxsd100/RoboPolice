@@ -131,7 +131,7 @@ module.exports = {
       await send(guildMemberUpdate)
     } else if (possibleTimeoutLog) {
       const embedCopyTL = guildMemberUpdate
-      embedCopyTL.eventName = 'guildMemberTimeout'
+      //embedCopyTL.eventName = 'guildMemberTimeout'
       embedCopyTL.embeds[0].description = `${member.username}#${member.discriminator} (${member.mention}) ${member.communicationDisabledUntil ? 'was timed out' : 'had their timeout removed'}`
       embedCopyTL.embeds[0].author = {
         name: `${member.username}#${member.discriminator}`,
