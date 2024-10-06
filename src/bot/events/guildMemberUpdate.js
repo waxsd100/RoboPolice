@@ -137,7 +137,8 @@ module.exports = {
       embedCopyTL.eventName = 'guildMemberTimeout'
       
       if (!embedCopyTL.eventName == 'guildMemberTimeout') return
-      
+
+      /*
       embedCopyTL.embeds[0].description = `${member.username}#${member.discriminator} (${member.mention}) ${member.communicationDisabledUntil ? 'was timed out' : 'had their timeout removed'}`
       embedCopyTL.embeds[0].author = {
         name: `${member.username}#${member.discriminator}`,
@@ -174,6 +175,7 @@ module.exports = {
         value: `\`\`\`ini\nUser = ${member.id}\nPerpetrator = ${possibleTimeoutLog.user.id}\`\`\``
       })
       await send(embedCopyTL)
+      */
     }
   }
 }
