@@ -33,7 +33,7 @@ module.exports = async pkg => {
     await cacheGuild(pkg.guildID)
     return
   }
-  console.log(pkg.eventName)
+  console.log("webhooksender - " + pkg.eventName)
   if (!guildSettings.getEventByName(pkg.eventName)) return
   if (!global.bot.getChannel(guildSettings.getEventByName(pkg.eventName))) {
     await global.redis.del(`webhook-${guildSettings.getEventByName(pkg.eventName)}`)
