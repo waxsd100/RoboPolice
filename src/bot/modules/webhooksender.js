@@ -33,7 +33,6 @@ module.exports = async pkg => {
     await cacheGuild(pkg.guildID)
     return
   }
-  console.log(guildSettings.getEventByName(pkg.eventName))
   console.log(pkg.eventName)
   if (!guildSettings.getEventByName(pkg.eventName)) return
   if (!global.bot.getChannel(guildSettings.getEventByName(pkg.eventName))) {
