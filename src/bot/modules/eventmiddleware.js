@@ -57,8 +57,8 @@ function getGuildIdByEvent (type, args) {
     case 'guildBanRemove':
     case 'guildEmojisUpdate':
     case 'guildMemberAdd':
-    case 'guildMemberUpdate':
     case 'guildMemberTimeout':
+    case 'guildMemberUpdate':
     case 'guildRoleCreate':
     case 'guildRoleDelete':
     case 'guildRoleUpdate':
