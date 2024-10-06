@@ -136,9 +136,8 @@ module.exports = {
       const embedCopyTL = guildMemberUpdate
       embedCopyTL.eventName = 'guildMemberTimeout'
       
-      if (!embedCopyTL.eventName == 'guildMemberTimeout') return
+      if (!embedCopyTL.eventName == 'guildMemberTimeout') return // Trying to force this bot to actually listen to this event name
 
-      /*
       embedCopyTL.embeds[0].description = `${member.username}#${member.discriminator} (${member.mention}) ${member.communicationDisabledUntil ? 'was timed out' : 'had their timeout removed'}`
       embedCopyTL.embeds[0].author = {
         name: `${member.username}#${member.discriminator}`,
@@ -175,7 +174,6 @@ module.exports = {
         value: `\`\`\`ini\nUser = ${member.id}\nPerpetrator = ${possibleTimeoutLog.user.id}\`\`\``
       })
       await send(embedCopyTL)
-      */
     }
   }
 }

@@ -3,7 +3,7 @@ const cacheGuild = require('../utils/cacheGuild')
 const markdownEscape = require('markdown-escape')
 
 module.exports = {
-    name: 'guildMemberTimeout',
+    name: 'guildMemberTimeout1',
     type: 'on',
     handle: async (guild, member, oldMember) => {
         console.log("Firing guildMemberTimeout event")
