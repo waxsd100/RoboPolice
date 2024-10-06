@@ -7,7 +7,7 @@ module.exports = async (event, type) => {
   if (type === 'on') {
     global.bot.on(event.name, async (...args) => {
       const guildId = getGuildIdByEvent(event.name, args)
-      console.log("eventmiddleware - " + event.name)
+      console.log("eventmiddleware - " + event.name + " | ID - " + guildId)
 
       if (!guildId) {
         global.logger.warn(`While executing event ${event.name}, a guild ID was not returned!`)
@@ -19,7 +19,10 @@ module.exports = async (event, type) => {
         }
 
         const logChannel = global.bot.guildSettingsCache[guildId].event_logs[event.name] && global.bot.getChannel(global.bot.guildSettingsCache[guildId].event_logs[event.name])
-        if (!logChannel) return
+        if (!logChannel) {
+          console.log("no log channel specified for " + event.name)
+          return
+        }
 
         const botPerms = logChannel.permissionsOf(global.bot.user.id).json
 
