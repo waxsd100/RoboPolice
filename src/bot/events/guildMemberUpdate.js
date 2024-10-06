@@ -131,7 +131,7 @@ module.exports = {
       })
       if (!guildMemberUpdate.embeds[0].fields[0].value) return
       await send(guildMemberUpdate)
-    } else if (possibleTimeoutLog) {
+    } else if (possibleTimeoutLog && embedCopyTL.eventName == 'guildMemberUpdate') {
       console.log("Logging timeout")
       const embedCopyTL = guildMemberUpdate
       embedCopyTL.eventName = 'guildMemberTimeout'

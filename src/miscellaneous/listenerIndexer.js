@@ -16,7 +16,6 @@ module.exports = () => {
     } else {
       on.push({ name: event.name, handle: event.handle, ...(event.requiredPerms?.length ? { requiredPerms: event.requiredPerms } : {}) })
     }
-    console.log(on)
   })
   return [on, once]
 }
