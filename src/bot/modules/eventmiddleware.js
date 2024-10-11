@@ -18,14 +18,14 @@ module.exports = async (event, type) => {
           await cacheGuild(guildId)
         }
 
+        if (event.name == 'guildMemberUpdate') {
+          event.name = 'guildMemberTimeout'
+        }
+
         const logChannel = global.bot.guildSettingsCache[guildId].event_logs[event.name] && global.bot.getChannel(global.bot.guildSettingsCache[guildId].event_logs[event.name])
         if (!logChannel) {
-          if (event.name == 'guildMemberUpdate') {
-            event.name = 'guildMemberTimeout'
-          } else {
-            console.log("no log channel specified for " + event.name)
-            return
-          }
+          console.log("no log channel specified for " + event.name)
+          return
         }
 
         const botPerms = logChannel.permissionsOf(global.bot.user.id).json
