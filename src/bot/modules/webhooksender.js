@@ -33,7 +33,7 @@ module.exports = async pkg => {
     await cacheGuild(pkg.guildID)
     return
   }
-  console.log("webhooksender - " + pkg.eventName)
+
   if (!guildSettings.getEventByName(pkg.eventName)) return
   if (!global.bot.getChannel(guildSettings.getEventByName(pkg.eventName))) {
     await global.redis.del(`webhook-${guildSettings.getEventByName(pkg.eventName)}`)
@@ -42,7 +42,7 @@ module.exports = async pkg => {
   }
   if (!global.bot.getChannel(guildSettings.getEventByName(pkg.eventName))?.permissionsOf(global.bot.user.id).json.manageWebhooks || !global.bot.getChannel(guildSettings.getEventByName(pkg.eventName)).permissionsOf(global.bot.user.id).json.viewAuditLog) return
   const webhook = await webhookCache.getWebhook(guildSettings.getEventByName(pkg.eventName))
-  console.log(pkg.eventName + " - passed webhooksender")
+
   let webhookID, webhookToken
   if (webhook) {
     const split = webhook.split('|')

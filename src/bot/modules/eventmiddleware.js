@@ -7,7 +7,6 @@ module.exports = async (event, type) => {
   if (type === 'on') {
     global.bot.on(event.name, async (...args) => {
       const guildId = getGuildIdByEvent(event.name, args)
-      console.log("eventmiddleware - " + event.name + " | ID - " + guildId)
 
       if (!guildId) {
         global.logger.warn(`While executing event ${event.name}, a guild ID was not returned!`)

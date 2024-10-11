@@ -17,7 +17,6 @@ module.exports = {
   name: 'guildMemberUpdate',
   type: 'on',
   handle: async (guild, member, oldMember) => {
-    console.log("Firing guildMemberUpdate event")
     if (!global.bot.guilds.get(guild.id)) { // don't try to log something when the bot isn't in the guild
       return
     }
@@ -92,7 +91,6 @@ module.exports = {
     const possibleRoleLog = logs.entries.find(e => e.targetID === member.id && e.actionType === 25 && Date.now() - ((e.id / 4194304) + 1420070400000) < 3000)
     const possibleTimeoutLog = logs.entries.find(e => e.targetID === member.id && e.actionType === 24 && (e.before.communication_disabled_until || e.after.communication_disabled_until) && Date.now() - ((e.id / 4194304) + 1420070400000) < 3000)
     if (possibleRoleLog) {
-      console.log("Logging role change")
       possibleRoleLog.guild = []
       const user = possibleRoleLog.user
       if (user == null) return
@@ -135,7 +133,6 @@ module.exports = {
     
     // Timeout log (WHY ISN'T THIS A SEPARATE EVENT?????)
     else if (possibleTimeoutLog) {
-      console.log("Logging timeout")
       const embedCopyTL = guildMemberUpdate
       embedCopyTL.eventName = 'guildMemberTimeout'
       
