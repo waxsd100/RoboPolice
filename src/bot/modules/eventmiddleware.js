@@ -18,9 +18,10 @@ module.exports = async (event, type) => {
           await cacheGuild(guildId)
         }
 
+        /*
         if (event.name == 'guildMemberUpdate') {
           event.name = 'guildMemberTimeout'
-        }
+        }*/
 
         const logChannel = global.bot.guildSettingsCache[guildId].event_logs[event.name] && global.bot.getChannel(global.bot.guildSettingsCache[guildId].event_logs[event.name])
         if (!logChannel) {
@@ -64,6 +65,7 @@ function getGuildIdByEvent (type, args) {
     case 'guildBanRemove':
     case 'guildEmojisUpdate':
     case 'guildMemberAdd':
+    case 'guildMemberTimeout':
     case 'guildMemberUpdate':
     case 'guildRoleCreate':
     case 'guildRoleDelete':
