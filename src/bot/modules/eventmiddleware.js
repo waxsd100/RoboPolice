@@ -18,10 +18,11 @@ module.exports = async (event, type) => {
           await cacheGuild(guildId)
         }
 
-        /*
+        // Forces guildMemberUpdate to log Timeout independently of that event.
+        // If you're seeing this, please give me a better solution because this bot is so stubborn with the whole event thing. Thx.
         if (event.name == 'guildMemberUpdate') {
           event.name = 'guildMemberTimeout'
-        }*/
+        }
 
         const logChannel = global.bot.guildSettingsCache[guildId].event_logs[event.name] && global.bot.getChannel(global.bot.guildSettingsCache[guildId].event_logs[event.name])
         if (!logChannel) {
@@ -65,7 +66,6 @@ function getGuildIdByEvent (type, args) {
     case 'guildBanRemove':
     case 'guildEmojisUpdate':
     case 'guildMemberAdd':
-    case 'guildMemberTimeout':
     case 'guildMemberUpdate':
     case 'guildRoleCreate':
     case 'guildRoleDelete':
