@@ -134,7 +134,7 @@ module.exports = {
     }
     
     // Timeout log (WHY ISN'T THIS A SEPARATE EVENT?????)
-    else if (possibleTimeoutLog && embedCopyTL.eventName == 'guildMemberUpdate') {
+    else if (possibleTimeoutLog) {
       console.log("Logging timeout")
       const embedCopyTL = guildMemberUpdate
       embedCopyTL.eventName = 'guildMemberTimeout'
