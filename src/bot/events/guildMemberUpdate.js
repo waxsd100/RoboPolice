@@ -55,6 +55,29 @@ module.exports = {
         name: 'ID',
         value: `\`\`\`ini\nUser = ${member.id}\`\`\``
       })
+
+      const logs = await guild.getAuditLog({ limit: 5 });
+      const possibleNickLog = logs.entries.find(e =>
+        e.targetID === member.id &&
+        e.actionType === 24 &&
+        e.changes.some(change => change.key === 'nick') &&
+        Date.now() - ((e.id / 4194304) + 1420070400000) < 3000
+      );
+  
+      if (possibleNickLog) {
+        const perpetrator = possibleNickLog.user;
+        if (perpetrator) {
+          guildMemberUpdate.embeds[0].fields.push({
+            name: 'Perpetrator',
+            value: `${perpetrator.username}#${perpetrator.discriminator} (\`${perpetrator.id}\`)`
+          });
+          guildMemberUpdate.embeds[0].footer = {
+            text: `${perpetrator.username}#${perpetrator.discriminator}`,
+            icon_url: perpetrator.avatarURL
+          };
+        }
+      }
+
       if (!guildMemberUpdate.embeds[0].fields[0].value) return
       await send(guildMemberUpdate)
     } else if (oldMember?.pending && !member.pending && guild.features.includes('MEMBER_VERIFICATION_GATE_ENABLED')) {
