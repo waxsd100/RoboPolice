@@ -1,4 +1,3 @@
-Logger is a powerful [Discord](https://discordapp.com) bot meant to give staff members oversight over the various actions taking place in their server. Come talk about me with my creator at [Logger's Lounge](https://discord.gg/ed7Gaa3).
 
 ## Installation
 
