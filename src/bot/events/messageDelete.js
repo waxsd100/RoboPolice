@@ -62,7 +62,7 @@ module.exports = {
       value: `<t:${Math.round(cachedMessage.ts / 1000)}:F>`
     }, {
       name: 'ID',
-      value: `\`\`\`ini\nUser = ${cachedMessage.author_id}\nMessage = ${cachedMessage.id}\`\`\``
+      value: `\`\`\`ini\nUser = <@${cachedMessage.author_id}>\nMessage = ${cachedMessage.id}\`\`\``
     })
 
     if (cachedMessage.attachment_b64) {
