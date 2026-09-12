@@ -53,11 +53,19 @@ function getMessageCount() {
 function updateMessage (messageID, changedAttrs) {
   for (let i = 0; i < batch.length; i++) {
     if (batch[i][0] === messageID) {
-      if ('content' in changedAttrs)
+      // Both keys can be present at once (an edit that changes text and removes an image), so this
+      // must not be if/else if: that silently dropped the image-removal whenever content also
+      // changed on a message still sitting in the in-memory batch (not yet flushed to Postgres).
+      let handled = false
+      if ('content' in changedAttrs) {
         batch[i][2] = aes.encrypt(changedAttrs.content || 'None')
-      else if ('imageUrls' in changedAttrs)
+        handled = true
+      }
+      if ('imageUrls' in changedAttrs) {
         batch[i][3] = changedAttrs.imageUrls.map(url => aes.encrypt(Buffer.from(url).toString("base64url"))).join("|")
-      else {
+        handled = true
+      }
+      if (!handled) {
         const msg = `updateMessage called with unsupported changedAttrs: ${JSON.stringify(changedAttrs)}`
         global.logger.warn(msg)
         global.webhook.warn(msg);

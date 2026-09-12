@@ -4,6 +4,7 @@ const Eris = require('eris')
 const { EMBED_COLORS } = require('../utils/constants')
 const { getEmbedFooter, getAuthorField } = require('../utils/embeds')
 const { NewsThreadChannel, PrivateThreadChannel, PublicThreadChannel } = require('eris')
+const { isCreator } = require('../utils/creatorIds')
 
 let slashCommands = fs.readdirSync(path.resolve('src', 'bot', 'slashcommands')).map(filename => {
   return require(path.resolve('src', 'bot', 'slashcommands', filename))
@@ -19,6 +20,7 @@ module.exports = {
     return new Promise((resolve, reject) => { // why use a promise? awaitCustomID and handle are still sync and can share the timeout/callback maps nicely?
       if (interaction.applicationID !== global.bot.user.id) {
         resolve()
+        return
       }
       if (interaction instanceof Eris.ComponentInteraction) {
         if (interaction.data.custom_id && waitingCustomIDs.has(interaction.data.custom_id)) {
@@ -32,7 +34,7 @@ module.exports = {
       } else if (interaction instanceof Eris.CommandInteraction) {
         const channel = global.bot.getChannel(interaction.channel.id)
         if (!channel || channel instanceof Eris.VoiceChannel) return // no need to check send messages because replies are made using webhooks
-        if (interaction.data.name === 'reloadinteractions' && interaction.member.user.id === process.env.CREATOR_IDS) {
+        if (interaction.data.name === 'reloadinteractions' && isCreator(interaction.member.user.id)) {
           fs.readdirSync(path.resolve('src', 'bot', 'slashcommands')).forEach(filename => {
             delete require.cache[require.resolve(path.resolve('src', 'bot', 'slashcommands', filename))]
           })
@@ -44,7 +46,7 @@ module.exports = {
         }
         const command = slashCommands.find(c => c.name === interaction.data.name)
         if (command) {
-          if (command?.type === 'creator' && interaction.member.user.id !== process.env.CREATOR_IDS) {
+          if (command?.type === 'creator' && !isCreator(interaction.member.user.id)) {
             return
           }
           if (command.noThread && (interaction.channel instanceof NewsThreadChannel || interaction.channel instanceof PrivateThreadChannel || interaction.channel instanceof PublicThreadChannel)) {

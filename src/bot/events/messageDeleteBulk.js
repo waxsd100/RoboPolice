@@ -10,11 +10,17 @@ module.exports = {
   handle: async messages => {
     if (messages.length === 0) return // TODO: TEST!
 
+    // Eris populates this differently depending on whether the deleted messages were cached
+    // (channel.guild.id) or arrived as raw gateway stubs (guildID/guildId). This used to be
+    // resolved one way when PASTE_SITE_ROOT_URL was unset (guildId only) and a different, more
+    // permissive way otherwise, so the "no paste site configured" notice silently never sent
+    // whenever the guild id actually lived under one of the other two shapes.
+    const guildID = messages[0].channel?.guild?.id || messages[0].guildID || messages[0].guildId
+    if (!guildID) return
+
     if (!process.env.PASTE_SITE_ROOT_URL) {
-      if (!messages[0].guildId) return;
-  
       return send({
-        guildID: messages[0].guildId,
+        guildID,
         eventName: 'messageDeleteBulk',
         embeds: [{
             description: `${messages.length} 件のメッセージが一括削除されました。:warning: pasteサイトが設定されていないため、削除されたメッセージの内容は表示されません。:warning:`,
@@ -23,8 +29,6 @@ module.exports = {
       });
     }
 
-    const guildID = messages[0].channel?.guild?.id || messages[0].guildID || messages[0].guildId
-    if (!guildID) return
     const dbMessages = await getMessagesByIds(messages.map(m => m.id))
     if (!dbMessages) {
       // getMessagesByIds returns null when nothing matched. If the newest of the batch is past the

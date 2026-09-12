@@ -6,11 +6,17 @@
 const uri = process.env.BEZERK_URI
 const secret = process.env.BEZERK_SECRET
 const WS = require('ws')
+const cluster = require('cluster') // was missing: every IDENTIFY (op 1001) threw ReferenceError, breaking the bridge
 const cacheGuild = require('../bot/utils/cacheGuild')
 
 let socket
 
 function start () {
+  // Tracks whether IDENTIFY_REPLY confirmed our secret before this connection is trusted with
+  // REQUEST (eval) payloads. Without this, any message arriving on the socket before that
+  // handshake completes - including from a misconfigured or unauthenticated peer - would be
+  // eval'd with the full run of this process (env vars, DB credentials, the bot client).
+  let identified = false
   global.logger.info(`Bezerk connection started to ${uri}`)
   socket = new WS(uri)
   socket.on('error', e => {
@@ -39,6 +45,7 @@ function start () {
       }
       case '1002': { // IDENTIFY_REPLY
         if (msg.c.success === true) {
+          identified = true
           global.logger.info('Bezerk connection fully open.')
           global.logger.info('Successfully connected to Bezerk.')
         } else {
@@ -47,6 +54,14 @@ function start () {
         break
       }
       case '2001': { // REQUEST
+        if (!identified) {
+          global.logger.warn('Bezerk REQUEST received before a successful IDENTIFY_REPLY, ignoring.')
+          return send({
+            op: '5000', // CANNOT_COMPLY
+            c: 'Not identified',
+            uuid: msg.uuid ? msg.uuid : 6334
+          })
+        }
         const bot = global.bot
         try {
           if (msg.c.startsWith('recache')) {
