@@ -60,7 +60,7 @@ not personal data.
 ### 3.3 Temporary caches
 
 Invite-code usage counters, webhook handles and server settings are held in Redis to avoid repeated
-API calls. These are caches; they are not a long-term store and are cleared on restart.
+API calls. These are caches: every key carries a 3-hour expiry and they are cleared on restart.
 
 ### 3.4 What the App does NOT collect
 
@@ -94,27 +94,23 @@ Apart from these, data stays on infrastructure we operate.
 
 | Data | Retention |
 |---|---|
-| Message rows | Retained while the App operates; no fixed expiry |
+| Message rows | **30 days**, then permanently deleted |
 | Server configuration | Until the App is removed from the Server |
-| Temporary caches | Transient; cleared on restart |
+| Temporary caches | 3-hour expiry; also cleared on restart |
 
-We do not currently apply a fixed expiry to message rows: they are the audit record the Server's
-moderators rely on, and an incident is often investigated long after it happened. We keep only the
-fields listed in section 3.1, encrypted, and we delete a user's rows on request (section 8).
-
-Rows are also removed automatically in one case: when a single message is deleted and that deletion
-is logged, its row is dropped, because the log embed then holds the record. This does **not** apply
-to bulk deletions (for example messages removed along with a ban), whose rows remain.
+Message rows are deleted once they are 30 days old. This is enforced by a scheduled job
+(`src/miscellaneous/prune.js`) that runs automatically, not by hand. A row is also dropped earlier if
+its message is deleted and that single deletion is logged, because the log embed then holds the
+record; this does not apply to bulk deletions, whose rows wait for the 30-day sweep.
 
 Two limits are worth stating plainly:
 
-- Excluding a channel with `/ignorechannel` stops future logging in it. It does not remove rows
-  already stored from that channel.
+- Excluding a channel with `/ignorechannel` stops future logging in it. It does not immediately
+  remove rows already stored from that channel; those expire on the normal 30-day schedule.
 - Because we do not store a server or channel ID alongside a message (section 3.1), we cannot select
   rows by server. Rows can be selected by user ID, which is what a deletion request uses.
 
-If we introduce a fixed retention window in future, this section will be updated before it takes
-effect.
+If we change the retention window, this section will be updated before the change takes effect.
 
 ## 6. Security
 
@@ -133,7 +129,8 @@ the database.
 ## 8. Requesting deletion of your data
 
 Join https://discord.com/invite/nobaman and contact the staff with your Discord user ID. We will
-delete the message rows stored for that user.
+delete the message rows stored for that user. Independently of any request, all message rows are
+deleted after 30 days.
 
 ## 9. Children
 
@@ -208,8 +205,8 @@ https://discord.com/invite/nobaman
 
 ### 3.3 一時キャッシュ
 
-招待コードの使用回数、Webhook ハンドル、サーバー設定を Redis に保持します。これらはキャッシュであり
-長期保存ではなく、再起動時に消去されます。
+招待コードの使用回数、Webhook ハンドル、サーバー設定を Redis に保持します。これらはキャッシュであり、
+すべてのキーに3時間の有効期限が設定されているほか、再起動時にも消去されます。
 
 ### 3.4 取得しないもの
 
@@ -243,26 +240,23 @@ https://discord.com/invite/nobaman
 
 | データ | 保持期間 |
 |---|---|
-| メッセージ行 | 本BOTの運用中は保持（期限は設けていません） |
+| メッセージ行 | **30日**、その後は完全に削除 |
 | サーバー設定 | 本BOTがサーバーから削除されるまで |
-| 一時キャッシュ | 一時的（再起動時に消去） |
+| 一時キャッシュ | 3時間で失効（再起動時にも消去） |
 
-メッセージ行に固定の保存期限は設けていません。これらは本サーバーのモデレーターが依拠する監査記録であり、
-事案の調査は発生からかなり経ってから行われることがあるためです。保存するのは 3.1 に挙げた項目のみで、
-暗号化したうえで保持し、削除請求があれば当該ユーザーの行を削除します（第8項）。
-
-自動的に削除される場合が1つあります。単一のメッセージが削除され、その削除がログに出力された時点で、
-該当する行は削除されます（ログがその役割を引き継ぐため）。ただし**一括削除**（BANに伴う削除など）には
-この処理は適用されず、行は残ります。
+メッセージ行は30日経過した時点で削除されます。これは手動ではなく、定期実行されるジョブ
+（`src/miscellaneous/prune.js`）によって強制されます。また単一のメッセージが削除され、その削除が
+ログに出力された時点で該当行はより早く削除されます（ログがその役割を引き継ぐため）。ただし
+**一括削除**（BANに伴う削除など）にはこの早期削除は適用されず、通常の30日で削除されます。
 
 以下の2点は明示しておきます。
 
 - `/ignorechannel` によるチャンネルの除外は、以後のログ取得を停止するものです。そのチャンネルから
-  既に保存された行を削除するものではありません。
+  既に保存された行が即座に消えるわけではなく、通常どおり30日で削除されます。
 - メッセージにサーバーIDやチャンネルIDを併せて保存していないため（3.1）、サーバー単位で行を
   選択することはできません。ユーザーID単位での選択は可能で、削除請求はこれを用います。
 
-将来固定の保持期間を設ける場合は、適用前に本項を更新します。
+保持期間を変更する場合は、適用前に本項を更新します。
 
 ## 6. セキュリティ
 
@@ -279,7 +273,8 @@ AES-256 により暗号化されます。したがって平文のメッセージ
 ## 8. データ削除の請求
 
 https://discord.com/invite/nobaman に参加し、ご自身の Discord ユーザーIDを添えてスタッフにご連絡ください。
-当該ユーザーについて保存されているメッセージ行を削除します。
+当該ユーザーについて保存されているメッセージ行を削除します。請求の有無にかかわらず、
+メッセージ行は30日で削除されます。
 
 ## 9. 年齢
 
