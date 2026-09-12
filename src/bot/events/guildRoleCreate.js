@@ -17,7 +17,7 @@ module.exports = {
           value: 'User'
         }, {
           name: 'ID',
-          value: `\`\`\`ini\nロール = ${role.id}\n実行者 = Unknown\`\`\``
+          value: `\`\`\`ini\nロール = ${role.id}\n実行者 = 不明\`\`\``
         }]
       }]
     }

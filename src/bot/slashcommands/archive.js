@@ -52,7 +52,7 @@ module.exports = {
     sa
       .post(`${process.env.PASTE_SITE_ROOT_URL}/documents`)
       .set('Content-Type', 'text/plain')
-      .send(pasteString || 'No messages were able to be archived')
+      .send(pasteString || 'アーカイブできるメッセージがありませんでした')
       .end((err, res) => {
         if (!err && res.statusCode === 200 && res.body.key) {
           interaction.editOriginalMessage({

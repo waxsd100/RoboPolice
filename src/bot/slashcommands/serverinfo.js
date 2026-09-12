@@ -49,7 +49,7 @@ module.exports = {
     if (guild.emojis.length === 0) {
       fields.push({
         name: 'Emojis',
-        value: 'None'
+        value: 'なし'
       })
       interaction.createMessage({ embed }).catch(() => {})
     } else {
@@ -88,7 +88,7 @@ module.exports = {
             global.logger.error('Failure to send a legal serverinfo embed', e)
           })
         } else {
-          interaction.createMessage({ embeds: [{ description: 'Emojis continued', fields: emojiFieldsToUse }] }).catch(e => {
+          interaction.createMessage({ embeds: [{ description: '絵文字（続き）', fields: emojiFieldsToUse }] }).catch(e => {
             global.logger.error('Failure to send serverinfo emoji continuation embed', e)
           })
         }

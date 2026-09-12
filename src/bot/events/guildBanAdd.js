@@ -21,7 +21,7 @@ module.exports = {
           value: '理由なし'
         }, {
           name: 'ID',
-          value: `\`\`\`ini\nユーザー = ${user.id}\n実行者 = Unknown\`\`\``
+          value: `\`\`\`ini\nユーザー = ${user.id}\n実行者 = 不明\`\`\``
         }],
         color: 3553599
       }]

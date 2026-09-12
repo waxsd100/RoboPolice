@@ -27,7 +27,7 @@ module.exports = {
           value: newChannel.name
         }, {
           name: 'ID',
-          value: `\`\`\`ini\nユーザー = Unknown\nチャンネル = ${newChannel.id}\`\`\``
+          value: `\`\`\`ini\nユーザー = 不明\nチャンネル = ${newChannel.id}\`\`\``
         }],
         color: 3553599
       }]

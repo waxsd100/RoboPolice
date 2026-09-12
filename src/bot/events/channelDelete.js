@@ -34,7 +34,7 @@ module.exports = {
           value: channel.position
         }, {
           name: 'ID',
-          value: `\`\`\`ini\nユーザー = Unknown\nチャンネル = ${channel.id}\`\`\``
+          value: `\`\`\`ini\nユーザー = 不明\nチャンネル = ${channel.id}\`\`\``
         }],
         color: 3553599
       }]

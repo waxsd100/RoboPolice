@@ -38,7 +38,7 @@ module.exports = {
     if (message.channel.guild.emojis.length === 0) {
       fields.push({
         name: 'Emojis',
-        value: 'None'
+        value: 'なし'
       })
       await message.channel.createMessage({ embeds: [embed] })
     } else {

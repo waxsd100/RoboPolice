@@ -74,7 +74,7 @@ module.exports = {
       } else {
         guildRoleUpdateEvent.embeds[0].fields.push({
           name: 'ID',
-          value: `\`\`\`ini\nロール = ${role.id}\n実行者 = Unknown\`\`\``
+          value: `\`\`\`ini\nロール = ${role.id}\n実行者 = 不明\`\`\``
         })
         if (guildRoleUpdateEvent.embeds[0].fields.length === 1) return
         await send(guildRoleUpdateEvent)

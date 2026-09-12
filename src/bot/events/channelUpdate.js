@@ -165,7 +165,7 @@ module.exports = {
             if (fields[counter].value.length >= 950) {
               counter++
               fields.push({
-                name: `${overwriteName} continued`,
+                name: `${overwriteName} 続き`,
                 value: ''
               })
             }
@@ -212,7 +212,7 @@ module.exports = {
     } else {
       channelUpdateEvent.embeds[0].fields.push({
         name: 'ID',
-        value: `\`\`\`ini\nユーザー = Unknown, no audit log entry\nチャンネル = ${channel.id}\`\`\``
+        value: `\`\`\`ini\nユーザー = 不明（監査ログなし）\nチャンネル = ${channel.id}\`\`\``
       })
       await send(channelUpdateEvent)
     }

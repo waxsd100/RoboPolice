@@ -34,10 +34,10 @@ module.exports = {
       value: `<t:${Math.round(((member.id / 4194304) + 1420070400000) / 1000)}:F>`
     }, {
       name: 'ロール',
-      value: roles.length !== 0 ? roles.map(c => `\`${c.name}\``).join(', ') : 'None'
+      value: roles.length !== 0 ? roles.map(c => `\`${c.name}\``).join(', ') : 'なし'
     }, {
       name: '主な権限',
-      value: perms.length !== 0 ? perms.join(', ') : 'None'
+      value: perms.length !== 0 ? perms.join(', ') : 'なし'
     })
     message.channel.createMessage({
       embeds: [{

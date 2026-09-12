@@ -29,8 +29,8 @@ module.exports = {
   name: 'ignorechannel',
   quickHelp: 'このコマンドを実行したチャンネルのイベントをログ対象外にします。対象にしたいテキストチャンネルで実行するか、チャンネルID（ボイスチャンネルも可）を引数に指定してください。',
   examples: `\`${process.env.GLOBAL_BOT_PREFIX}ignorechannel\` <- 実行したチャンネルのイベントを除外
-  \`${process.env.GLOBAL_BOT_PREFIX}ignorechannel voice channel id\` <- 指定したボイスチャンネルのイベントを除外
-  \`${process.env.GLOBAL_BOT_PREFIX}ignorechannel text channel id\` <- 指定したテキストチャンネルのイベントを除外`,
+  \`${process.env.GLOBAL_BOT_PREFIX}ignorechannel ボイスチャンネルID\` <- 指定したボイスチャンネルのイベントを除外
+  \`${process.env.GLOBAL_BOT_PREFIX}ignorechannel テキストチャンネルID\` <- 指定したテキストチャンネルのイベントを除外`,
   type: 'custom',
   perm: 'manageChannels',
   category: 'Logging'
