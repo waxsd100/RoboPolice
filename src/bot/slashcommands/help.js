@@ -53,7 +53,7 @@ module.exports = {
           }, {
             inline: true,
             name: '__Time: Message logging__',
-            value: `${global.bot.user.username} cannot log messages upon deletion that it didn't see created first, so messages sent before the bot joined or while it was offline will not show their content when deleted.`
+            value: `${global.bot.user.username} cannot log messages upon deletion that it didn't see created first, so messages sent before the bot joined or while it was offline will not show their content when deleted. Additionally, messages are kept for ${process.env.MESSAGE_HISTORY_DAYS} days: deleting or editing a message older than that produces no log entry at all.`
           }],
           footer: getEmbedFooter(global.bot.user),
           author: getAuthorField(interaction.member.user),

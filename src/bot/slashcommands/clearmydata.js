@@ -8,7 +8,7 @@ module.exports = {
     interaction.createMessage({
       embeds: [{
         title: 'Action needed:',
-        description: `To request deletion of your data (messages), join the [support server](${process.env.DISCORD_SUPPORT_SERVER}) and contact the staff with your user ID. Stored messages are encrypted at rest, and we delete them on request.\n\nSee the [Privacy Policy](${LEGAL_LINKS.PRIVACY_POLICY}) for exactly what is stored and for how long.`,
+        description: `To request deletion of your data (messages), join the [support server](${process.env.DISCORD_SUPPORT_SERVER}) and contact the staff with your user ID. Stored messages are encrypted at rest and are automatically deleted after ${process.env.MESSAGE_HISTORY_DAYS} days regardless of this request.\n\nSee the [Privacy Policy](${LEGAL_LINKS.PRIVACY_POLICY}) for exactly what is stored.`,
         color: 16711680,
         timestamp: new Date(),
         footer: {
