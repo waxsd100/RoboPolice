@@ -77,7 +77,7 @@ async function paste (messages, guildID) {
         if (!err && res.body && res.statusCode === 200 && res.body.key) {
           messageDeleteBulkEvent.embeds[0].fields.push({
             name: 'Link',
-            value: `${process.env.PASTE_ROOT_URL}/${res.body.key}.txt`
+            value: `${process.env.PASTE_SITE_ROOT_URL}/${res.body.key}.txt`
           })
           send(messageDeleteBulkEvent)
         } else {
