@@ -3,6 +3,7 @@ const updateMessageByID = require('../../db/interfaces/postgres/update').updateM
 const getMessageFromDB = require('../../db/interfaces/postgres/read').getMessageById
 const getMessageFromBatch = require('../../db/messageBatcher').getMessage
 const escape = require('markdown-escape')
+const { isBeyondRetention } = require('../utils/retention')
 
 // markdown-escape is a single exported function, I probably don't need it as a node module lol
 
@@ -17,8 +18,14 @@ module.exports = {
     if (!oldMessage) {
       oldMessage = await getMessageFromDB(newMessage.id)
     }
-    if (!oldMessage) return
-    if (newMessage.author.bot && !global.bot.global.guildSettingsCache[newMessage.channel.guild.id].isLogBots()) return
+    if (!oldMessage) {
+      // Aged out of retention: report that an edit happened even though the previous text is gone.
+      if (isBeyondRetention(newMessage.id) && !newMessage.author.bot) {
+        await send(expiredUpdateEvent(newMessage, member))
+      }
+      return
+    }
+    if (newMessage.author.bot && !global.bot.guildSettingsCache[newMessage.channel.guild.id].isLogBots()) return
     await processMessage(newMessage, oldMessage)
 
     async function processMessage (newMessage, oldMessage) {
@@ -123,6 +130,31 @@ module.exports = {
         await send(secondMessageUpdatePayload)
       }
     }
+  }
+}
+
+function expiredUpdateEvent (newMessage, member) {
+  return {
+    guildID: newMessage.channel.guild.id,
+    eventName: 'messageUpdate',
+    embeds: [{
+      author: {
+        name: `${newMessage.author.username}#${newMessage.author.discriminator} ${member && member.nick ? `(${member.nick})` : ''}`,
+        icon_url: newMessage.author.avatarURL
+      },
+      description: `**${newMessage.author.username}#${newMessage.author.discriminator}** updated their message in: ${newMessage.channel.name}.`,
+      fields: [{
+        name: 'Channel',
+        value: `<#${newMessage.channel.id}> (${newMessage.channel.name})\n[Go To Message](https://discord.com/channels/${newMessage.channel.guild.id}/${newMessage.channel.id}/${newMessage.id})`
+      }, {
+        name: 'Previous',
+        value: `Not available. The message is older than the ${process.env.MESSAGE_HISTORY_DAYS} day retention window, so its previous content is no longer stored.`
+      }, {
+        name: 'ID',
+        value: `\`\`\`ini\nUser = ${newMessage.author.id}\nMessage = ${newMessage.id}\`\`\``
+      }],
+      color: 15084269
+    }]
   }
 }
 

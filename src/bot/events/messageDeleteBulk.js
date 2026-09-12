@@ -2,6 +2,7 @@ const sa = require('superagent')
 const getMessagesByIds = require('../../db/interfaces/postgres/read').getMessagesByIds
 const send = require('../modules/webhooksender')
 const { EMBED_COLORS } = require('../utils/constants')
+const { isBeyondRetention } = require('../utils/retention')
 
 module.exports = {
   name: 'messageDeleteBulk',
@@ -22,8 +23,26 @@ module.exports = {
       });
     }
 
+    const guildID = messages[0].channel?.guild?.id || messages[0].guildID || messages[0].guildId
+    if (!guildID) return
     const dbMessages = await getMessagesByIds(messages.map(m => m.id))
-    await paste(dbMessages, messages[0].channel.guild.id)
+    if (!dbMessages) {
+      // getMessagesByIds returns null when nothing matched. If the newest of the batch is past the
+      // retention window they were all pruned, so report the deletion rather than dropping it.
+      const newestID = messages.reduce((a, b) => BigInt(a.id) > BigInt(b.id) ? a : b).id // snowflakes vary in length, so compare numerically
+      if (isBeyondRetention(newestID)) {
+        await send({
+          guildID,
+          eventName: 'messageDeleteBulk',
+          embeds: [{
+            description: `**${messages.length}** message(s) were bulk deleted. Their contents are not available: they are older than the ${process.env.MESSAGE_HISTORY_DAYS} day retention window.`,
+            color: EMBED_COLORS.YELLOW_ORANGE
+          }]
+        })
+      }
+      return
+    }
+    await paste(dbMessages, guildID)
   }
 }
 
