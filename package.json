@@ -1,7 +1,7 @@
 {
   "name": "loggerv3",
   "version": "3.3.0",
-  "description": "Logger version 3, serving over 180,000 Discord servers",
+  "description": "RoboPolice - a private audit-logging Discord app, forked from Logger v3",
   "main": "index.js",
   "scripts": {
     "test": "standard",

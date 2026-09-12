@@ -84,8 +84,18 @@ class GuildSettings {
     })
   }
 
+  // Stored message rows exist only to render messageDelete / messageUpdate / messageDeleteBulk. A
+  // guild with none of those configured can never use them, so caching there would store message
+  // content we would never read. Fails open: if settings look malformed, keep the old behaviour
+  // rather than silently stopping deletion logs.
+  needsMessageCache () {
+    if (!this.event_logs) return true
+    return ['messageDelete', 'messageUpdate', 'messageDeleteBulk']
+      .some(event => !!this.event_logs[event] && !this.eventIsDisabled(event))
+  }
+
   eventIsDisabled (event) {
-    return this.disabledEvents.includes(event)
+    return !!this.disabledEvents && this.disabledEvents.includes(event)
   }
 
   recache () {

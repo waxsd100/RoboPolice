@@ -1,3 +1,4 @@
+const { LEGAL_LINKS } = require('../utils/constants')
 module.exports = {
   func: async message => {
     await message.channel.createMessage({
@@ -20,7 +21,7 @@ module.exports = {
         fields: [
           {
             name: 'Technical Details',
-            value: `${global.bot.user.username} is written in JavaScript utilizing the Node.js runtime. It uses the [eris](https://github.com/abalabahaha/eris) library to interact with the Discord API. PostgreSQL and Redis are used. I am OSS at https://github.com/tizzysaurus/logger`
+            value: `${global.bot.user.username} is written in JavaScript utilizing the Node.js runtime. It uses the [eris](https://github.com/abalabahaha/eris) library to interact with the Discord API. PostgreSQL and Redis are used. I am OSS at https://github.com/waxsd100/RoboPolice`
           },
           {
             name: 'The Author',
@@ -32,7 +33,7 @@ module.exports = {
           },
           {
             name: 'Privacy Policy',
-            value: `For up-to-date privacy information, please contact \`@${process.env.BOT_CREATOR_NAME}\`.`
+            value: `[Privacy Policy](${LEGAL_LINKS.PRIVACY_POLICY}) | [Terms of Service](${LEGAL_LINKS.TERMS_OF_SERVICE})`
           }
         ]
       }]

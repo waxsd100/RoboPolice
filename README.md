@@ -1,33 +1,121 @@
-Logger is a powerful [Discord](https://discordapp.com) bot meant to give staff members oversight over the various actions taking place in their server. Come talk about me with my creator at [Logger's Lounge](https://discord.gg/ed7Gaa3).
+# ロボポリス (RoboPolice)
 
-## Installation
+RoboPolice is a **private** [Discord](https://discord.com) audit-logging app. It is not publicly
+listed and cannot be added by third parties. It runs only in servers we operate: one community
+server, whose staff use it for that server's own moderation, plus a few private test servers used to
+stage changes.
 
-You are mostly on your own selfhosting this version. Required applications:
-- PostgreSQL 11
+It records moderation-relevant events — member joins and leaves, kicks, bans, role and nickname
+changes, message deletions and edits, channel/role/emoji/server-setting changes, invite usage and
+voice activity — and posts them to staff-only log channels chosen with `/setup`.
+
+Support: https://discord.com/invite/nobaman
+
+A fork of [Logger v3](https://github.com/curtisf/logger) by Curtis Fowler, licensed
+AGPL-3.0-or-later.
+
+## Legal
+
+- [Privacy Policy](PRIVACY.md)
+- [Terms of Service](TERMS.md)
+
+These are the documents registered with Discord for this application. **Keep them in sync with what
+the code actually does** — if you change what is stored, where it is sent, or how long it is kept,
+update them in the same change. The application for privileged intent access attests that they are
+accurate, and the reviewer can read this repository.
+
+## Privileged intents
+
+The app requires two privileged intents, both enabled in the Developer Portal:
+
+| Intent | Why |
+|---|---|
+| **Server Members** | `GUILD_MEMBER_ADD` / `REMOVE` / `UPDATE` are not delivered without it, so join, leave, kick, nickname and role logging cannot work. Also resolves nicknames and roles shown in every other log embed. |
+| **Message Content** | A deleted message cannot be fetched back from the API, so its content must be received before deletion to be shown in a deletion or edit log. |
+
+**Presence is not used** and must stay disabled.
+
+See [`docs/discord/privileged-intent-review.md`](docs/discord/privileged-intent-review.md) for the
+intent review submission, where every claim is mapped to the code that backs it.
+
+## What is stored
+
+Short version; [PRIVACY.md](PRIVACY.md) is authoritative.
+
+| Data | Where | Retention |
+|---|---|---|
+| Message ID, author ID, timestamp, AES-256 encrypted content and attachment URLs | PostgreSQL `messages` | `MESSAGE_HISTORY_DAYS` days |
+| Per-server settings (log channels, ignored channels, disabled events) | PostgreSQL `guilds` | Until the app leaves the server |
+| Invite counters, webhook handles, guild settings | Redis | 3 hours |
+
+Message rows are written **only for servers that have a message deletion or edit log channel
+configured** — a server with none never has message content stored, since nothing could read it back.
+
+## Requirements
+
+- PostgreSQL 11+
 - Redis
-- NodeJS 14+ (14.5.0)
+- Node.js 14.5+
 
-1. Setup Postgres and add a superuser (default user works)
-2. Clone bot repo and enter the created folder
-3. Copy .env.example into .env
-4. Fill out **all** fields in it (even Sentry unless you hotpatch it out)
-5. `npm install`
-6. `node src/miscellaneous/generateDB.js`
-7. Set `ENABLE_TEXT_COMMANDS="true"` in .env
-8. `node index.js`
-9. Use your prefix to set the bot's commands. If yours is %, then you'd do `%setcmd global` to globally set commands, and `%setcmd guild` to quickly set server-specific slash commands
+## Setup
+
+1. Set up Postgres with a superuser (the default user works)
+2. Clone the repo and enter the folder
+3. `cp .env.example .env` and fill it in. Every value is required except the ones marked optional
+4. `npm install`
+5. `node src/miscellaneous/generateDB.js` to create the database and tables
+6. Set `ENABLE_TEXT_COMMANDS="true"` in `.env`
+7. `node index.js`
+8. Register slash commands with the text prefix: `%setcmd global` for global commands, or
+   `%setcmd guild` for faster server-scoped registration (substitute your `GLOBAL_BOT_PREFIX`)
+
+## Configuration worth knowing
+
+| Variable | Effect |
+|---|---|
+| `MESSAGE_HISTORY_DAYS` | Retention window. Unset means rows are **never** deleted, which contradicts PRIVACY.md and what `/help` and `/clearmydata` tell users. The bot warns on startup if unset. |
+| `PRUNE_EXTERNAL` | Set `true` only when running `prune.js` as a separate cron service, so the bot stops scheduling its own sweep |
+| `SENTRY_URI` | Optional. When set, errors and stack traces are sent to Sentry — a third party, disclosed in PRIVACY.md. Leave unset to keep error reporting local |
+| `PASTE_SITE_ROOT_URL` | Optional. Where `/archive` and bulk-deletion logs upload message text. Anyone with the resulting link can read it, so self-host it. Unset disables both features |
+| `MESSAGE_BATCH_SIZE` | Messages buffered in memory before a batched insert. Larger means fewer writes but more messages lost on an unclean restart |
+
+## Data retention
+
+`src/miscellaneous/prune.js` deletes message rows older than `MESSAGE_HISTORY_DAYS`, in batches. Run
+it either way:
+
+- **In-process (default):** the worker owning shard 0 sweeps hourly. Nothing to configure beyond
+  `MESSAGE_HISTORY_DAYS`.
+- **As a cron job:** `node src/miscellaneous/prune.js` prunes once, prints the number of rows
+  deleted, and exits. Give it the same `PG*` variables, and set `PRUNE_EXTERNAL=true` on the bot so
+  the sweep is not scheduled twice.
+
+Once a row is pruned, deleting or editing that message logs that it happened but cannot show the
+content. Messages that were never stored at all stay silent, as before.
 
 ## Usage
 
 ```bash
-node index.js
+node index.js          # the bot
+npm run lint           # eslint
+npm test               # standard
 ```
 
 ## Contributing
-Pull requests are welcome as long as it follows the following guidelines:
-1. Is your idea really one that a large group of moderators would like?
-2. Is your idea scalable?
-3. Will your idea cause the bot to hit it's global ratelimit?
-4. Have you proposed it to *piero#5432* in my [support server?](https://discord.gg/ed7Gaa3)
 
-If you have done all of the above steps, then open a pull request and I will review it. Style guide and testing will be implemented in a later update.
+This is a fork maintained for one community, so changes are judged by what that community needs
+rather than by what suits a public logging bot. Before opening a pull request:
+
+1. Does it keep the bot within its Discord rate limits?
+2. Does it change what data is stored, sent, or kept? If so, update [PRIVACY.md](PRIVACY.md) and
+   [TERMS.md](TERMS.md) in the same pull request — and the answers in
+   [`docs/discord/privileged-intent-review.md`](docs/discord/privileged-intent-review.md) if it
+   touches anything the intent review declares.
+3. Does it need a new privileged intent? That requires a fresh review request to Discord, so raise
+   it before writing the code.
+
+Discuss it in the support server first: https://discord.com/invite/nobaman
+
+## License
+
+AGPL-3.0-or-later, inherited from [Logger](https://github.com/curtisf/logger). See [LICENSE.md](LICENSE.md).

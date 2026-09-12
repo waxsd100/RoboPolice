@@ -91,3 +91,10 @@ exports.PRESET_EVENT_MAP = {
   channel: ['channelCreate', 'channelUpdate', 'channelDelete'],
   all: this.ALL_EVENTS
 }
+
+// Public legal documents. These URLs are what is registered with Discord (Developer Portal and the
+// privileged intent review), so they must stay resolvable. Override per-deployment if self-hosting.
+exports.LEGAL_LINKS = {
+  PRIVACY_POLICY: process.env.PRIVACY_POLICY_URL || 'https://github.com/waxsd100/RoboPolice/blob/master/PRIVACY.md',
+  TERMS_OF_SERVICE: process.env.TERMS_OF_SERVICE_URL || 'https://github.com/waxsd100/RoboPolice/blob/master/TERMS.md'
+}

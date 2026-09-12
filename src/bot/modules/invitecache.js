@@ -1,3 +1,7 @@
+// Redis 'EX' is in SECONDS. This was 10800000, i.e. 125 days, because a millisecond
+// value was passed to a seconds parameter; 3 hours is what the value was written as.
+const CACHE_TTL_SECONDS = 10800
+
 const aes = require('../../db/aes')
 
 module.exports = {
@@ -15,15 +19,15 @@ module.exports = {
   },
   cacheInvitesWhole: async (guildID, invitesArray) => {
     await global.redis.del(`linvites-${guildID}`)
-    await global.redis.set(`linvites-${guildID}`, JSON.stringify(invitesArray.map(i => module.exports.formatInvite(i, true))), 'EX', 10800000)
+    await global.redis.set(`linvites-${guildID}`, JSON.stringify(invitesArray.map(i => module.exports.formatInvite(i, true))), 'EX', CACHE_TTL_SECONDS)
   },
   insertInvite: async (guildID, invite) => {
     const invites = await module.exports.getCachedInvites(guildID)
     if (!invites) {
-      await global.redis.set(`linvites-${guildID}`, JSON.stringify([module.exports.formatInvite(invite, true)]), 'EX', 10800000)
+      await global.redis.set(`linvites-${guildID}`, JSON.stringify([module.exports.formatInvite(invite, true)]), 'EX', CACHE_TTL_SECONDS)
     } else {
       invites.push(module.exports.formatInvite(invite, false))
-      await global.redis.set(`linvites-${guildID}`, JSON.stringify(invites.map(i => module.exports.formatInvite(i, true))), 'EX', 10800000)
+      await global.redis.set(`linvites-${guildID}`, JSON.stringify(invites.map(i => module.exports.formatInvite(i, true))), 'EX', CACHE_TTL_SECONDS)
     }
   },
   deleteInvites: async (guildID) => {
@@ -37,7 +41,7 @@ module.exports = {
     await global.redis.set(`linvites-${guildID}`, JSON.stringify(guildInvites.map(i => {
       i.code = aes.encrypt(code)
       return i
-    })), 'EX', 10800000)
+    })), 'EX', CACHE_TTL_SECONDS)
   },
   formatInvite: (invite, doEncrypt) => { // strip useless info and only keep what I want
     if (!invite) throw new Error('Invite given to be stripped is null-ish')

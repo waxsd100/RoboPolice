@@ -3,6 +3,7 @@ const getMessageFromDB = require('../../db/interfaces/postgres/read').getMessage
 const getMessageFromBatch = require('../../db/messageBatcher').getMessage
 const deleteMessage = require('../../db/interfaces/postgres/delete').deleteMessage
 const cacheGuild = require('../utils/cacheGuild')
+const { isBeyondRetention, messageTimestamp } = require('../utils/retention')
 
 module.exports = {
   name: 'messageDelete',
@@ -16,7 +17,12 @@ module.exports = {
     if (!cachedMessage) {
       cachedMessage = await getMessageFromDB(message.id)
     }
-    if (!cachedMessage) return
+    if (!cachedMessage) {
+      // The row aged out of the retention window. We cannot show the content, but staying silent
+      // would mean an old message can be deleted without leaving any trace at all.
+      if (isBeyondRetention(message.id)) await send(expiredMessageEvent(message))
+      return
+    }
     await deleteMessage(message.id)
     let cachedUser = global.bot.users.get(cachedMessage.author_id)
     if (!cachedUser) {
@@ -87,4 +93,29 @@ function chunkify (toChunk) {
     chunksToReturn.push(chunkedStr)
   }
   return chunksToReturn
+}
+
+function expiredMessageEvent (message) {
+  return {
+    guildID: message.channel.guild.id,
+    eventName: 'messageDelete',
+    embeds: [{
+      author: {
+        name: 'Unknown User',
+        icon_url: 'https://logger.bot/staticfiles/red-x.png'
+      },
+      description: `Message deleted in <#${message.channel.id}>`,
+      fields: [{
+        name: 'Content',
+        value: `Not available. The message is older than the ${process.env.MESSAGE_HISTORY_DAYS} day retention window, so its content is no longer stored.`
+      }, {
+        name: 'Date',
+        value: `<t:${Math.round(messageTimestamp(message.id) / 1000)}:F>`
+      }, {
+        name: 'ID',
+        value: `\`\`\`ini\nMessage = ${message.id}\`\`\``
+      }],
+      color: 8530669
+    }]
+  }
 }

@@ -1,5 +1,5 @@
 const Eris = require('eris')
-const { EMBED_COLORS, ALL_EVENTS, EVENT_HELP } = require('../utils/constants')
+const { EMBED_COLORS, ALL_EVENTS, EVENT_HELP, LEGAL_LINKS } = require('../utils/constants')
 const { getEmbedFooter, getAuthorField } = require('../utils/embeds')
 
 module.exports = {
@@ -18,7 +18,7 @@ module.exports = {
           fields: [{
             inline: true,
             name: 'Open Source',
-            value: 'See https://github.com/tizzysaurus/logger for current code.'
+            value: 'See https://github.com/waxsd100/RoboPolice for current code.'
           }, {
             inline: true,
             name: 'Dashboard',
@@ -26,7 +26,7 @@ module.exports = {
           }, {
             inline: false,
             name: 'Privacy Policy',
-            value: `Please contact \`@${process.env.BOT_CREATOR_NAME}\` for privacy information`
+            value: `[Privacy Policy](${LEGAL_LINKS.PRIVACY_POLICY}) | [Terms of Service](${LEGAL_LINKS.TERMS_OF_SERVICE})\nQuestions about your data? Join the [support server](${process.env.DISCORD_SUPPORT_SERVER}).`
           }, {
             inline: true,
             name: 'Support',
@@ -53,7 +53,7 @@ module.exports = {
           }, {
             inline: true,
             name: '__Time: Message logging__',
-            value: `${global.bot.user.username} cannot log messages upon deletion that it didn't see created first. Additionally, messages are kept for ${process.env.MESSAGE_HISTORY_DAYS} days, so messages older than that will not be logged upon deletion.`
+            value: `${global.bot.user.username} cannot log messages upon deletion that it didn't see created first, so messages sent before the bot joined or while it was offline will not show their content when deleted. Additionally, messages are kept for ${process.env.MESSAGE_HISTORY_DAYS} days: deleting or editing a message older than that produces no log entry at all.`
           }],
           footer: getEmbedFooter(global.bot.user),
           author: getAuthorField(interaction.member.user),
