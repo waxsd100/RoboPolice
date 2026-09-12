@@ -2,7 +2,7 @@ module.exports = {
   func: async message => {
     message.channel.createMessage({
       embeds: [{
-        description: `Hi, you can invite me via [this link](https://discord.com/oauth2/authorize?client_id=1223274176786206853). To see what invite is used for a member joining, you MUST grant **manage channels** and **manage server** for it to work (Discord does not send invite info to the bot otherwise)!`,
+        description: `[このリンク](https://discord.com/oauth2/authorize?client_id=${global.bot.user.id}) から招待できます。参加したメンバーが使用した招待コードを記録するには、**チャンネルの管理** と **サーバー管理** の権限が必要です（これらが無いと Discord が招待情報を送信しません）。`,
         color: 3553599,
         timestamp: new Date(),
         footer: {
@@ -17,8 +17,8 @@ module.exports = {
     })
   },
   name: 'invite',
-  quickHelp: 'Returns an embed with multiple invites to choose your preferred permissions.',
-  examples: `\`${process.env.GLOBAL_BOT_PREFIX}invite\` <- returns an embed with invites for different use cases (fewer required perms = better!)`,
+  quickHelp: '権限の異なる招待リンクを表示します。',
+  examples: `\`${process.env.GLOBAL_BOT_PREFIX}invite\` <- 用途別の招待リンクを表示（必要な権限が少ないものほど安全です）`,
   type: 'any',
   category: 'General'
 }

@@ -22,7 +22,7 @@ module.exports = {
 
       await message.channel.createMessage({
         embeds: [{
-          title: 'Any events associated with this channel have been undone.',
+          title: 'このチャンネルに紐づくイベントの設定を解除しました。',
           color: 16711680,
           timestamp: new Date(),
           footer: {
@@ -39,10 +39,10 @@ module.exports = {
     }
   },
   name: 'stoplogging',
-  quickHelp: 'Use this in a log channel to stop me from logging certain (or all) events. This command is the opposite of setchannel and can be used the same way to unset events instead of setting them.',
-  examples: `\`${process.env.GLOBAL_BOT_PREFIX}stoplogging\` <- stops logging every event configured to log to the channel it's used in
-  \`${process.env.GLOBAL_BOT_PREFIX}stoplogging messageDelete, messageUpdate\` <- if the bot was logging messageDelete and messageUpdate to the channel this is used in, now it is unset
-  \`${process.env.GLOBAL_BOT_PREFIX}stoplogging guildMemberVerify\` <- if the bot was logging member verify events to the channel this was used in, it will stop doing so`,
+  quickHelp: 'ログチャンネルで実行すると、指定した（または全ての）イベントの出力を停止します。setchannel と逆の動作で、使い方は同じです。',
+  examples: `\`${process.env.GLOBAL_BOT_PREFIX}stoplogging\` <- 実行したチャンネルに設定された全イベントの出力を停止
+  \`${process.env.GLOBAL_BOT_PREFIX}stoplogging messageDelete, messageUpdate\` <- 実行したチャンネルの messageDelete と messageUpdate の設定を解除
+  \`${process.env.GLOBAL_BOT_PREFIX}stoplogging guildMemberVerify\` <- 実行したチャンネルのメンバー認証イベントの出力を停止`,
   type: 'admin',
   noThread: true,
   category: 'Logging'

@@ -7,7 +7,7 @@ module.exports = {
     if (!eventList.includes(split[0])) {
       return message.channel.createMessage({
         embeds: [{
-          description: `The provided argument is invalid. Valid events: ${eventList.join(', ')}`,
+          description: `引数が正しくありません。指定できるイベント: ${eventList.join(', ')}`,
           color: 16711680,
           timestamp: new Date(),
           footer: {
@@ -22,7 +22,7 @@ module.exports = {
       })
     }
     const disabled = await disableEvent(message.channel.guild.id, split[0])
-    const respStr = `${!disabled ? 'Enabled' : 'Disabled'} ${split[0]}.`
+    const respStr = `${split[0]} を${!disabled ? '有効化' : '無効化'}しました。`
     message.channel.createMessage({
       embeds: [{
         description: respStr,
@@ -40,8 +40,8 @@ module.exports = {
     })
   },
   name: 'togglemodule',
-  quickHelp: `[DEPRECATED]\nIgnore any event provided after this command. You should have no need for this command when you can stop an event from logging by using ${process.env.GLOBAL_BOT_PREFIX}stoplogging.`,
-  examples: 'Unneccesary, this command is deprecated.',
+  quickHelp: `[非推奨]\n指定したイベントを無視します。${process.env.GLOBAL_BOT_PREFIX}stoplogging で出力を停止できるため、通常は不要です。`,
+  examples: 'このコマンドは非推奨です。',
   type: 'custom',
   perm: 'manageChannels',
   category: 'Logging'

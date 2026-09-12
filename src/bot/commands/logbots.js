@@ -5,7 +5,7 @@ module.exports = {
     const state = await toggleLogBots(message.channel.guild.id)
     await message.channel.createMessage({
       embeds: [{
-        title: `${state ? 'I am now logging bot activity.' : 'I am no longer logging bot activity.'}`,
+        title: `${state ? 'BOTの操作を記録するようにしました。' : 'BOTの操作を記録しないようにしました。'}`,
         color: 16711680,
         timestamp: new Date(),
         footer: {
@@ -21,8 +21,8 @@ module.exports = {
     })
   },
   name: 'logbots',
-  quickHelp: 'Use this to toggle whether I log actions done by bots or not (DEFAULT: disabled). Does NOT ignore bots deleting messages!',
-  examples: `\`${process.env.GLOBAL_BOT_PREFIX}logbots\` <- toggle whether bot actions are logged, current status will be returned (ignoring or actively logging)`,
+  quickHelp: 'BOTによる操作を記録するかどうかを切り替えます（既定: 無効）。BOTがメッセージを削除した場合の記録は対象外です。',
+  examples: `\`${process.env.GLOBAL_BOT_PREFIX}logbots\` <- BOTの操作を記録するかを切り替え、現在の状態を表示`,
   type: 'admin',
   category: 'Logging'
 }

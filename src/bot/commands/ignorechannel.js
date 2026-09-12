@@ -9,7 +9,7 @@ module.exports = {
       toIgnore = suffix
     }
     const disabled = await ignoreChannel(message.channel.guild.id, toIgnore) // return a boolean representing whether a channel is ignored or not
-    const respStr = `Toggled logging events targeting <#${toIgnore}> (${message.channel.guild.channels.get(toIgnore).name}). I am now ${disabled ? 'ignoring' : 'logging'} events from this channel`
+    const respStr = `<#${toIgnore}> (${message.channel.guild.channels.get(toIgnore).name}) の設定を切り替えました。このチャンネルのイベントを${disabled ? '記録しません' : '記録します'}`
     message.channel.createMessage({
       embeds: [{
         description: respStr,
@@ -27,10 +27,10 @@ module.exports = {
     })
   },
   name: 'ignorechannel',
-  quickHelp: 'Ignore any event that originates from the channel this command is used in. Use in the text channel you want to the bot to ignore OR provide a channel id (can be a voice channel) as a suffix.',
-  examples: `\`${process.env.GLOBAL_BOT_PREFIX}ignorechannel\` <- ignore events from the channel this is ran in
-  \`${process.env.GLOBAL_BOT_PREFIX}ignorechannel voice channel id\` <- ignore voice events related to the given channel
-  \`${process.env.GLOBAL_BOT_PREFIX}ignorechannel text channel id\` <- ignore text-related events related to the given channel`,
+  quickHelp: 'このコマンドを実行したチャンネルのイベントをログ対象外にします。対象にしたいテキストチャンネルで実行するか、チャンネルID（ボイスチャンネルも可）を引数に指定してください。',
+  examples: `\`${process.env.GLOBAL_BOT_PREFIX}ignorechannel\` <- 実行したチャンネルのイベントを除外
+  \`${process.env.GLOBAL_BOT_PREFIX}ignorechannel voice channel id\` <- 指定したボイスチャンネルのイベントを除外
+  \`${process.env.GLOBAL_BOT_PREFIX}ignorechannel text channel id\` <- 指定したテキストチャンネルのイベントを除外`,
   type: 'custom',
   perm: 'manageChannels',
   category: 'Logging'
