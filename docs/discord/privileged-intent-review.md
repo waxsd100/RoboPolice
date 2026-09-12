@@ -21,41 +21,30 @@ Discord から「10,000ユーザー到達につき特権インテントの審査
 | 特権インテント | 実際の使用 | 申請 | 根拠 |
 |---|---|---|---|
 | **Server Members** (`GUILD_MEMBERS`) | **使用中** | **申請する** | `src/bot/index.js:65` で有効化。参加/退出/キック/ニックネーム/ロール変更ログの根幹 |
-| **Message Content** (`MESSAGE_CONTENT`) | **要確認**（下記 1.1） | **申請する想定** | 削除/編集メッセージの本文ログに必須 |
+| **Message Content** (`MESSAGE_CONTENT`) | **使用中**（実機確認済み） | **申請する** | 削除/編集メッセージの本文ログに必須。詳細は 1.1 |
 | **Presence** (`GUILD_PRESENCES`) | **未使用** | **申請しない** | コード全体で `guildPresences` の参照ゼロ |
 
-### 1.1 【重要】Message Content インテントのビットが送られていない
+### 1.1 Message Content は本番で動作している（実機確認済み）
 
-`src/bot/index.js:60-68` の intents 配列は以下の通りです。
+削除ログに実際のメッセージ本文が出力されることを確認済みのため、**本番のロボポリスは
+ゲートウェイで MESSAGE_CONTENT (`1 << 15`) を要求できています**。したがって Message Content は
+「実使用中の特権インテント」であり、申請対象で確定です。
 
-```js
-intents: [
-  'guilds', 'guildVoiceStates', 'guildEmojis', 'guildInvites',
-  'guildMembers', 'guildMessages', 'guildBans'
-]
-```
+一方で、**このリポジトリの内容そのままでは Message Content を要求できません**（申請とは別件の乖離）：
 
-このうち `messageContent` が **含まれていません**。さらに依存している Eris フォーク
-(`github:curtisf/eris#ff-dev`) の `lib/Constants.js` には `messageContent` (`1 << 15`) の定数自体が存在せず、
-ビット14の次がビット16（`guildScheduledEvents`）に飛んでいます。
+- `src/bot/index.js:60-68` の intents 配列に `messageContent` が無い
+- `package-lock.json` が固定している Eris は `curtisf/eris` の commit `c075c5b`（`0.16.2-dev`）で、
+  この版の `lib/Constants.js` の `Intents` は `directMessageTyping` (`1 << 14`) で終わっており、
+  `messageContent` の定数が存在しない
+- `lib/Client.js:176-188` は配列を走査して未知の名前を `warn` して**黙って捨てる**実装のため、
+  仮に `'messageContent'` を配列に足しても無視される
 
-つまり現在の IDENTIFY で送られるビットフィールドは:
+この状態で計算されるビットフィールドは `719`（`messageContent` の `32768` を含まない）です。
+実機が動いている以上、**本番環境は別バージョンの Eris か、別の intents 指定で稼働しています。**
 
-```
-guilds(1) + guildMembers(2) + guildBans(4) + guildEmojis(8)
-+ guildInvites(64) + guildVoiceStates(128) + guildMessages(512) = 719
-```
-
-Message Content (`32768`) は含まれません。Portal 側でトグルを ON にしていても、
-**ゲートウェイで要求していなければ `message.content` は空文字で届きます。**
-
-→ **確認してください：本番のロボポリスで、削除されたメッセージの本文がログに出ていますか？**
-
-- **出ている** → 本番は本リポジトリと別のコード／別のライブラリで動いている。その実態に合わせて申請する。
-- **出ていない（`<no message content>` になる）** → 本文ログは既に壊れています。
-  申請と併せて intents を `719 + 32768 = 33487` に修正する必要があります（修正案は §5）。
-
-いずれにせよ「本文ログ機能を今後も提供する」なら Message Content は申請対象です。
+> **申請への影響：なし。** Message Content を申請対象に含めてください。
+> ただし「リポジトリの `master` と本番デプロイが乖離している」こと自体は別途確認を推奨します
+> （このリポジトリから `npm ci` で再デプロイすると本文ログが壊れます）。
 
 ---
 
@@ -288,30 +277,31 @@ Not applicable — we are not applying for the Presence Intent.
 
 - [ ] **削除請求の連絡先** — `/clearmydata` は `BOT_CREATOR_NAME` への連絡を案内するのみ。
       メールアドレスかサポートサーバーの恒久的な導線を用意する。
-- [ ] **§1.1 の Message Content ビット問題の決着** — 申請内容と実装を一致させる。
 
 ---
 
-## 5. （任意）Message Content インテントを実際に有効化する場合の修正
+## 5. リポジトリと本番の乖離について（申請ブロッカーではない）
 
-依存している Eris フォークに `messageContent` 定数が無いため、配列指定では表現できません。
-数値ビットフィールドで渡します。`src/bot/index.js` の `intents` を置き換え：
+§1.1 の通り、本番は Message Content を受信できていますが、このリポジトリの pin（`eris@0.16.2-dev`,
+commit `c075c5b`）では構造的に要求できません。**申請作業のためにコードを変更する必要はありません。**
+むしろ、このリポジトリの状態に本番を合わせると本文ログが壊れます。
 
-```js
-// guilds(1) | guildMembers(2) | guildBans(4) | guildEmojis(8)
-// | guildInvites(64) | guildVoiceStates(128) | guildMessages(512)
-// | messageContent(1 << 15 = 32768)  ← このフォークの Constants には定数が無いため直接指定
-intents: 719 | (1 << 15), // = 33487
-```
+将来このリポジトリから再デプロイする場合にのみ、以下が必要になります。
 
-> ⚠️ **先に Developer Portal で Message Content を ON にしてください。**
-> Portal で無効のままこのビットを送ると、ゲートウェイが `Disallowed intents specified` を返し
-> （`Shard.js:2641`）**ボット全体が接続不能になります。**
-> 審査で却下された場合も同様なので、却下時はこの行を元に戻す必要があります。
+1. `messageContent` 定数を持つ Eris（0.17 以降、またはそれ相当のフォーク）へ更新する
+2. `src/bot/index.js` の intents に `messageContent` を加える。定数を持たない版を使い続けるなら
+   数値で直接指定する：
 
-この変更は挙動に影響が大きいため、本パックには含めていません。適用の可否を判断してください。
+   ```js
+   // guilds(1) | guildMembers(2) | guildBans(4) | guildEmojis(8)
+   // | guildInvites(64) | guildVoiceStates(128) | guildMessages(512)
+   // | messageContent(1 << 15 = 32768)
+   intents: 719 | (1 << 15), // = 33487
+   ```
 
----
+> ⚠️ 特権インテントが Portal で無効な状態でこのビットを送ると、ゲートウェイが
+> `Disallowed intents specified` を返し（`Shard.js:2403`）**ボットが接続不能になります。**
+> 万一審査で却下された場合は、この点に注意して設定を戻してください。
 
 ## 6. 申請時の注意点
 
