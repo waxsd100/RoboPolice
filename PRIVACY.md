@@ -13,9 +13,11 @@
 RoboPolice ("the App") is a **private** Discord application. It is not publicly listed and cannot be
 added to servers by third parties. It runs in a small number of servers, all of them ours:
 
-- the community server reachable at https://discord.com/invite/nobaman ("the Server"), which is the
-  only place it does real moderation work, and
-- a few private test servers we operate, used to try changes before they reach the Server.
+- the community server reachable at https://discord.com/invite/nobaman ("the Server"), the only
+  place it actually logs anything, and
+- a few private test servers we operate, used to try changes before they reach the Server. No
+  logging is configured there, and the App stores no message content for a server that has no
+  delete/edit log channel set up (see section 3.1).
 
 Everything in this policy applies to all of them; "the Server" below covers each server the App is
 installed in.
@@ -40,7 +42,9 @@ The App only receives data from Discord's API, and only for the Server it is ins
 
 ### 3.1 Message data
 
-For each message sent in a channel that has not been excluded from logging, the App stores one row:
+The App stores message rows only for a server that has a message deletion or edit log channel
+configured; in a server with none, nothing is stored. Where logging is configured, for each message
+sent in a channel that has not been excluded, the App stores one row:
 
 | Field | Stored as |
 |---|---|
@@ -167,8 +171,10 @@ https://discord.com/invite/nobaman
 第三者がサーバーに追加することはできません。設置されているのは当方が運営する少数のサーバーのみです。
 
 - https://discord.com/invite/nobaman でアクセスできるコミュニティサーバー（以下「本サーバー」）。
-  実際のモデレーション業務を行っているのはここだけです。
+  実際にログを取得しているのはここだけです。
 - 当方が運営する少数の非公開テストサーバー。本サーバーへ反映する前の動作確認に使用します。
+  ログの出力先を設定していないため、メッセージの保存も行われません（本BOTは、削除・編集ログの
+  出力先が設定されていないサーバーではメッセージを保存しません。3.1 参照）。
 
 本ポリシーはそのすべてに適用されます。以下の「本サーバー」は、本BOTが設置されている各サーバーを指します。
 
@@ -191,7 +197,9 @@ https://discord.com/invite/nobaman
 
 ### 3.1 メッセージデータ
 
-ログ対象から除外されていないチャンネルで送信された各メッセージについて、以下の1行を保存します。
+メッセージの保存を行うのは、メッセージの削除・編集ログの出力先が設定されているサーバーだけです。
+設定が無いサーバーでは一切保存しません。設定があるサーバーでは、ログ対象から除外されていない
+チャンネルで送信された各メッセージについて、以下の1行を保存します。
 
 | 項目 | 保存形式 |
 |---|---|
