@@ -83,12 +83,17 @@ parties. No data leaves the App's own infrastructure.
 
 | Data | Retention |
 |---|---|
-| Message rows | **Up to 30 days**, then permanently deleted by an automated daily job |
+| Message rows | Retained while the App operates; no fixed expiry |
 | Server configuration | Until the App is removed from the Server |
 | Temporary caches | Transient; cleared on restart |
 
-The retention window is enforced in code by a scheduled deletion job
-(`src/bot/modules/retention.js`), not manually.
+We do not currently apply a fixed expiry to message rows: they are the audit record the Server's
+moderators rely on, and an incident is often investigated long after it happened. We keep only the
+fields listed in section 3.1, encrypted, and we delete a user's rows on request (section 8). A row is
+also deleted as soon as its message is deleted and logged, since the log embed replaces it.
+
+If we introduce a fixed retention window in future, this section will be updated before it takes
+effect.
 
 ## 6. Security
 
@@ -107,8 +112,7 @@ the database. Database access is restricted to the App's own host.
 ## 8. Requesting deletion of your data
 
 Join https://discord.com/invite/nobaman and contact the staff with your Discord user ID. We will
-delete the message rows stored for that user. Independently of any request, all message rows are
-automatically deleted after 30 days.
+delete the message rows stored for that user.
 
 ## 9. Children
 
@@ -206,11 +210,16 @@ https://discord.com/invite/nobaman
 
 | データ | 保持期間 |
 |---|---|
-| メッセージ行 | **最長30日**、その後は日次の自動ジョブで完全に削除 |
+| メッセージ行 | 本BOTの運用中は保持（期限は設けていません） |
 | サーバー設定 | 本BOTがサーバーから削除されるまで |
 | 一時キャッシュ | 一時的（再起動時に消去） |
 
-保持期間は手動ではなくコード上の自動削除ジョブ（`src/bot/modules/retention.js`）で強制されます。
+メッセージ行に固定の保存期限は設けていません。これらは本サーバーのモデレーターが依拠する監査記録であり、
+事案の調査は発生からかなり経ってから行われることがあるためです。保存するのは 3.1 に挙げた項目のみで、
+暗号化したうえで保持し、削除請求があれば当該ユーザーの行を削除します（第8項）。なお、メッセージが
+削除されてログに出力された時点で、その行はデータベースから削除されます（ログがその役割を引き継ぐため）。
+
+将来固定の保持期間を設ける場合は、適用前に本項を更新します。
 
 ## 6. セキュリティ
 
@@ -228,8 +237,7 @@ AES-256 により暗号化されます。したがって平文のメッセージ
 ## 8. データ削除の請求
 
 https://discord.com/invite/nobaman に参加し、ご自身の Discord ユーザーIDを添えてスタッフにご連絡ください。
-当該ユーザーについて保存されているメッセージ行を削除します。請求の有無にかかわらず、
-メッセージ行は30日で自動的に削除されます。
+当該ユーザーについて保存されているメッセージ行を削除します。
 
 ## 9. 年齢
 

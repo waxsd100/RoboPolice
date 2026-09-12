@@ -202,9 +202,9 @@ We do NOT use message content for machine learning, AI model training, statistic
 advertising or analytics, and we never share it with third parties. It is used solely to render the
 log embed posted back into the same server the message came from.
 
-Content is AES-256 encrypted before it is written to our database, rows are deleted after 30 days by
-an automated job, and administrators can exclude channels with /ignorechannel or turn logging off
-entirely with /stoplogging.
+Content is AES-256 encrypted before it is written to our database, a stored row is deleted as soon as
+its message is deleted and logged, and administrators can exclude channels with /ignorechannel or
+turn logging off entirely with /stoplogging.
 ```
 
 ### Q. Please provide links to screenshots and/or videos that demonstrate your use case
@@ -234,16 +234,29 @@ not user data.
 Redis holds short-lived operational caches only (invite-code counters, webhook handles, guild
 settings), cleared on restart.
 
-No presence data, no member profile data, no message content beyond the retention window.
+No presence data and no member profile data is stored at all.
 ```
 
 ### Q. Are you storing API Data for 30 days or less?
 
+> これは Yes/No の**開示質問**であり、30日以内であることは要件ではありません。
+> 実態に合わせて No と答え、隣接欄で理由を説明します（虚偽の Yes が一番危険です）。
+
 ```
-Yes. Message rows are retained for 30 days and then permanently deleted. This is enforced in code by
-a scheduled deletion job (src/bot/modules/retention.js) that runs hourly and deletes any row older
-than the configured window; it is not a manual process. Guild configuration rows are deleted when the
-app is removed from the server.
+No, not as a fixed window. Stored message rows are the audit record the server's moderators rely on,
+and incidents are often investigated well after the fact, so we do not expire them on a timer.
+
+What limits the exposure instead:
+- We store only a message ID, an author ID, a timestamp, and the content and attachment URLs in
+  AES-256 encrypted form. We do not store the guild ID or the channel ID.
+- A stored row is deleted the moment its message is deleted and logged, because the log embed then
+  holds the record instead.
+- Guild configuration rows are deleted when the app is removed from the server.
+- We delete a user's stored rows on request, via /clearmydata and our support server.
+- This is a single private server, not a data set aggregated across many communities.
+
+If Discord requires a bounded retention window for approval, we will implement one and update our
+privacy policy accordingly.
 ```
 
 ### Q. How do users contact you to request deletion of their activity data?
@@ -252,7 +265,7 @@ app is removed from the server.
 Any member can run /clearmydata in the server, which returns the contact route and links to our
 Privacy Policy. Requests are handled by the staff of the community server the app runs in, reachable
 at https://discord.com/invite/nobaman. We action deletion requests manually against the message
-store. Independently of any request, all message rows are automatically deleted after 30 days.
+store, and a row is in any case deleted as soon as its message is deleted and logged.
 ```
 
 ### Q. Are you encrypting the data that you store at rest?
@@ -280,9 +293,10 @@ Not applicable — we are not applying for the Presence Intent.
 - [x] **利用規約** — `TERMS.md`。Developer Portal の Terms of Service URL 欄にも登録してください。
 - [x] **BOT内からポリシーへ導線** — `/help`・`/info`・`/clearmydata` にポリシーURLを表示するよう変更。
       「Where is your Privacy Policy available?」への回答の裏付けになります。
-- [x] **保持期間の実装** — `src/bot/modules/retention.js` を追加し、`MESSAGE_HISTORY_DAYS`（既定30）より
-      古い行を毎時バッチ削除します。これまで自動削除は実装されておらず、BOTがユーザーに告知していた
-      「N日で削除」が事実と異なる状態でした。
+- [x] **保持期間に関する記述を実態に合わせた** — 自動削除は実装しない方針のため、`PRIVACY.md` は
+      「固定の保持期限は設けない」と明記。併せて、**上流 Logger 由来で `/clearmydata` と `/help` が
+      「N日後に自動削除される」と表示していた虚偽の告知を削除**しました（実装が存在しないため）。
+      `MESSAGE_HISTORY_DAYS` は `.env.example` 上で「BOTは強制しない」と注記。
 - [ ] **スクリーンショット／動画** — 以下を撮影して恒久URL（Imgur / YouTube限定公開 等）に：
   1. `/setup` でログチャンネルを設定している画面
   2. メンバー参加ログ（Account Age・Invite Used が写っているもの）
@@ -293,8 +307,8 @@ Not applicable — we are not applying for the Presence Intent.
   7. `/help` のプライバシーポリシー欄（BOT内導線の証明）
 - [ ] **Developer Portal 側の登録** — General Information の Privacy Policy URL / Terms of Service URL に
       上記2つのURLを入力。
-- [ ] **`MESSAGE_HISTORY_DAYS` の値確認** — 本番 `.env` が30以外なら `PRIVACY.md` の記述と揃えること
-      （申請の「30日以内」回答と矛盾させない）。
+- [ ] **外部での定期削除の有無を確認** — cron や pg_cron で `messages` を掃除しているなら、その事実を
+      `PRIVACY.md` 第5項と申請回答に反映してください（あるなら明記した方が審査上は有利です）。
 
 ---
 

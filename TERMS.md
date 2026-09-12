@@ -24,8 +24,8 @@ and voice activity) and posts them to log channels chosen by the Server's admini
 ## 3. Logging notice
 
 Members of the Server are informed that message and member activity is logged. Administrators control
-what is logged through `/setup`, `/ignorechannel` and `/stoplogging`. Message data is retained for at
-most 30 days; see the Privacy Policy for details.
+what is logged through `/setup`, `/ignorechannel` and `/stoplogging`. See the Privacy Policy for what
+is stored and for how long.
 
 ## 4. Acceptable use
 
@@ -82,8 +82,8 @@ https://discord.com/invite/nobaman
 ## 3. ログ取得の告知
 
 本サーバーのメンバーには、メッセージおよびメンバーの活動が記録されることが告知されています。
-記録対象は管理者が `/setup`、`/ignorechannel`、`/stoplogging` で制御します。メッセージデータの
-保持期間は最長30日です。詳細はプライバシーポリシーをご覧ください。
+記録対象は管理者が `/setup`、`/ignorechannel`、`/stoplogging` で制御します。保存内容と保持期間の詳細は
+プライバシーポリシーをご覧ください。
 
 ## 4. 禁止事項
 

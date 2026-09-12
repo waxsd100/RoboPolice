@@ -1,7 +1,6 @@
 const cluster = require('cluster')
 const checkForMissingSettings = require('../utils/recoverSettings')
 const statAggregator = require('../modules/statAggregator')
-const retention = require('../modules/retention')
 
 let failedHealthCheckCount = 0
 
@@ -17,7 +16,6 @@ module.exports = {
     })
     if (global.bot.shards.find(s => s.id === 0)) { // only check for missing settings once
       await checkForMissingSettings()
-      retention.start() // one worker owns the retention sweep so shards don't duplicate the delete
     }
     setInterval(() => {
       if (bot.shards.filter(shard => shard.latency == Infinity && shard.status === 'disconnected').length !== 0) {
