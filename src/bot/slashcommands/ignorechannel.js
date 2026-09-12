@@ -13,10 +13,10 @@ module.exports = {
     if (listIgnoredChannelsOption) {
       interaction.createMessage({
         embeds: [{
-          title: 'Ignored Channels',
+          title: 'ログ除外チャンネル',
           description: global.bot.guildSettingsCache[interaction.guildID].ignoredChannels.map(id => {
             return `<#${id}> (${id})`
-          }).join('\n') || 'No channels are explicitly ignored!',
+          }).join('\n') || 'ログ除外に設定されているチャンネルはありません。',
           author: getAuthorField(interaction.member.user),
           footer: getEmbedFooter(global.bot.user)
         }]
@@ -25,8 +25,8 @@ module.exports = {
       await clearIgnoredChannels(interaction.guildID)
       interaction.createMessage({
         embeds: [{
-          title: 'Ignored Channels',
-          description: 'I am not ignoring any channels anymore (reset successful)',
+          title: 'ログ除外チャンネル',
+          description: 'ログ除外チャンネルをすべて解除しました。',
           color: EMBED_COLORS.GREEN,
           author: getAuthorField(interaction.member.user),
           footer: getEmbedFooter(global.bot.user)
@@ -37,8 +37,8 @@ module.exports = {
       if (channelOption && !global.bot.getChannel(channelOption.value)) {
         return interaction.createMessage({
           embeds: [{
-            title: 'Unsuccessful',
-            description: 'Channel not found.',
+            title: '失敗',
+            description: 'チャンネルが見つかりません。',
             thumbnail: {
               url: interaction.member.user.dynamicAvatarURL(null, 64)
             },
@@ -49,8 +49,8 @@ module.exports = {
       const isDisabled = await ignoreChannel(interaction.guildID, channelOption?.value || interaction.channel.id)
       interaction.createMessage({
         embeds: [{
-          title: 'Success',
-          description: `I am ${isDisabled ? 'ignoring' : 'logging'} events in <#${channelOption?.value || interaction.channel.id}>`,
+          title: '成功',
+          description: `<#${channelOption?.value || interaction.channel.id}> を${isDisabled ? 'ログ除外に設定しました' : 'ログ対象に戻しました'}`,
           thumbnail: {
             url: interaction.member.user.dynamicAvatarURL(null, 64)
           },

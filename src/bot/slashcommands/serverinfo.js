@@ -16,28 +16,28 @@ module.exports = {
       }
     }
     const embed = {
-      description: `Information about ${guild.name}`,
+      description: `${guild.name} の情報`,
       color: 319403,
       fields: [{
-        name: 'Name',
+        name: 'サーバー名',
         value: `**${guild.name}** (${guild.id})`
       }, {
-        name: 'Verification Level',
+        name: '認証レベル',
         value: `${guild.verificationLevel}`
       }, {
-        name: 'Owner',
+        name: 'オーナー',
         value: `${owner ? `**${owner.username}#${owner.discriminator}** ` : ''}(${guild.ownerID})`
       }, {
-        name: 'Features',
-        value: guild.features.length !== 0 ? guild.features.join(', ') : 'No Guild Features'
+        name: 'サーバー機能',
+        value: guild.features.length !== 0 ? guild.features.join(', ') : 'なし'
       }, {
-        name: 'Channels',
-        value: `**${guild.channels.size}** total\n**${guild.channels.filter(c => c.type === 0).length}** text\n**${guild.channels.filter(c => c.type === 2).length}** voice\n**${guild.channels.filter(c => c.type === 4).length}** categories`
+        name: 'チャンネル数',
+        value: `合計 **${guild.channels.size}**\nテキスト **${guild.channels.filter(c => c.type === 0).length}**\nボイス **${guild.channels.filter(c => c.type === 2).length}**\nカテゴリ **${guild.channels.filter(c => c.type === 4).length}**`
       }, {
-        name: 'Boost Count',
-        value: `**${guild.premiumSubscriptionCount >= 0 ? guild.premiumSubscriptionCount : 'Unavailable'}**`
+        name: 'ブースト数',
+        value: `**${guild.premiumSubscriptionCount >= 0 ? guild.premiumSubscriptionCount : '取得不可'}**`
       }, {
-        name: 'Role Count',
+        name: 'ロール数',
         value: `${guild.roles.size}`
       }]
     }

@@ -9,32 +9,32 @@ module.exports = {
       // general help
       interaction.createMessage({
         embeds: [{
-          title: 'General Help',
-          description: `**How do I configure ${global.bot.user.username}?**\nSee \`/help guide: Usage\` for a short setup guide.`,
+          title: 'ヘルプ',
+          description: `**${global.bot.user.username} の設定方法**\n簡単なセットアップ手順は \`/help guide: Usage\` をご覧ください。`,
           color: EMBED_COLORS.PURPLED_BLUE,
           thumbnail: {
             url: interaction.member.user.dynamicAvatarURL(null, 64)
           },
           fields: [{
             inline: true,
-            name: 'Open Source',
-            value: 'See https://github.com/waxsd100/RoboPolice for current code.'
+            name: 'ソースコード',
+            value: '最新のコードは https://github.com/waxsd100/RoboPolice で公開しています。'
           }, {
             inline: true,
-            name: 'Dashboard',
-            value: 'There are currently no plans for a dashboard, as I don\'t have a website to host it on.'
+            name: 'ダッシュボード',
+            value: 'ホスティング先のWebサイトが無いため、ダッシュボードの提供予定はありません。'
           }, {
             inline: false,
-            name: 'Privacy Policy',
+            name: 'プライバシーポリシー',
             value: `[Privacy Policy](${LEGAL_LINKS.PRIVACY_POLICY}) | [Terms of Service](${LEGAL_LINKS.TERMS_OF_SERVICE})\nQuestions about your data? Join the [support server](${process.env.DISCORD_SUPPORT_SERVER}).`
           }, {
             inline: true,
-            name: 'Support',
-            value: `See \`/help event: eventname\` for any event you want further clarification on. If something is going terribly wrong, go ahead and join [my support server](${process.env.DISCORD_SUPPORT_SERVER})`
+            name: 'サポート',
+            value: `個々のイベントの詳細は \`/help event: eventname\` で確認できます。うまく動かない場合は[サポートサーバー](${process.env.DISCORD_SUPPORT_SERVER})へお越しください。`
           }, {
             inline: false,
-            name: 'Donations',
-            value: `If you like me and want to support my owner, you can contact \`@${process.env.BOT_CREATOR_NAME}\`.`
+            name: '支援について',
+            value: `このBOTを気に入っていただけた場合は \`@${process.env.BOT_CREATOR_NAME}\` までご連絡ください。`
           }],
           footer: getEmbedFooter(global.bot.user)
         }],
@@ -43,17 +43,17 @@ module.exports = {
     } else if (interaction.data.options?.find(o => o.name === 'guide')) {
       interaction.createMessage({
         embeds: [{
-          title: 'Usage Guide',
+          title: '使い方ガイド',
           color: EMBED_COLORS.PURPLED_BLUE,
-          description: `**__How does ${global.bot.user.username} work for me?__**\nMost actions on Discord (ban, message edit, member join, etc) are available to be set individually or as a preset to any channel you choose and have \`Manage Webhook\` permissions in.\n\n**__To setup logging__**\nUse \`/setup\` in the text channel you want to have the selected events log to. Select \`via_presets\` (set many events at once - joinlog, messages, ...) or \`via_individual_event\` (configure logging individually). Once all the desired presets or events you want to log to the current channel are selected, close the selection box and the bot will start logging your selection of events. If you want more information about an event, select it using \`/help event\`\n\n*Is something not working?* See the requirements below to ensure success in configuring ${global.bot.user.username}. If you need additional help, please contact \`@${process.env.BOT_CREATOR_NAME}\``,
+          description: `**__${global.bot.user.username} の仕組み__**\nDiscord 上のほとんどの操作（BAN、メッセージ編集、メンバー参加など）は、\`ウェブフックの管理\` 権限があるチャンネルへ、個別またはプリセット単位で出力先を設定できます。\n\n**__ログの設定方法__**\n出力先にしたいテキストチャンネルで \`/setup\` を実行します。\`via_presets\`（joinlog、messages などをまとめて設定）または \`via_individual_event\`（イベントごとに個別設定）を選んでください。必要なプリセットやイベントを選び終えたら選択ボックスを閉じると、ログの記録が始まります。各イベントの詳細は \`/help event\` で確認できます。\n\n*うまく動かない場合は* 下記の要件をご確認ください。それでも解決しない場合は \`@${process.env.BOT_CREATOR_NAME}\` までご連絡ください。`,
           fields: [{
             inline: true,
-            name: '__Permissions: Logging member joins__',
-            value: 'For the bot to somewhat accurately log the invite used for a member who joined, it **requires `Manage Channels` (can be channel permission overwrites) and `Manage Server`**. This is because Discord does not send invite information to the bot without it (Manage Channels: receives invites made for channels realtime | Manage Server: to fetch server invites)\n\nYou can find an invite with these permissions by using `/invite`.'
+            name: '__必要な権限: 参加ログ__',
+            value: '参加したメンバーが使用した招待コードを記録するには、**`チャンネルの管理`（チャンネル単位の権限上書きでも可）と `サーバー管理`** が必要です。これらが無いと Discord が招待情報をBOTへ送信しないためです（チャンネルの管理: 作成された招待をリアルタイムで受信 / サーバー管理: サーバーの招待一覧を取得）。\n\nこれらの権限を含む招待リンクは `/invite` で取得できます。'
           }, {
             inline: true,
-            name: '__Time: Message logging__',
-            value: `${global.bot.user.username} cannot log messages upon deletion that it didn't see created first, so messages sent before the bot joined or while it was offline will not show their content when deleted. Additionally, messages are kept for ${process.env.MESSAGE_HISTORY_DAYS} days: deleting or editing a message older than that produces no log entry at all.`
+            name: '__記録できる範囲: メッセージログ__',
+            value: `${global.bot.user.username} は、送信時点を見ていないメッセージの内容を削除時に表示できません。BOTの参加前や停止中に送信されたメッセージは、削除されても内容が表示されません。またメッセージの保存期間は ${process.env.MESSAGE_HISTORY_DAYS} 日で、それより古いメッセージを削除・編集した場合は「内容は保持期間外」として記録されます。`
           }],
           footer: getEmbedFooter(global.bot.user),
           author: getAuthorField(interaction.member.user),
@@ -70,11 +70,11 @@ module.exports = {
       }
       interaction.createMessage({
         embeds: [{
-          title: `Help for ${eventName} event`,
+          title: `${eventName} イベントの説明`,
           color: EMBED_COLORS.PURPLED_BLUE,
           footer: getEmbedFooter(global.bot.user),
           author: getAuthorField(interaction.member.user),
-          description: `__**Description**__\n${EVENT_HELP[eventName]}\n\n*Not what you're looking for? Join [my support server](${process.env.DISCORD_SUPPORT_SERVER})*.`
+          description: `__**説明**__\n${EVENT_HELP[eventName]}\n\n*お探しの内容と違う場合は[サポートサーバー](${process.env.DISCORD_SUPPORT_SERVER})へお越しください。*`
         }],
         flags: Eris.Constants.MessageFlags.EPHEMERAL
       })

@@ -30,56 +30,56 @@ async function handlePresetSetup (interaction, recursionUUID) {
         max_values: 9,
         min_values: 0,
         options: [{
-          label: 'ALL',
-          description: 'Log ALL events',
+          label: 'すべて',
+          description: 'すべてのイベントを記録します',
           value: 'all',
           default: !Object.keys(guildEvents).find(geKey => guildEvents[geKey] !== interaction.channel.id)
         }, {
-          label: 'Channel Events',
-          description: 'Channel created, deleted, updated (name, permission overwrites)',
+          label: 'チャンネル関連',
+          description: 'チャンネルの作成・削除・更新（名前、権限の上書き）',
           value: 'channel',
           default: interaction.channel.id === guildEvents.channelCreate && interaction.channel.id === guildEvents.channelUpdate && interaction.channel.id === guildEvents.channelDelete
         }, {
-          label: 'Message Events',
-          description: 'Message update, delete, and bulk delete (ban, purge)',
+          label: 'メッセージ関連',
+          description: 'メッセージの編集・削除・一括削除（BAN、purge）',
           value: 'message',
           default: interaction.channel.id === guildEvents.messageUpdate && interaction.channel.id === guildEvents.messageDelete && interaction.channel.id === guildEvents.messageDeleteBulk
         }, {
-          label: 'Member Update Events',
-          description: 'Member role added/removed, nickname changed, boosted server, timed out',
+          label: 'メンバー更新関連',
+          description: 'ロールの付与・剥奪、ニックネーム変更、サーバーブースト、タイムアウト',
           value: 'member',
           default: interaction.channel.id === guildEvents.guildMemberUpdate && interaction.channel.id === guildEvents.guildMemberBoostUpdate && interaction.channel.id === guildEvents.guildMemberNickUpdate
         }, {
-          label: 'Moderation Events',
-          description: 'Member banned/unbanned or kicked',
+          label: 'モデレーション関連',
+          description: 'メンバーのBAN・BAN解除・キック',
           value: 'moderation',
           default: interaction.channel.id === guildEvents.guildBanAdd && interaction.channel.id === guildEvents.guildBanRemove && interaction.channel.id === guildEvents.guildMemberKick
         }, {
-          label: 'Joinlog Events',
-          description: '(Requires manage server & manage channels to be accurate) member join/leave',
+          label: '参加ログ関連',
+          description: 'メンバーの参加・退出（正確な記録にはサーバー管理とチャンネルの管理が必要）',
           value: 'joinlog',
           default: interaction.channel.id === guildEvents.guildMemberAdd && interaction.channel.id === guildEvents.guildMemberRemove
         }, {
-          label: 'Server Events',
-          description: 'Server settings update (name, moderation level, ...), event started',
+          label: 'サーバー関連',
+          description: 'サーバー設定の変更（名前、認証レベルなど）、イベント開始',
           value: 'server',
           default: interaction.channel.id === guildEvents.guildUpdate
         }, {
-          label: 'Role Events',
-          description: 'Role created/deleted/updated (name, permissions)',
+          label: 'ロール関連',
+          description: 'ロールの作成・削除・更新（名前、権限）',
           value: 'role',
           default: interaction.channel.id === guildEvents.guildRoleCreate && interaction.channel.id === guildEvents.guildRoleDelete && interaction.channel.id === guildEvents.guildRoleUpdate
         }, {
-          label: 'Voice Events',
-          description: 'Voice channel join/leave/switch, server muted/deafened',
+          label: 'ボイス関連',
+          description: 'ボイスチャンネルの参加・退出・移動、サーバーミュート／スピーカーミュート',
           value: 'voice',
           default: interaction.channel.id === guildEvents.voiceChannelLeave && interaction.channel.id === guildEvents.voiceChannelSwitch && interaction.channel.id === guildEvents.voiceStateUpdate && interaction.channel.id === guildEvents.voiceChannelJoin
         }]
       }]
     }]
     const setupEmbed = {
-      title: 'Welcome to the Logger setup utility',
-      description: 'Use the option selector below choose preset events for logging to **here**. If you want to learn more about the usage of this command, see `/help guide: Usage` and `/help`.',
+      title: 'ログ設定ユーティリティ',
+      description: '下の選択メニューから、**このチャンネル**へ出力するイベントのプリセットを選んでください。詳しい使い方は `/help guide: Usage` と `/help` をご覧ください。',
       color: EMBED_COLORS.PURPLED_BLUE,
       thumbnail: {
         url: interaction.member.user.dynamicAvatarURL(null, 64)
@@ -130,7 +130,7 @@ async function handlePresetSetup (interaction, recursionUUID) {
         thumbnail: {
           url: global.bot.user.dynamicAvatarURL(null, 64)
         },
-        description: `I cannot update logging settings with new presets: I need the following permissions in this channel: ${missingPermissions.map(p => `**${p}**`).join(', ')}. Have questions? See \`/help usage: Guide\``,
+        description: `ログ設定を更新できません。このチャンネルで次の権限が必要です: ${missingPermissions.map(p => `**${p}**`).join(', ')}。詳しくは \`/help usage: Guide\` をご覧ください。`,
         color: EMBED_COLORS.YELLOW_ORANGE,
         footer: getEmbedFooter(global.bot.user),
         author: getAuthorField(interaction.member.user)
@@ -163,79 +163,79 @@ async function handleIndividualSetup (interaction, recursionUUID) {
         max_values: 24,
         min_values: 0,
         options: [{
-          label: 'ALL',
-          description: 'Log ALL events',
+          label: 'すべて',
+          description: 'すべてのイベントを記録します',
           value: 'all',
           default: !Object.keys(guildEvents).find(geKey => guildEvents[geKey] !== interaction.channel.id)
         },
         {
-          label: 'Channel Create',
-          description: 'On channel creation',
+          label: 'チャンネル作成',
+          description: 'チャンネルが作成されたとき',
           value: 'channelCreate',
           default: guildEvents
             .channelCreate ===
             interaction.channel.id
         },
         {
-          label: 'Channel Update',
-          description: 'On channel settings change',
+          label: 'チャンネル更新',
+          description: 'チャンネル設定が変更されたとき',
           value: 'channelUpdate',
           default: guildEvents
             .channelUpdate ===
             interaction.channel.id
         },
         {
-          label: 'Channel Delete',
-          description: 'On channel deletion',
+          label: 'チャンネル削除',
+          description: 'チャンネルが削除されたとき',
           value: 'channelDelete',
           default: guildEvents
             .channelDelete ===
             interaction.channel.id
         },
         {
-          label: 'Member Banned',
-          description: 'On member being banned',
+          label: 'メンバーBAN',
+          description: 'メンバーがBANされたとき',
           value: 'guildBanAdd',
           default: guildEvents
             .guildBanAdd ===
             interaction.channel.id
         },
         {
-          label: 'Member Unbanned',
-          description: 'On member being unbanned',
+          label: 'メンバーBAN解除',
+          description: 'メンバーのBANが解除されたとき',
           value: 'guildBanRemove',
           default: guildEvents
             .guildBanRemove ===
             interaction.channel.id
         },
         {
-          label: 'Role Create',
-          description: 'On role creation',
+          label: 'ロール作成',
+          description: 'ロールが作成されたとき',
           value: 'guildRoleCreate',
           default: guildEvents
             .guildRoleCreate ===
             interaction.channel.id
         },
         {
-          label: 'Role Delete',
-          description: 'On role deletion',
+          label: 'ロール削除',
+          description: 'ロールが削除されたとき',
           value: 'guildRoleDelete',
           default: guildEvents
             .guildRoleDelete ===
             interaction.channel.id
         },
         {
-          label: 'Role Update',
-          description: 'On role update',
+          label: 'ロール更新',
+          description: 'ロールが更新されたとき',
           value: 'guildRoleUpdate',
           default: guildEvents
             .guildRoleUpdate ===
             interaction.channel.id
         },
         {
-          label: 'Server Settings Change',
+          label: 'サーバー設定変更',
           description:
-            'On server settings being changed',
+            'サーバー設定が変更されたとき',
 
           value: 'guildUpdate',
           default: guildEvents
@@ -243,18 +243,18 @@ async function handleIndividualSetup (interaction, recursionUUID) {
             interaction.channel.id
         },
         {
-          label: 'Server Emojis Change',
+          label: 'サーバー絵文字変更',
           description:
-            'On emojis being added or removed',
+            '絵文字が追加・削除されたとき',
           value: 'guildEmojisUpdate',
           default: guildEvents
             .guildEmojisUpdate ===
             interaction.channel.id
         },
         {
-          label: 'Message Delete',
+          label: 'メッセージ削除',
           description:
-            'On a single message being deleted',
+            'メッセージが1件削除されたとき',
 
           value: 'messageDelete',
           default: guildEvents
@@ -262,104 +262,104 @@ async function handleIndividualSetup (interaction, recursionUUID) {
             interaction.channel.id
         },
         {
-          label: 'Bulk Message Delete',
+          label: 'メッセージ一括削除',
           description:
-            'On a message purge or member ban',
+            'メッセージの一括削除やBANに伴う削除が行われたとき',
           value: 'messageDeleteBulk',
           default: guildEvents
             .messageDeleteBulk ===
             interaction.channel.id
         },
         {
-          label: 'Message Edit',
-          description: 'On message update',
+          label: 'メッセージ編集',
+          description: 'メッセージが編集されたとき',
           value: 'messageUpdate',
           default: guildEvents
             .messageUpdate ===
             interaction.channel.id
         },
         {
-          label: 'Member Join',
+          label: 'メンバー参加',
           description:
-            'On member joining the server',
+            'メンバーがサーバーに参加したとき',
           value: 'guildMemberAdd',
           default: guildEvents
             .guildMemberAdd ===
             interaction.channel.id
         },
         {
-          label: 'Member Kick',
-          description: 'On member being kicked',
+          label: 'メンバーキック',
+          description: 'メンバーがキックされたとき',
           value: 'guildMemberKick',
           default: guildEvents
             .guildMemberKick ===
             interaction.channel.id
         },
         {
-          label: 'Member Leave',
+          label: 'メンバー退出',
           description:
-            'On member leaving the server',
+            'メンバーがサーバーから退出したとき',
           value: 'guildMemberRemove',
           default: guildEvents
             .guildMemberRemove ===
             interaction.channel.id
         },
         {
-          label: 'Member Nickname Update',
+          label: 'ニックネーム変更',
           description:
-            'On member updating their nickname (conditional log!)',
+            'メンバーがニックネームを変更したとき（条件付きで記録されます）',
           value: 'guildMemberNickUpdate',
           default: guildEvents
             .guildMemberNickUpdate ===
             interaction.channel.id
         },
         {
-          label: 'Member Role Add/Remove',
+          label: 'ロール付与・剥奪',
           description:
-            'On member getting or losing a role',
+            'メンバーがロールを付与・剥奪されたとき',
           value: 'guildMemberUpdate',
           default: guildEvents
             .guildMemberUpdate ===
             interaction.channel.id
         },
         {
-          label: 'Member Gate Verify',
+          label: 'メンバー認証通過',
           description:
-            'On member accepting community rules',
+            'メンバーがコミュニティのルールに同意したとき',
           value: 'guildMemberVerify',
           default: guildEvents
             .guildMemberVerify ===
             interaction.channel.id
         },
         {
-          label: 'Voice Channel Leave',
+          label: 'ボイス退出',
           description:
-            'On member leaving a voice channel',
+            'メンバーがボイスチャンネルから退出したとき',
           value: 'voiceChannelLeave',
           default: guildEvents
             .voiceChannelLeave ===
             interaction.channel.id
         },
         {
-          label: 'Voice Channel Join',
+          label: 'ボイス参加',
           description:
-            'On member joining a voice channel',
+            'メンバーがボイスチャンネルに参加したとき',
           value: 'voiceChannelJoin',
           default: guildEvents.voiceChannelJoin ===
             interaction.channel.id
         },
         {
-          label: 'Voice Channel Moved',
+          label: 'ボイス移動',
           description:
-            'On member getting moved from a voice channel',
+            'メンバーがボイスチャンネルを移動したとき',
           value: 'voiceChannelSwitch',
           default: guildEvents.voiceChannelSwitch ===
             interaction.channel.id
         },
         {
-          label: 'Member Voice Muted/Deafened',
+          label: 'ボイスミュート',
           description:
-            'On member being muted or deafened',
+            'メンバーがミュート・スピーカーミュートされたとき',
           value: 'voiceStateUpdate',
           default: guildEvents.voiceStateUpdate === interaction.channel.id
         }
@@ -367,8 +367,8 @@ async function handleIndividualSetup (interaction, recursionUUID) {
       }]
     }]
     const setupEmbed = {
-      title: 'Welcome to the Logger setup utility',
-      description: 'Use the option selector below choose individual events for logging to **here**. If you want to learn more about the usage of this command, see `/help guide: Usage` and `/help`.',
+      title: 'ログ設定ユーティリティ',
+      description: '下の選択メニューから、**このチャンネル**へ出力するイベントを個別に選んでください。詳しい使い方は `/help guide: Usage` と `/help` をご覧ください。',
       color: EMBED_COLORS.PURPLED_BLUE,
       thumbnail: {
         url: interaction.member.user.dynamicAvatarURL(null, 64)
@@ -416,7 +416,7 @@ async function handleIndividualSetup (interaction, recursionUUID) {
         thumbnail: {
           url: global.bot.user.dynamicAvatarURL(null, 64)
         },
-        description: `I cannot update logging settings with new presets: I need the following permissions in this channel: ${missingPermissions.map(p => `**${p}**`).join(', ')}. Have questions? See \`/help usage: Guide\``,
+        description: `ログ設定を更新できません。このチャンネルで次の権限が必要です: ${missingPermissions.map(p => `**${p}**`).join(', ')}。詳しくは \`/help usage: Guide\` をご覧ください。`,
         color: EMBED_COLORS.YELLOW_ORANGE,
         footer: getEmbedFooter(global.bot.user),
         author: getAuthorField(interaction.member.user)
@@ -446,9 +446,9 @@ async function handleListLogSetup (interaction) {
   }
   interaction.createMessage({
     embeds: [{
-      title: 'Logging Channels',
+      title: 'ログ出力チャンネル一覧',
       author: getAuthorField(interaction.member.user),
-      description: logLines.length !== 0 ? logLines.join('\n') : 'I am not logging any events to this server, see `/setup` or `/help` for setup help.',
+      description: logLines.length !== 0 ? logLines.join('\n') : 'このサーバーではどのイベントも記録していません。設定方法は `/setup` または `/help` をご覧ください。',
       color: EMBED_COLORS.PURPLED_BLUE
     }],
     flags: Eris.Constants.MessageFlags.EPHEMERAL

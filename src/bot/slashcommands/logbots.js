@@ -11,7 +11,7 @@ module.exports = {
       const isLoggingBots = await toggleLogBots(interaction.guildID)
       interaction.createMessage({
         embeds: [{
-          description: `Successfully __${isLoggingBots ? 'enabled' : 'disabled'}__ logging edit/deletes of messages that are made by a bot.`,
+          description: `BOTが送信したメッセージの編集・削除ログを __${isLoggingBots ? '有効化' : '無効化'}__ しました。`,
           color: EMBED_COLORS.GREEN,
           thumbnail: {
             url: interaction.member.user.dynamicAvatarURL(null, 64)
@@ -24,8 +24,8 @@ module.exports = {
       global.logger.error(e)
       interaction.createMessage({
         embeds: [{
-          title: 'Error',
-          description: 'There was a problem while toggling logbots, try again',
+          title: 'エラー',
+          description: 'logbots の切り替えに失敗しました。もう一度お試しください。',
           color: EMBED_COLORS.RED,
           thumbnail: {
             url: interaction.member.user.dynamicAvatarURL(null, 64)

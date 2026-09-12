@@ -7,7 +7,7 @@ module.exports = {
   type: 'on',
   handle: async message => {
     if (message.type === 23 || message.type === 24 || message.author.bot || !message.member) return // do not log automod actions
-    if (process.env.ENABLE_TEXT_COMMANDS) {
+    if (process.env.ENABLE_TEXT_COMMANDS === 'true') { // 文字列なので truthy 判定だと "false" でも有効になってしまう
       await commandHandler(message)
     }
     if (message.author.id === global.bot.user.id) return // dump logs made by the bot

@@ -11,18 +11,18 @@ module.exports = {
     try {
         if (interaction.data?.options?.find(o => o.name === 'scope')?.value === 'guild') {
           await global.bot.bulkEditGuildCommands(interaction.channel.guild.id, [...commands, ...developerCommands])
-          interaction.createMessage(`Guild set ${[...commands, ...developerCommands].length} slash commands successfully`)
+          interaction.createMessage(`このサーバーに ${[...commands, ...developerCommands].length} 件のスラッシュコマンドを登録しました`)
           global.logger.info(`Guild set ${[...commands, ...developerCommands].length} slash commands successfully`)
         } else if (interaction.data?.options?.find(o => o.name === 'scope')?.value === 'global') {
           await global.bot.bulkEditCommands(commands)
-          interaction.createMessage(`Globally set ${commands.length} slash commands successfully`)
+          interaction.createMessage(`${commands.length} 件のスラッシュコマンドをグローバルに登録しました`)
           global.logger.info(`Globally set ${commands.length} slash commands successfully`)
         } else {
-          interaction.createMessage('Incorrect usage, options are guild or global.')
+          interaction.createMessage('使い方が正しくありません。scope には guild か global を指定してください。')
         }
       } catch (e) {
         global.logger.error('Error setting guild slash commands', e)
-        interaction.createMessage(`Error setting slash commands:\n${e?.message}`)
+        interaction.createMessage(`スラッシュコマンドの登録に失敗しました:\n${e?.message}`)
       }
   }
 }
