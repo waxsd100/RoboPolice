@@ -1,3 +1,4 @@
+const { LEGAL_LINKS } = require('../utils/constants')
 module.exports = {
   func: async message => {
     await message.channel.createMessage({
@@ -32,7 +33,7 @@ module.exports = {
           },
           {
             name: 'Privacy Policy',
-            value: `For up-to-date privacy information, please contact \`@${process.env.BOT_CREATOR_NAME}\`.`
+            value: `[Privacy Policy](${LEGAL_LINKS.PRIVACY_POLICY}) | [Terms of Service](${LEGAL_LINKS.TERMS_OF_SERVICE})`
           }
         ]
       }]

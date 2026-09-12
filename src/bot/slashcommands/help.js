@@ -1,5 +1,5 @@
 const Eris = require('eris')
-const { EMBED_COLORS, ALL_EVENTS, EVENT_HELP } = require('../utils/constants')
+const { EMBED_COLORS, ALL_EVENTS, EVENT_HELP, LEGAL_LINKS } = require('../utils/constants')
 const { getEmbedFooter, getAuthorField } = require('../utils/embeds')
 
 module.exports = {
@@ -26,7 +26,7 @@ module.exports = {
           }, {
             inline: false,
             name: 'Privacy Policy',
-            value: `Please contact \`@${process.env.BOT_CREATOR_NAME}\` for privacy information`
+            value: `[Privacy Policy](${LEGAL_LINKS.PRIVACY_POLICY}) | [Terms of Service](${LEGAL_LINKS.TERMS_OF_SERVICE})\nQuestions about your data? Join the [support server](${process.env.DISCORD_SUPPORT_SERVER}).`
           }, {
             inline: true,
             name: 'Support',

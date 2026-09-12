@@ -9,7 +9,17 @@ Discord から「10,000ユーザー到達につき特権インテントの審査
 | アプリ名 | ロボポリス (RoboPolice) |
 | アプリケーション ID | `308674858781245440` |
 | ベース | Logger v3 (AGPL-3.0) のフォーク |
-| ソース | https://github.com/waxsd100/RoboPolice |
+| ソース | https://github.com/waxsd100/RoboPolice （public） |
+| 公開種別 | **プライベートBOT**（一般公開しておらず、第三者は追加できない） |
+| 設置サーバー数 | **1サーバーのみ**（https://discord.com/invite/nobaman ） |
+| 1万ユーザー到達の理由 | 配布数ではなく、**その1サーバーのメンバーが1万人超**であるため |
+| プライバシーポリシー | https://github.com/waxsd100/RoboPolice/blob/master/PRIVACY.md |
+| 利用規約 | https://github.com/waxsd100/RoboPolice/blob/master/TERMS.md |
+
+> **この申請の性格**：本BOTは1つのコミュニティが自分たちのモデレーションのために自前で動かしている
+> プライベートBOTです。審査では「不特定多数に配布されたBOTがデータを集めている」ケースと明確に
+> 区別されるよう、**単一サーバー運用であること**を各回答で明示します（Discord にとってはリスクの
+> 低い類型です）。逆に、公開BOTのような大げさな説明を書くと不利になります。
 
 ---
 
@@ -82,30 +92,34 @@ Discord から「10,000ユーザー到達につき特権インテントの審査
 
 ## 3. 申請フォーム 回答テンプレート（英語・そのまま貼り付け可）
 
-> フォームの自由記述欄は **1項目あたり2,000文字上限**です。以下はすべて上限内に収めてあります。
-> `<< >>` で囲った箇所は送信前に必ず実値へ置き換えてください。
+> フォームの自由記述欄は **1項目あたり2,000文字上限**です。以下はすべて上限内です。
+> URL・保持日数はすでに確定値を埋めてあります。事実が変わった場合のみ書き換えてください。
 
 ### Q. What does your application do?
 
 ```
-RoboPolice (ロボポリス) is a server audit-logging app used mainly by Japanese-speaking Discord
-communities. Server administrators use /setup to bind each event type to a log channel. The app then
-posts a structured embed to that channel whenever a moderation-relevant event occurs, giving staff a
-permanent, reviewable record of what happened in their server.
+RoboPolice (ロボポリス) is a PRIVATE Discord application. It is not publicly listed and cannot be
+added by third parties: it runs in exactly one community server, operated by that server's own staff
+for that server's own moderation. It crossed the 10,000-user threshold because that single server has
+more than 10,000 members, not because the app is distributed widely.
 
-Logged events include: member joins (with account age and which invite code was used), member leaves,
-kicks and bans, nickname changes, role changes, membership-screening completions, message deletions,
+The app is an audit logger. Server administrators use /setup to bind each event type to a staff-only
+log channel, and the app posts a structured embed there whenever a moderation-relevant event occurs,
+giving moderators a reviewable record of what happened.
+
+Logged events: member joins (with account age and the invite code used), member leaves, kicks, bans
+and unbans, nickname changes, role changes, membership-screening completions, message deletions,
 message edits (before/after), bulk deletions, channel/role/emoji/sticker/server-setting changes,
 invite creation and deletion, and voice channel join/leave/move.
 
-Moderators also have slash commands: /setup, /ignorechannel (exclude a channel from logging),
-/stoplogging (disable logging entirely), /logbots (toggle logging of bot messages), /userinfo,
-/serverinfo, /archive (export recent messages of a channel for an investigation), and /clearmydata.
+Moderator commands: /setup, /ignorechannel (exclude a channel from logging), /stoplogging (turn
+logging off entirely), /logbots, /userinfo, /serverinfo, /archive (export recent messages of one
+channel for an incident report), and /clearmydata.
 
-The app is a fork of the open-source Logger v3 project (AGPL-3.0). Source code:
-https://github.com/waxsd100/RoboPolice
+The app is a fork of the open-source Logger v3 project (AGPL-3.0). The full source is public at
+https://github.com/waxsd100/RoboPolice, so every claim in this application can be verified in code.
 
-The app does not use the Presence intent and is not applying for it.
+We are NOT applying for the Presence Intent; the app does not use it.
 ```
 
 ### Q. Do you have a public Privacy Policy telling your users about their data usage?
@@ -114,15 +128,22 @@ The app does not use the Presence intent and is not applying for it.
 Yes.
 ```
 
-### Q. Where is your Privacy Policy available? / Please share a link to your Privacy Policy.
+### Q. Where is your Privacy Policy available?
 
 ```
-<< https://.../privacy の安定した恒久URL >>
+It is published at a stable, permanent public URL in the app's own public repository, and it is
+linked from inside the app itself: the /help and /info commands both show a "Privacy Policy" field
+linking to it, and /clearmydata links to it when explaining how to request data deletion. It is also
+pinned in the community server the app runs in.
 ```
 
-> ⚠️ **最頻出の却下理由がここです。** Discord サーバーの招待リンクや Discord 自体のポリシーページは不可。
-> 「stable, permanent URL」で自前ホストしている必要があります。
-> 雛形を `docs/discord/PRIVACY_POLICY.md` に用意しました（§4 参照）。
+### Q. Please share a link to your Privacy Policy.
+
+```
+https://github.com/waxsd100/RoboPolice/blob/master/PRIVACY.md
+```
+
+（利用規約を求められた場合: `https://github.com/waxsd100/RoboPolice/blob/master/TERMS.md`）
 
 ### Q. Which intents are you applying for?
 
@@ -134,105 +155,104 @@ Server Members Intent, Message Content Intent
 ### Q. Why do you need the Guild Members (Server Members) intent?
 
 ```
-Member lifecycle logging is the single most used feature of this app, and it is impossible without
-this intent because GUILD_MEMBER_ADD / GUILD_MEMBER_REMOVE / GUILD_MEMBER_UPDATE are simply not
-delivered without it. These are passive server events, so slash commands cannot substitute for them:
-there is no user interaction to hang a command off when someone quietly leaves a server.
+Member lifecycle logging is the most used feature of this app, and it is impossible without this
+intent: GUILD_MEMBER_ADD / GUILD_MEMBER_REMOVE / GUILD_MEMBER_UPDATE are simply not delivered without
+it. These are passive server events, so slash commands cannot substitute for them — there is no user
+interaction to hang a command off when someone quietly leaves the server.
 
 Concretely, the intent powers:
 
-1. Join logs — we report the joining member, their account creation age (a standard raid/alt-account
-   signal for moderators), the server member count, and which invite code was used. Invite attribution
-   is done by diffing the guild's invite uses against our cache on each GUILD_MEMBER_ADD.
+1. Join logs — the joining member, their account creation age (a standard raid/alt-account signal for
+   moderators), the server member count, and which invite code was used. Invite attribution is done
+   by diffing the guild's invite uses against our cache on each GUILD_MEMBER_ADD.
 2. Leave and kick logs — on GUILD_MEMBER_REMOVE we read the audit log to distinguish a voluntary
-   leave from a kick, name the responsible moderator, and record the roles the member held at the
-   time so staff can see what access was lost.
+   leave from a kick, name the responsible moderator, and record the roles the member held, so staff
+   can see what access was lost.
 3. Nickname, role and membership-screening logs — from GUILD_MEMBER_UPDATE, so staff can see who
    gained a privileged role and when.
 4. Member resolution for every other log embed — the member object (nickname, roles, avatar) is what
-   lets a deletion or ban log say "Taro (nickname: Mod-Taro)" instead of a bare snowflake ID.
+   lets a deletion or ban log read "Taro (nickname: Mod-Taro)" instead of a bare snowflake ID.
 5. The /userinfo moderation command.
 
-We only read member data; we never store member profile data in our database. Member objects live in
-the gateway cache in memory and are discarded when the process restarts.
+We only read member data. No member profile data is written to our database at all; member objects
+live in the gateway cache in memory and are discarded on restart. This is all scoped to the single
+server the app runs in.
 ```
 
 ### Q. Why do you need the Message Content intent?
 
 ```
-The core feature of the app is telling moderators what a deleted or edited message actually said.
-Once a message is deleted, it can never be retrieved from the Discord API again, so the only way to
-provide this is to have received the content before the deletion happened. No slash-command or
-interaction-based design can replace this — by the time a moderator could run a command, the evidence
-is already gone.
+The core feature of the app is showing moderators what a deleted or edited message actually said.
+A deleted message can never be retrieved from the Discord API, so the only way to provide this is to
+have received the content before the deletion happened. No slash-command or interaction-based design
+can replace this: by the time a moderator could run a command, the evidence is gone.
 
 Message Content is used for exactly these features:
 
 1. Message deletion logs — the text and image attachments of the removed message are shown to staff.
-   This is what communities use to act on scam/phishing links, raid spam, doxxing and harassment,
+   This is what the community uses to act on scam/phishing links, raid spam, doxxing and harassment,
    and to review whether another moderator's deletion was appropriate.
-2. Message edit logs — a before/after diff, used to catch "post a normal message, then edit it into
-   an advertisement or a scam link" behaviour, which is invisible in Discord's own UI.
+2. Message edit logs — a before/after diff, which catches "post something innocuous, then edit it
+   into an advertisement or a scam link" behaviour that is invisible in Discord's own UI.
 3. Bulk deletion logs — the same, for mass deletions.
 4. /archive — lets a moderator with Manage Messages export recent messages of one channel for an
    incident report.
 
-We do NOT use message content for machine learning, model training, statistics, profiling,
-advertising or any analytics, and we never share it with third parties. It is used solely to render
-the log embed that is sent back into the same server the message came from.
+We do NOT use message content for machine learning, AI model training, statistics, profiling,
+advertising or analytics, and we never share it with third parties. It is used solely to render the
+log embed posted back into the same server the message came from.
 
-Content is AES-256 encrypted before it is written to our database, and rows are purged after
-<< MESSAGE_HISTORY_DAYS >> days. Server administrators can exclude channels with /ignorechannel or
-turn logging off entirely with /stoplogging.
+Content is AES-256 encrypted before it is written to our database, rows are deleted after 30 days by
+an automated job, and administrators can exclude channels with /ignorechannel or turn logging off
+entirely with /stoplogging.
 ```
 
 ### Q. Please provide links to screenshots and/or videos that demonstrate your use case
 
 ```
-<< 下記 §4 のチェックリストに沿って撮影し、恒久URLを貼る >>
+<< §4 のチェックリストに沿って撮影し、恒久URLを貼る >>
 ```
 
 ### Q. Are you storing any API Data off-platform?
 
 ```
-Yes. We store the minimum required to render deletion/edit logs.
+Yes, the minimum required to render deletion and edit logs. Everything stays on infrastructure we
+operate ourselves; nothing is sent to any third party.
 
 PostgreSQL "messages" table, one row per message seen:
-  - message ID
-  - author ID
-  - message content, AES-256 encrypted
-  - attachment image URLs, AES-256 encrypted
-  - timestamp
-Note that we do not even store the guild ID or channel ID of a message.
+  - message ID (plaintext)
+  - author ID (plaintext)
+  - message content (AES-256 encrypted)
+  - image attachment URLs (AES-256 encrypted)
+  - timestamp (plaintext)
+We do not even store the guild ID or channel ID of a message.
 
 PostgreSQL "guilds" table, one row per server: guild ID, owner ID, which channels are ignored, which
-events are disabled, the log channel ID per event, and per-guild settings. This is configuration, not
-user data.
+events are disabled, the log channel ID per event, and per-server settings. This is configuration,
+not user data.
 
 Redis holds short-lived operational caches only (invite-code counters, webhook handles, guild
-settings); it is not a long-term store.
+settings), cleared on restart.
 
-No presence data, no member profile data, no message content beyond the retention window, and nothing
-is shared with or sold to third parties.
+No presence data, no member profile data, no message content beyond the retention window.
 ```
 
 ### Q. Are you storing API Data for 30 days or less?
 
 ```
-<< 実際の MESSAGE_HISTORY_DAYS の値に合わせる >>
-Yes. Message rows are retained for << N >> days and then permanently deleted from the database.
-Guild configuration rows are deleted when the app is removed from the server.
+Yes. Message rows are retained for 30 days and then permanently deleted. This is enforced in code by
+a scheduled deletion job (src/bot/modules/retention.js) that runs hourly and deletes any row older
+than the configured window; it is not a manual process. Guild configuration rows are deleted when the
+app is removed from the server.
 ```
-
-> ⚠️ §4 のギャップ確認を参照。30日以内であることが強い加点材料です。
 
 ### Q. How do users contact you to request deletion of their activity data?
 
 ```
-Users can run /clearmydata in any server where the app is present, which returns the contact details
-for a deletion request. Requests are also accepted at << サポートサーバー招待URL >> and by email at
-<< 連絡先メールアドレス >>. We action deletion requests manually against the message store, and in any
-case all message rows are automatically purged after << N >> days.
+Any member can run /clearmydata in the server, which returns the contact route and links to our
+Privacy Policy. Requests are handled by the staff of the community server the app runs in, reachable
+at https://discord.com/invite/nobaman. We action deletion requests manually against the message
+store. Independently of any request, all message rows are automatically deleted after 30 days.
 ```
 
 ### Q. Are you encrypting the data that you store at rest?
@@ -240,8 +260,8 @@ case all message rows are automatically purged after << N >> days.
 ```
 Yes. Message content and attachment URLs are encrypted with AES-256 in the application layer
 (src/db/aes.js) before they are inserted into PostgreSQL, so plaintext message content never touches
-disk. The encryption key is held only in the application's environment and is not stored in the
-database. << ディスク/ボリューム暗号化やDBアクセス制限をしていれば1文追記 >>
+disk. The encryption key is held only in the application's runtime environment and is never stored in
+the database. Database access is restricted to the application's own host.
 ```
 
 ### Q. Presence Intent の各設問
@@ -252,31 +272,29 @@ Not applicable — we are not applying for the Presence Intent.
 
 ---
 
-## 4. 送信前に埋めるべきギャップ（現時点で不足している要件）
+## 4. 送信前の残作業
 
-- [ ] **プライバシーポリシーの恒久URL** — 現状コード内は「作者に連絡してください」表記のみ
-      (`src/bot/slashcommands/help.js:28-29`, `src/bot/commands/info.js:34-35`)。これは **確実に却下されます**。
-      → 雛形: `docs/discord/PRIVACY_POLICY.md`。GitHub Pages 等で公開し、`/help` `/info` の文言もURLに差し替える。
-- [ ] **利用規約 (ToS) のURL** — 雛形: `docs/discord/TERMS_OF_SERVICE.md`。Portal のアプリ設定欄にも登録する。
-- [ ] **スクリーンショット／動画** — 以下を撮影して恒久URL（Imgur / YouTube限定公開 / 自前ホスト）に：
+- [x] **プライバシーポリシー** — `PRIVACY.md`（英日併記）をリポジトリルートに作成。public リポジトリなので
+      `https://github.com/waxsd100/RoboPolice/blob/master/PRIVACY.md` が恒久URLとして機能します。
+      **PR #8 を master にマージした時点で有効になります。**
+- [x] **利用規約** — `TERMS.md`。Developer Portal の Terms of Service URL 欄にも登録してください。
+- [x] **BOT内からポリシーへ導線** — `/help`・`/info`・`/clearmydata` にポリシーURLを表示するよう変更。
+      「Where is your Privacy Policy available?」への回答の裏付けになります。
+- [x] **保持期間の実装** — `src/bot/modules/retention.js` を追加し、`MESSAGE_HISTORY_DAYS`（既定30）より
+      古い行を毎時バッチ削除します。これまで自動削除は実装されておらず、BOTがユーザーに告知していた
+      「N日で削除」が事実と異なる状態でした。
+- [ ] **スクリーンショット／動画** — 以下を撮影して恒久URL（Imgur / YouTube限定公開 等）に：
   1. `/setup` でログチャンネルを設定している画面
-  2. メンバー参加ログの埋め込み（Account Age・Invite Used が写っているもの）
-  3. 退出／キックログの埋め込み（ロールと実行モデレーターが写っているもの）
-  4. メッセージ削除ログの埋め込み（本文が写っているもの＝Message Content の用途証明）
+  2. メンバー参加ログ（Account Age・Invite Used が写っているもの）
+  3. 退出／キックログ（ロールと実行モデレーターが写っているもの）
+  4. **メッセージ削除ログ（本文が写っているもの）= Message Content の用途証明**
   5. メッセージ編集ログの Before / After
   6. `/ignorechannel` と `/stoplogging` によるオプトアウト画面
-- [ ] **データ保持期間の実装確認** — `MESSAGE_HISTORY_DAYS` は現状 **ヘルプ文言にしか登場せず、
-      自動削除ジョブがリポジトリ内に実装されていません**（`src/db/interfaces/postgres/delete.js` は
-      単体削除のみ）。外部 cron / pg_cron で実際に削除していることを確認してください。
-      していない場合、「N日で削除します」という申請は虚偽になります。実装例:
-
-      ```sql
-      -- 例: 30日より古いメッセージを削除（cron で日次実行）
-      DELETE FROM messages WHERE ts < NOW() - INTERVAL '30 days';
-      ```
-
-- [ ] **削除請求の連絡先** — `/clearmydata` は `BOT_CREATOR_NAME` への連絡を案内するのみ。
-      メールアドレスかサポートサーバーの恒久的な導線を用意する。
+  7. `/help` のプライバシーポリシー欄（BOT内導線の証明）
+- [ ] **Developer Portal 側の登録** — General Information の Privacy Policy URL / Terms of Service URL に
+      上記2つのURLを入力。
+- [ ] **`MESSAGE_HISTORY_DAYS` の値確認** — 本番 `.env` が30以外なら `PRIVACY.md` の記述と揃えること
+      （申請の「30日以内」回答と矛盾させない）。
 
 ---
 
@@ -311,3 +329,5 @@ commit `c075c5b`）では構造的に要求できません。**申請作業の�
 - フォームには**下書き保存機能がありません**。本ファイルの回答を完成させてから、一気に貼り付けて送信してください。
 - 却下されても再申請は可能です。ただし審査中もボットは通常通り稼働できます。
 - 承認後も **毎年の再申請が必要**です。
+- **プライベートBOTであることを隠さないでください。** 単一サーバー運用・公開していない・ソース公開済み、
+  という条件は審査上むしろ有利に働きます。

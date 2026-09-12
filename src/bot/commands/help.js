@@ -1,3 +1,4 @@
+const { LEGAL_LINKS } = require('../utils/constants')
 module.exports = {
   func: async (message, suffix) => {
     let DMC
@@ -67,7 +68,7 @@ module.exports = {
             }, {
               inline: false,
               name: 'Privacy Policy',
-              value: `Please contact \`@${process.env.BOT_CREATOR_NAME}\` for privacy information`
+              value: `[Privacy Policy](${LEGAL_LINKS.PRIVACY_POLICY}) | [Terms of Service](${LEGAL_LINKS.TERMS_OF_SERVICE})\nQuestions about your data? Join the [support server](${process.env.DISCORD_SUPPORT_SERVER}).`
             }, {
               inline: true,
               name: 'Support',

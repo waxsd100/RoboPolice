@@ -1,5 +1,6 @@
 const Eris = require('eris')
 const { getAuthorField } = require('../utils/embeds.js')
+const { LEGAL_LINKS } = require('../utils/constants.js')
 
 module.exports = {
   name: 'clearmydata',
@@ -7,7 +8,7 @@ module.exports = {
     interaction.createMessage({
       embeds: [{
         title: 'Action needed:',
-        description: `To clear your data (messages), please contact \`@${process.env.BOT_CREATOR_NAME}\`. Remember: all messages stored are encrypted and automatically removed from the database after ${process.env.MESSAGE_HISTORY_DAYS} days.`,
+        description: `To request deletion of your data (messages), join the [support server](${process.env.DISCORD_SUPPORT_SERVER}) and contact the staff with your user ID. Remember: all stored messages are encrypted at rest and are automatically removed from the database after ${process.env.MESSAGE_HISTORY_DAYS} days regardless of this request.\n\nSee the [Privacy Policy](${LEGAL_LINKS.PRIVACY_POLICY}) for exactly what is stored.`,
         color: 16711680,
         timestamp: new Date(),
         footer: {

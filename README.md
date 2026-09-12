@@ -1,5 +1,13 @@
 Logger is a powerful [Discord](https://discordapp.com) bot meant to give staff members oversight over the various actions taking place in their server. Come talk about me with my creator at [Logger's Lounge](https://discord.gg/ed7Gaa3).
 
+## Legal
+
+- [Privacy Policy](PRIVACY.md)
+- [Terms of Service](TERMS.md)
+
+These are the documents registered with Discord for this application; keep them in sync with what the
+code actually does before changing data handling.
+
 ## Installation
 
 You are mostly on your own selfhosting this version. Required applications:
