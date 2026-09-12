@@ -10,8 +10,9 @@
 
 ## 1. Acceptance
 
-RoboPolice ("the App") is a private Discord application operated in a single community server
-("the Server"), reachable at https://discord.com/invite/nobaman. By using the Server while the App is
+RoboPolice ("the App") is a private Discord application. It runs in the community server reachable
+at https://discord.com/invite/nobaman ("the Server") and in a few private test servers we operate;
+these Terms apply to each of them. By using the Server while the App is
 present, you agree to these Terms and to the
 [Privacy Policy](https://github.com/waxsd100/RoboPolice/blob/master/PRIVACY.md).
 
@@ -69,8 +70,9 @@ https://discord.com/invite/nobaman
 
 ## 1. 同意
 
-ロボポリス（以下「本BOT」）は、https://discord.com/invite/nobaman でアクセスできる単一の
-コミュニティサーバー（以下「本サーバー」）で運用されるプライベートな Discord アプリケーションです。
+ロボポリス（以下「本BOT」）はプライベートな Discord アプリケーションです。
+https://discord.com/invite/nobaman でアクセスできるコミュニティサーバー（以下「本サーバー」）と、
+当方が運営する少数の非公開テストサーバーで稼働しており、本規約はそのいずれにも適用されます。
 本BOTが設置された本サーバーを利用することで、本規約および
 [プライバシーポリシー](https://github.com/waxsd100/RoboPolice/blob/master/PRIVACY.md)に同意したものとみなします。
 

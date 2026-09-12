@@ -10,10 +10,15 @@
 
 ## 1. About this application
 
-RoboPolice ("the App") is a **private** Discord application. It is not publicly listed, cannot be
-added to servers by third parties, and operates in a **single Discord community** — the server
-reachable at https://discord.com/invite/nobaman ("the Server"). The App is operated by that Server's
-own staff, for that Server's own moderation.
+RoboPolice ("the App") is a **private** Discord application. It is not publicly listed and cannot be
+added to servers by third parties. It runs in a small number of servers, all of them ours:
+
+- the community server reachable at https://discord.com/invite/nobaman ("the Server"), which is the
+  only place it does real moderation work, and
+- a few private test servers we operate, used to try changes before they reach the Server.
+
+Everything in this policy applies to all of them; "the Server" below covers each server the App is
+installed in.
 
 The App reached Discord's 10,000-user threshold because the Server itself has more than 10,000
 members, not because the App is distributed across many servers.
@@ -159,9 +164,13 @@ https://discord.com/invite/nobaman
 ## 1. このアプリケーションについて
 
 ロボポリス（以下「本BOT」）は**プライベート**な Discord アプリケーションです。一般公開されておらず、
-第三者がサーバーに追加することはできません。稼働しているのは https://discord.com/invite/nobaman で
-アクセスできる**単一のコミュニティサーバー**（以下「本サーバー」）のみであり、本サーバーの運営スタッフが
-自サーバーのモデレーションのために運用しています。
+第三者がサーバーに追加することはできません。設置されているのは当方が運営する少数のサーバーのみです。
+
+- https://discord.com/invite/nobaman でアクセスできるコミュニティサーバー（以下「本サーバー」）。
+  実際のモデレーション業務を行っているのはここだけです。
+- 当方が運営する少数の非公開テストサーバー。本サーバーへ反映する前の動作確認に使用します。
+
+本ポリシーはそのすべてに適用されます。以下の「本サーバー」は、本BOTが設置されている各サーバーを指します。
 
 本BOTが Discord の1万ユーザー基準に達したのは、本サーバー自体のメンバーが1万人を超えているためであり、
 多数のサーバーに配布されているためではありません。
