@@ -1,4 +1,9 @@
-Logger is a powerful [Discord](https://discordapp.com) bot meant to give staff members oversight over the various actions taking place in their server. Come talk about me with my creator at [Logger's Lounge](https://discord.gg/ed7Gaa3).
+RoboPolice (ロボポリス) is a **private** [Discord](https://discord.com) audit-logging app. It is not
+publicly listed and runs in a single community server, whose staff operate it for that server's own
+moderation. Support: https://discord.com/invite/nobaman
+
+It is a fork of [Logger v3](https://github.com/curtisf/logger) (AGPL-3.0). Upstream documentation
+below describes self-hosting the original project.
 
 ## Legal
 

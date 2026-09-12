@@ -18,7 +18,7 @@ module.exports = {
           fields: [{
             inline: true,
             name: 'Open Source',
-            value: 'See https://github.com/tizzysaurus/logger for current code.'
+            value: 'See https://github.com/waxsd100/RoboPolice for current code.'
           }, {
             inline: true,
             name: 'Dashboard',

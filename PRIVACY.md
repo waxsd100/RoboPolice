@@ -76,8 +76,19 @@ Solely to render the log embeds posted back into the Server the event came from,
 moderator commands (`/userinfo`, `/serverinfo`, `/archive`).
 
 We do **not** use any of this data for machine learning or AI model training, profiling, advertising,
-analytics, or any statistical or commercial product. We do **not** sell, rent, or share it with third
-parties. No data leaves the App's own infrastructure.
+analytics, or any statistical or commercial product. We do **not** sell or rent it to anyone.
+
+Two components can send data outside our own servers:
+
+- **Error monitoring.** When the App hits an unexpected error, the error and its stack trace are sent
+  to Sentry so we can fix it. Error reports are not intended to contain message content, but we
+  cannot guarantee that a stack trace never includes a fragment of it.
+- **Message archives.** `/archive` (run by a moderator with Manage Messages) and bulk-deletion logs
+  write the affected messages to a paste service so the log can link to them instead of flooding the
+  channel. Anyone holding the resulting link can read that archive. The paste service is configured
+  by the operator; see section 11 to ask which instance is in use.
+
+Apart from these, data stays on infrastructure we operate.
 
 ## 5. Retention
 
@@ -89,8 +100,18 @@ parties. No data leaves the App's own infrastructure.
 
 We do not currently apply a fixed expiry to message rows: they are the audit record the Server's
 moderators rely on, and an incident is often investigated long after it happened. We keep only the
-fields listed in section 3.1, encrypted, and we delete a user's rows on request (section 8). A row is
-also deleted as soon as its message is deleted and logged, since the log embed replaces it.
+fields listed in section 3.1, encrypted, and we delete a user's rows on request (section 8).
+
+Rows are also removed automatically in one case: when a single message is deleted and that deletion
+is logged, its row is dropped, because the log embed then holds the record. This does **not** apply
+to bulk deletions (for example messages removed along with a ban), whose rows remain.
+
+Two limits are worth stating plainly:
+
+- Excluding a channel with `/ignorechannel` stops future logging in it. It does not remove rows
+  already stored from that channel.
+- Because we do not store a server or channel ID alongside a message (section 3.1), we cannot select
+  rows by server. Rows can be selected by user ID, which is what a deletion request uses.
 
 If we introduce a fixed retention window in future, this section will be updated before it takes
 effect.
@@ -100,7 +121,7 @@ effect.
 Message content and attachment URLs are encrypted with AES-256 in the application layer
 (`src/db/aes.js`) **before** they are written to PostgreSQL, so plaintext message content never
 reaches disk. The encryption key is held only in the App's runtime environment and is never stored in
-the database. Database access is restricted to the App's own host.
+the database.
 
 ## 7. Your choices
 
@@ -204,7 +225,19 @@ https://discord.com/invite/nobaman
 （`/userinfo`、`/serverinfo`、`/archive`）への応答のみに使用します。
 
 機械学習・AIモデルの学習、プロファイリング、広告、分析、統計・商用目的には**一切使用しません**。
-第三者への販売・貸与・共有も行いません。データが本BOTの自己インフラの外に出ることはありません。
+第三者への販売・貸与も行いません。
+
+ただし、以下の2つの機能はデータを当方のサーバー外へ送信します。
+
+- **エラー監視** — 予期しないエラーが発生した場合、修正のためエラー内容とスタックトレースを Sentry へ
+  送信します。エラー報告にメッセージ本文を含める意図はありませんが、スタックトレースに断片が
+  混入しない保証まではできません。
+- **メッセージのアーカイブ** — `/archive`（メッセージ管理権限を持つモデレーターが実行）および
+  一括削除ログは、対象メッセージを paste サービスへ書き出し、ログからリンクします。そのリンクを
+  知る者は誰でもアーカイブを閲覧できます。使用する paste サービスは運用者が設定します。
+  どのインスタンスを使用しているかは第11項の連絡先までお問い合わせください。
+
+これら以外については、データが当方の運用するインフラの外に出ることはありません。
 
 ## 5. 保持期間
 
@@ -216,8 +249,18 @@ https://discord.com/invite/nobaman
 
 メッセージ行に固定の保存期限は設けていません。これらは本サーバーのモデレーターが依拠する監査記録であり、
 事案の調査は発生からかなり経ってから行われることがあるためです。保存するのは 3.1 に挙げた項目のみで、
-暗号化したうえで保持し、削除請求があれば当該ユーザーの行を削除します（第8項）。なお、メッセージが
-削除されてログに出力された時点で、その行はデータベースから削除されます（ログがその役割を引き継ぐため）。
+暗号化したうえで保持し、削除請求があれば当該ユーザーの行を削除します（第8項）。
+
+自動的に削除される場合が1つあります。単一のメッセージが削除され、その削除がログに出力された時点で、
+該当する行は削除されます（ログがその役割を引き継ぐため）。ただし**一括削除**（BANに伴う削除など）には
+この処理は適用されず、行は残ります。
+
+以下の2点は明示しておきます。
+
+- `/ignorechannel` によるチャンネルの除外は、以後のログ取得を停止するものです。そのチャンネルから
+  既に保存された行を削除するものではありません。
+- メッセージにサーバーIDやチャンネルIDを併せて保存していないため（3.1）、サーバー単位で行を
+  選択することはできません。ユーザーID単位での選択は可能で、削除請求はこれを用います。
 
 将来固定の保持期間を設ける場合は、適用前に本項を更新します。
 
@@ -225,8 +268,7 @@ https://discord.com/invite/nobaman
 
 メッセージ本文と添付URLは、PostgreSQL に書き込まれる**前に**アプリケーション層（`src/db/aes.js`）で
 AES-256 により暗号化されます。したがって平文のメッセージ本文がディスクに書かれることはありません。
-暗号鍵は実行環境上にのみ存在し、データベースには保存されません。データベースへのアクセスは
-本BOTのホストに限定されています。
+暗号鍵は実行環境上にのみ存在し、データベースには保存されません。
 
 ## 7. 選択肢
 
