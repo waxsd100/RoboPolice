@@ -9,7 +9,7 @@ module.exports = {
       eventName: 'guildRoleUpdate',
       who: null,
       embeds: [{
-        description: `A role was updated (${role.name})`,
+        description: `A role が更新されました (${role.name})`,
         fields: [],
         color: role.color ? role.color : 3553599
       }]
@@ -32,7 +32,7 @@ module.exports = {
     })
     if (role.permissions.allow !== oldRole.permissions.allow || role.permissions.deny !== oldRole.permissions.deny) {
       const field = {
-        name: 'Permissions changed',
+        name: '権限の変更',
         value: ''
       }
       const newPerms = Object.keys(role.permissions.json)
@@ -63,7 +63,7 @@ module.exports = {
       if (log && log.user) {
         guildRoleUpdateEvent.embeds[0].fields.push({
           name: 'ID',
-          value: `\`\`\`ini\nRole = ${role.id}\nPerpetrator = ${log.user.id}\`\`\``
+          value: `\`\`\`ini\nロール = ${role.id}\n実行者 = ${log.user.id}\`\`\``
         })
         guildRoleUpdateEvent.embeds[0].author = {
           name: `${log.user.username}#${log.user.discriminator}`,
@@ -74,7 +74,7 @@ module.exports = {
       } else {
         guildRoleUpdateEvent.embeds[0].fields.push({
           name: 'ID',
-          value: `\`\`\`ini\nRole = ${role.id}\nPerpetrator = Unknown\`\`\``
+          value: `\`\`\`ini\nロール = ${role.id}\n実行者 = Unknown\`\`\``
         })
         if (guildRoleUpdateEvent.embeds[0].fields.length === 1) return
         await send(guildRoleUpdateEvent)

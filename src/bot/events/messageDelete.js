@@ -39,10 +39,10 @@ module.exports = {
       eventName: 'messageDelete',
       embeds: [{
         author: {
-          name: cachedUser ? `${cachedUser.username}#${cachedUser.discriminator} ${cachedUser && cachedUser.nick ? `(${member.nick})` : ''}` : `Unknown User <@${cachedMessage.author_id}>`,
+          name: cachedUser ? `${cachedUser.username}#${cachedUser.discriminator} ${cachedUser && cachedUser.nick ? `(${member.nick})` : ''}` : `不明なユーザー <@${cachedMessage.author_id}>`,
           icon_url: cachedUser ? cachedUser.avatarURL : 'https://logger.bot/staticfiles/red-x.png'
         },
-        description: `Message deleted in <#${message.channel.id}>`,
+        description: `<#${message.channel.id}> でメッセージが削除されました`,
         fields: [],
         color: 8530669
       }]
@@ -55,20 +55,20 @@ module.exports = {
         messageChunks.push(cachedMessage.content)
       }
     } else {
-      messageChunks.push('<no message content>')
+      messageChunks.push('<本文なし>')
     }
     messageChunks.forEach((chunk, i) => {
       messageDeleteEvent.embeds[0].fields.push({
-        name: i === 0 ? 'Content' : 'Continued',
+        name: i === 0 ? '内容' : '続き',
         value: chunk
       })
     })
     messageDeleteEvent.embeds[0].fields.push({
-      name: 'Date',
+      name: '日時',
       value: `<t:${Math.round(cachedMessage.ts / 1000)}:F>`
     }, {
       name: 'ID',
-      value: `\`\`\`ini\nUser = ${cachedMessage.author_id}\nMessage = ${cachedMessage.id}\`\`\`\n <@${cachedMessage.author_id}>`
+      value: `\`\`\`ini\nユーザー = ${cachedMessage.author_id}\nメッセージ = ${cachedMessage.id}\`\`\`\n <@${cachedMessage.author_id}>`
     })
     
     if (cachedMessage.attachment_b64) {
@@ -101,19 +101,19 @@ function expiredMessageEvent (message) {
     eventName: 'messageDelete',
     embeds: [{
       author: {
-        name: 'Unknown User',
+        name: '不明なユーザー',
         icon_url: 'https://logger.bot/staticfiles/red-x.png'
       },
-      description: `Message deleted in <#${message.channel.id}>`,
+      description: `<#${message.channel.id}> でメッセージが削除されました`,
       fields: [{
-        name: 'Content',
-        value: `Not available. The message is older than the ${process.env.MESSAGE_HISTORY_DAYS} day retention window, so its content is no longer stored.`
+        name: '内容',
+        value: `取得できません。保持期間（${process.env.MESSAGE_HISTORY_DAYS}日）を過ぎているため、内容は保存されていません。`
       }, {
-        name: 'Date',
+        name: '日時',
         value: `<t:${Math.round(messageTimestamp(message.id) / 1000)}:F>`
       }, {
         name: 'ID',
-        value: `\`\`\`ini\nMessage = ${message.id}\`\`\``
+        value: `\`\`\`ini\nメッセージ = ${message.id}\`\`\``
       }],
       color: 8530669
     }]

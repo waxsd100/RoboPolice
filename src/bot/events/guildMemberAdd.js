@@ -13,20 +13,20 @@ module.exports = {
           name: `${member.username}#${member.discriminator}`,
           icon_url: member.avatarURL
         },
-        description: `<@${member.id}> joined `,
+        description: `<@${member.id}> が参加しました`,
         fields: [{
-          name: 'Name',
+          name: '名前',
           value: `${member.username}#${member.discriminator} (${member.id}) ${member.mention}`
         }, {
-          name: 'Joined At',
+          name: '参加日時',
           value: `<t:${Math.round(Date.now() / 1000)}:F>`
         }, {
-          name: 'Account Age',
-          value: `**${Math.floor((new Date() - member.user.createdAt) / 86400000)}** days`,
+          name: 'アカウント作成からの日数',
+          value: `**${Math.floor((new Date() - member.user.createdAt) / 86400000)}** 日`,
           inline: true
         },
         {
-          name: 'Member Count',
+          name: 'メンバー数',
           value: guild.memberCount.toLocaleString(),
           inline: true
         }],
@@ -52,22 +52,22 @@ module.exports = {
         if (!usedInvite) {
           if (guild.vanityURL != null) {
             GMAEvent.embeds[0].fields.push({
-              name: 'Invite Used',
-              value: 'Server vanity',
+              name: '使用された招待',
+              value: 'サーバーのカスタムURL',
               inline: true
             })
           } else if (member.bot) {
             GMAEvent.embeds[0].fields.push({
-              name: 'Invite Used',
-              value: 'OAuth flow',
+              name: '使用された招待',
+              value: 'OAuth連携',
               inline: true
             })
           }
         }
         if (usedInvite) {
           GMAEvent.embeds[0].fields.push({
-            name: 'Invite Used',
-            value: `${usedInvite.code} with ${usedInvite.uses.toLocaleString()} uses`,
+            name: '使用された招待',
+            value: `${usedInvite.code}（使用回数 ${usedInvite.uses.toLocaleString()}）`,
             inline: true
           })
         }
@@ -79,7 +79,7 @@ module.exports = {
     }
     GMAEvent.embeds[0].fields.push({
       name: 'ID',
-      value: `\`\`\`ini\nMember = ${member.id}\nGuild = ${guild.id}\`\`\``
+      value: `\`\`\`ini\nメンバー = ${member.id}\nサーバー = ${guild.id}\`\`\``
     })
     await send(GMAEvent)
   }

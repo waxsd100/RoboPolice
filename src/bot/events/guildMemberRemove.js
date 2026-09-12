@@ -17,10 +17,10 @@ module.exports = {
       })
     }
     const rolesField = {
-      name: 'Roles',
-      value: roles.length === 0 ? 'None' : roles.map(r => r.name).join(', ') // No idea why the below line is needed
+      name: 'ロール',
+      value: roles.length === 0 ? 'なし' : roles.map(r => r.name).join(', ') // No idea why the below line is needed
     }
-    if (!rolesField.value) rolesField.value = 'None'
+    if (!rolesField.value) rolesField.value = 'なし'
     const event = {
       guildID: guild.id,
       eventName: 'guildMemberRemove'
@@ -40,10 +40,10 @@ module.exports = {
           icon_url: member.avatarURL
         },
         color: 16711680,
-        description: `${member.username}#${member.discriminator} ${member.nick ? `(${member.nick})` : ''} was kicked`,
+        description: `${member.username}#${member.discriminator} ${member.nick ? `(${member.nick})` : ''} がキックされました`,
         fields: [{
-          name: 'User Information',
-          value: `${member.username}#${member.discriminator} (${member.id}) ${member.mention} ${member.bot ? '\nIs a bot' : ''}`
+          name: 'ユーザー情報',
+          value: `${member.username}#${member.discriminator} (${member.id}) ${member.mention} ${member.bot ? '\nBOTです' : ''}`
         }],
         footer: {
           text: `${user.username}#${user.discriminator}`,
@@ -52,19 +52,19 @@ module.exports = {
       }]
       if (member.roles) {
         event.embeds[0].fields.push(rolesField, {
-          name: 'Joined At',
-          value: `<t:${Math.round(member.joinedAt / 1000)}:F> (${Math.abs(((new Date().getTime() - member.joinedAt) / 1000 / 60 / 60 / 24)).toFixed(0)} days, ${Math.abs(((new Date().getTime() - member.joinedAt) / 1000 / 60 / 60)).toFixed(0)} hours ago)`
+          name: '参加日時',
+          value: `<t:${Math.round(member.joinedAt / 1000)}:F> (${Math.abs(((new Date().getTime() - member.joinedAt) / 1000 / 60 / 60 / 24)).toFixed(0)} 日と ${Math.abs(((new Date().getTime() - member.joinedAt) / 1000 / 60 / 60)).toFixed(0)} 時間前)`
         })
       }
       event.embeds[0].fields.push({
-        name: 'Created At',
-        value: `<t:${Math.round(member.createdAt / 1000)}:F> (${Math.abs(((new Date().getTime() - member.createdAt) / 1000 / 60 / 60 / 24)).toFixed(0)} days, ${((new Date().getTime() - member.createdAt) / 1000 / 60 / 60).toFixed(0)} hours old)`
+        name: '作成日時',
+        value: `<t:${Math.round(member.createdAt / 1000)}:F> (${Math.abs(((new Date().getTime() - member.createdAt) / 1000 / 60 / 60 / 24)).toFixed(0)} 日と ${((new Date().getTime() - member.createdAt) / 1000 / 60 / 60).toFixed(0)} 時間前)`
       }, {
-        name: 'Reason',
-        value: log.reason ? log.reason : 'None provided'
+        name: '理由',
+        value: log.reason ? log.reason : '理由なし'
       }, {
         name: 'ID',
-        value: `\`\`\`ini\nUser = ${member.id}\nPerpetrator = ${user.id}\`\`\``
+        value: `\`\`\`ini\nユーザー = ${member.id}\n実行者 = ${user.id}\`\`\``
       })
       return send(event)
     } else {
@@ -75,24 +75,24 @@ module.exports = {
           icon_url: member.avatarURL
         },
         color: 16711680,
-        description: `${member.username}#${member.discriminator} left the server`,
+        description: `${member.username}#${member.discriminator} がサーバーから退出しました`,
         fields: [{
-          name: 'User Information',
-          value: `${member.username}#${member.discriminator} (${member.id}) ${member.mention} ${member.bot ? '\nIs a bot' : ''}`
+          name: 'ユーザー情報',
+          value: `${member.username}#${member.discriminator} (${member.id}) ${member.mention} ${member.bot ? '\nBOTです' : ''}`
         }]
       }]
       if (member.roles) {
         event.embeds[0].fields.push(rolesField, {
-          name: 'Joined At',
+          name: '参加日時',
           value: `<t:${Math.round(member.joinedAt / 1000)}:F> (<t:${Math.round(member.joinedAt / 1000)}:R>)`
         })
       }
       event.embeds[0].fields.push({
-        name: 'Created At',
+        name: '作成日時',
         value: `<t:${Math.round(member.createdAt / 1000)}:F> (<t:${Math.round(member.createdAt / 1000)}:R>)`
       }, {
         name: 'ID',
-        value: `\`\`\`ini\nUser = ${member.id}\`\`\``
+        value: `\`\`\`ini\nユーザー = ${member.id}\`\`\``
       })
       return send(event)
     }

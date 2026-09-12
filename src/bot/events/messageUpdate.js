@@ -37,11 +37,11 @@ module.exports = {
             name: `${newMessage.author.username}#${newMessage.author.discriminator} ${member && member.nick ? `(${member.nick})` : ''}`,
             icon_url: newMessage.author.avatarURL
           },
-          description: `**${newMessage.author.username}#${newMessage.author.discriminator}** ${member && member.nick ? `(${member.nick})` : ''} updated their message in: ${newMessage.channel.name}.`,
+          description: `**${newMessage.author.username}#${newMessage.author.discriminator}** ${member && member.nick ? `(${member.nick})` : ''} がメッセージを編集しました（${newMessage.channel.name}）`,
           fields: [
             {
-              name: `${newMessage.channel.type === 10 || newMessage.channel.type === 11 || newMessage.channel.type === 12 ? 'Thread' : 'Channel'}`,
-              value: `<#${newMessage.channel.id}> (${newMessage.channel.name})\n[Go To Message](https://discord.com/channels/${newMessage.channel.guild.id}/${newMessage.channel.id}/${newMessage.id})`
+              name: `${newMessage.channel.type === 10 || newMessage.channel.type === 11 || newMessage.channel.type === 12 ? 'スレッド' : 'チャンネル'}`,
+              value: `<#${newMessage.channel.id}> (${newMessage.channel.name})\n[メッセージへ移動](https://discord.com/channels/${newMessage.channel.guild.id}/${newMessage.channel.id}/${newMessage.id})`
             },
           ],
           color: 15084269
@@ -52,18 +52,18 @@ module.exports = {
         // handles large message nitro editing and helps make huge message edits look nicer.
         messageUpdateEvent.embeds[0].fields.splice(1) // nuke all fields but essential message info
         secondMessageUpdatePayload = JSON.parse(JSON.stringify(messageUpdateEvent)) // deep copy initial payload
-        messageUpdateEvent.embeds[0].description += `\n\n**__Now__**:\n${escape(newMessage.content.replace(/~/g, '\\~'), ['angle brackets']).replace(/\"/g, '"').replace(/`/g, '') || "None"}`
+        messageUpdateEvent.embeds[0].description += `\n\n**__Now__**:\n${escape(newMessage.content.replace(/~/g, '\\~'), ['angle brackets']).replace(/\"/g, '"').replace(/`/g, '') || "なし"}`
         messageUpdateEvent.embeds[0].fields = []
         delete secondMessageUpdatePayload.embeds[0].author
         secondMessageUpdatePayload.embeds[0].description = `**__Previously__**:\n${oldMessage.content}`
         secondMessageUpdatePayload.embeds[0].fields.push({
           name: 'ID',
-          value: `\`\`\`ini\nUser = ${newMessage.author.id}\nMessage = ${newMessage.id}\`\`\``
+          value: `\`\`\`ini\nユーザー = ${newMessage.author.id}\nメッセージ = ${newMessage.id}\`\`\``
         })
         messageUpdateEvent.noFooter = true
       } else {
         let nowChunks, beforeChunks
-        const escapedNewContents = escape(newMessage.content.replace(/~/g, '\\~'), ['angle brackets']).replace(/\"/g, '"').replace(/`/g, '') || "None"
+        const escapedNewContents = escape(newMessage.content.replace(/~/g, '\\~'), ['angle brackets']).replace(/\"/g, '"').replace(/`/g, '') || "なし"
         if (escapedNewContents.length > 1000) {
           nowChunks = chunkify(escapedNewContents)
         } else {
@@ -76,26 +76,26 @@ module.exports = {
           beforeChunks = [oldMessage.content]
         }
         if (nowChunks.length === 0) {
-          nowChunks.push('<no message content>')
+          nowChunks.push('<本文なし>')
         }
         if (beforeChunks.length === 0) {
-          beforeChunks.push('<no message content>')
+          beforeChunks.push('<本文なし>')
         }
         nowChunks.forEach((chunk, i) => {
           messageUpdateEvent.embeds[0].fields.push({
-            name: i === 0 ? 'Now' : 'Now Continued',
+            name: i === 0 ? '変更後' : '変更後（続き）',
             value: chunk
           })
         })
         beforeChunks.forEach((chunk, i) => {
           messageUpdateEvent.embeds[0].fields.push({
-            name: i === 0 ? 'Previous' : 'Previous Continued',
+            name: i === 0 ? '変更前' : '変更前（続き）',
             value: chunk // previous is already escaped, don't escape again
           })
         })
         messageUpdateEvent.embeds[0].fields.push({
           name: 'ID',
-          value: `\`\`\`ini\nUser = ${newMessage.author.id}\nMessage = ${newMessage.id}\`\`\``
+          value: `\`\`\`ini\nユーザー = ${newMessage.author.id}\nメッセージ = ${newMessage.id}\`\`\``
         })
       }
 
@@ -142,16 +142,16 @@ function expiredUpdateEvent (newMessage, member) {
         name: `${newMessage.author.username}#${newMessage.author.discriminator} ${member && member.nick ? `(${member.nick})` : ''}`,
         icon_url: newMessage.author.avatarURL
       },
-      description: `**${newMessage.author.username}#${newMessage.author.discriminator}** updated their message in: ${newMessage.channel.name}.`,
+      description: `**${newMessage.author.username}#${newMessage.author.discriminator}** がメッセージを編集しました（${newMessage.channel.name}）`,
       fields: [{
-        name: 'Channel',
-        value: `<#${newMessage.channel.id}> (${newMessage.channel.name})\n[Go To Message](https://discord.com/channels/${newMessage.channel.guild.id}/${newMessage.channel.id}/${newMessage.id})`
+        name: 'チャンネル',
+        value: `<#${newMessage.channel.id}> (${newMessage.channel.name})\n[メッセージへ移動](https://discord.com/channels/${newMessage.channel.guild.id}/${newMessage.channel.id}/${newMessage.id})`
       }, {
-        name: 'Previous',
-        value: `Not available. The message is older than the ${process.env.MESSAGE_HISTORY_DAYS} day retention window, so its previous content is no longer stored.`
+        name: '変更前',
+        value: `取得できません。保持期間（${process.env.MESSAGE_HISTORY_DAYS}日）を過ぎているため、変更前の内容は保存されていません。`
       }, {
         name: 'ID',
-        value: `\`\`\`ini\nUser = ${newMessage.author.id}\nMessage = ${newMessage.id}\`\`\``
+        value: `\`\`\`ini\nユーザー = ${newMessage.author.id}\nメッセージ = ${newMessage.id}\`\`\``
       }],
       color: 15084269
     }]

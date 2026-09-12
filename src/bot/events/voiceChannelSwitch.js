@@ -15,14 +15,14 @@ module.exports = {
         },
         description: `**${member.username}#${member.discriminator}** ${member.nick ? `(${member.nick})` : ''} moved from <#${oldChannel.id}> (${oldChannel.name}) to <#${channel.id}> (${channel.name}).`,
         fields: [{
-          name: 'Current channel they are in',
+          name: '移動先チャンネル',
           value: `<#${channel.id}> (${channel.name})`
         }, {
-          name: 'Previously occupied channel',
+          name: '移動元チャンネル',
           value: `<#${oldChannel.id}> (${oldChannel.name})`
         }, {
           name: 'ID',
-          value: `\`\`\`ini\nUser = ${member.id}\nNew = ${channel.id}\nOld = ${oldChannel.id}\`\`\``
+          value: `\`\`\`ini\nユーザー = ${member.id}\nNew = ${channel.id}\nOld = ${oldChannel.id}\`\`\``
         }],
         color: 3553599
       }]

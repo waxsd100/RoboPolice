@@ -8,16 +8,16 @@ module.exports = {
       guildID: guild.id,
       eventName: 'guildRoleCreate',
       embeds: [{
-        description: 'A role was created ',
+        description: 'A role が作成されました',
         fields: [{
-          name: 'Name',
+          name: '名前',
           value: role.name
         }, {
-          name: 'Type',
+          name: '種類',
           value: 'User'
         }, {
           name: 'ID',
-          value: `\`\`\`ini\nRole = ${role.id}\nPerpetrator = Unknown\`\`\``
+          value: `\`\`\`ini\nロール = ${role.id}\n実行者 = Unknown\`\`\``
         }]
       }]
     }
@@ -32,7 +32,7 @@ module.exports = {
         const perp = log.user
         if (!perp) return await send(guildRoleCreateEvent)
         if (log.reason) guildRoleCreateEvent.embeds[0].fields[1].value = log.reason
-        guildRoleCreateEvent.embeds[0].fields[2].value = `\`\`\`ini\nRole = ${role.id}\nPerpetrator = ${perp.id}\`\`\``
+        guildRoleCreateEvent.embeds[0].fields[2].value = `\`\`\`ini\nロール = ${role.id}\n実行者 = ${perp.id}\`\`\``
         guildRoleCreateEvent.embeds[0].author = {
           name: `${perp.username}#${perp.discriminator}`,
           icon_url: perp.avatarURL
@@ -44,7 +44,7 @@ module.exports = {
     } else {
       guildRoleCreateEvent.embeds[0].fields[1] = {
         name: 'ID',
-        value: `\`\`\`ini\nRole = ${role.id}\nPerpetrator = Automatically created by invite\`\`\``
+        value: `\`\`\`ini\nロール = ${role.id}\n実行者 = Automatically created by invite\`\`\``
       }
     }
   }

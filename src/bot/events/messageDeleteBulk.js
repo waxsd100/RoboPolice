@@ -17,7 +17,7 @@ module.exports = {
         guildID: messages[0].guildId,
         eventName: 'messageDeleteBulk',
         embeds: [{
-            description: `${messages.length} messages were bulk deleted. :warning: The bot owner hasn't configured a paste site so contents of deleted messages not shown. :warning:`,
+            description: `${messages.length} 件のメッセージが一括削除されました。:warning: pasteサイトが設定されていないため、削除されたメッセージの内容は表示されません。:warning:`,
             color: EMBED_COLORS.YELLOW_ORANGE,
         }]
       });
@@ -35,7 +35,7 @@ module.exports = {
           guildID,
           eventName: 'messageDeleteBulk',
           embeds: [{
-            description: `**${messages.length}** message(s) were bulk deleted. Their contents are not available: they are older than the ${process.env.MESSAGE_HISTORY_DAYS} day retention window.`,
+            description: `**${messages.length}** 件のメッセージが一括削除されました。保持期間（${process.env.MESSAGE_HISTORY_DAYS}日）を過ぎているため、内容は取得できません。`,
             color: EMBED_COLORS.YELLOW_ORANGE
           }]
         })
@@ -52,7 +52,7 @@ async function paste (messages, guildID) {
     guildID: guildID,
     eventName: 'messageDeleteBulk',
     embeds: [{
-      description: `**${messages.length}** message(s) were deleted and known in cache.`,
+      description: `**${messages.length}** 件のメッセージが一括削除されました（キャッシュにあった分）。`,
       fields: [],
       color: 15550861
     }]
@@ -61,7 +61,7 @@ async function paste (messages, guildID) {
     let globalUser = global.bot.users.get(m.author_id)
     if (!globalUser) {
       globalUser = {
-        username: 'Unknown',
+        username: '不明',
         discriminator: '0000',
         avatarURL: '<no avatar>'
       }
@@ -76,7 +76,7 @@ async function paste (messages, guildID) {
       .end((err, res) => {
         if (!err && res.body && res.statusCode === 200 && res.body.key) {
           messageDeleteBulkEvent.embeds[0].fields.push({
-            name: 'Link',
+            name: 'リンク',
             value: `${process.env.PASTE_SITE_ROOT_URL}/${res.body.key}.txt`
           })
           send(messageDeleteBulkEvent)

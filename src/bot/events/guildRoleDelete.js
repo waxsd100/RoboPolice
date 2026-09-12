@@ -8,17 +8,17 @@ module.exports = {
       guildID: guild.id,
       eventName: 'guildRoleDelete',
       embeds: [{
-        description: 'A role was deleted',
+        description: 'ロールが削除されました',
         fields: [
           {
-            name: 'Name',
+            name: '名前',
             value: role.name
           }, {
-            name: 'Reason',
-            value: 'None.'
+            name: '理由',
+            value: 'なし'
           }, {
             name: 'ID',
-            value: `\`\`\`ini\nRole = ${role.id}\nPerpetrator = Deletion upon member leaving\`\`\``
+            value: `\`\`\`ini\nロール = ${role.id}\n実行者 = Deletion upon member leaving\`\`\``
           }],
         color: role.color ? role.color : 3553599
       }]
@@ -29,7 +29,7 @@ module.exports = {
     if (log) {
       const perp = log.user
       if (log.reason) guildRoleDeleteEvent.embeds[0].fields[1].value = log.reason
-      guildRoleDeleteEvent.embeds[0].fields[2].value = `\`\`\`ini\nRole = ${role.id}\nPerpetrator = ${perp.id}\`\`\``
+      guildRoleDeleteEvent.embeds[0].fields[2].value = `\`\`\`ini\nロール = ${role.id}\n実行者 = ${perp.id}\`\`\``
       guildRoleDeleteEvent.embeds[0].author = {
         name: `${perp.username}#${perp.discriminator}`,
         icon_url: perp.avatarURL

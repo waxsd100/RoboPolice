@@ -12,16 +12,16 @@ module.exports = {
           name: `${user.username}#${user.discriminator} `,
           icon_url: user.avatarURL
         },
-        description: `${user.username}#${user.discriminator} was banned`,
+        description: `${user.username}#${user.discriminator} がBANされました`,
         fields: [{
-          name: 'User Information',
-          value: `${user.username}#${user.discriminator} (${user.id}) ${user.mention} ${user.bot ? '\nIs a bot' : ''}`
+          name: 'ユーザー情報',
+          value: `${user.username}#${user.discriminator} (${user.id}) ${user.mention} ${user.bot ? '\nBOTです' : ''}`
         }, {
-          name: 'Reason',
-          value: 'None provided'
+          name: '理由',
+          value: '理由なし'
         }, {
           name: 'ID',
-          value: `\`\`\`ini\nUser = ${user.id}\nPerpetrator = Unknown\`\`\``
+          value: `\`\`\`ini\nユーザー = ${user.id}\n実行者 = Unknown\`\`\``
         }],
         color: 3553599
       }]
@@ -48,7 +48,7 @@ module.exports = {
       if (!log.user) return
       const perp = log.user
       if (log.reason) guildBanAddEvent.embeds[0].fields[1].value = log.reason
-      guildBanAddEvent.embeds[0].fields[2].value = `\`\`\`ini\nUser = ${user.id}\nPerpetrator = ${perp.id}\`\`\``
+      guildBanAddEvent.embeds[0].fields[2].value = `\`\`\`ini\nユーザー = ${user.id}\n実行者 = ${perp.id}\`\`\``
       guildBanAddEvent.embeds[0].footer = {
         text: `${perp.username}#${perp.discriminator}`,
         icon_url: perp.avatarURL
