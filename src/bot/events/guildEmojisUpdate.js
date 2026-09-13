@@ -14,13 +14,13 @@ module.exports = {
       guildID: guild.id,
       eventName: 'guildEmojisUpdate',
       embeds: [{
-        description: 'Guild emojis were updated.',
+        description: 'サーバー絵文字が更新されました',
         fields: [{
-          name: 'Emoji was manipulated',
+          name: '絵文字が変更されました',
           value: ''
         }, {
           name: 'ID',
-          value: '```ini\nUser = Unknown\nEmoji = Unknown```'
+          value: '```ini\nユーザー = 不明\n絵文字 = 不明```'
         }],
         color: 3553599
       }]
@@ -37,19 +37,19 @@ module.exports = {
         url: `https://cdn.discordapp.com/emojis/${emoji.id}.png?v=1`
       }
       guildEmojisUpdateEvent.embeds[0].fields[0].name = 'Added emoji'
-      guildEmojisUpdateEvent.embeds[0].fields[0].value = `Name = ${emoji.name}\nManaged = ${emoji.managed ? 'Yes' : 'No'}\nAnimated = ${emoji.animated ? 'Yes' : 'No'}\n<${emoji.animated ? 'a' : ''}:${emoji.name}:${emoji.id}>`
+      guildEmojisUpdateEvent.embeds[0].fields[0].value = `名前 = ${emoji.name}\n管理対象 = ${emoji.managed ? 'はい' : 'いいえ'}\nアニメーション = ${emoji.animated ? 'はい' : 'いいえ'}\n<${emoji.animated ? 'a' : ''}:${emoji.name}:${emoji.id}>`
     } else if (oldEmojis.length > emojis.length) {
       const removedEmojis = oldEmojis.filter(e => !emojis.find(o => o.id === e.id))
       emoji = removedEmojis[0]
       type = 'removed'
       guildEmojisUpdateEvent.embeds[0].fields[0].name = 'Removed emoji'
-      guildEmojisUpdateEvent.embeds[0].fields[0].value = `Name = ${emoji.name}\nManaged = ${emoji.managed ? 'Yes' : 'No'}\nAnimated = ${emoji.animated ? 'Yes' : 'No'}`
+      guildEmojisUpdateEvent.embeds[0].fields[0].value = `名前 = ${emoji.name}\n管理対象 = ${emoji.managed ? 'はい' : 'いいえ'}\nアニメーション = ${emoji.animated ? 'はい' : 'いいえ'}`
     } else {
       type = 'updated'
       emoji = emojis.find(e => oldEmojis.find(o => o.id === e.id)?.name !== e.name)
       if (!emoji) return
       guildEmojisUpdateEvent.embeds[0].fields[0].name = 'Updated emoji'
-      guildEmojisUpdateEvent.embeds[0].fields[0].value = `Name = ${emoji.name}\nManaged = ${emoji.managed ? 'Yes' : 'No'}\nAnimated = ${emoji.animated ? 'Yes' : 'No'}`
+      guildEmojisUpdateEvent.embeds[0].fields[0].value = `名前 = ${emoji.name}\n管理対象 = ${emoji.managed ? 'はい' : 'いいえ'}\nアニメーション = ${emoji.animated ? 'はい' : 'いいえ'}`
       guildEmojisUpdateEvent.embeds[0].thumbnail = {
         url: `https://cdn.discordapp.com/emojis/${emoji.id}.png?v=1`
       }
@@ -58,7 +58,7 @@ module.exports = {
         return
       }
       if (emoji.name !== oldEmoji.name) {
-        guildEmojisUpdateEvent.embeds[0].fields[0].value += `\nName was = ${oldEmoji.name}`
+        guildEmojisUpdateEvent.embeds[0].fields[0].value += `\nName 変更前 = ${oldEmoji.name}`
       }
     }
     await setTimeout(async () => {
@@ -72,7 +72,7 @@ module.exports = {
           name: `${user.username}#${user.discriminator}`,
           icon_url: user.avatarURL
         }
-        guildEmojisUpdateEvent.embeds[0].fields[1].value = `\`\`\`ini\nUser = ${user.id}\nEmoji = ${emoji.id}\`\`\``
+        guildEmojisUpdateEvent.embeds[0].fields[1].value = `\`\`\`ini\nユーザー = ${user.id}\n絵文字 = ${emoji.id}\`\`\``
         await send(guildEmojisUpdateEvent)
       }
     }, 1000)

@@ -21,13 +21,13 @@ module.exports = {
       guildID: guild.id,
       eventName: 'guildStickersUpdate',
       embeds: [{
-        description: 'Guild stickers were updated.',
+        description: 'サーバースタンプが更新されました',
         fields: [{
-          name: 'Sticker was manipulated',
+          name: 'スタンプが変更されました',
           value: ''
         }, {
           name: 'ID',
-          value: '```ini\nUser = Unknown\nSticker = Unknown```'
+          value: '```ini\nユーザー = 不明\nスタンプ = 不明```'
         }],
         color: 3553599
       }]
@@ -44,19 +44,19 @@ module.exports = {
         url: `https://cdn.discordapp.com/stickers/${sticker.id}.png?v=1`
       }
       guildStickersUpdateEvent.embeds[0].fields[0].name = 'Added sticker'
-      guildStickersUpdateEvent.embeds[0].fields[0].value = `Name = ${sticker.name}\nDescription = ${sticker.description}\nFormat = ${STICKER_FORMAT_TYPES[sticker.format_type]}`
+      guildStickersUpdateEvent.embeds[0].fields[0].value = `名前 = ${sticker.name}\nDescription = ${sticker.description}\nFormat = ${STICKER_FORMAT_TYPES[sticker.format_type]}`
     } else if (oldStickers.length > stickers.length) {
       const removedStickers = oldStickers.filter(e => !stickers.find(o => o.id === e.id))
       sticker = removedStickers[0]
       type = 'removed'
       guildStickersUpdateEvent.embeds[0].fields[0].name = 'Removed sticker'
-      guildStickersUpdateEvent.embeds[0].fields[0].value = `Name = ${sticker.name}\nDescription = ${sticker.description}\nFormat = ${STICKER_FORMAT_TYPES[sticker.format_type]}`
+      guildStickersUpdateEvent.embeds[0].fields[0].value = `名前 = ${sticker.name}\nDescription = ${sticker.description}\nFormat = ${STICKER_FORMAT_TYPES[sticker.format_type]}`
     } else {
       type = 'updated'
       sticker = stickers.find(e => oldStickers.find(o => o.id === e.id).name !== e.name)
       if (!sticker) return
       guildStickersUpdateEvent.embeds[0].fields[0].name = 'Updated sticker'
-      guildStickersUpdateEvent.embeds[0].fields[0].value = `Name = ${sticker.name}\nDescription = ${sticker.description}\nFormat = ${STICKER_FORMAT_TYPES[sticker.format_type]}`
+      guildStickersUpdateEvent.embeds[0].fields[0].value = `名前 = ${sticker.name}\nDescription = ${sticker.description}\nFormat = ${STICKER_FORMAT_TYPES[sticker.format_type]}`
       guildStickersUpdateEvent.embeds[0].thumbnail = {
         url: `https://cdn.discordapp.com/stickers/${sticker.id}.png?v=1`
       }
@@ -79,7 +79,7 @@ module.exports = {
           name: `${user.username}#${user.discriminator}`,
           icon_url: user.avatarURL
         }
-        guildStickersUpdateEvent.embeds[0].fields[1].value = `\`\`\`ini\nUser = ${user.id}\nSticker = ${sticker.id}\`\`\``
+        guildStickersUpdateEvent.embeds[0].fields[1].value = `\`\`\`ini\nユーザー = ${user.id}\nスタンプ = ${sticker.id}\`\`\``
       }
       await send(guildStickersUpdateEvent)
     }, 1000)

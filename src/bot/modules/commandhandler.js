@@ -17,26 +17,26 @@ function processCommand (message, commandName, suffix) {
   const bp = message.channel.permissionsOf(global.bot.user.id).json
   if (!bp.viewChannel || !bp.sendMessages) return
   if ((command.noDM || command.perm || command.type === 'admin') && !message.channel.guild) {
-    message.channel.createMessage('You cannot use this command in a DM!')
+    message.channel.createMessage('このコマンドはDMでは使用できません。')
     return
   } else if (command.noThread && (message.channel.type === 10 || message.channel.type === 11 || message.channel.type === 12)) {
-    message.channel.createMessage('You cannot use this command in a thread!')
+    message.channel.createMessage('このコマンドはスレッド内では使用できません。')
     return
   } else if (message.author.id === process.env.CREATOR_IDS) {
     global.logger.info(`Developer override by ${message.author.username}#${message.author.discriminator} at ${new Date().toUTCString()}`)
     command.func(message, suffix)
     return
   } else if (command.type === 'creator' && !process.env.CREATOR_IDS.includes(message.author.id)) {
-    message.channel.createMessage('This command is creator only!')
+    message.channel.createMessage('このコマンドはBOT開発者専用です。')
     return
   } else if (command.type === 'admin' && !(message.member.permissions.has('administrator' || message.author.id === message.channel.guild.ownerID))) {
-    message.channel.createMessage('That\'s an admin only command. You need the administrator permission to use it.')
+    message.channel.createMessage('このコマンドは管理者専用です。使用には「管理者」権限が必要です。')
     return
   } else if (command.perm && !(message.member.permissions.has(command.perm) || message.author.id === message.channel.guild.ownerID)) {
-    message.channel.createMessage(`This command requires you to be the owner of the server, or have the ${command.perm} permission.`)
+    message.channel.createMessage(`このコマンドの使用には、サーバーのオーナーであるか ${command.perm} 権限が必要です。`)
     return
   } else if (command.perms && command.perms.find(p => !message.member.permissions.has(p))) {
-    message.channel.createMessage(`This command requires you to be the owner of the server, or have the following permissions: ${command.perms.join(', ')}`)
+    message.channel.createMessage(`このコマンドの使用には、サーバーのオーナーであるか次の権限が必要です: ${command.perms.join(', ')}`)
     return
   }
   global.logger.info(`${message.author.username}#${message.author.discriminator} (${message.author.id}) in ${message.channel.id} sent ${commandName} with the args "${suffix}". The guild is called "${message.channel.guild.name}", owned by ${message.channel.guild.ownerID} and has ${message.channel.guild.memberCount} members.`)

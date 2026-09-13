@@ -2,12 +2,12 @@ const { Permission } = require('eris')
 const send = require('../modules/webhooksender')
 const escape = require('markdown-escape')
 const CHANNEL_TYPE_MAP = {
-  0: 'Text channel',
-  2: 'Voice channel',
-  4: 'Category channel',
-  5: 'Announcement channel',
-  13: 'Stage channel',
-  15: 'Forum channel'
+  0: 'テキストチャンネル',
+  2: 'ボイスチャンネル',
+  4: 'カテゴリ',
+  5: 'アナウンスチャンネル',
+  13: 'ステージチャンネル',
+  15: 'フォーラムチャンネル'
 }
 
 const canUseExternal = guild => {
@@ -32,13 +32,13 @@ module.exports = {
       eventName: 'channelUpdate',
       embeds: [{
         author: {
-          name: 'Unknown User',
+          name: '不明なユーザー',
           icon_url: 'https://logger.bot/staticfiles/red-x.png'
         },
         color: 0x03d3fc,
-        description: `${CHANNEL_TYPE_MAP[channel.type] ? CHANNEL_TYPE_MAP[channel.type] : 'unsupported channel'} <#${channel.id}> was updated (${escape(channel.name)})`,
+        description: `${CHANNEL_TYPE_MAP[channel.type] ? CHANNEL_TYPE_MAP[channel.type] : '非対応のチャンネル'} <#${channel.id}> が更新されました (${escape(channel.name)})`,
         fields: [{
-          name: 'Creation date',
+          name: '作成日時',
           value: `<t:${Math.round(((channel.id / 4194304) + 1420070400000) / 1000)}:F>`,
           inline: true
         }]
@@ -72,8 +72,8 @@ module.exports = {
       for (const changedKey in toIter) {
         if (changedKey === 'topic') {
           if ((channel.topic?.length || 0) + (oldChannel.topic?.length || 0) > 1000) {
-            let newTopic = '<no topic set>'
-            let oldTopic = '<no topic set>'
+            let newTopic = '<トピック未設定>'
+            let oldTopic = '<トピック未設定>'
             if (channel.topic !== null && channel.topic.trim()) {
               newTopic = escape(channel.topic.replace(/~/g, '\\~'), ['angle brackets'])
             }
@@ -85,8 +85,8 @@ module.exports = {
             }
             channelUpdateEvent.embeds[0].description += `\n\n**__New topic__**\n\`${newTopic}\`\n\n**__Old topic__**\n\`${oldTopic}\``
           } else {
-            let newTopic = '<no topic set>'
-            let oldTopic = '<no topic set>'
+            let newTopic = '<トピック未設定>'
+            let oldTopic = '<トピック未設定>'
             if (channel.topic !== null && channel.topic.trim()) {
               newTopic = escape(channel.topic.replace(/~/g, '\\~'), ['angle brackets'])
             }
@@ -95,12 +95,12 @@ module.exports = {
             }
             if (newTopic === oldTopic) {
               channelUpdateEvent.embeds[0].fields.push({
-                name: 'Topic',
-                value: '<no topic set>'
+                name: 'トピック',
+                value: '<トピック未設定>'
               })
             } else {
               channelUpdateEvent.embeds[0].fields.push({
-                name: 'Topic',
+                name: 'トピック',
                 value: `Now: \`${newTopic}\`\nWas: \`${oldTopic}\``
               })
             }
@@ -120,16 +120,16 @@ module.exports = {
         const nRole = channel.guild.roles.get(log.after.id)
         if (!nRole) return
         channelUpdateEvent.embeds[0].fields.push({
-          name: 'Overwrite Created',
-          value: `For: ${log.after.type === 0 ? `role ${nRole.name}` : `member <@${log.after.id}>`}`
+          name: '権限の上書きを追加',
+          value: `対象: ${log.after.type === 0 ? `ロール ${nRole.name}` : `メンバー <@${log.after.id}>`}`
         })
         if (log.after.type === 0) {
           channelUpdateEvent.embeds[0].color = nRole.color || 0x03d3fc
         }
       } else if (Object.keys(log.before).length !== 0 && Object.keys(log.after).length === 0) {
         channelUpdateEvent.embeds[0].fields.push({
-          name: 'Overwrite Removed',
-          value: `For: ${log.before.type === 0 ? `role ${channel.guild.roles.get(log.before.id) ? channel.guild.roles.get(log.before.id).name : log.before.id}` : `member <@${log.before.id}>`}`
+          name: '権限の上書きを削除',
+          value: `対象: ${log.before.type === 0 ? `ロール ${channel.guild.roles.get(log.before.id) ? channel.guild.roles.get(log.before.id).name : log.before.id}` : `メンバー <@${log.before.id}>`}`
         })
         if (log.before.type === 0) {
           const role = channel.guild.roles.get(log.before.id)
@@ -143,7 +143,7 @@ module.exports = {
           const oldPerms = Object.keys(oldOverwrite.json)
           const differentPerms = (newPerms.length >= oldPerms.length ? newPerms.concat(getDifference(newPerms, oldPerms)) : oldPerms.concat(oldPerms, newPerms)).filter((v, i, self) => self.indexOf(v) === i)
           if (channel.permissionOverwrites.map(o => `${o.allow}|${o.deny}`).toString() === oldChannel.permissionOverwrites.map(o => `${o.allow}|${o.deny}`).toString()) return
-          let overwriteName = `${newOverwrite.type === 1 ? 'member' : 'role'} `
+          let overwriteName = `${newOverwrite.type === 1 ? 'メンバー' : 'ロール'} `
           if (newOverwrite.type === 1) {
             const member = channel.guild.members.get(newOverwrite.id)
             if (member) {
@@ -165,7 +165,7 @@ module.exports = {
             if (fields[counter].value.length >= 950) {
               counter++
               fields.push({
-                name: `${overwriteName} continued`,
+                name: `${overwriteName} 続き`,
                 value: ''
               })
             }
@@ -205,14 +205,14 @@ module.exports = {
       channelUpdateEvent.embeds[0].author.name = `${user.username}#${user.discriminator}`
       channelUpdateEvent.embeds[0].author.icon_url = user.avatarURL
       if (channel.type === 13) {
-        channelUpdateEvent.embeds[0].description = `Stage Channel **${channel.name}** was ${channel.topic === null ? 'closed' : 'opened'}`
+        channelUpdateEvent.embeds[0].description = `Stage Channel **${channel.name}** が${channel.topic === null ? '終了しました' : '開始しました'}`
       }
-      channelUpdateEvent.embeds[0].fields.push({ name: 'ID', value: `\`\`\`ini\nUser = ${user.id}\nChannel = ${channel.id}\`\`\`` })
+      channelUpdateEvent.embeds[0].fields.push({ name: 'ID', value: `\`\`\`ini\nユーザー = ${user.id}\nチャンネル = ${channel.id}\`\`\`` })
       await send(channelUpdateEvent)
     } else {
       channelUpdateEvent.embeds[0].fields.push({
         name: 'ID',
-        value: `\`\`\`ini\nUser = Unknown, no audit log entry\nChannel = ${channel.id}\`\`\``
+        value: `\`\`\`ini\nユーザー = 不明（監査ログなし）\nチャンネル = ${channel.id}\`\`\``
       })
       await send(channelUpdateEvent)
     }
@@ -235,7 +235,7 @@ function transformAuditLogEntry (nameOfKey, before, after) {
       return { before: before ? 'enabled' : 'disabled', after: after ? 'enabled' : 'disabled' }
     }
     case 'topic': {
-      return { before: before ? escape(before.replace(/~/g, '\\~'), ['angle brackets']) : '<no topic set>', after: after ? escape(after.replace(/~/g, '\\~'), ['angle brackets']) : '<no topic set>' }
+      return { before: before ? escape(before.replace(/~/g, '\\~'), ['angle brackets']) : '<トピック未設定>', after: after ? escape(after.replace(/~/g, '\\~'), ['angle brackets']) : '<トピック未設定>' }
     }
     case 'rate_limit_per_user': {
       return { before: `${before} second(s)`, after: `${after} seconds` }
@@ -250,10 +250,10 @@ function transformAuditLogEntry (nameOfKey, before, after) {
       return { before: `${parseInt(before) / 1000}kbps`, after: `${parseInt(after) / 1000}kbps` }
     }
     case 'rtc_region': {
-      return { before: before || 'Automatic', after: after || 'Automatic' }
+      return { before: before || '自動', after: after || '自動' }
     }
     case 'video_quality_mode': {
-      return { before: before === 1 ? 'Automatic' : '720p', after: after === 1 ? 'Automatic' : '720p' }
+      return { before: before === 1 ? '自動' : '720p', after: after === 1 ? '自動' : '720p' }
     }
     case 'user_limit': {
       return { before: before !== 0 ? before : 'unrestricted', after: after !== 0 ? after : 'unrestricted' }

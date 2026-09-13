@@ -9,17 +9,17 @@ const checkExempt = [
 ]
 
 const verificationLevels = {
-  0: 'Unrestricted',
-  1: 'Low - must have a verified email',
-  2: 'Medium - must be registered for 5 minutes',
-  3: 'High - 10 minutes of membership required',
-  4: 'Highest - verified phone required'
+  0: '制限なし',
+  1: '低 - メール認証が必要',
+  2: '中 - 登録から5分以上が必要',
+  3: '高 - サーバー参加から10分以上が必要',
+  4: '最高 - 電話番号認証が必要'
 }
 
 const explicitContentLevels = {
-  0: 'No Scanning Enabled',
-  1: 'Scanning content from members without a role',
-  2: 'Scanning content from all members'
+  0: 'スキャンしない',
+  1: 'ロールを持たないメンバーをスキャン',
+  2: 'すべてのメンバーをスキャン'
 }
 
 module.exports = {
@@ -54,7 +54,7 @@ module.exports = {
             name: `${user.username}#${user.discriminator} ${member && member.nick ? `(${member.nick})` : ''}`,
             icon_url: user.avatarURL
           },
-          description: 'The guild was updated',
+          description: 'サーバー設定が変更されました',
           fields: fields,
           color: 3553599
         }]
@@ -62,19 +62,19 @@ module.exports = {
     }).catch(() => {})
     // TODO: handle new guild updates, son! (update: will jump on this next, see project board on github)
     function handle (name, logEntry) {
-      let after = 'None'
-      let before = 'None'
+      let after = 'なし'
+      let before = 'なし'
       switch (name) {
         case 'system_channel_id':
           if (logEntry.before.system_channel_id) {
-            before = logEntry.before.system_channel_id ? newGuild.channels.get(logEntry.before.system_channel_id).name : 'None'
+            before = logEntry.before.system_channel_id ? newGuild.channels.get(logEntry.before.system_channel_id).name : 'なし'
           }
           if (logEntry.after.system_channel_id) {
-            after = logEntry.after.system_channel_id ? newGuild.channels.get(logEntry.after.system_channel_id).name : 'None'
+            after = logEntry.after.system_channel_id ? newGuild.channels.get(logEntry.after.system_channel_id).name : 'なし'
           }
           return {
-            name: 'Welcome Message Channel',
-            value: `► Now: **${after}**\n► Was: **${before}**`
+            name: 'ウェルカムメッセージチャンネル',
+            value: `► 変更後: **${after}**\n► 変更前: **${before}**`
           }
         case 'afk_timeout':
           if (logEntry.before.afk_timeout) {
@@ -84,125 +84,125 @@ module.exports = {
             after = logEntry.after.afk_timeout / 60
           }
           return {
-            name: 'AFK Timeout',
-            value: `► Now: **${after}** minutes\n► Was: **${before}** minutes`
+            name: 'AFKタイムアウト',
+            value: `► 変更後: **${after}** 分\n► 変更前: **${before}** 分`
           }
         case 'default_message_notifications':
           if (logEntry.before.default_message_notifications !== undefined) {
-            before = logEntry.before.default_message_notifications === 0 ? 'All Messages' : 'Mentions'
+            before = logEntry.before.default_message_notifications === 0 ? 'すべてのメッセージ' : 'メンションのみ'
           }
           if (logEntry.after.default_message_notifications !== undefined) {
-            after = logEntry.after.default_message_notifications === 0 ? 'All Messages' : 'Mentions'
+            after = logEntry.after.default_message_notifications === 0 ? 'すべてのメッセージ' : 'メンションのみ'
           }
           return {
-            name: 'Message Notifications',
-            value: `► Now: **${after}**\n► Was: **${before}**`
+            name: '通知設定',
+            value: `► 変更後: **${after}**\n► 変更前: **${before}**`
           }
         case 'afk_channel_id':
           const beforeChannel = logEntry.before && newGuild.channels.get(logEntry.before.afk_channel_id)
           const afterChannel = logEntry.after && newGuild.channels.get(logEntry.after.afk_channel_id)
           if (!beforeChannel) {
-            before = 'None'
+            before = 'なし'
           } else {
             before = beforeChannel.name
           }
           if (!afterChannel) {
-            after = 'None'
+            after = 'なし'
           } else {
             after = afterChannel.name
           }
           return {
-            name: 'AFK Channel',
-            value: `► Now: **${after}**\n► Was: **${before}**`
+            name: 'AFKチャンネル',
+            value: `► 変更後: **${after}**\n► 変更前: **${before}**`
           }
         case 'name':
           before = logEntry.before.name
           after = logEntry.after.name
           return {
-            name: 'Name',
-            value: `► Now: **${after}**\n► Was: **${before}**`
+            name: '名前',
+            value: `► 変更後: **${after}**\n► 変更前: **${before}**`
           }
         case 'region':
           before = logEntry.before.region
           after = logEntry.after.region
           return {
-            name: 'Region',
-            value: `► Now: **${after}**\n► Was: **${before}**`
+            name: 'リージョン',
+            value: `► 変更後: **${after}**\n► 変更前: **${before}**`
           }
         case 'icon':
-          before = 'Not Available'
-          after = newGuild.icon ? `[This](\`https://cdn.discordapp.com/icons/${newGuild.id}/${newGuild.icon}.jpg\`)` : 'None'
+          before = '取得不可'
+          after = newGuild.icon ? `[This](\`https://cdn.discordapp.com/icons/${newGuild.id}/${newGuild.icon}.jpg\`)` : 'なし'
           return {
-            name: 'Icon',
-            value: `► Now: **${after}**\n► Was: **${before}**`
+            name: 'アイコン',
+            value: `► 変更後: **${after}**\n► 変更前: **${before}**`
           }
         case 'features':
-          before = 'Not Available'
-          after = 'Not Available'
+          before = '取得不可'
+          after = '取得不可'
           return {
-            name: 'Features ⚠ WARNING: This isn\'t changed very often!',
-            value: `► Now: **${after}**\n► Was: **${before}**`
+            name: 'サーバー機能 ⚠ 注意: 頻繁には変更されません',
+            value: `► 変更後: **${after}**\n► 変更前: **${before}**`
           }
         case 'splash':
-          before = 'Not Available'
-          after = 'Not Available'
+          before = '取得不可'
+          after = '取得不可'
           return {
-            name: 'Splash Image ⚠ WARNING: This isn\'t changed very often',
-            value: `► Now: **${after}**\n► Was: **${before}**`
+            name: 'スプラッシュ画像 ⚠ 注意: 頻繁には変更されません',
+            value: `► 変更後: **${after}**\n► 変更前: **${before}**`
           }
         case 'verification_level':
           return {
-            name: 'Verification Level',
+            name: '認証レベル',
             value: verificationLevels[logEntry.after.verification_level]
           }
         case 'mfa_level':
-          before = logEntry.before.mfa_level === 1 ? 'Enabled' : 'Disabled'
-          after = logEntry.after.mfa_level === 1 ? 'Enabled' : 'Disabled'
+          before = logEntry.before.mfa_level === 1 ? '有効' : '無効'
+          after = logEntry.after.mfa_level === 1 ? '有効' : '無効'
           return {
-            name: 'MFA Level',
-            value: `► Now: **${after}**\n► Was: **${before}**`
+            name: '二要素認証レベル',
+            value: `► 変更後: **${after}**\n► 変更前: **${before}**`
           }
         case 'explicit_content_filter':
           before = explicitContentLevels[logEntry.before.explicit_content_filter]
           after = explicitContentLevels[logEntry.after.explicit_content_filter]
           return {
-            name: 'Explicit Content Filter',
-            value: `► Now: **${after}**\n► Was: **${before}**`
+            name: '不適切なコンテンツフィルター',
+            value: `► 変更後: **${after}**\n► 変更前: **${before}**`
           }
         case 'widget_enabled':
-          before = logEntry.before.widget_enabled ? 'Enabled' : 'Disabled'
-          after = logEntry.after.widget_enabled ? 'Enabled' : 'Disabled'
+          before = logEntry.before.widget_enabled ? '有効' : '無効'
+          after = logEntry.after.widget_enabled ? '有効' : '無効'
           return {
-            name: 'Widget Enabled',
-            value: `► Now: **${after}**\n► Was: **${before}**`
+            name: 'ウィジェット',
+            value: `► 変更後: **${after}**\n► 変更前: **${before}**`
           }
         case 'rules_channel_id':
-          before = logEntry.before.rules_channel_id ? global.bot.getChannel(logEntry.before.rules_channel_id).name || 'None' : 'None',
-          after = logEntry.after.rules_channel_id ? global.bot.getChannel(logEntry.after.rules_channel_id).name || 'None' : 'None'
+          before = logEntry.before.rules_channel_id ? global.bot.getChannel(logEntry.before.rules_channel_id).name || 'なし' : 'なし',
+          after = logEntry.after.rules_channel_id ? global.bot.getChannel(logEntry.after.rules_channel_id).name || 'なし' : 'なし'
           return {
-            name: 'Rules Channel Location',
-            value: `► Now: **${after}**\n► Was: **${before}**`
+            name: 'ルールチャンネル',
+            value: `► 変更後: **${after}**\n► 変更前: **${before}**`
           }
         case 'public_updates_channel_id':
-          before = logEntry.before.public_updates_channel_id ? global.bot.getChannel(logEntry.before.public_updates_channel_id).name || 'None' : 'None',
-          after = logEntry.after.public_updates_channel_id ? global.bot.getChannel(logEntry.after.public_updates_channel_id).name || 'None' : 'None'
+          before = logEntry.before.public_updates_channel_id ? global.bot.getChannel(logEntry.before.public_updates_channel_id).name || 'なし' : 'なし',
+          after = logEntry.after.public_updates_channel_id ? global.bot.getChannel(logEntry.after.public_updates_channel_id).name || 'なし' : 'なし'
           return {
-            name: 'Public Updates Channel Location',
-            value: `► Now: **${after}**\n► Was: **${before}**`
+            name: '公開アップデートチャンネル',
+            value: `► 変更後: **${after}**\n► 変更前: **${before}**`
           }
         case 'preferred_locale':
           before = logEntry.before.preferred_locale
           after = logEntry.after.preferred_locale
           return {
-            name: 'Server Locale',
-            value: `► Now: **${after}**\n► Was: **${before}**`
+            name: 'サーバーの言語',
+            value: `► 変更後: **${after}**\n► 変更前: **${before}**`
           }
         case 'description':
           before = logEntry.before.description
           after = logEntry.after.description
           return {
-            name: 'Server Description',
-            value: `► Now: **${escape(after)}**\n► Was: **${escape(before)}**`
+            name: 'サーバーの説明',
+            value: `► 変更後: **${escape(after)}**\n► 変更前: **${escape(before)}**`
           }
       }
     }

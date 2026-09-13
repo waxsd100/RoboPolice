@@ -13,13 +13,13 @@ module.exports = {
           name: `${member.username}#${member.discriminator} ${member.nick ? `(${member.nick})` : ''}`,
           icon_url: member.avatarURL
         },
-        description: `**${member.username}#${member.discriminator}** joined ${channel.type !== 13 ? 'voice' : 'stage'} channel: ${channel.name}.`,
+        description: `**${member.username}#${member.discriminator}** が${channel.type !== 13 ? 'ボイス' : 'ステージ'}チャンネルに参加しました: ${channel.name}`,
         fields: [{
-          name: 'Channel',
+          name: 'チャンネル',
           value: `<#${channel.id}> (${channel.name})`
         }, {
           name: 'ID',
-          value: `\`\`\`ini\nUser = ${member.id}\nChannel = ${channel.id}\`\`\``
+          value: `\`\`\`ini\nユーザー = ${member.id}\nチャンネル = ${channel.id}\`\`\``
         }],
         color: 3553599
       }]

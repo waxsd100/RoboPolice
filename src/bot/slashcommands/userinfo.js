@@ -39,20 +39,20 @@ module.exports = {
     })
     const roles = member.roles.map(r => guild.roles.get(r)).sort((a, b) => b.position - a.position)
     const fields = [{
-      name: 'Name',
+      name: '名前',
       value: `${member.username}#${member.discriminator} ${member.nick ? `(**${member.nick}**)` : ''} (${member.id})`
     }, {
-      name: 'Join Date',
+      name: '参加日時',
       value: `<t:${Math.round(member.joinedAt / 1000)}:F> (<t:${Math.round(member.joinedAt / 1000)}:R>)`
     }, {
-      name: 'Creation Date',
+      name: 'アカウント作成日時',
       value: `<t:${Math.round(((member.id / 4194304) + 1420070400000) / 1000)}:F>`
     }, {
-      name: 'Roles',
-      value: roles.length !== 0 ? roles.map(c => `\`${c.name}\``).join(', ') : 'None'
+      name: 'ロール',
+      value: roles.length !== 0 ? roles.map(c => `\`${c.name}\``).join(', ') : 'なし'
     }, {
-      name: 'Notable Permissions',
-      value: perms.length !== 0 ? perms.join(', ') : 'None'
+      name: '主な権限',
+      value: perms.length !== 0 ? perms.join(', ') : 'なし'
     }]
     interaction.createMessage({
       embeds: [{

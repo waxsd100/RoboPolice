@@ -15,8 +15,8 @@ module.exports = {
       await setAllEventsOneId(interaction.guildID, '')
       interaction.createMessage({
         embeds: [{
-          title: 'Success',
-          description: 'All events have been unset, the bot will stop logging.',
+          title: '成功',
+          description: 'すべてのイベントの出力先を解除しました。ログの記録を停止します。',
           thumbnail: {
             url: interaction.member.user.dynamicAvatarURL(null, 64)
           },
@@ -31,8 +31,8 @@ module.exports = {
       if (eventsLoggingHere.length === 0) {
         interaction.createMessage({
           embeds: [{
-            title: 'Warning',
-            description: `No events were logging to <#${channelToStopLogging || interaction.channel.id}>. Use \`/setup list\` to review the current logging setup.`,
+            title: '警告',
+            description: `<#${channelToStopLogging || interaction.channel.id}> に出力しているイベントはありません。現在の設定は \`/setup list\` で確認できます。`,
             thumbnail: {
               url: interaction.member.user.dynamicAvatarURL(null, 64)
             },
@@ -47,12 +47,12 @@ module.exports = {
       await clearEventByID(interaction.guildID, channelToStopLogging || interaction.channel.id)
       interaction.createMessage({
         embeds: [{
-          description: `All events logging to <#${channelToStopLogging || interaction.channel.id}> (${channelToStopLogging || interaction.channel.id}) have been unset.`,
+          description: `All events logging to <#${channelToStopLogging || interaction.channel.id}> (${channelToStopLogging || interaction.channel.id}) の出力先をすべて解除しました。`,
           thumbnail: {
             url: interaction.member.user.dynamicAvatarURL(null, 64)
           },
           fields: [{
-            name: 'Events unset',
+            name: '解除したイベント',
             value: eventsLoggingHere.join(', ')
           }],
           color: EMBED_COLORS.GREEN,

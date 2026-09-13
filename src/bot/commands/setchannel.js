@@ -34,7 +34,7 @@ module.exports = {
   func: async (message, suffix) => {
     const botPerms = message.channel.permissionsOf(global.bot.user.id).json
     if (!botPerms.manageWebhooks || !botPerms.viewAuditLogs) {
-      message.channel.createMessage('I need manage webhooks and view audit logs permissions to run setchannel! This is necessary for me to send messages to your configured logging channel.').catch(_ => {})
+      message.channel.createMessage('setchannel の実行には「ウェブフックの管理」と「監査ログを表示」の権限が必要です。設定したログチャンネルへメッセージを送るために必須です。').catch(_ => {})
       message.addReaction('❌').catch(_ => {})
       return
     }
@@ -55,11 +55,11 @@ module.exports = {
     }
   },
   name: 'setchannel',
-  quickHelp: 'Setchannel configures bot logging behavior.',
-  examples: `\`${process.env.GLOBAL_BOT_PREFIX}setchannel\` <- log everything where this is sent
-  \`${process.env.GLOBAL_BOT_PREFIX}setchannel messageDelete, messageUpdate\` <- logs message deletions and updates
-  \`${process.env.GLOBAL_BOT_PREFIX}setchannel guildMemberAdd, guildMemberRemove, guildMemberKick\` <- joins, leaves, kicks logging **(YOU MUST ALLOW LOGGER __MANAGE CHANNELS AND MANAGE SERVER__ FOR INVITE TRACKING TO WORK! Why? Discord does not send invite info without it!)**
-  \`${process.env.GLOBAL_BOT_PREFIX}setchannel anyevent\` <- set events one-by-one to log. Use commas for multiple. Valid events:
+  quickHelp: 'ログの出力先チャンネルとイベントを設定します。',
+  examples: `\`${process.env.GLOBAL_BOT_PREFIX}setchannel\` <- 実行したチャンネルにすべてのイベントを出力
+  \`${process.env.GLOBAL_BOT_PREFIX}setchannel messageDelete, messageUpdate\` <- メッセージの削除と編集を出力
+  \`${process.env.GLOBAL_BOT_PREFIX}setchannel guildMemberAdd, guildMemberRemove, guildMemberKick\` <- 参加・退出・キックを出力 **（招待コードの記録には __チャンネルの管理とサーバー管理__ の権限が必要です。これが無いと Discord が招待情報を送信しません）**
+  \`${process.env.GLOBAL_BOT_PREFIX}setchannel anyevent\` <- イベントを個別に指定して出力。複数指定はカンマ区切り。指定できるイベント:
   \`\`\`${eventList.toString(',')}\`\`\``, // 4 characters away from max embed length
   perms: ['manageWebhooks', 'manageChannels', 'viewAuditLogs'],
   noThread: true,

@@ -50,7 +50,7 @@ module.exports = {
           if (command.noThread && (interaction.channel instanceof NewsThreadChannel || interaction.channel instanceof PrivateThreadChannel || interaction.channel instanceof PublicThreadChannel)) {
             interaction.createMessage({
               embeds: [{
-                title: 'Unable to run',
+                title: '実行できません',
                 color: EMBED_COLORS.YELLOW_ORANGE,
                 description: `__${command.name}__ cannot be ran in a thread.`,
                 footer: getEmbedFooter(global.bot.user),
@@ -69,7 +69,7 @@ module.exports = {
             if (missingPermissions.length !== 0) {
               interaction.createMessage({
                 embeds: [{
-                  title: 'Missing Permissions',
+                  title: '権限が不足しています',
                   color: EMBED_COLORS.YELLOW_ORANGE,
                   description: `You are missing the following permissions to run ${command.name}: ${missingPermissions.map(perm => `\`${perm}\``).join(', ')}`,
                   footer: getEmbedFooter(global.bot.user),
@@ -89,7 +89,7 @@ module.exports = {
             if (missingPermissions.length !== 0) {
               interaction.createMessage({
                 embeds: [{
-                  title: 'Bot Missing Permissions',
+                  title: 'BOTの権限が不足しています',
                   color: EMBED_COLORS.YELLOW_ORANGE,
                   description: `I need the following permissions to run ${command.name}: ${missingPermissions.map(perm => `\`${perm}\``).join(', ')}`,
                   footer: getEmbedFooter(global.bot.user),

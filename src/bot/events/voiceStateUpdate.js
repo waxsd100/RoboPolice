@@ -17,13 +17,13 @@ module.exports = {
           name: `${member.username}#${member.discriminator} ${member.nick ? `(${member.nick})` : ''}`,
           icon_url: member.avatarURL
         },
-        description: `**${member.username}#${member.discriminator}** ${member.nick ? `(${member.nick})` : ''} had their voice state updated.`,
+        description: `**${member.username}#${member.discriminator}** ${member.nick ? `(${member.nick})` : ''} had のボイス状態が変更されました`,
         fields: [{
-          name: 'Voice Channel',
+          name: 'ボイスチャンネル',
           value: `<#${channel.id}> (${channel.name})`
         }, {
           name: 'ID',
-          value: `\`\`\`ini\nUser = ${member.id}\nChannel = ${channel.id}\n`
+          value: `\`\`\`ini\nユーザー = ${member.id}\nチャンネル = ${channel.id}\n`
         }],
         color: 3553599
       }]
@@ -37,11 +37,11 @@ module.exports = {
     const actionName = Object.keys(log.before)[0]
     if (!actionName) return
     voiceStateUpdateEvent.embeds[0].fields.unshift({
-      name: 'Action',
-      value: `${log.before[actionName] ? 'un' : 'now '}${actionName}` || 'Unknown'
+      name: '操作',
+      value: `${{ mute: 'サーバーミュート', deaf: 'サーバースピーカーミュート' }[actionName] || actionName}${log.before[actionName] ? ' を解除' : ' を設定'}` || '不明'
     })
     if (user && user.id && user.username) {
-      voiceStateUpdateEvent.embeds[0].fields[voiceStateUpdateEvent.embeds[0].fields.length - 1].value += `Perpetrator = ${user.id}\`\`\``
+      voiceStateUpdateEvent.embeds[0].fields[voiceStateUpdateEvent.embeds[0].fields.length - 1].value += `実行者 = ${user.id}\`\`\``
       voiceStateUpdateEvent.embeds[0].footer = {
         text: `${user.username}#${user.discriminator}`,
         icon_url: user.avatarURL

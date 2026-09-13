@@ -9,8 +9,8 @@ module.exports = {
   func: async interaction => {
     if (!process.env.PASTE_SITE_ROOT_URL) return interaction.createMessage({
       embeds: [{
-        title: 'Unsuccessful',
-        description: 'The bot owner hasn\'t yet configured the paste site, so this command is unavailable.',
+        title: '失敗',
+        description: 'BOTの管理者が paste サイトを設定していないため、このコマンドは利用できません。',
         thumbnail: {
           url: interaction.member.user.dynamicAvatarURL(null, 64)
         },
@@ -22,8 +22,8 @@ module.exports = {
     if (!interaction.data.options || !interaction.data.options[0] || interaction.data.options[0].value > 1000 || interaction.data.options[0].value < 5) {
       interaction.createMessage({
         embeds: [{
-          title: 'Unsuccessful',
-          description: 'Amount must be 5 <= amount < 1000',
+          title: '失敗',
+          description: '件数は 5 以上 1000 未満で指定してください。',
           thumbnail: {
             url: interaction.member.user.dynamicAvatarURL(null, 64)
           },
@@ -38,8 +38,8 @@ module.exports = {
     try {
       await interaction.createMessage({
         embeds: [{ // make sure followup message is created before doing any more work
-          title: 'Processing',
-          description: `Processing request from ${interaction.member.username}#${interaction.member.discriminator} for an archive of ${interaction.data.options[0].value} messages`,
+          title: '処理中',
+          description: `${interaction.member.username}#${interaction.member.discriminator} からの ${interaction.data.options[0].value} 件のアーカイブ要求を処理しています`,
           thumbnail: {
             url: interaction.member.user.dynamicAvatarURL(null, 64)
           },
@@ -52,13 +52,13 @@ module.exports = {
     sa
       .post(`${process.env.PASTE_SITE_ROOT_URL}/documents`)
       .set('Content-Type', 'text/plain')
-      .send(pasteString || 'No messages were able to be archived')
+      .send(pasteString || 'アーカイブできるメッセージがありませんでした')
       .end((err, res) => {
         if (!err && res.statusCode === 200 && res.body.key) {
           interaction.editOriginalMessage({
             embeds: [{
-              title: 'Success',
-              description: `Archived ${fetchedMessages.length} messages: ${PASTE_SITE_ROOT_URL}/${res.body.key}.txt`,
+              title: '成功',
+              description: `${fetchedMessages.length} 件のメッセージをアーカイブしました: ${process.env.PASTE_SITE_ROOT_URL}/${res.body.key}.txt`,
               thumbnail: {
                 url: interaction.member.user.dynamicAvatarURL(null, 64)
               },
@@ -70,8 +70,8 @@ module.exports = {
         } else {
           interaction.editOriginalMessage({
             embeds: [{
-              title: 'Error',
-              description: 'The archive service returned an error, please try again later!',
+              title: 'エラー',
+              description: 'アーカイブサービスがエラーを返しました。時間をおいて再度お試しください。',
               thumbnail: {
                 url: interaction.member.user.dynamicAvatarURL(null, 64)
               },

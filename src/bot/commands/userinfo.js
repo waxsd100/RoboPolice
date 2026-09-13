@@ -24,20 +24,20 @@ module.exports = {
     })
     const roles = member.roles.map(r => message.channel.guild.roles.get(r)).sort((a, b) => b.position - a.position)
     fields.push({
-      name: 'Name',
+      name: '名前',
       value: `${member.username}#${member.discriminator} ${member.nick ? `(**${member.nick}**)` : ''} (${member.id})`
     }, {
-      name: 'Join Date',
+      name: '参加日時',
       value: `<t:${Math.round(member.joinedAt / 1000)}:F> (<t:${Math.round(member.joinedAt / 1000)}:R>)`
     }, {
-      name: 'Creation Date',
+      name: 'アカウント作成日時',
       value: `<t:${Math.round(((member.id / 4194304) + 1420070400000) / 1000)}:F>`
     }, {
-      name: 'Roles',
-      value: roles.length !== 0 ? roles.map(c => `\`${c.name}\``).join(', ') : 'None'
+      name: 'ロール',
+      value: roles.length !== 0 ? roles.map(c => `\`${c.name}\``).join(', ') : 'なし'
     }, {
-      name: 'Notable Permissions',
-      value: perms.length !== 0 ? perms.join(', ') : 'None'
+      name: '主な権限',
+      value: perms.length !== 0 ? perms.join(', ') : 'なし'
     })
     message.channel.createMessage({
       embeds: [{
@@ -51,9 +51,9 @@ module.exports = {
     }).catch(() => { })
   },
   name: 'userinfo',
-  quickHelp: 'Use this with a mention to get info about a user or about yourself with no mention.', // The restriction of using a mention is very intentional.
-  examples: `\`${process.env.GLOBAL_BOT_PREFIX}userinfo\` <- create an embed showing information about you
-  \`${process.env.GLOBAL_BOT_PREFIX}userinfo @AnyUser\` <- create an embed showing information about the user that was mentioned`,
+  quickHelp: 'メンション付きで実行するとそのユーザーの、引数なしで実行すると自分の情報を表示します。', // The restriction of using a mention is very intentional.
+  examples: `\`${process.env.GLOBAL_BOT_PREFIX}userinfo\` <- 自分の情報を表示
+  \`${process.env.GLOBAL_BOT_PREFIX}userinfo @AnyUser\` <- メンションしたユーザーの情報を表示`,
   type: 'any',
   category: 'General'
 }

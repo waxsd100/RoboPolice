@@ -5,28 +5,28 @@ module.exports = {
     const fields = []
     const owner = global.bot.users.get(message.channel.guild.ownerID)
     const embed = {
-      description: `Information about ${message.channel.guild.name}`,
+      description: `${message.channel.guild.name} の情報`,
       color: 319403,
       fields: [{
-        name: 'Name',
+        name: 'サーバー名',
         value: `**${message.channel.guild.name}** (${message.channel.guild.id})`
       }, {
-        name: 'Verification Level',
+        name: '認証レベル',
         value: `${message.channel.guild.verificationLevel}`
       }, {
-        name: 'Owner',
+        name: 'オーナー',
         value: `${owner ? `**${owner.username}#${owner.discriminator}** ` : ''}(${message.channel.guild.ownerID})`
       }, {
-        name: 'Features',
-        value: message.channel.guild.features.length !== 0 ? message.channel.guild.features.join(', ') : 'No Guild Features'
+        name: 'サーバー機能',
+        value: message.channel.guild.features.length !== 0 ? message.channel.guild.features.join(', ') : 'なし'
       }, {
-        name: 'Channels',
-        value: `**${message.channel.guild.channels.size}** total\n**${message.channel.guild.channels.filter(c => c.type === 0).length}** text\n**${message.channel.guild.channels.filter(c => c.type === 2).length}** voice\n**${message.channel.guild.channels.filter(c => c.type === 4).length}** categories`
+        name: 'チャンネル数',
+        value: `合計 **${message.channel.guild.channels.size}**\nテキスト **${message.channel.guild.channels.filter(c => c.type === 0).length}**\nボイス **${message.channel.guild.channels.filter(c => c.type === 2).length}**\nカテゴリ **${message.channel.guild.channels.filter(c => c.type === 4).length}**`
       }, {
-        name: 'Region',
+        name: 'リージョン',
         value: `**${message.channel.guild.region}**`
       }, {
-        name: 'Role Count',
+        name: 'ロール数',
         value: `${message.channel.guild.roles.size}`
       }]
     }
@@ -38,7 +38,7 @@ module.exports = {
     if (message.channel.guild.emojis.length === 0) {
       fields.push({
         name: 'Emojis',
-        value: 'None'
+        value: 'なし'
       })
       await message.channel.createMessage({ embeds: [embed] })
     } else {
@@ -75,13 +75,13 @@ module.exports = {
           embed.fields = embed.fields.concat(emojiFieldsToUse)
           await message.channel.createMessage({ embeds: [embed] })
         } else {
-          await message.channel.createMessage({ embeds: [{ description: 'Emojis continued', fields: emojiFieldsToUse }] })
+          await message.channel.createMessage({ embeds: [{ description: '絵文字（続き）', fields: emojiFieldsToUse }] })
         }
       }
     }
   },
   name: 'serverinfo',
-  quickHelp: 'Use to get information about the current server (emojis, owner, member count, etc)',
+  quickHelp: '現在のサーバーの情報（絵文字、オーナー、メンバー数など）を表示します。',
   examples: `\`${process.env.GLOBAL_BOT_PREFIX}serverinfo\``,
   type: 'any',
   category: 'Utility'

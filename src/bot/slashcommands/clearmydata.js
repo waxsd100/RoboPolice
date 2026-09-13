@@ -7,8 +7,8 @@ module.exports = {
   func: async interaction => {
     interaction.createMessage({
       embeds: [{
-        title: 'Action needed:',
-        description: `To request deletion of your data (messages), join the [support server](${process.env.DISCORD_SUPPORT_SERVER}) and contact the staff with your user ID. Stored messages are encrypted at rest and are automatically deleted after ${process.env.MESSAGE_HISTORY_DAYS} days regardless of this request.\n\nSee the [Privacy Policy](${LEGAL_LINKS.PRIVACY_POLICY}) for exactly what is stored.`,
+        title: '対応が必要です',
+        description: `保存データ（メッセージ）の削除をご希望の場合は、[サポートサーバー](${process.env.DISCORD_SUPPORT_SERVER}) に参加し、ご自身のユーザーIDを添えてスタッフへご連絡ください。保存されたメッセージは暗号化されており、この請求の有無にかかわらず ${process.env.MESSAGE_HISTORY_DAYS} 日で自動的に削除されます。\n\n何が保存されているかは[プライバシーポリシー](${LEGAL_LINKS.PRIVACY_POLICY})をご覧ください。`,
         color: 16711680,
         timestamp: new Date(),
         footer: {

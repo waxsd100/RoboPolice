@@ -5,20 +5,20 @@ module.exports = {
     try {
       DMC = await message.author.getDMChannel()
     } catch (e) {
-      message.channel.createMessage(`<@${message.author.id}>, you're not capable of receiving a DM from me.`).catch(() => {})
+      message.channel.createMessage(`<@${message.author.id}> DMを受け取れない設定になっています。`).catch(() => {})
       return
     }
 
     if (suffix) {
       if (!global.bot.commands[suffix] || global.bot.commands[suffix]?.hidden) {
-        return message.channel.createMessage(`<@${message.author.id}>, that isn't a valid command. Use \`${process.env.GLOBAL_BOT_PREFIX}help\` to see all commands.`)
+        return message.channel.createMessage(`<@${message.author.id}> そのようなコマンドはありません。\`${process.env.GLOBAL_BOT_PREFIX}help\` で全コマンドを確認できます。`)
       }
       await message.channel.createMessage({
         embeds: [{
-          title: `Help for ${suffix}`,
+          title: `${suffix} コマンドの説明`,
           description: global.bot.commands[suffix].quickHelp,
           fields: [{
-            name: 'Examples',
+            name: '使用例',
             value: global.bot.commands[suffix].examples
           }],
           color: 0xFFFFFF
@@ -26,7 +26,7 @@ module.exports = {
       })
     } else {
       const embed = {
-        description: `Below, you can see my commands listed by name and description. To learn more about a command or view examples, use ${process.env.GLOBAL_BOT_PREFIX}help commandname.`,
+        description: `コマンドの一覧です。個別の詳細や使用例は ${process.env.GLOBAL_BOT_PREFIX}help コマンド名 で確認できます。`,
         color: 3553599,
         timestamp: new Date(),
         footer: {
@@ -46,7 +46,7 @@ module.exports = {
         if (!command.hidden) {
           embed.fields.push({
             name: command.name,
-            value: `${command.quickHelp}\n\nExample(s):\n${command.examples}`
+            value: `${command.quickHelp}\n\n使用例:\n${command.examples}`
           })
         }
       })
@@ -56,41 +56,41 @@ module.exports = {
         })
         await DMC.createMessage({
           embeds: [{
-            description: 'Continued help information...',
+            description: 'ヘルプの続き',
             fields: [{
               inline: true,
-              name: 'Open Source',
-              value: 'See https://github.com/waxsd100/RoboPolice for current code.'
+              name: 'ソースコード',
+              value: '最新のコードは https://github.com/waxsd100/RoboPolice で公開しています。'
             }, {
               inline: true,
-              name: 'Dashboard',
-              value: 'There are currently no plans for a dashboard, as I don\'t have a website to host it on.'
+              name: 'ダッシュボード',
+              value: 'ホスティング先のWebサイトが無いため、ダッシュボードの提供予定はありません。'
             }, {
               inline: false,
-              name: 'Privacy Policy',
-              value: `[Privacy Policy](${LEGAL_LINKS.PRIVACY_POLICY}) | [Terms of Service](${LEGAL_LINKS.TERMS_OF_SERVICE})\nQuestions about your data? Join the [support server](${process.env.DISCORD_SUPPORT_SERVER}).`
+              name: 'プライバシーポリシー',
+              value: `[プライバシーポリシー](${LEGAL_LINKS.PRIVACY_POLICY}) | [利用規約](${LEGAL_LINKS.TERMS_OF_SERVICE})\nデータの取り扱いについてのご質問は[サポートサーバー](${process.env.DISCORD_SUPPORT_SERVER})へどうぞ。`
             }, {
               inline: true,
-              name: 'Support',
-              value: `See \`/help event: eventname\` for any event you want further clarification on. If something is going terribly wrong, go ahead and join [my support server](${process.env.DISCORD_SUPPORT_SERVER})`
+              name: 'サポート',
+              value: `個々のイベントの詳細は \`/help event: eventname\` で確認できます。うまく動かない場合は[サポートサーバー](${process.env.DISCORD_SUPPORT_SERVER})へお越しください。`
             }, {
               inline: false,
-              name: 'Donations',
-              value: `If you like me and want to support my owner, you can contact \`@${process.env.BOT_CREATOR_NAME}\`.`
+              name: '支援について',
+              value: `このBOTを気に入っていただけた場合は \`@${process.env.BOT_CREATOR_NAME}\` までご連絡ください。`
             }],
           }]
         })
         await message.addReaction('📜')
       } catch (_) {
         message.addReaction('❌').catch(() => {})
-        message.channel.createMessage(`<@${message.author.id}>, I can't send you a help DM! Open your DMs to fix this or use \`${process.env.GLOBAL_BOT_PREFIX}help commandname\``).catch(() => {})
+        message.channel.createMessage(`<@${message.author.id}> ヘルプをDMで送信できませんでした。DMを受け取れる設定にするか、\`${process.env.GLOBAL_BOT_PREFIX}help コマンド名\` をご利用ください。`).catch(() => {})
       }
     }
   },
   name: 'help',
-  quickHelp: 'DM you with a help message!',
-  examples: `\`${process.env.GLOBAL_BOT_PREFIX}help\` <- DM a help message with every command
-  \`${process.env.GLOBAL_BOT_PREFIX}help setchannel\` <- get further info (examples) on any command`,
+  quickHelp: 'ヘルプをDMで送信します。',
+  examples: `\`${process.env.GLOBAL_BOT_PREFIX}help\` <- 全コマンドのヘルプをDMで送信
+  \`${process.env.GLOBAL_BOT_PREFIX}help setchannel\` <- 各コマンドの詳細（使用例）を表示`,
   type: 'any',
   category: 'General'
 }

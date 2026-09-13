@@ -8,7 +8,7 @@ module.exports = {
       await interaction.createMessage({
         embeds: [{
           title: 'Pong',
-          description: `Fetching RTT time, gateway latency: ${global.bot.getChannel(interaction.channel.id).guild.shard.latency} ms`,
+          description: `RTT を計測中です。ゲートウェイ遅延: ${global.bot.getChannel(interaction.channel.id).guild.shard.latency} ms`,
           thumbnail: {
             url: interaction.member.user.dynamicAvatarURL(null, 64)
           },
@@ -19,7 +19,7 @@ module.exports = {
       await interaction.editOriginalMessage({
         embeds: [{
           title: 'Pong',
-          description: `I'm alive! Gateway latency: ${global.bot.getChannel(interaction.channel.id).guild.shard.latency} ms RTT time: ${new Date().getTime() - start}`,
+          description: `稼働中です。ゲートウェイ遅延: ${global.bot.getChannel(interaction.channel.id).guild.shard.latency} ms / RTT: ${new Date().getTime() - start} ms`,
           thumbnail: {
             url: interaction.member.user.dynamicAvatarURL(null, 64)
           },

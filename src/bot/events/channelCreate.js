@@ -1,11 +1,11 @@
 const send = require('../modules/webhooksender')
 const CHANNEL_TYPE_MAP = {
-  0: 'Text channel',
-  2: 'Voice channel',
-  4: 'Category channel',
-  5: 'Announcement channel',
-  13: 'Stage channel',
-  15: 'Forum channel'
+  0: 'テキストチャンネル',
+  2: 'ボイスチャンネル',
+  4: 'カテゴリ',
+  5: 'アナウンスチャンネル',
+  13: 'ステージチャンネル',
+  15: 'フォーラムチャンネル'
 }
 
 module.exports = {
@@ -18,16 +18,16 @@ module.exports = {
       eventName: 'channelCreate',
       embeds: [{
         author: {
-          name: 'Unknown User',
+          name: '不明なユーザー',
           icon_url: 'https://logger.bot/staticfiles/red-x.png'
         },
         description: `${CHANNEL_TYPE_MAP[newChannel.type] ? CHANNEL_TYPE_MAP[newChannel.type] : 'Unsupported channel type'} created <#${newChannel.id}>`,
         fields: [{
-          name: 'Name',
+          name: '名前',
           value: newChannel.name
         }, {
           name: 'ID',
-          value: `\`\`\`ini\nUser = Unknown\nChannel = ${newChannel.id}\`\`\``
+          value: `\`\`\`ini\nユーザー = 不明\nチャンネル = ${newChannel.id}\`\`\``
         }],
         color: 3553599
       }]
@@ -54,7 +54,7 @@ module.exports = {
       const member = newChannel.guild.members.get(user.id)
       channelCreateEvent.embeds[0].author.name = `${user.username}#${user.discriminator} ${member && member.nick ? `(${member.nick})` : ''}`
       channelCreateEvent.embeds[0].author.icon_url = user.avatarURL
-      channelCreateEvent.embeds[0].fields[1].value = `\`\`\`ini\nUser = ${user.id}\nChannel = ${newChannel.id}\`\`\``
+      channelCreateEvent.embeds[0].fields[1].value = `\`\`\`ini\nユーザー = ${user.id}\nチャンネル = ${newChannel.id}\`\`\``
     }
     await send(channelCreateEvent)
   }
