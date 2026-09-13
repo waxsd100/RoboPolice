@@ -44,7 +44,7 @@ Short version; [PRIVACY.md](PRIVACY.md) is authoritative.
 
 | Data | Where | Retention |
 |---|---|---|
-| Message ID, author ID, timestamp, AES-256 encrypted content and attachment URLs | PostgreSQL `messages` | `MESSAGE_HISTORY_DAYS` days |
+| Message ID, author ID, timestamp, AES-256 encrypted content and attachment URLs | PostgreSQL `messages` | `MESSAGE_HISTORY_DAYS` days, or forever if unset |
 | Per-server settings (log channels, ignored channels, disabled events) | PostgreSQL `guilds` | Until the app leaves the server |
 | Invite counters, webhook handles, guild settings | Redis | 3 hours |
 
@@ -73,7 +73,7 @@ configured** — a server with none never has message content stored, since noth
 
 | Variable | Effect |
 |---|---|
-| `MESSAGE_HISTORY_DAYS` | Retention window. Unset means rows are **never** deleted, which contradicts PRIVACY.md and what `/help` and `/clearmydata` tell users. The bot warns on startup if unset. |
+| `MESSAGE_HISTORY_DAYS` | Retention window. Unset (or 0/non-numeric) means retention is unlimited by design — nothing is ever pruned, and `/help`/`/clearmydata` say so instead of naming a day count. The bot logs which mode it's in at startup. If you go unlimited on a real deployment, update PRIVACY.md's retention section to match, since it currently states a fixed number of days. |
 | `STAFF_ROLE_ID` | Optional. A member holding this role, or any role at or above it in Settings > Roles, bypasses the same permission checks a server owner already bypasses — not creator-only commands, and not what the bot itself needs. Unset disables it entirely. |
 | `PRUNE_EXTERNAL` | Set `true` only when running `prune.js` as a separate cron service, so the bot stops scheduling its own sweep |
 | `SENTRY_URI` | Optional. When set, errors and stack traces are sent to Sentry — a third party, disclosed in PRIVACY.md. Leave unset to keep error reporting local |
