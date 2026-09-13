@@ -74,6 +74,7 @@ configured** — a server with none never has message content stored, since noth
 | Variable | Effect |
 |---|---|
 | `MESSAGE_HISTORY_DAYS` | Retention window. Unset means rows are **never** deleted, which contradicts PRIVACY.md and what `/help` and `/clearmydata` tell users. The bot warns on startup if unset. |
+| `STAFF_ROLE_ID` | Optional. A member holding this role, or any role at or above it in Settings > Roles, bypasses the same permission checks a server owner already bypasses — not creator-only commands, and not what the bot itself needs. Unset disables it entirely. |
 | `PRUNE_EXTERNAL` | Set `true` only when running `prune.js` as a separate cron service, so the bot stops scheduling its own sweep |
 | `SENTRY_URI` | Optional. When set, errors and stack traces are sent to Sentry — a third party, disclosed in PRIVACY.md. Leave unset to keep error reporting local |
 | `PASTE_SITE_ROOT_URL` | Optional. Where `/archive` and bulk-deletion logs upload message text. Anyone with the resulting link can read it, so self-host it. Unset disables both features |

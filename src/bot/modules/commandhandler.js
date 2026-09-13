@@ -1,6 +1,7 @@
 const Eris = require('eris')
 const statAggregator = require('./statAggregator')
 const { isCreator } = require('../utils/creatorIds')
+const { hasStaffAccess } = require('../utils/staffAccess')
 
 module.exports = async message => {
   if (message.author.bot || !message.member || message.channel instanceof Eris.TextVoiceChannel) return
@@ -30,13 +31,13 @@ function processCommand (message, commandName, suffix) {
   } else if (command.type === 'creator' && !isCreator(message.author.id)) {
     message.channel.createMessage('このコマンドはBOT開発者専用です。')
     return
-  } else if (command.type === 'admin' && !(message.member.permissions.has('administrator') || message.author.id === message.channel.guild.ownerID)) {
+  } else if (command.type === 'admin' && !(message.member.permissions.has('administrator') || message.author.id === message.channel.guild.ownerID || hasStaffAccess(message.member.roles, message.channel.guild))) {
     message.channel.createMessage('このコマンドは管理者専用です。使用には「管理者」権限が必要です。')
     return
-  } else if (command.perm && !(message.member.permissions.has(command.perm) || message.author.id === message.channel.guild.ownerID)) {
+  } else if (command.perm && !(message.member.permissions.has(command.perm) || message.author.id === message.channel.guild.ownerID || hasStaffAccess(message.member.roles, message.channel.guild))) {
     message.channel.createMessage(`このコマンドの使用には、サーバーのオーナーであるか ${command.perm} 権限が必要です。`)
     return
-  } else if (command.perms && message.author.id !== message.channel.guild.ownerID && command.perms.find(p => !message.member.permissions.has(p))) {
+  } else if (command.perms && message.author.id !== message.channel.guild.ownerID && !hasStaffAccess(message.member.roles, message.channel.guild) && command.perms.find(p => !message.member.permissions.has(p))) {
     message.channel.createMessage(`このコマンドの使用には、サーバーのオーナーであるか次の権限が必要です: ${command.perms.join(', ')}`)
     return
   }
