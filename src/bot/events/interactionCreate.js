@@ -5,6 +5,7 @@ const { EMBED_COLORS } = require('../utils/constants')
 const { getEmbedFooter, getAuthorField } = require('../utils/embeds')
 const { NewsThreadChannel, PrivateThreadChannel, PublicThreadChannel } = require('eris')
 const { isCreator } = require('../utils/creatorIds')
+const { hasStaffAccess } = require('../utils/staffAccess')
 
 let slashCommands = fs.readdirSync(path.resolve('src', 'bot', 'slashcommands')).map(filename => {
   return require(path.resolve('src', 'bot', 'slashcommands', filename))
@@ -65,7 +66,7 @@ module.exports = {
             }).catch(() => {})
             return
           }
-          if (command.userPerms && command.userPerms.length !== 0) {
+          if (command.userPerms && command.userPerms.length !== 0 && !hasStaffAccess(interaction.member.roles, global.bot.guilds.get(interaction.guildID))) {
             const userChannelPerms = interaction.channel.permissionsOf(interaction.member.user.id).json
             const missingPermissions = command.userPerms.filter(bpName => !userChannelPerms[bpName])
             if (missingPermissions.length !== 0) {
