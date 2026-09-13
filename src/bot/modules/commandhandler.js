@@ -1,5 +1,6 @@
 const Eris = require('eris')
 const statAggregator = require('./statAggregator')
+const { isCreator } = require('../utils/creatorIds')
 
 module.exports = async message => {
   if (message.author.bot || !message.member || message.channel instanceof Eris.TextVoiceChannel) return
@@ -22,20 +23,20 @@ function processCommand (message, commandName, suffix) {
   } else if (command.noThread && (message.channel.type === 10 || message.channel.type === 11 || message.channel.type === 12)) {
     message.channel.createMessage('このコマンドはスレッド内では使用できません。')
     return
-  } else if (message.author.id === process.env.CREATOR_IDS) {
+  } else if (isCreator(message.author.id)) {
     global.logger.info(`Developer override by ${message.author.username}#${message.author.discriminator} at ${new Date().toUTCString()}`)
     command.func(message, suffix)
     return
-  } else if (command.type === 'creator' && !process.env.CREATOR_IDS.includes(message.author.id)) {
+  } else if (command.type === 'creator' && !isCreator(message.author.id)) {
     message.channel.createMessage('このコマンドはBOT開発者専用です。')
     return
-  } else if (command.type === 'admin' && !(message.member.permissions.has('administrator' || message.author.id === message.channel.guild.ownerID))) {
+  } else if (command.type === 'admin' && !(message.member.permissions.has('administrator') || message.author.id === message.channel.guild.ownerID)) {
     message.channel.createMessage('このコマンドは管理者専用です。使用には「管理者」権限が必要です。')
     return
   } else if (command.perm && !(message.member.permissions.has(command.perm) || message.author.id === message.channel.guild.ownerID)) {
     message.channel.createMessage(`このコマンドの使用には、サーバーのオーナーであるか ${command.perm} 権限が必要です。`)
     return
-  } else if (command.perms && command.perms.find(p => !message.member.permissions.has(p))) {
+  } else if (command.perms && message.author.id !== message.channel.guild.ownerID && command.perms.find(p => !message.member.permissions.has(p))) {
     message.channel.createMessage(`このコマンドの使用には、サーバーのオーナーであるか次の権限が必要です: ${command.perms.join(', ')}`)
     return
   }

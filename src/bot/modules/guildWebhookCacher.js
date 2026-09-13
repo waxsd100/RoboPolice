@@ -79,7 +79,9 @@ module.exports = async (guildID, channelID) => {
       await webhookCache.setWebhook(channelID, newHook.id, newHook.token)
       await cacheGuild(guildID)
     } else {
-      console.log(newHook)
+      // Do not log the raw response: a webhook object carries a `token` that alone lets anyone
+      // holding it post to this channel. Log only what's safe to diagnose from.
+      console.log(newHook ? { id: newHook.id, hasToken: !!newHook.token, channelID: newHook.channel_id } : newHook)
       global.logger.warn('Webhook "created" is invalid, please inspect')
     }
   }
