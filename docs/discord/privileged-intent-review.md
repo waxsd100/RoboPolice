@@ -70,9 +70,9 @@ Discord から「10,000ユーザー到達につき特権インテントの審査
 | 機能 | ファイル |
 |---|---|
 | 参加ログ（アカウント作成日・使用された招待コードの特定） | `src/bot/events/guildMemberAdd.js` |
-| 退出／キックログ（Audit Log 照合で退出とキックを判別、所持ロールを記録） | `src/bot/events/guildMemberRemove.js:28-31` |
+| 退出／キックログ（Audit Log 照合で退出とキックを判別、所持ロールを記録） | `src/bot/events/guildMemberRemove.js:14-16`（ロール記録）, `:28-31`（Audit Log 照合） |
 | ニックネーム変更・ロール変更・メンバー認証通過ログ | `src/bot/events/guildMemberUpdate.js` |
-| 他の全ログ埋め込みでの表示名／ニックネーム／アバター解決 | `src/bot/events/messageDelete.js:19-31`, `messageUpdate.js:16` |
+| 他の全ログ埋め込みでの表示名／ニックネーム／アバター解決 | `src/bot/events/messageDelete.js:39-42`, `messageUpdate.js:16` |
 | `/userinfo` コマンド | `src/bot/slashcommands/userinfo.js` |
 | BAN / BAN解除ログの対象者情報 | `src/bot/events/guildBanAdd.js`, `guildBanRemove.js` |
 
@@ -166,7 +166,7 @@ Presence インテントは使用していないため、申請しません。
 
 1. アプリ内のコマンド
    - /help の「Privacy Policy」欄にプライバシーポリシーと利用規約へのリンクを表示しています。
-   - /info でも同じリンクを表示しています。
+   - `%info`（テキストコマンド。本番はこちらが主に使われています）でも同じリンクを表示しています。
    - /clearmydata でデータ削除請求の方法を案内する際に、プライバシーポリシーへリンクしています。
 2. 公開リポジトリ上の恒久URL（下記③に記載）。本アプリはソースコードを全文公開しており、
    ポリシーはそのリポジトリ内に置かれているため、改訂履歴も公開されています。
@@ -349,7 +349,7 @@ https://github.com/waxsd100/RoboPolice/commits/master/PRIVACY.md で公開され
       `https://github.com/waxsd100/RoboPolice/blob/master/PRIVACY.md` が恒久URLとして機能します。
       **PR #8 を master にマージした時点で有効になります。**
 - [x] **利用規約** — `TERMS.md`。Developer Portal の Terms of Service URL 欄にも登録してください。
-- [x] **BOT内からポリシーへ導線** — `/help`・`/info`・`/clearmydata` にポリシーURLを表示するよう変更。
+- [x] **BOT内からポリシーへ導線** — `/help`・`%info`（テキストコマンド）・`/clearmydata` にポリシーURLを表示するよう変更。
       「Where is your Privacy Policy available?」への回答の裏付けになります。
 - [x] **保持期間に関する記述を実態に合わせた** — 自動削除は実装しない方針のため、`PRIVACY.md` は
       「固定の保持期限は設けない」と明記。併せて、**上流 Logger 由来で `/clearmydata` と `/help` が
@@ -377,10 +377,13 @@ https://github.com/waxsd100/RoboPolice/commits/master/PRIVACY.md で公開され
 - [ ] **PRESENCE INTENT トグルを OFF にする** — 現在 ON だがコード上未使用。申請の記述と矛盾するため、
       送信前に必ず OFF にしてください（動作への影響はありません）。
 - [ ] **オプトアウト設問の回答を決める** — §3.5。推奨は No。
-- [ ] **Railway に `MESSAGE_HISTORY_DAYS=30` を設定** — これを入れないと削除ジョブが動かず、
-      申請の「30日以内→はい」とポリシーの記述が事実と食い違います。§8 参照。
-- [ ] **保持日数30日でよいか確認** — 変えるなら `PRIVACY.md`（4箇所）と §3 の回答も合わせて直します。
-      30日以外にすると、フォームの「30日以内か」に Yes と答えられなくなる点だけ注意してください。
+- [x] **自動削除は稼働中（運用者から確認済み・2026-09-13）** — `MESSAGE_HISTORY_DAYS` を設定し、
+      `src/miscellaneous/prune.js` による定期削除が実際に動いています。これで申請の「30日以内→はい」と
+      `PRIVACY.md` の記述が事実と一致します。
+      ⚠️ **1点だけ確認してください**：実際に設定している日数が `PRIVACY.md` の「30日」と一致していますか？
+      30以外の値なら、`PRIVACY.md`（4箇所）と本ファイル §3 の回答（30日以内か→Yes、の根拠）を
+      その日数に合わせて書き換える必要があります（30日を超える値にすると「30日以内か」に Yes と
+      答えられなくなる点は変わりません）。
 
 ---
 
