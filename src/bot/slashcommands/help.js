@@ -1,6 +1,7 @@
 const Eris = require('eris')
 const { EMBED_COLORS, ALL_EVENTS, EVENT_HELP, LEGAL_LINKS } = require('../utils/constants')
 const { getEmbedFooter, getAuthorField } = require('../utils/embeds')
+const { retentionWindowClause } = require('../utils/retention')
 
 module.exports = {
   name: 'help',
@@ -53,7 +54,7 @@ module.exports = {
           }, {
             inline: true,
             name: '__記録できる範囲: メッセージログ__',
-            value: `${global.bot.user.username} は、送信時点を見ていないメッセージの内容を削除時に表示できません。BOTの参加前や停止中に送信されたメッセージは、削除されても内容が表示されません。またメッセージの保存期間は ${process.env.MESSAGE_HISTORY_DAYS} 日で、それより古いメッセージを削除・編集した場合は「内容は保持期間外」として記録されます。`
+            value: `${global.bot.user.username} は、送信時点を見ていないメッセージの内容を削除時に表示できません。BOTの参加前や停止中に送信されたメッセージは、削除されても内容が表示されません。${retentionWindowClause(global.bot.user.username)}`
           }],
           footer: getEmbedFooter(global.bot.user),
           author: getAuthorField(interaction.member.user),

@@ -1,6 +1,7 @@
 require('dotenv').config()
 
 const pool = require('../db/clients/postgres')
+const { getRetentionDays } = require('../bot/utils/retention')
 
 // Deletes message rows past the retention window promised in PRIVACY.md and in /clearmydata.
 //
@@ -20,15 +21,13 @@ const SWEEP_INTERVAL_MS = 1000 * 60 * 60
 
 let sweeping = false
 
-function getRetentionDays () {
-  const days = parseInt(process.env.MESSAGE_HISTORY_DAYS, 10)
-  if (!Number.isInteger(days) || days <= 0) return null
-  return days
-}
-
 async function prune () {
   const days = getRetentionDays()
-  if (!days) throw new Error('MESSAGE_HISTORY_DAYS is unset or not a positive integer')
+  // No MESSAGE_HISTORY_DAYS configured means retention is unlimited by design, not an error: a
+  // deployment can deliberately keep messages forever. Prune nothing rather than failing, so a
+  // Railway Cron job (or a direct `node prune.js`) run without it set is a clean no-op, not a
+  // recurring failure.
+  if (!days) return { deleted: 0, days: null }
   let deleted = 0
   for (let i = 0; i < MAX_BATCHES_PER_RUN; i++) {
     const res = await pool.query(
@@ -65,7 +64,7 @@ function startScheduler () {
   }
   const days = getRetentionDays()
   if (!days) {
-    global.logger.warn('[PRUNE]: MESSAGE_HISTORY_DAYS is unset, so stored messages will never expire. This contradicts the retention window stated in PRIVACY.md and in /clearmydata.')
+    global.logger.startup('[PRUNE]: MESSAGE_HISTORY_DAYS is not set. Message retention is unlimited: nothing will be pruned. Set it (and update PRIVACY.md / /clearmydata to match) if messages should expire.')
     return
   }
   global.logger.startup(`[PRUNE]: Message retention is ${days} days, sweeping every ${SWEEP_INTERVAL_MS / 60000} minutes.`)
@@ -76,7 +75,11 @@ function startScheduler () {
 async function main () {
   try {
     const { deleted, days } = await prune()
-    console.log(`[PRUNE]: Deleted ${deleted.toLocaleString()} message rows older than ${days} days.`)
+    if (days === null) {
+      console.log('[PRUNE]: MESSAGE_HISTORY_DAYS is not set. Message retention is unlimited: nothing to prune.')
+    } else {
+      console.log(`[PRUNE]: Deleted ${deleted.toLocaleString()} message rows older than ${days} days.`)
+    }
     pool.end()
     process.exit(0)
   } catch (e) {
