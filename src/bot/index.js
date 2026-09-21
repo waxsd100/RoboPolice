@@ -70,9 +70,7 @@ async function init () {
     ...(process.env.USE_MAX_CONCURRENCY === 'true' ? { useMaxConcurrency: true } : {})
   })
 
-  global.bot.editStatus('dnd', {
-    name: 'Bot is booting'
-  })
+
 
   global.bot.commands = {}
   global.bot.ignoredChannels = []
