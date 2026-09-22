@@ -55,7 +55,8 @@ const eventStatistics = {
   'global-ratelimit-hit': 0,
   'ratelimit-hit': 0,
   'webhook-ratelimit-hit': 0,
-  guildMemberBoostUpdate: 0
+  guildMemberBoostUpdate: 0,
+  presenceUpdate: 0
 }
 
 const miscStatistics = {

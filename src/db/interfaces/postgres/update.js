@@ -30,7 +30,8 @@ const eventList = [
   'voiceChannelSwitch',
   'guildEmojisUpdate',
   'guildStickersUpdate',
-  'guildMemberNickUpdate'
+  'guildMemberNickUpdate',
+  'presenceUpdate'
 ]
 
 const eventLogs = {
@@ -58,7 +59,8 @@ const eventLogs = {
   guildStickersUpdate: '',
   guildMemberNickUpdate: '',
   guildMemberBoostUpdate: '',
-  guildMemberVerify: '' // I am a moron for having an object representing
+  guildMemberVerify: '', // I am a moron for having an object representing
+  presenceUpdate: ''
 } // default event settings in multiple places instead of in constants.js
 
 async function clearEventLog (guildID) {
