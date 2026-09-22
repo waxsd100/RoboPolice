@@ -16,8 +16,8 @@ AGPL-3.0-or-later.
 
 ## Legal
 
-- [Privacy Policy](PRIVACY.md)
-- [Terms of Service](TERMS.md)
+- [Privacy Policy](https://github.com/waxsd100/RoboPolice/wiki/Privacy-Policy)
+- [Terms of Service](https://github.com/waxsd100/RoboPolice/wiki/Terms-of-Service)
 
 These are the documents registered with Discord for this application. **Keep them in sync with what
 the code actually does** — if you change what is stored, where it is sent, or how long it is kept,
@@ -40,7 +40,7 @@ intent review submission, where every claim is mapped to the code that backs it.
 
 ## What is stored
 
-Short version; [PRIVACY.md](PRIVACY.md) is authoritative.
+Short version; the Privacy Policy is authoritative.
 
 | Data | Where | Retention |
 |---|---|---|
@@ -73,10 +73,10 @@ configured** — a server with none never has message content stored, since noth
 
 | Variable | Effect |
 |---|---|
-| `MESSAGE_HISTORY_DAYS` | Retention window. Unset (or 0/non-numeric) means retention is unlimited by design — nothing is ever pruned, and `/help`/`/clearmydata` say so instead of naming a day count. The bot logs which mode it's in at startup. If you go unlimited on a real deployment, update PRIVACY.md's retention section to match, since it currently states a fixed number of days. |
+| `MESSAGE_HISTORY_DAYS` | Retention window. Unset (or 0/non-numeric) means retention is unlimited by design — nothing is ever pruned, and `/help`/`/clearmydata` say so instead of naming a day count. The bot logs which mode it's in at startup. If you go unlimited on a real deployment, update the Privacy Policy's retention section to match, since it currently states a fixed number of days. |
 | `STAFF_ROLE_ID` | Optional. A member holding this role, or any role at or above it in Settings > Roles, bypasses the same permission checks a server owner already bypasses — not creator-only commands, and not what the bot itself needs. Unset disables it entirely. |
 | `PRUNE_EXTERNAL` | Set `true` only when running `prune.js` as a separate cron service, so the bot stops scheduling its own sweep |
-| `SENTRY_URI` | Optional. When set, errors and stack traces are sent to Sentry — a third party, disclosed in PRIVACY.md. Leave unset to keep error reporting local |
+| `SENTRY_URI` | Optional. When set, errors and stack traces are sent to Sentry — a third party, disclosed in the Privacy Policy. Leave unset to keep error reporting local |
 | `PASTE_SITE_ROOT_URL` | Optional. Where `/archive` and bulk-deletion logs upload message text. Anyone with the resulting link can read it, so self-host it. Unset disables both features |
 | `MESSAGE_BATCH_SIZE` | Messages buffered in memory before a batched insert. Larger means fewer writes but more messages lost on an unclean restart |
 
@@ -108,8 +108,8 @@ This is a fork maintained for one community, so changes are judged by what that 
 rather than by what suits a public logging bot. Before opening a pull request:
 
 1. Does it keep the bot within its Discord rate limits?
-2. Does it change what data is stored, sent, or kept? If so, update [PRIVACY.md](PRIVACY.md) and
-   [TERMS.md](TERMS.md) in the same pull request — and the answers in
+2. Does it change what data is stored, sent, or kept? If so, update the Privacy Policy and
+   Terms of Service in the same pull request — and the answers in
    [`docs/discord/privileged-intent-review.md`](docs/discord/privileged-intent-review.md) if it
    touches anything the intent review declares.
 3. Does it need a new privileged intent? That requires a fresh review request to Discord, so raise

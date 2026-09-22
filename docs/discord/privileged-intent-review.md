@@ -13,8 +13,8 @@ Discord から「10,000ユーザー到達につき特権インテントの審査
 | 公開種別 | **プライベートBOT**（一般公開しておらず、第三者は追加できない） |
 | 設置サーバー | 本番のコミュニティサーバー（https://discord.com/invite/nobaman ）＋ **当方運営の非公開テストサーバー数個** |
 | 1万ユーザー到達の理由 | 配布数ではなく、**その1サーバーのメンバーが1万人超**であるため |
-| プライバシーポリシー | https://github.com/waxsd100/RoboPolice/blob/master/PRIVACY.md |
-| 利用規約 | https://github.com/waxsd100/RoboPolice/blob/master/TERMS.md |
+| プライバシーポリシー | https://github.com/waxsd100/RoboPolice/wiki/Privacy-Policy |
+| 利用規約 | https://github.com/waxsd100/RoboPolice/wiki/Terms-of-Service |
 
 > **この申請の性格**：本BOTは1つのコミュニティが自分たちのモデレーションのために自前で動かしている
 > プライベートBOTです。審査では「不特定多数に配布されたBOTがデータを集めている」ケースと明確に
@@ -178,13 +178,12 @@ https://github.com/waxsd100/RoboPolice にて全文を公開しています。
 
 ```
 プライバシーポリシー:
-https://github.com/waxsd100/RoboPolice/blob/master/PRIVACY.md
+https://github.com/waxsd100/RoboPolice/wiki/Privacy-Policy
 
 利用規約:
-https://github.com/waxsd100/RoboPolice/blob/master/TERMS.md
+https://github.com/waxsd100/RoboPolice/wiki/Terms-of-Service
 
-いずれも英語と日本語を併記しています。改訂履歴は
-https://github.com/waxsd100/RoboPolice/commits/master/PRIVACY.md で公開されています。
+いずれも英語と日本語を併記しています。改訂履歴はWikiのHistoryタブから誰でも閲覧できます。
 ```
 
 #### ③ どのインテントを申請しますか？
@@ -313,13 +312,12 @@ https://github.com/waxsd100/RoboPolice/blob/master/docs/discord/evidence_images/
 
 ## 4. 送信前の残作業
 
-- [x] **プライバシーポリシー** — `PRIVACY.md`（英日併記）をリポジトリルートに作成。public リポジトリなので
-      `https://github.com/waxsd100/RoboPolice/blob/master/PRIVACY.md` が恒久URLとして機能します。
-      **PR #8 を master にマージした時点で有効になります。**
-- [x] **利用規約** — `TERMS.md`。Developer Portal の Terms of Service URL 欄にも登録してください。
+- [x] **プライバシーポリシー** — Wikiに作成。public リポジトリなので
+      `https://github.com/waxsd100/RoboPolice/wiki/Privacy-Policy` が恒久URLとして機能します。
+- [x] **利用規約** — Wikiに作成。Developer Portal の Terms of Service URL 欄にも登録してください。
 - [x] **BOT内からポリシーへ導線** — `/help`・`%info`（テキストコマンド）・`/clearmydata` にポリシーURLを表示するよう変更。
       「Where is your Privacy Policy available?」への回答の裏付けになります。
-- [x] **保持期間に関する記述を実態に合わせた** — 自動削除は実装しない方針のため、`PRIVACY.md` は
+- [x] **保持期間に関する記述を実態に合わせた** — 自動削除は実装しない方針のため、Wikiのポリシーは
       「固定の保持期限は設けない」と明記。併せて、**上流 Logger 由来で `/clearmydata` と `/help` が
       「N日後に自動削除される」と表示していた虚偽の告知を削除**しました（実装が存在しないため）。
       `MESSAGE_HISTORY_DAYS` は `.env.example` 上で「BOTは強制しない」と注記。
@@ -331,9 +329,9 @@ https://github.com/waxsd100/RoboPolice/blob/master/docs/discord/evidence_images/
 - [ ] **オプトアウト設問の回答を決める** — §3.5。推奨は No。
 - [x] **自動削除は稼働中（運用者から確認済み・2026-09-13）** — `MESSAGE_HISTORY_DAYS` を設定し、
       `src/miscellaneous/prune.js` による定期削除が実際に動いています。これで申請の「30日以内→はい」と
-      `PRIVACY.md` の記述が事実と一致します。
-      ⚠️ **1点だけ確認してください**：実際に設定している日数が `PRIVACY.md` の「30日」と一致していますか？
-      30以外の値なら、`PRIVACY.md`（4箇所）と本ファイル §3 の回答（30日以内か→Yes、の根拠）を
+      Wikiの記述が事実と一致します。
+      ⚠️ **1点だけ確認してください**：実際に設定している日数が Wikiポリシーの「30日」と一致していますか？
+      30以外の値なら、Wikiポリシーと本ファイル §3 の回答（30日以内か→Yes、の根拠）を
       その日数に合わせて書き換える必要があります（30日を超える値にすると「30日以内か」に Yes と
       答えられなくなる点は変わりません）。
 
@@ -388,9 +386,9 @@ commit `c075c5b`）では構造的に要求できません。**申請作業の�
 | A1 | **提出するリポジトリ自体が「180,000サーバーで稼働」と書いてあった** | `package.json:4` | description を書き換え |
 | A2 | README 冒頭が上流 Logger の説明で、**別のサポートサーバー**を案内していた | `README.md:1` | RoboPolice の説明に差し替え |
 | A3 | `/help` `/info` が **`tizzysaurus/logger`** を「current code」として案内。提出するリポジトリと不一致（AGPL の観点でも不適切） | `slashcommands/help.js:21` ほか | `waxsd100/RoboPolice` に修正 |
-| A4 | ポリシーの「データは自前インフラの外に出ない」が**虚偽**。Sentry へエラー送信、paste サイトへメッセージ本文送信 | `logger.js:5,14,22`, `index.js:12,126`, `archive.js:53`, `messageDeleteBulk.js:54` | PRIVACY.md と申請回答に開示を追加 |
+| A4 | ポリシーの「データは自前インフラの外に出ない」が**虚偽**。Sentry へエラー送信、paste サイトへメッセージ本文送信 | `logger.js:5,14,22`, `index.js:12,126`, `archive.js:53`, `messageDeleteBulk.js:54` | Wikiポリシーと申請回答に開示を追加 |
 | A5 | 「メッセージ削除時に行も削除される」が**一括削除では成立しない** | `messageDelete.js:20` にはあるが `messageDeleteBulk.js` に削除呼び出しが無い | 「単一削除のみ」と正確に記述 |
-| A6 | `/ignorechannel` が遡及しないこと、**サーバー単位の削除が構造的に不可能**なこと（guild_id 未保存）を伏せていた | `generateDB.js` のスキーマ | PRIVACY.md に明記 |
+| A6 | `/ignorechannel` が遡及しないこと、**サーバー単位の削除が構造的に不可能**なこと（guild_id 未保存）を伏せていた | `generateDB.js` のスキーマ | Wikiポリシーに明記 |
 | A7 | 「Database access is restricted to the App's own host」は**私が書いた未検証の主張** | — | 削除 |
 | A8 | ToS の「メンバーには告知されている」も未検証の断定 | — | 「管理者が周知する責任を負う」に変更 |
 

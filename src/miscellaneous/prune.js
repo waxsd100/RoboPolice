@@ -3,7 +3,7 @@ require('dotenv').config()
 const pool = require('../db/clients/postgres')
 const { getRetentionDays } = require('../bot/utils/retention')
 
-// Deletes message rows past the retention window promised in PRIVACY.md and in /clearmydata.
+// Deletes message rows past the retention window promised in the Privacy Policy and in /clearmydata.
 //
 // Two ways to run it, pick one (running both is harmless, just redundant):
 //   - In-process: the bot schedules this itself on the worker owning shard 0. This is the default.
@@ -64,7 +64,7 @@ function startScheduler () {
   }
   const days = getRetentionDays()
   if (!days) {
-    global.logger.startup('[PRUNE]: MESSAGE_HISTORY_DAYS is not set. Message retention is unlimited: nothing will be pruned. Set it (and update PRIVACY.md / /clearmydata to match) if messages should expire.')
+    global.logger.startup('[PRUNE]: MESSAGE_HISTORY_DAYS is not set. Message retention is unlimited: nothing will be pruned. Set it (and update the Privacy Policy / /clearmydata to match) if messages should expire.')
     return
   }
   global.logger.startup(`[PRUNE]: Message retention is ${days} days, sweeping every ${SWEEP_INTERVAL_MS / 60000} minutes.`)
