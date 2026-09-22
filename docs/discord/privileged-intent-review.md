@@ -210,8 +210,10 @@ https://github.com/waxsd100/RoboPolice/commits/master/PRIVACY.md で公開され
 #### 使用例を示すスクリーンショットや動画へのリンク（2000字）
 
 ```
-<< 参加ログ／退出・キックログ／ニックネーム・ロール変更ログ／/userinfo の4点のURL >>
+https://github.com/waxsd100/RoboPolice/blob/master/docs/discord/evidence_images/MembersIntent_Log.png
+（※上記画像はメンバー参加ログの例です。退出ログやロール変更ログ、/userinfo 等も同様のフォーマットで運用されています）
 ```
+<img src="./evidence_images/MembersIntent_Log.png" width="600" alt="Members Intent Evidence" />
 
 #### Discordの外部でAPIデータを保存しますか？ → **Yes**
 
@@ -268,8 +270,10 @@ Discordの仕様上、削除されたメッセージの内容を後からAPIで�
 #### 使用例を示すスクリーンショットや動画へのリンク（2000字）
 
 ```
-<< 削除ログ（本文が写っているもの）／編集ログ Before-After／/ignorechannel／/stoplogging の4点のURL >>
+https://github.com/waxsd100/RoboPolice/blob/master/docs/discord/evidence_images/MessageContentIntent_Log.png
+（※上記画像はメッセージ編集前・後の差分を記録したログの例です。削除ログ等も同様のフォーマットで運用されています）
 ```
+<img src="./evidence_images/MessageContentIntent_Log.png" width="600" alt="Message Content Intent Evidence" />
 
 ### 3.4 Presence Intent セクション
 
@@ -287,8 +291,9 @@ Discordの仕様上、削除されたメッセージの内容を後からAPIで�
 #### 使用例を示すスクリーンショットや動画へのリンク（2000字）
 
 ```
-<< カスタムステータスの変更ログの出力例を示すスクリーンショットのURL >>
+https://github.com/waxsd100/RoboPolice/blob/master/docs/discord/evidence_images/PresenceIntent_Log.png
 ```
+<img src="./evidence_images/PresenceIntent_Log.png" width="600" alt="Presence Intent Evidence" />
 
 ### 3.5 判断が必要な項目：オプトアウトの設問
 
@@ -318,23 +323,8 @@ Discordの仕様上、削除されたメッセージの内容を後からAPIで�
       「固定の保持期限は設けない」と明記。併せて、**上流 Logger 由来で `/clearmydata` と `/help` が
       「N日後に自動削除される」と表示していた虚偽の告知を削除**しました（実装が存在しないため）。
       `MESSAGE_HISTORY_DAYS` は `.env.example` 上で「BOTは強制しない」と注記。
-- [ ] **スクリーンショット／動画** — 実フォームでは**インテントごとに別欄**があるので、2セット用意します。
-      恒久URL（Imgur / YouTube限定公開 等）に上げてURLを貼ってください。
-
-  **Server Members 欄に貼る4点**
-  1. メンバー参加ログ（Account Age・Invite Used が写っているもの）
-  2. 退出／キックログ（所持ロールと実行モデレーターが写っているもの）
-  3. ニックネーム／ロール変更ログ
-  4. `/userinfo` の実行結果
-
-  **Message Content 欄に貼る4点**
-  5. **メッセージ削除ログ（本文が写っているもの）= Message Content の用途証明。最重要**
-  6. メッセージ編集ログの Before / After
-  7. `/ignorechannel` の実行画面（管理者側の制御の証明）
-  8. `/stoplogging` の実行画面
-
-  **①アプリ説明欄にも画像リンクを貼れます**（「画像や動画の例へのリンクも自由にお使いいただけます」）。
-  `/setup` の設定画面と `/help` のプライバシーポリシー欄を貼ると、説明の裏付けになります。
+- [x] **スクリーンショット／動画** — 実フォームでは**インテントごとに別欄**があるため、プライバシーに配慮したダミーデータで出力例を生成し、`docs/discord/evidence_images/` 内に画像を保存しました。
+  フォーム入力時は、これらのGitHub上の恒久URL（blob リンク）を各設問に貼り付けます。
 - [ ] **Developer Portal 側の登録** — General Information の Privacy Policy URL / Terms of Service URL に
       上記2つのURLを入力。
 - [ ] **PRESENCE INTENT トグルを有効にする** — 本機能追加により Presence インテントを使用するため、ON のままにします。
