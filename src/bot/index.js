@@ -64,7 +64,8 @@ async function init () {
       'guildInvites',
       'guildMembers',
       'guildMessages',
-      'guildBans'
+      'guildBans',
+      'guildPresences'
     ],
     defaultImageFormat: 'png',
     ...(process.env.USE_MAX_CONCURRENCY === 'true' ? { useMaxConcurrency: true } : {})

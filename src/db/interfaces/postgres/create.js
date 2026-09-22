@@ -29,7 +29,8 @@ const eventLogs = {
   guildEmojisUpdate: '',
   guildStickersUpdate: '',
   guildMemberNickUpdate: '',
-  guildMemberBoostUpdate: ''
+  guildMemberBoostUpdate: '',
+  presenceUpdate: ''
 }
 
 async function createGuild (guild) {

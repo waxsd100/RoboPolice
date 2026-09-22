@@ -23,7 +23,8 @@ exports.ALL_EVENTS = [
   'voiceChannelSwitch',
   'guildEmojisUpdate',
   'guildStickersUpdate',
-  'guildMemberBoostUpdate'
+  'guildMemberBoostUpdate',
+  'presenceUpdate'
 ]
 
 exports.EVENT_HELP = {
@@ -51,7 +52,8 @@ exports.EVENT_HELP = {
   voiceChannelSwitch: 'メンバーがボイスチャンネルを移動したときに記録します。強制的に移動させたメンバーがいた場合でも、その実行者は含まれません。',
   guildEmojisUpdate: '絵文字が追加・更新・削除されたときに記録します。対象の絵文字と、実行したユーザーを含みます。',
   guildMemberBoostUpdate: 'メンバーがサーバーブーストを開始または終了したときに記録します。',
-  guildStickersUpdate: 'スタンプが追加・更新・削除されたときに記録します。対象のスタンプと、実行したユーザーを含みます。'
+  guildStickersUpdate: 'スタンプが追加・更新・削除されたときに記録します。対象のスタンプと、実行したユーザーを含みます。',
+  presenceUpdate: 'メンバーがカスタムステータスを変更した際に記録します。禁止ワードや不適切なリンクの監視に有用です。'
 }
 
 exports.EVENTS_USING_AUDITLOGS = [
@@ -84,7 +86,7 @@ exports.EMBED_COLORS = {
 exports.PRESET_EVENT_MAP = {
   voice: ['voiceChannelLeave', 'voiceChannelJoin', 'voiceChannelSwitch', 'voiceStateUpdate'],
   message: ['messageUpdate', 'messageDelete', 'messageDeleteBulk'],
-  member: ['guildMemberUpdate', 'guildMemberNickUpdate', 'guildMemberVerify', 'guildMemberBoostUpdate'],
+  member: ['guildMemberUpdate', 'guildMemberNickUpdate', 'guildMemberVerify', 'guildMemberBoostUpdate', 'presenceUpdate'],
   moderation: ['guildBanAdd', 'guildBanRemove', 'guildMemberKick'],
   joinlog: ['guildMemberAdd', 'guildMemberRemove'],
   server: ['guildUpdate'],

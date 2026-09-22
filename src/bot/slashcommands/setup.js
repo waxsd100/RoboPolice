@@ -362,6 +362,12 @@ async function handleIndividualSetup (interaction, recursionUUID) {
             'メンバーがミュート・スピーカーミュートされたとき',
           value: 'voiceStateUpdate',
           default: guildEvents.voiceStateUpdate === interaction.channel.id
+        },
+        {
+          label: 'カスタムステータス変更',
+          description: 'メンバーがカスタムステータスを変更したとき',
+          value: 'presenceUpdate',
+          default: guildEvents.presenceUpdate === interaction.channel.id
         }
         ]
       }]
