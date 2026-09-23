@@ -1,6 +1,5 @@
 const webhookCache = require('./webhookcache')
 const clearEventByID = require('../../db/interfaces/postgres/update').clearEventByID
-const statAggregator = require('./statAggregator')
 const cacheGuild = require('../utils/cacheGuild')
 
 const logChannelLocks = {}
@@ -37,7 +36,6 @@ module.exports = async (guildID, channelID) => {
   let webhooks
   try {
     webhooks = await logChannel?.getWebhooks()
-    statAggregator.incrementMisc('fetchWebhooks')
   } catch (_) {
     global.logger.warn(`Logchannel ${channelID} in ${guildID} does not exist even though it is in cache`)
     await global.redis.del(`webhook-${channelID}`)
@@ -53,7 +51,6 @@ module.exports = async (guildID, channelID) => {
       return
     }
   }
-  statAggregator.incrementMisc('createWebhook')
   global.logger.info(`Create hook > C: ${channelID} G: ${guildID} `)
   if (!logChannel) {
     global.logger.warn(`Logchannel ${channelID} in ${global.bot.guilds.get(guildID).name} ${guildID} does not exist low`)

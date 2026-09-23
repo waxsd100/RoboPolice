@@ -8,6 +8,9 @@ const addBotListeners = require('./utils/addbotlisteners')
 
 require('dotenv').config()
 
+// How long a worker holds the Redis lock while its shards identify, so workers connect one at a time.
+const CONNECT_LOCK_TTL_MS = 2000
+
 if (process.env.SENTRY_URI) {
   Sentry.init({
     dsn: process.env.SENTRY_URI,
@@ -18,8 +21,8 @@ if (process.env.SENTRY_URI) {
 }
 
 function connect () {
-  redisLock.lock('loggerinit', parseInt(process.env.REDIS_LOCK_TTL)).then(function (lock) {
-    global.logger.startup(`Shards ${cluster.worker.rangeForShard} have obtained a lock and are connecting now. Configured Redis TTL is ${process.env.REDIS_LOCK_TTL}ms.`)
+  redisLock.lock('loggerinit', CONNECT_LOCK_TTL_MS).then(function (lock) {
+    global.logger.startup(`Shards ${cluster.worker.rangeForShard} have obtained a lock and are connecting now.`)
     global.bot.connect()
     global.bot.once('ready', () => {
       lock.unlock().catch(function () {
@@ -45,15 +48,6 @@ async function init () {
       roles: false,
       users: false
     },
-    rest: {
-      use_twilight: !!process.env.TWILIGHT_PORT || !!process.env.TWILIGHT_HOST,
-      ...(!!process.env.TWILIGHT_PORT || !!process.env.TWILIGHT_HOST ? {
-        domain: process.env.TWILIGHT_HOST || 'localhost',
-        baseURL: '/api/v9',
-        port: process.env.TWILIGHT_PORT || 8080,
-        requestTimeout: 1000 * 60 * 30 // 1h time
-      } : {})
-    },
     restMode: true,
     messageLimit: 0,
     autoreconnect: 'auto',
@@ -67,29 +61,17 @@ async function init () {
       'guildBans',
       'guildPresences'
     ],
-    defaultImageFormat: 'png',
-    ...(process.env.USE_MAX_CONCURRENCY === 'true' ? { useMaxConcurrency: true } : {})
+    defaultImageFormat: 'png'
   })
-
-
 
   global.bot.commands = {}
   global.bot.ignoredChannels = []
   global.bot.guildSettingsCache = {}
 
-  if (!!process.env.TWILIGHT_PORT || !!process.env.TWILIGHT_HOST) {
-    global.logger.info('Using HTTP proxy...')
-  }
-
   indexCommands() // yes, block the thread while we read commands.
   await cacheGuildInfo()
 
   addBotListeners()
-
-  if (process.env.BEZERK_URI && process.env.BEZERK_SECRET) {
-    global.logger.info('Using bridge for website')
-    require('../miscellaneous/bezerk')
-  }
 
   connect()
 }
@@ -100,9 +82,6 @@ process.on('exit', (code) => {
   poolClient.end(() => {
     global.logger.info('PostgreSQL clients returned')
   })
-  if (process.env.TWILIGHT_PROXY_PORT) {
-    global.bot.requestHandler.closeConn()
-  }
 })
 
 process.on('SIGINT', async () => {

@@ -56,25 +56,6 @@ exports.EVENT_HELP = {
   presenceUpdate: 'メンバーがカスタムステータスを変更した際に記録します。禁止ワードや不適切なリンクの監視に有用です。'
 }
 
-exports.EVENTS_USING_AUDITLOGS = [
-  'channelCreate',
-  'channelUpdate',
-  'channelDelete',
-  'guildBanAdd',
-  'guildBanRemove',
-  'guildRoleCreate',
-  'guildRoleDelete',
-  'guildRoleUpdate',
-  'guildUpdate',
-  'messageDeleteBulk',
-  'guildMemberKick',
-  'guildMemberRemove',
-  'guildMemberUpdate',
-  'voiceStateUpdate',
-  'guildEmojisUpdate',
-  'guildStickersUpdate'
-]
-
 exports.EMBED_COLORS = {
   RED: 0xbb2124,
   YELLOW_ORANGE: 0xffaf24,
@@ -96,8 +77,10 @@ exports.PRESET_EVENT_MAP = {
 }
 
 // Public legal documents. These URLs are what is registered with Discord (Developer Portal and the
-// privileged intent review), so they must stay resolvable. Override per-deployment if self-hosting.
+// privileged intent review), so they must stay resolvable.
 exports.LEGAL_LINKS = {
-  PRIVACY_POLICY: process.env.PRIVACY_POLICY_URL || 'https://github.com/waxsd100/RoboPolice/wiki/Privacy-Policy',
-  TERMS_OF_SERVICE: process.env.TERMS_OF_SERVICE_URL || 'https://github.com/waxsd100/RoboPolice/wiki/Terms-of-Service'
+  PRIVACY_POLICY: 'https://github.com/waxsd100/RoboPolice/wiki/Privacy-Policy',
+  TERMS_OF_SERVICE: 'https://github.com/waxsd100/RoboPolice/wiki/Terms-of-Service'
 }
+
+exports.SUPPORT_SERVER_URL = 'https://discord.com/invite/nobaman'

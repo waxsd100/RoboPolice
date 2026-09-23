@@ -1,4 +1,4 @@
-const { LEGAL_LINKS } = require('../utils/constants')
+const { LEGAL_LINKS, SUPPORT_SERVER_URL } = require('../utils/constants')
 module.exports = {
   func: async (message, suffix) => {
     let DMC
@@ -68,15 +68,15 @@ module.exports = {
             }, {
               inline: false,
               name: 'プライバシーポリシー',
-              value: `[プライバシーポリシー](${LEGAL_LINKS.PRIVACY_POLICY}) | [利用規約](${LEGAL_LINKS.TERMS_OF_SERVICE})\nデータの取り扱いについてのご質問は[サポートサーバー](${process.env.DISCORD_SUPPORT_SERVER})へどうぞ。`
+              value: `[プライバシーポリシー](${LEGAL_LINKS.PRIVACY_POLICY}) | [利用規約](${LEGAL_LINKS.TERMS_OF_SERVICE})\nデータの取り扱いについてのご質問は[サポートサーバー](${SUPPORT_SERVER_URL})へどうぞ。`
             }, {
               inline: true,
               name: 'サポート',
-              value: `個々のイベントの詳細は \`/help event: eventname\` で確認できます。うまく動かない場合は[サポートサーバー](${process.env.DISCORD_SUPPORT_SERVER})へお越しください。`
+              value: `個々のイベントの詳細は \`/help event: eventname\` で確認できます。うまく動かない場合は[サポートサーバー](${SUPPORT_SERVER_URL})へお越しください。`
             }, {
               inline: false,
               name: '支援について',
-              value: `このBOTを気に入っていただけた場合は \`@${process.env.BOT_CREATOR_NAME}\` までご連絡ください。`
+              value: `このBOTを気に入っていただけた場合は[サポートサーバー](${SUPPORT_SERVER_URL})までご連絡ください。`
             }],
           }]
         })

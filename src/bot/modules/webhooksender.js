@@ -1,23 +1,8 @@
-const { EVENTS_USING_AUDITLOGS } = require('../utils/constants')
 const webhookCache = require('./webhookcache')
 const guildWebhookCacher = require('./guildWebhookCacher')
 const cacheGuild = require('../utils/cacheGuild')
-const statAggregator = require('./statAggregator')
 const enqueue = require('./bulkqueue')
 const setEventsByChannelID = require('../../db/interfaces/postgres/update').setEventsLogId
-
-// const doNotAggregate = ['voiceStateUpdate', 'voiceChannelLeave', 'voiceChannelSwitch', 'guildMemberVerify']
-// these three events could possibly be an audit log fetch in the future, so they must be recorded together
-// update: debug, see what is doing what
-
-const doNotAggregate = [
-  'disconnect',
-  'error',
-  'interactionCreate',
-  'inviteCreate',
-  'inviteDelete',
-  'warn'
-]
 
 module.exports = async pkg => {
   if (!pkg.guildID) return global.logger.error('No guildID was provided in an embed!')
@@ -58,14 +43,6 @@ module.exports = async pkg => {
     }
     if (!pkg.embeds[0].timestamp) {
       pkg.embeds[0].timestamp = new Date()
-    }
-
-    statAggregator.incrementGuild(pkg.guildID)
-    if (!doNotAggregate.includes(pkg.eventName)) {
-      statAggregator.incrementEvent(pkg.eventName)
-    }
-    if (EVENTS_USING_AUDITLOGS.includes(pkg.eventName)) {
-      statAggregator.incrementMisc('fetchAuditLogs')
     }
 
     // Thanks for the help, De Morgan's laws.

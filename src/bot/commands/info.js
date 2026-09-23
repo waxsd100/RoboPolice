@@ -1,4 +1,4 @@
-const { LEGAL_LINKS } = require('../utils/constants')
+const { LEGAL_LINKS, SUPPORT_SERVER_URL } = require('../utils/constants')
 module.exports = {
   func: async message => {
     await message.channel.createMessage({
@@ -25,7 +25,7 @@ module.exports = {
           },
           {
             name: '開発元',
-            value: `${global.bot.user.username} is a fork of [Logger](https://github.com/curtisf/logger), developed and maintained by \`@${process.env.BOT_CREATOR_NAME}\`.`
+            value: `${global.bot.user.username} is a fork of [Logger](https://github.com/curtisf/logger), maintained for one community server. Support: ${SUPPORT_SERVER_URL}`
           },
           {
             name: 'シャード情報',

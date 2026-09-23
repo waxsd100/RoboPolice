@@ -1,5 +1,4 @@
 const send = require('../modules/webhooksender')
-const statAggregator = require('../modules/statAggregator')
 
 module.exports = {
   name: 'presenceUpdate',
@@ -23,8 +22,6 @@ module.exports = {
     // If custom status text hasn't changed (or it never had one), ignore
     if (newState === oldState) return
     
-    statAggregator.incrementEvent('presenceUpdate')
-
     const presenceUpdatePayload = {
       guildID: member.guild.id,
       eventName: 'presenceUpdate',

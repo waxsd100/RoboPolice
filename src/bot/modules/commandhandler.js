@@ -1,5 +1,4 @@
 const Eris = require('eris')
-const statAggregator = require('./statAggregator')
 const { isCreator } = require('../utils/creatorIds')
 const { hasStaffAccess } = require('../utils/staffAccess')
 
@@ -42,6 +41,5 @@ function processCommand (message, commandName, suffix) {
     return
   }
   global.logger.info(`${message.author.username}#${message.author.discriminator} (${message.author.id}) in ${message.channel.id} sent ${commandName} with the args "${suffix}". The guild is called "${message.channel.guild.name}", owned by ${message.channel.guild.ownerID} and has ${message.channel.guild.memberCount} members.`)
-  statAggregator.incrementCommand(command.name)
   command.func(message, suffix)
 }

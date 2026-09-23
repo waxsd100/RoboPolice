@@ -7,17 +7,13 @@ let webhookErrorCount = 0
 let lastRetryAfter
 
 module.exports = () => {
-  const statAggregator = require('../modules/statAggregator')
-
   global.bot.on('global-ratelimit-hit', timeLeft => { // using global. instead of just passing the bot instance is lazy
     global.webhook.error(`${new Date().toISOString()} [${cluster.worker.rangeForShard}] global ratelimit hit, time remaining: ${timeLeft}`)
     console.warn(`${new Date().toISOString()} [${cluster.worker.rangeForShard}] global ratelimit hit, time remaining: ${timeLeft}`)
-    statAggregator.incrementEvent('global-ratelimit-hit')
     global.redis.set('logger-global', timeLeft, 'EX', timeLeft)
   })
 
   global.bot.on('ratelimit-hit', info => {
-    statAggregator.incrementEvent('ratelimit-hit')
     console.warn(`${new Date().toISOString()} [${cluster.worker.rangeForShard}] ratelimit hit, is ${!info.global && 'not '}global`, info.info)
   })
 
@@ -33,7 +29,6 @@ module.exports = () => {
         console.warn('Failed to match 429ing webhook key')
       }
     }
-    statAggregator.incrementEvent('webhook-ratelimit-hit')
   })
 
   const [on, once] = listenerIndexer()
