@@ -1,6 +1,6 @@
 const Eris = require('eris')
 const { getAuthorField } = require('../utils/embeds.js')
-const { LEGAL_LINKS } = require('../utils/constants.js')
+const { LEGAL_LINKS, SUPPORT_SERVER_URL } = require('../utils/constants.js')
 const { retentionDeletionClause } = require('../utils/retention.js')
 
 module.exports = {
@@ -9,7 +9,7 @@ module.exports = {
     interaction.createMessage({
       embeds: [{
         title: '対応が必要です',
-        description: `保存データ（メッセージ）の削除をご希望の場合は、[サポートサーバー](${process.env.DISCORD_SUPPORT_SERVER}) に参加し、ご自身のユーザーIDを添えてスタッフへご連絡ください。保存されたメッセージは暗号化されており、この請求の有無にかかわらず ${retentionDeletionClause()}。\n\n何が保存されているかは[プライバシーポリシー](${LEGAL_LINKS.PRIVACY_POLICY})をご覧ください。`,
+        description: `保存データ（メッセージ）の削除をご希望の場合は、[サポートサーバー](${SUPPORT_SERVER_URL}) に参加し、ご自身のユーザーIDを添えてスタッフへご連絡ください。保存されたメッセージは暗号化されており、この請求の有無にかかわらず ${retentionDeletionClause()}。\n\n何が保存されているかは[プライバシーポリシー](${LEGAL_LINKS.PRIVACY_POLICY})をご覧ください。`,
         color: 16711680,
         timestamp: new Date(),
         footer: {

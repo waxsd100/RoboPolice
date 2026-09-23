@@ -26,14 +26,13 @@ accurate, and the reviewer can read this repository.
 
 ## Privileged intents
 
-The app requires two privileged intents, both enabled in the Developer Portal:
+The app requires three privileged intents, all enabled in the Developer Portal:
 
 | Intent | Why |
 |---|---|
 | **Server Members** | `GUILD_MEMBER_ADD` / `REMOVE` / `UPDATE` are not delivered without it, so join, leave, kick, nickname and role logging cannot work. Also resolves nicknames and roles shown in every other log embed. |
 | **Message Content** | A deleted message cannot be fetched back from the API, so its content must be received before deletion to be shown in a deletion or edit log. |
-
-**Presence is not used** and must stay disabled.
+| **Presence** | `PRESENCE_UPDATE` is used only to log changes to a member's custom status text (`presenceUpdate` event). Online status, games and other activities are ignored and never stored. |
 
 See [`docs/discord/privileged-intent-review.md`](docs/discord/privileged-intent-review.md) for the
 intent review submission, where every claim is mapped to the code that backs it.
@@ -64,9 +63,8 @@ configured** — a server with none never has message content stored, since noth
 3. `cp .env.example .env` and fill it in. Every value is required except the ones marked optional
 4. `npm install`
 5. `node src/miscellaneous/generateDB.js` to create the database and tables
-6. Set `ENABLE_TEXT_COMMANDS="true"` in `.env`
-7. `node index.js`
-8. Register slash commands with the text prefix: `%setcmd global` for global commands, or
+6. `node index.js`
+7. Register slash commands with the text prefix: `%setcmd global` for global commands, or
    `%setcmd guild` for faster server-scoped registration (substitute your `GLOBAL_BOT_PREFIX`)
 
 ## Configuration worth knowing
@@ -78,7 +76,10 @@ configured** — a server with none never has message content stored, since noth
 | `PRUNE_EXTERNAL` | Set `true` only when running `prune.js` as a separate cron service, so the bot stops scheduling its own sweep |
 | `SENTRY_URI` | Optional. When set, errors and stack traces are sent to Sentry — a third party, disclosed in the Privacy Policy. Leave unset to keep error reporting local |
 | `PASTE_SITE_ROOT_URL` | Optional. Where `/archive` and bulk-deletion logs upload message text. Anyone with the resulting link can read it, so self-host it. Unset disables both features |
-| `MESSAGE_BATCH_SIZE` | Messages buffered in memory before a batched insert. Larger means fewer writes but more messages lost on an unclean restart |
+
+Values that never differ between deployments are constants in code rather than environment
+variables: the support server and legal URLs (`src/bot/utils/constants.js`) and the message batch
+size (`src/db/messageBatcher.js`).
 
 ## Data retention
 

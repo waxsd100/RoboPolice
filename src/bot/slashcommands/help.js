@@ -1,5 +1,5 @@
 const Eris = require('eris')
-const { EMBED_COLORS, ALL_EVENTS, EVENT_HELP, LEGAL_LINKS } = require('../utils/constants')
+const { EMBED_COLORS, ALL_EVENTS, EVENT_HELP, LEGAL_LINKS, SUPPORT_SERVER_URL } = require('../utils/constants')
 const { getEmbedFooter, getAuthorField } = require('../utils/embeds')
 const { retentionWindowClause } = require('../utils/retention')
 
@@ -27,15 +27,15 @@ module.exports = {
           }, {
             inline: false,
             name: 'プライバシーポリシー',
-            value: `[Privacy Policy](${LEGAL_LINKS.PRIVACY_POLICY}) | [Terms of Service](${LEGAL_LINKS.TERMS_OF_SERVICE})\nQuestions about your data? Join the [support server](${process.env.DISCORD_SUPPORT_SERVER}).`
+            value: `[Privacy Policy](${LEGAL_LINKS.PRIVACY_POLICY}) | [Terms of Service](${LEGAL_LINKS.TERMS_OF_SERVICE})\nQuestions about your data? Join the [support server](${SUPPORT_SERVER_URL}).`
           }, {
             inline: true,
             name: 'サポート',
-            value: `個々のイベントの詳細は \`/help event: eventname\` で確認できます。うまく動かない場合は[サポートサーバー](${process.env.DISCORD_SUPPORT_SERVER})へお越しください。`
+            value: `個々のイベントの詳細は \`/help event: eventname\` で確認できます。うまく動かない場合は[サポートサーバー](${SUPPORT_SERVER_URL})へお越しください。`
           }, {
             inline: false,
             name: '支援について',
-            value: `このBOTを気に入っていただけた場合は \`@${process.env.BOT_CREATOR_NAME}\` までご連絡ください。`
+            value: `このBOTを気に入っていただけた場合は[サポートサーバー](${SUPPORT_SERVER_URL})までご連絡ください。`
           }],
           footer: getEmbedFooter(global.bot.user)
         }],
@@ -46,7 +46,7 @@ module.exports = {
         embeds: [{
           title: '使い方ガイド',
           color: EMBED_COLORS.PURPLED_BLUE,
-          description: `**__${global.bot.user.username} の仕組み__**\nDiscord 上のほとんどの操作（BAN、メッセージ編集、メンバー参加など）は、\`ウェブフックの管理\` 権限があるチャンネルへ、個別またはプリセット単位で出力先を設定できます。\n\n**__ログの設定方法__**\n出力先にしたいテキストチャンネルで \`/setup\` を実行します。\`via_presets\`（joinlog、messages などをまとめて設定）または \`via_individual_event\`（イベントごとに個別設定）を選んでください。必要なプリセットやイベントを選び終えたら選択ボックスを閉じると、ログの記録が始まります。各イベントの詳細は \`/help event\` で確認できます。\n\n*うまく動かない場合は* 下記の要件をご確認ください。それでも解決しない場合は \`@${process.env.BOT_CREATOR_NAME}\` までご連絡ください。`,
+          description: `**__${global.bot.user.username} の仕組み__**\nDiscord 上のほとんどの操作（BAN、メッセージ編集、メンバー参加など）は、\`ウェブフックの管理\` 権限があるチャンネルへ、個別またはプリセット単位で出力先を設定できます。\n\n**__ログの設定方法__**\n出力先にしたいテキストチャンネルで \`/setup\` を実行します。\`via_presets\`（joinlog、messages などをまとめて設定）または \`via_individual_event\`（イベントごとに個別設定）を選んでください。必要なプリセットやイベントを選び終えたら選択ボックスを閉じると、ログの記録が始まります。各イベントの詳細は \`/help event\` で確認できます。\n\n*うまく動かない場合は* 下記の要件をご確認ください。それでも解決しない場合は[サポートサーバー](${SUPPORT_SERVER_URL})までご連絡ください。`,
           fields: [{
             inline: true,
             name: '__必要な権限: 参加ログ__',
@@ -75,7 +75,7 @@ module.exports = {
           color: EMBED_COLORS.PURPLED_BLUE,
           footer: getEmbedFooter(global.bot.user),
           author: getAuthorField(interaction.member.user),
-          description: `__**説明**__\n${EVENT_HELP[eventName]}\n\n*お探しの内容と違う場合は[サポートサーバー](${process.env.DISCORD_SUPPORT_SERVER})へお越しください。*`
+          description: `__**説明**__\n${EVENT_HELP[eventName]}\n\n*お探しの内容と違う場合は[サポートサーバー](${SUPPORT_SERVER_URL})へお越しください。*`
         }],
         flags: Eris.Constants.MessageFlags.EPHEMERAL
       })

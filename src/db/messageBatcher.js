@@ -6,15 +6,14 @@ const batch = []
 global.timesSubmitted = 0
 global.totalMessagesSubmitted = 0
 
-function getBatchSize() {
-  return +process.env.MESSAGE_BATCH_SIZE || 1000
-}
+// Messages held in memory before one batched INSERT. Anything still here is lost on an unclean
+// restart, so keep it small: this bot logs one server, not thousands.
+const BATCH_SIZE = 10
 
 async function addItem (messageAsArray) {
   batch.push(messageAsArray)
-  const batchSize = getBatchSize()
-  if (batch.length >= batchSize) {
-    await submitBatch(batchSize)
+  if (batch.length >= BATCH_SIZE) {
+    await submitBatch(BATCH_SIZE)
   }
 }
 
