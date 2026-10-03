@@ -40,13 +40,16 @@ async function createGuild (guild) {
   } catch (e) { }
 }
 
+// The form message content is stored in (before encryption). messageUpdate compares against and
+// writes back this exact form, so a stored row never mixes escaped and raw text.
+function toStoredContent (content) {
+  if (!content) return 'None'
+  return escape(content.replace(/~/g, '\\~'), ['angle brackets'])
+}
+
 async function cacheMessage (message) {
   // Encrypt Content
-  if (!message.content) {
-    message.content = aes.encrypt('None')
-  } else {
-    message.content = aes.encrypt(escape(message.content.replace(/~/g, '\\~'), ['angle brackets']))
-  }
+  message.content = aes.encrypt(toStoredContent(message.content))
   // Encrypt Images (max 10)
   let images = message.attachments.filter(attachment => attachment.content_type.startsWith("image"))
   if (images.length === 0)
@@ -64,4 +67,5 @@ async function cacheMessage (message) {
 }
 
 exports.cacheMessage = cacheMessage
+exports.toStoredContent = toStoredContent
 exports.createGuild = createGuild
