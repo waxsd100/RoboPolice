@@ -2,6 +2,7 @@ const send = require('../modules/webhooksender')
 const updateMessageByID = require('../../db/interfaces/postgres/update').updateMessageByID
 const getMessageFromDB = require('../../db/interfaces/postgres/read').getMessageById
 const getMessageFromBatch = require('../../db/messageBatcher').getMessage
+const toStoredContent = require('../../db/interfaces/postgres/create').toStoredContent
 const escape = require('markdown-escape')
 const { isBeyondRetention } = require('../utils/retention')
 
@@ -101,11 +102,13 @@ module.exports = {
       }
 
       let newUrls = [];
+      let imagesRemoved = false
       if (oldMessage.attachment_b64) {
         const oldImageUrls = oldMessage.attachment_b64.split("|").map(base64url => Buffer.from(base64url, "base64url").toString("utf-8")).filter(Boolean)
         newAttachmentImages = newMessage.attachments.filter(attachment => attachment.content_type.startsWith("image"))
         if (oldImageUrls.length > newAttachmentImages.length) {
           // Removed at least one image from the message
+          imagesRemoved = true
           newUrls = newAttachmentImages.map(img => img.url)
           const removedImageUrls = oldImageUrls.filter(url => !newUrls.includes(url))
           removedImageUrls.forEach( (url, indx) => messageUpdateEvent.embeds[indx] = {
@@ -120,11 +123,17 @@ module.exports = {
         }
       }
 
+      // Compare in the stored (escaped) form: comparing raw text against it flagged any message
+      // containing ~ or < > as changed even when the text was identical.
+      const storedNewContent = toStoredContent(newMessage.content)
       let changedAttrs = {}
-      if (newMessage.content !== oldMessage.content)
-        changedAttrs.content = newMessage.content
-      if (newUrls.length)
+      if (storedNewContent !== oldMessage.content)
+        changedAttrs.content = storedNewContent
+      if (imagesRemoved)
         changedAttrs.imageUrls = newUrls
+      // Same text and no image removed: a pin, a new thread or a late embed unfurl that landed
+      // within isFreshEdit's window after a real edit. Nothing was edited, so log nothing.
+      if (Object.keys(changedAttrs).length === 0) return
       await updateMessageByID(newMessage.id, changedAttrs)
       await send(messageUpdateEvent)
       if (secondMessageUpdatePayload) {
