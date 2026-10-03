@@ -13,6 +13,7 @@ module.exports = {
   handle: async (newMessage, oldMessage) => {
     if (!newMessage.channel.guild || !newMessage.author) return
     if (newMessage.author.id === global.bot.user.id) return
+    if (!isFreshEdit(newMessage)) return
     const member = newMessage.channel.guild.members.get(newMessage.author.id) // this member "should" be in cache at all times
     oldMessage = await getMessageFromBatch(newMessage.id)
     if (!oldMessage) {
@@ -131,6 +132,18 @@ module.exports = {
       }
     }
   }
+}
+
+// Discord also sends MESSAGE_UPDATE for changes that are not edits: a thread started from the
+// message, pin/unpin, link previews unfurling late, suppressed embeds, a poll closing. Those can hit
+// messages of any age, and with no previous copy to compare against (messageLimit: 0, retention
+// pruning) they used to be logged as edits. Only a real content edit moves edited_timestamp to now.
+const EDIT_FRESHNESS_MS = 5 * 60 * 1000
+
+function isFreshEdit (message) {
+  const editedAt = message.editedTimestamp ?? Date.parse(message.edited_timestamp)
+  if (!editedAt) return false
+  return Date.now() - editedAt <= EDIT_FRESHNESS_MS
 }
 
 function expiredUpdateEvent (newMessage, member) {
