@@ -112,7 +112,7 @@ module.exports = {
             try {
               command.func(interaction)
             } catch (commandError) {
-              global.logger.error(commandError) // we do want this to reach sentry if failed
+              global.logger.error(commandError)
               resolve() // it hurts to use a promise like this
             }
           } else {

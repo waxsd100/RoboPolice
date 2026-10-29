@@ -1,5 +1,3 @@
-const cacheGuild = require('../utils/cacheGuild')
-
 class GuildSettings {
   constructor (data) {
     if (data.disabled) return
@@ -11,18 +9,8 @@ class GuildSettings {
     this.ignoredChannels = data.ignoredChannels || data.ignored_channels
     this.logBots = data.logBots || data.log_bots
     this.event_logs = data.event_logs
-    this.allLog = data.logchannel
     this.ownerID = data.ownerID || data.owner_id
     this.disabledEvents = data.disabledEvents || data.disabled_events
-    this.feeds = data.feeds ? data.feeds : ''
-    this.joinlog = this.feeds ? this.feeds.joinlog.channelID : ''
-    this.mod = data.feeds ? data.feeds.mod.channelID : ''
-    this.messageLog = data.feeds ? data.feeds.messages.channelID : ''
-    this.serverLog = data.feeds ? data.feeds.server.channelID : ''
-    this.voice = data.feeds ? data.feeds.voice.channelID : ''
-    this.premium = data.premium ? data.premium : false
-    this.ignoredUsers = data.ignoredUsers
-    this.customSettings = data.custom_settings
 
     global.bot.guildSettingsCache[data.id] = this // someday, this will be replaced because it's dumb
   }
@@ -35,24 +23,8 @@ class GuildSettings {
     return this.ignoredChannels.includes(channelID)
   }
 
-  isPremium () {
-    return this.premium
-  }
-
   isLogBots () {
     return this.logBots
-  }
-
-  isUserIgnored (userID) {
-    return this.ignoredUsers.includes(userID)
-  }
-
-  getID () {
-    return this.id
-  }
-
-  getOwnerID () {
-    return this.ownerID
   }
 
   getEventLogRaw () {
@@ -74,10 +46,6 @@ class GuildSettings {
     })
   }
 
-  clearEventByName (name) {
-    this.event_logs[name] = ''
-  }
-
   clearEventLog () {
     Object.keys(this.event_logs).forEach(event => {
       this.event_logs[event] = ''
@@ -96,10 +64,6 @@ class GuildSettings {
 
   eventIsDisabled (event) {
     return !!this.disabledEvents && this.disabledEvents.includes(event)
-  }
-
-  recache () {
-    cacheGuild(this.id)
   }
 }
 

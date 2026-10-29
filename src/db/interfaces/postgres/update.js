@@ -99,28 +99,6 @@ async function setEventsLogId (guildID, channelID, events) {
   await cacheGuild(guildID)
 }
 
-async function setEventsRawLogs (guildID, channelID, events) {
-  const doc = await getDoc(guildID)
-  doc.event_logs = { ...doc.event_logs, ...events }
-  await pool.query('UPDATE guilds SET event_logs=$1 WHERE id=$2', [doc.event_logs, guildID])
-  await cacheGuild(guildID)
-}
-
-async function disableEvent (guildID, event) {
-  const doc = await getDoc(guildID)
-  let disabled = true
-  if (doc.disabled_events.includes(event)) {
-    doc.disabled_events.splice(doc.disabled_events.indexOf(event), 1)
-    disabled = false
-  } else {
-    doc.disabled_events.push(event)
-  }
-  global.bot.guildSettingsCache[guildID].disabledEvents = doc.disabled_events
-  await pool.query('UPDATE guilds SET disabled_events=$1 WHERE id=$2', [doc.disabled_events, guildID])
-  await cacheGuild(guildID)
-  return disabled
-}
-
 async function ignoreChannel (guildID, channelID) {
   const doc = await getDoc(guildID)
   let disabled = true
@@ -173,12 +151,10 @@ async function updateMessageByID (id, changedAttrs) {
 }
 
 exports.toggleLogBots = toggleLogBots
-exports.disableEvent = disableEvent
 exports.ignoreChannel = ignoreChannel
 exports.clearEventLog = clearEventLog
 exports.clearEventByID = clearEventByID
 exports.setAllEventsOneId = setAllEventsOneId
 exports.setEventsLogId = setEventsLogId
 exports.clearIgnoredChannels = clearIgnoredChannels
-exports.setEventsRawLogs = setEventsRawLogs
 exports.updateMessageByID = updateMessageByID

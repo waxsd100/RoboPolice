@@ -45,10 +45,6 @@ function getMessage (messageID) {
   }
 }
 
-function getMessageCount() {
-  return batch.length;
-}
-
 function updateMessage (messageID, changedAttrs) {
   for (let i = 0; i < batch.length; i++) {
     if (batch[i][0] === messageID) {
@@ -75,7 +71,6 @@ function updateMessage (messageID, changedAttrs) {
 }
 
 exports.getMessage = getMessage
-exports.getMessageCount = getMessageCount
 exports.addItem = addItem
 exports.updateMessage = updateMessage
 exports.submitBatch = submitBatch

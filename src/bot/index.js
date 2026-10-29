@@ -1,6 +1,5 @@
 const Eris = require('eris')
 const cluster = require('cluster')
-const Sentry = require('@sentry/node')
 const redisLock = require('../db/interfaces/redis/redislock')
 const indexCommands = require('../miscellaneous/commandIndexer')
 const cacheGuildInfo = require('./utils/cacheGuildSettings')
@@ -10,15 +9,6 @@ require('dotenv').config()
 
 // How long a worker holds the Redis lock while its shards identify, so workers connect one at a time.
 const CONNECT_LOCK_TTL_MS = 2000
-
-if (process.env.SENTRY_URI) {
-  Sentry.init({
-    dsn: process.env.SENTRY_URI,
-    maxBreadcrumbs: 1
-  })
-} else {
-  global.logger.warn('No Sentry URI provided. Error logging will be restricted to messages only.')
-}
 
 function connect () {
   redisLock.lock('loggerinit', CONNECT_LOCK_TTL_MS).then(function (lock) {
@@ -92,16 +82,13 @@ process.on('SIGINT', async () => {
 
 process.on('unhandledRejection', (e) => {
   if (!e.message.includes('[50013]') && !e.message.includes('Request timed out') && !e.message.startsWith('500 INTERNAL SERVER ERROR') && !e.message.includes('503 Service Temporarily Unavailable') && !e.message.includes('global ratelimit') && !e.message.includes('hang up')) {
-    global.logger.error_nosentry(e)
-    // sentry catches these already, stop double reporting
-    // Sentry.captureException(e.stack, { level: 'error' }) // handle when Discord freaks out
+    global.logger.error(e)
   }
 })
 
 process.on('uncaughtException', (e) => {
   if (!e.message.includes('[50013]') && !e.message.includes('Request timed out') && !e.message.startsWith('500 INTERNAL SERVER ERROR') && !e.message.includes('503 Service Temporarily Unavailable') && !e.message.includes('global ratelimit') && !e.message.includes('hang up')) {
-    global.logger.error_nosentry(e)
-    Sentry.captureException(e.stack, { level: 'fatal' })
+    global.logger.error(e)
   }
 })
 

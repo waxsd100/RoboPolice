@@ -33,21 +33,6 @@ module.exports = {
         ]
       },
       {
-        name: 'archive',
-        description: 'Creates a paste entry with this number of channel messages (auto-deletes in 2 weeks)',
-        options: [
-          {
-            type: ERIS_CONSTANTS.ApplicationCommandOptionTypes.INTEGER,
-            name: 'amount',
-            description: 'The number of messages to create a paste entry with (must be >= 5 or <= 100, 10,000 for patreon bot)',
-            required: true,
-            autocomplete: true,
-            max_value: 100,
-            min_value: 5
-          }
-        ]
-      },
-      {
         name: 'userinfo',
         description: 'See information about you (joined at, creation date, roles)',
         options: [
