@@ -30,9 +30,6 @@ module.exports = {
       await global.redis.set(`linvites-${guildID}`, JSON.stringify(invites.map(i => module.exports.formatInvite(i, true))), 'EX', CACHE_TTL_SECONDS)
     }
   },
-  deleteInvites: async (guildID) => {
-    await global.redis.del(`linvites-${guildID}`)
-  },
   deleteInvite: async (guildID, code) => {
     const guildInvites = await module.exports.getCachedInvites(guildID)
     const inviteToDelete = guildInvites.find(i => i.code === code)

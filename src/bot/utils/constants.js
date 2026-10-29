@@ -60,8 +60,7 @@ exports.EMBED_COLORS = {
   RED: 0xbb2124,
   YELLOW_ORANGE: 0xffaf24,
   GREEN: 0x22bb33,
-  PURPLED_BLUE: 0x3838fc,
-  CLEAR: 0x36393f // clear for dark mode users
+  PURPLED_BLUE: 0x3838fc
 }
 
 exports.PRESET_EVENT_MAP = {
