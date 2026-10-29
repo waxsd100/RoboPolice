@@ -5,6 +5,8 @@
   "main": "index.js",
   "scripts": {
     "test": "standard",
+    "test:unit": "node --test 'test/unit/**/*.test.js'",
+    "test:it": "node --test 'test/integration/**/*.test.js'",
     "lint": "node_modules/.bin/eslint . --ext .js"
   },
   "keywords": [

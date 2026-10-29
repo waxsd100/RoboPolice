@@ -1,4 +1,5 @@
 const commandHandler = require('../modules/commandhandler')
+const mentionEvent = require('../modules/mentionEvent')
 const cacheMessage = require('../../db/interfaces/postgres/create').cacheMessage
 const cacheGuild = require('../utils/cacheGuild')
 
@@ -8,6 +9,7 @@ module.exports = {
   handle: async message => {
     if (message.type === 23 || message.type === 24 || message.author.bot || !message.member) return // do not log automod actions
     await commandHandler(message)
+    mentionEvent.handle(message).catch(e => global.logger.error(e))
     if (message.author.id === global.bot.user.id) return // dump logs made by the bot
     let guildSettings = global.bot.guildSettingsCache[message.channel.guild.id]
     if (!guildSettings) {

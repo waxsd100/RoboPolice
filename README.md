@@ -50,11 +50,37 @@ Short version; the Privacy Policy is authoritative.
 Message rows are written **only for servers that have a message deletion or edit log channel
 configured** — a server with none never has message content stored, since nothing could read it back.
 
+## Events and forum posts from a mention
+
+Mention the app with a description, an event page URL, or a Discord message link
+(`@RoboPolice 11/3 19時から交流会 https://...`, `@RoboPolice これを募集フォーラムに立てて`), or reply to a
+message and mention it. It drafts either a server scheduled event or a forum post, shows it with
+Register / Post and Cancel buttons, and creates it only after the requester confirms. Only members
+who can manage events (or the owner, or `STAFF_ROLE_ID` staff) can use it. Events need the app to
+have **Manage Events**; a forum post needs both the requester and the app to be able to post in that
+forum, and is sent with mentions disabled so drafted text can't ping anyone.
+
+Drafting is a Gemini function-calling loop (`src/bot/modules/eventDrafter.js`) over read-only tools
+(`src/bot/modules/eventTools.js`): fetch a web page, read a Discord message by link, read a channel's
+recent messages, list channels, list forums with their tags and guidelines, and list existing
+scheduled events. The model ends by submitting an event or a forum post draft, which is checked
+against Discord's limits (`toScheduledEvent`, `src/bot/modules/forumPost.js`). When something can't be decided
+from those (several candidate events, an ambiguous date, event or forum post), the model asks the requester with up to 4
+buttons plus a way to stop, at most 3 times per draft. Discord reads are limited to this
+server and to channels both the requester and the app can read, so a mention can't reveal a channel
+the requester couldn't open. Web pages are fetched by the app itself; private and loopback addresses
+are refused.
+
+What the tools read (the mention, the replied-to message, linked pages and Discord messages, channel
+names) is sent to Google Gemini through Cloudflare AI Gateway. Nothing from this flow is stored by
+the app. Use a paid Gemini API tier: on the free tier Google may use the input to improve its models,
+which the intent review answers rule out.
+
 ## Requirements
 
 - PostgreSQL 11+
 - Redis
-- Node.js 14.5+
+- Node.js 18+
 
 ## Setup
 
@@ -74,6 +100,10 @@ configured** — a server with none never has message content stored, since noth
 | `MESSAGE_HISTORY_DAYS` | Retention window. Unset (or 0/non-numeric) means retention is unlimited by design — nothing is ever pruned, and `/help`/`/clearmydata` say so instead of naming a day count. The bot logs which mode it's in at startup. If you go unlimited on a real deployment, update the Privacy Policy's retention section to match, since it currently states a fixed number of days. |
 | `STAFF_ROLE_ID` | Optional. A member holding this role, or any role at or above it in Settings > Roles, bypasses the same permission checks a server owner already bypasses — not creator-only commands, and not what the bot itself needs. Unset disables it entirely. |
 | `PRUNE_EXTERNAL` | Set `true` only when running `prune.js` as a separate cron service, so the bot stops scheduling its own sweep |
+| `CLOUDFLARE_ACCOUNT_ID`, `CLOUDFLARE_AI_GATEWAY_ID` | Enable drafting events and forum posts from mentions. Unset means mentions are ignored |
+| `CLOUDFLARE_AI_GATEWAY_TOKEN` | Optional. Sent as `cf-aig-authorization` for an authenticated gateway |
+| `GEMINI_API_KEY` | Optional when the key is stored in the gateway (BYOK); otherwise required for drafting from mentions |
+| `GEMINI_MODEL` | Optional. Defaults to `gemini-flash-latest` |
 
 Values that never differ between deployments are constants in code rather than environment
 variables: the support server and legal URLs (`src/bot/utils/constants.js`) and the message batch
@@ -99,7 +129,12 @@ content. Messages that were never stored at all stay silent, as before.
 node index.js          # the bot
 npm run lint           # eslint
 npm test               # standard
+npm run test:unit      # unit tests (node:test)
+npm run test:it        # integration tests: mention → tools → buttons → event, with Discord and Gemini faked
 ```
+
+Tests need no database, Redis, Discord or Gemini: `test/helpers/fakes.js` stands in for them, and web
+pages come from a local HTTP server. CI runs both suites on every pull request.
 
 ## Contributing
 

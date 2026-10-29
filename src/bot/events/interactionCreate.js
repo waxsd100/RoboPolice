@@ -122,13 +122,19 @@ module.exports = {
       }
     })
   },
-  awaitCustomID (id, userIDToLock) {
+  // Stops waiting for `id` without settling its promise, e.g. for the buttons that were not pressed.
+  cancelCustomID (id) {
+    clearTimeout(waitingTimeouts.get(id))
+    waitingTimeouts.delete(id)
+    waitingCustomIDs.delete(id)
+  },
+  awaitCustomID (id, userIDToLock, timeoutMs = 60000) {
     return new Promise((resolve, reject) => {
       waitingTimeouts.set(id, setTimeout(() => {
         waitingCustomIDs.delete(id)
         waitingTimeouts.delete(id)
         reject(new Error(`Custom ID ${id} did not receive a response.`))
-      }, 60000))
+      }, timeoutMs))
       waitingCustomIDs.set(id, {
         userID: userIDToLock,
         run: (...toReturn) => {
