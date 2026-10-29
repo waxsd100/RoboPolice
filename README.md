@@ -84,10 +84,19 @@ one posted to.
 
 The model can also pick an image for the event cover or the forum post: an `og:image` /
 `twitter:image` of a page it read, an image attached to the mention or the replied-to message, or an
-embed image. The app downloads it (same address checks as pages, images only, 10MB at most) and
-crops it with sharp's attention strategy, which keeps the most salient region: 800×320 for an event
-cover, 1280×720 for a forum post. If the image can't be used the draft is still created, and the
-reply says why.
+embed image. The app downloads it (same address checks as pages, images only, 10MB at most) and the
+preview shows the actual result, 800×320 for an event cover or 1280×720 for a forum post. A second
+row of buttons switches how it is made (`src/bot/modules/coverImage.js`):
+
+| Mode | What it does | Default for |
+|---|---|---|
+| 切り抜き | Crops with sharp's attention strategy, keeping the most salient region | Images close to the target shape (photos) |
+| 全体表示 | Shows the whole image over a blurred, darkened copy of itself | Posters and anything far from the target shape |
+| AIで作成 | Gemini's image model (`GEMINI_IMAGE_MODEL`) makes a new cover from the title and description, based on the source image if there is one, without text | — |
+| なし | No image | Drafts without an image |
+
+"AIで作成" sends the title, description and the source image to Gemini, the same way drafting does.
+If an image can't be used the draft still works, and the preview says why.
 
 If drafting fails, the reply shows the cause and the top of the error log so staff can tell what
 went wrong without server access. Secrets are masked first (`src/bot/utils/redact.js`): values of
@@ -124,6 +133,7 @@ credentials in URLs. The same masked text goes to the error webhook.
 | `CLOUDFLARE_AI_GATEWAY_BYOK_ALIAS` | Optional. Name of the Gemini key stored in the gateway (BYOK), sent as `cf-aig-byok-alias`. Unset uses the key named `default` |
 | `GEMINI_API_KEY` | Optional when the key is stored in the gateway (BYOK); otherwise required for drafting from mentions |
 | `GEMINI_MODEL` | Optional. Defaults to `gemini-flash-latest` |
+| `GEMINI_IMAGE_MODEL` | Optional. Image model for AI-made covers. Defaults to `gemini-3.1-flash-image` |
 
 Values that never differ between deployments are constants in code rather than environment
 variables: the support server and legal URLs (`src/bot/utils/constants.js`) and the message batch

@@ -86,8 +86,8 @@ class GeminiError extends Error {
   }
 }
 
-async function generate (contents, declarations) {
-  const model = process.env.GEMINI_MODEL || DEFAULT_GEMINI_MODEL
+// One generateContent call through the gateway. Returns the first candidate's content.
+async function callGemini (model, body) {
   const url = `https://gateway.ai.cloudflare.com/v1/${process.env.CLOUDFLARE_ACCOUNT_ID}/${process.env.CLOUDFLARE_AI_GATEWAY_ID}/google-ai-studio/v1beta/models/${encodeURIComponent(model)}:generateContent`
   const headers = { 'Content-Type': 'application/json' }
   // Both optional: the Gemini key can be stored in the gateway (BYOK), and only an authenticated
@@ -101,14 +101,7 @@ async function generate (contents, declarations) {
     method: 'POST',
     headers,
     signal: AbortSignal.timeout(GEMINI_TIMEOUT_MS),
-    body: JSON.stringify({
-      systemInstruction: { parts: [{ text: SYSTEM_INSTRUCTION }] },
-      contents,
-      tools: [{ functionDeclarations: declarations }],
-      // ANY: every turn must be a tool call, so the loop always ends in a submit_* call.
-      toolConfig: { functionCallingConfig: { mode: 'ANY' } },
-      generationConfig: { temperature: 0.2 }
-    })
+    body: JSON.stringify(body)
   })
   if (!res.ok) {
     throw new GeminiError(`Gemini request failed: HTTP ${res.status} ${(await res.text()).slice(0, 1000)}`, `AI の呼び出しに失敗しました（HTTP ${res.status}）`)
@@ -117,6 +110,17 @@ async function generate (contents, declarations) {
   const content = data.candidates?.[0]?.content
   if (!content?.parts?.length) throw new GeminiError(`Gemini returned no content: ${JSON.stringify(data).slice(0, 1000)}`, 'AI から応答がありませんでした')
   return content
+}
+
+function generate (contents, declarations) {
+  return callGemini(process.env.GEMINI_MODEL || DEFAULT_GEMINI_MODEL, {
+    systemInstruction: { parts: [{ text: SYSTEM_INSTRUCTION }] },
+    contents,
+    tools: [{ functionDeclarations: declarations }],
+    // ANY: every turn must be a tool call, so the loop always ends in a submit_* call.
+    toolConfig: { functionCallingConfig: { mode: 'ANY' } },
+    generationConfig: { temperature: 0.2 }
+  })
 }
 
 // Runs the model with the read-only tools until it submits a draft, appending every turn to
@@ -221,4 +225,4 @@ async function revise (conversation, correction) {
   return check(conversation, await runAgent(conversation.contents, conversation.tools))
 }
 
-module.exports = { draft, revise, isConfigured, toScheduledEvent, ENTITY_TYPES, GeminiError }
+module.exports = { draft, revise, isConfigured, toScheduledEvent, callGemini, ENTITY_TYPES, GeminiError }

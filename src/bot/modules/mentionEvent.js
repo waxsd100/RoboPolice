@@ -5,8 +5,8 @@ const { createTools, StopDrafting } = require('./eventTools')
 const { EMBED_COLORS } = require('../utils/constants')
 const { hasStaffAccess } = require('../utils/staffAccess')
 const { redact } = require('../utils/redact')
-const urlFetcher = require('../utils/urlFetcher')
-const { cropTo, SIZES } = require('../utils/imageCrop')
+const { SIZES } = require('../utils/imageCrop')
+const { CoverImage, MODES } = require('./coverImage')
 const { FORUM_TYPES } = require('./forumPost')
 
 const ANSWER_TIMEOUT_MS = 5 * 60 * 1000
@@ -115,36 +115,23 @@ function sourcesField (sources) {
   return sources.length === 0 ? [] : [{ name: '参照元', value: sources.join('\n').slice(0, 1024) }]
 }
 
-// The chosen image, shown as-is in the preview; it is cropped when the draft is created.
-function imageParts (imageUrl, size) {
-  if (!imageUrl) return { fields: [], image: undefined }
+// The preview shows the rendered cover as an attachment, so the requester sees the real result.
+const PREVIEW_IMAGE = 'cover.jpg'
+
+function coverParts (cover) {
   return {
-    fields: [{ name: '画像', value: `あり（${size.width}×${size.height} に切り抜いて設定）` }],
-    image: { url: imageUrl }
+    fields: [{ name: '画像', value: cover.describe() }],
+    image: cover.buffer ? { url: `attachment://${PREVIEW_IMAGE}` } : undefined
   }
 }
 
-// Downloads and crops the chosen image. Failure is not fatal: the draft is created without it.
-async function loadImage (imageUrl, size) {
-  try {
-    const { buffer } = await urlFetcher.fetchImage(imageUrl)
-    return { buffer: await cropTo(buffer, size) }
-  } catch (e) {
-    return { error: e.message }
-  }
-}
-
-function imageNote (image) {
-  return image.error ? `\n（画像は設定できませんでした: ${redact(image.error)}）` : ''
-}
-
-function eventPreview ({ event, endGuessed, imageUrl }, sources, requester) {
+function eventPreview ({ event, endGuessed }, sources, requester, cover) {
   const start = Math.floor(Date.parse(event.scheduled_start_time) / 1000)
   const end = Math.floor(Date.parse(event.scheduled_end_time) / 1000)
   const where = event.entity_type === ENTITY_TYPES.external
     ? event.entity_metadata.location
     : `<#${event.channel_id}>`
-  const image = imageParts(imageUrl, SIZES.eventCover)
+  const image = coverParts(cover)
   return {
     title: event.name,
     description: event.description || '（説明なし）',
@@ -161,8 +148,8 @@ function eventPreview ({ event, endGuessed, imageUrl }, sources, requester) {
   }
 }
 
-function forumPreview ({ post, tagNames, truncated, imageUrl }, sources, requester) {
-  const image = imageParts(imageUrl, SIZES.forumImage)
+function forumPreview ({ post, tagNames, truncated }, sources, requester, cover) {
+  const image = coverParts(cover)
   return {
     title: post.name,
     description: post.message.content,
@@ -184,51 +171,73 @@ const KINDS = {
   event: {
     preview: eventPreview,
     confirmLabel: '登録する',
-    async create (result, guild, author) {
+    size: SIZES.eventCover,
+    text: ({ event }) => ({ title: event.name, summary: event.description }),
+    async create (result, guild, author, cover) {
       if (!guild.members.get(global.bot.user.id)?.permissions.has('manageEvents')) {
         return 'BOTに「イベントの管理」権限がないため、イベントを登録できませんでした。'
       }
-      const image = result.imageUrl ? await loadImage(result.imageUrl, SIZES.eventCover) : {}
       const created = await global.bot.requestHandler.request('POST', `/guilds/${guild.id}/scheduled-events`, true, {
         ...result.event,
-        ...(image.buffer ? { image: `data:image/jpeg;base64,${image.buffer.toString('base64')}` } : {}),
+        ...(cover.buffer ? { image: `data:image/jpeg;base64,${cover.buffer.toString('base64')}` } : {}),
         reason: `Requested by ${author.username} (${author.id})`
       })
-      return `イベントを登録しました: https://discord.com/events/${guild.id}/${created.id}${imageNote(image)}`
+      return `イベントを登録しました: https://discord.com/events/${guild.id}/${created.id}`
     }
   },
   forum: {
     preview: forumPreview,
     confirmLabel: '投稿する',
-    async create (result, guild, author) {
+    size: SIZES.forumImage,
+    text: ({ post }) => ({ title: post.name, summary: post.message.content }),
+    async create (result, guild, author, cover) {
       const { channelID, ...body } = result.post
-      const image = result.imageUrl ? await loadImage(result.imageUrl, SIZES.forumImage) : {}
       // The image is uploaded as files[0] and named through message.attachments, as Discord's
       // multipart convention asks; Eris sends the body as payload_json alongside it.
-      const files = image.buffer ? [{ name: 'files[0]', file: image.buffer }] : undefined
+      const files = cover.buffer ? [{ name: 'files[0]', file: cover.buffer }] : undefined
       if (files) body.message = { ...body.message, attachments: [{ id: 0, filename: 'image.jpg' }] }
       const thread = await global.bot.requestHandler.request('POST', `/channels/${channelID}/threads`, true, {
         ...body,
         reason: `Requested by ${author.username} (${author.id})`
       }, files)
-      return `フォーラムに投稿しました: https://discord.com/channels/${guild.id}/${thread.id}${imageNote(image)}`
+      return `フォーラムに投稿しました: https://discord.com/channels/${guild.id}/${thread.id}`
     }
   }
 }
 
+// Edits the reply. With `image` (a Buffer, or null to remove it) the edit goes through the REST
+// API directly: the pinned Eris cannot attach files when editing a message.
+async function editReply (reply, payload, image) {
+  if (image === undefined) return reply.edit(payload)
+  return global.bot.requestHandler.request('PATCH', `/channels/${reply.channel.id}/messages/${reply.id}`, true, {
+    ...payload,
+    attachments: image ? [{ id: 0, filename: PREVIEW_IMAGE }] : []
+  }, image ? [{ name: 'files[0]', file: image }] : undefined)
+}
+
+// Lays buttons out in rows: buttons with the same `row` (default 0) share rows of up to five.
+function buttonRows (buttons, ids) {
+  const groups = new Map()
+  buttons.forEach((b, i) => {
+    const row = b.row ?? 0
+    if (!groups.has(row)) groups.set(row, [])
+    groups.get(row).push({ type: BUTTON, style: b.style, label: b.label.slice(0, 80), custom_id: ids[i] })
+  })
+  const rows = []
+  for (const components of groups.values()) {
+    for (let i = 0; i < components.length; i += BUTTONS_PER_ROW) {
+      rows.push({ type: Eris.Constants.ComponentTypes.ACTION_ROW, components: components.slice(i, i + BUTTONS_PER_ROW) })
+    }
+  }
+  return rows
+}
+
 // Shows `buttons` on the reply and waits for the requester to press one. Resolves to the pressed
 // button's index and its interaction, or null if nobody pressed within the timeout.
-async function choose (reply, requesterID, message, buttons) {
+async function choose (reply, requesterID, message, buttons, image) {
   const { awaitCustomID, cancelCustomID } = require('../events/interactionCreate')
   const ids = buttons.map(() => uuidv4())
-  const components = []
-  for (let i = 0; i < buttons.length; i += BUTTONS_PER_ROW) {
-    components.push({
-      type: Eris.Constants.ComponentTypes.ACTION_ROW,
-      components: buttons.slice(i, i + BUTTONS_PER_ROW).map((b, j) => ({ type: BUTTON, style: b.style, label: b.label.slice(0, 80), custom_id: ids[i + j] }))
-    })
-  }
-  await reply.edit({ ...message, components })
+  await editReply(reply, { ...message, components: buttonRows(buttons, ids) }, image)
   try {
     const interaction = await Promise.race(ids.map(id => awaitCustomID(id, requesterID, ANSWER_TIMEOUT_MS)))
     return { index: ids.indexOf(interaction.data.custom_id), interaction }
@@ -317,21 +326,36 @@ async function handle (message) {
       member,
       tools
     })
-    for (let revisions = 0; ; revisions++) {
+    let revisions = 0
+    let cover = null
+    let needsCover = true
+    for (;;) {
       if (result.error) {
-        await reply.edit({ content: `作成できませんでした: ${result.error}`, embeds: [], components: [] })
+        await editReply(reply, { content: `作成できませんでした: ${result.error}`, embeds: [], components: [] }, null)
         return
       }
 
       const kind = KINDS[result.kind]
-      const embed = kind.preview(result, [...new Set(tools.sources)], message.author)
+      if (needsCover) {
+        // A correction can switch between event and forum post, which use different sizes.
+        if (!cover || cover.size !== kind.size) cover = new CoverImage(kind.size)
+        await cover.useDraft({ imageUrl: result.imageUrl, ...kind.text(result) })
+        needsCover = false
+      }
+      const embed = kind.preview(result, [...new Set(tools.sources)], message.author, cover)
       const canRevise = revisions < MAX_REVISIONS
       const buttons = [
         { label: kind.confirmLabel, style: SUCCESS, action: 'create' },
         ...(canRevise ? [{ label: '修正する', style: PRIMARY, action: 'revise' }] : []),
-        { label: 'キャンセル', style: DANGER, action: 'cancel' }
+        { label: 'キャンセル', style: DANGER, action: 'cancel' },
+        ...cover.modes().map(mode => ({
+          label: `画像: ${MODES[mode]}`,
+          style: mode === cover.mode ? SUCCESS : SECONDARY,
+          action: `image:${mode}`,
+          row: 1
+        }))
       ]
-      const picked = await choose(reply, message.author.id, { content: canRevise ? '' : `修正は${MAX_REVISIONS}回までです。`, embeds: [embed] }, buttons)
+      const picked = await choose(reply, message.author.id, { content: canRevise ? '' : `修正は${MAX_REVISIONS}回までです。`, embeds: [embed] }, buttons, cover.buffer)
       if (!picked) {
         await reply.edit({ content: '時間内に確認されなかったため、取りやめました。', components: [] })
         return
@@ -343,16 +367,24 @@ async function handle (message) {
         return
       }
       if (action === 'create') {
-        await interaction.editOriginalMessage({ content: await kind.create(result, guild, message.author), components: [] })
+        await interaction.editOriginalMessage({ content: await kind.create(result, guild, message.author, cover), components: [] })
         return
+      }
+      if (action.startsWith('image:')) {
+        const mode = action.slice('image:'.length)
+        if (mode === 'ai' && !cover.rendered.has('ai')) await reply.edit({ content: 'AI で画像を作成しています…', components: [] })
+        await cover.select(mode)
+        continue
       }
       const correction = await typedAnswer(reply, message.channel.id, message.author.id, '直したい内容を入力してください（例: 開始は20時、場所はボイスチャンネル）')
       await reply.edit({ content: '修正を反映しています…' })
       result = await revise(result.conversation, correction)
+      revisions++
+      needsCover = true
     }
   } catch (e) {
     if (e instanceof StopDrafting) {
-      await reply.edit({ content: e.message, embeds: [], components: [] }).catch(() => {})
+      await editReply(reply, { content: e.message, embeds: [], components: [] }, null).catch(() => {})
       return
     }
     global.logger.error(e)
@@ -361,7 +393,7 @@ async function handle (message) {
     const cause = e.hint || (e.name === 'TimeoutError' ? 'AI の応答が時間内に返りませんでした' : null)
     const content = `作成中にエラーが発生しました${cause ? `（${cause}）` : ''}。時間をおいてもう一度お試しください。\n${errorLog(e)}`
     if (reply) {
-      await reply.edit({ content, embeds: [], components: [] }).catch(() => {})
+      await editReply(reply, { content, embeds: [], components: [] }, null).catch(() => {})
     } else {
       await message.channel.createMessage({ content, ...reference }).catch(() => {})
     }
