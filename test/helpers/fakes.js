@@ -4,6 +4,7 @@ const http = require('http')
 
 process.env.AES_KEY = process.env.AES_KEY || 'test-aes-key'
 global.logger = global.logger || { info () {}, warn () {}, error () {}, debug () {}, startup () {}, fatal () {} }
+global.webhook = global.webhook || { generic () {}, warn () {}, error () {}, fatal () {} }
 
 const READ = ['viewChannel', 'readMessageHistory']
 
@@ -76,6 +77,7 @@ function configureGateway () {
   process.env.CLOUDFLARE_AI_GATEWAY_ID = 'gw'
   process.env.GEMINI_API_KEY = 'gemini-key'
   delete process.env.CLOUDFLARE_AI_GATEWAY_TOKEN
+  delete process.env.CLOUDFLARE_AI_GATEWAY_BYOK_ALIAS
   delete process.env.GEMINI_MODEL
 }
 

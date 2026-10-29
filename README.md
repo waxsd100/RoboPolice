@@ -76,6 +76,12 @@ names) is sent to Google Gemini through Cloudflare AI Gateway. Nothing from this
 the app. Use a paid Gemini API tier: on the free tier Google may use the input to improve its models,
 which the intent review answers rule out.
 
+If drafting fails, the reply shows the cause and the top of the error log so staff can tell what
+went wrong without server access. Secrets are masked first (`src/bot/utils/redact.js`): values of
+environment variables whose names look secret (`*TOKEN*`, `*KEY*`, `*PASSWORD*`, webhook URLs, the
+Cloudflare account ID) and patterns such as Discord tokens, Google API keys, bearer tokens and
+credentials in URLs. The same masked text goes to the error webhook.
+
 ## Requirements
 
 - PostgreSQL 11+
@@ -102,6 +108,7 @@ which the intent review answers rule out.
 | `PRUNE_EXTERNAL` | Set `true` only when running `prune.js` as a separate cron service, so the bot stops scheduling its own sweep |
 | `CLOUDFLARE_ACCOUNT_ID`, `CLOUDFLARE_AI_GATEWAY_ID` | Enable drafting events and forum posts from mentions. Unset means mentions are ignored |
 | `CLOUDFLARE_AI_GATEWAY_TOKEN` | Optional. Sent as `cf-aig-authorization` for an authenticated gateway |
+| `CLOUDFLARE_AI_GATEWAY_BYOK_ALIAS` | Optional. Name of the Gemini key stored in the gateway (BYOK), sent as `cf-aig-byok-alias`. Unset uses the key named `default` |
 | `GEMINI_API_KEY` | Optional when the key is stored in the gateway (BYOK); otherwise required for drafting from mentions |
 | `GEMINI_MODEL` | Optional. Defaults to `gemini-flash-latest` |
 

@@ -285,13 +285,36 @@ describe('mention → event / forum post (integration)', () => {
     assert.equal(discord.some(c => c.method === 'POST'), false)
   })
 
-  test('a Gemini failure is reported to the requester and logged', async (t) => {
+  test('a Gemini failure is reported to the requester with its cause and a masked log, and sent to the error webhook', async (t) => {
     const logged = t.mock.method(global.logger, 'error', () => {})
+    const hooked = t.mock.method(global.webhook, 'error', () => {})
+    process.env.CLOUDFLARE_AI_GATEWAY_TOKEN = 'cf-gateway-secret-token'
     const { channel, replies } = createChannel()
-    installGemini([new Error('upstream down')])
+    // An error body that echoes secrets back: the gateway token, a Google key and the account ID.
+    installGemini([new Error('bad auth Bearer cf-gateway-secret-token key AIzaSyA1234567890abcdefghijklmnopqrstuv at /v1/acct/gw')])
     await mentionEvent.handle(mention(channel, '<@BOT> 交流会'))
-    assert.equal(replies[0].state.content, '作成中にエラーが発生しました。時間をおいてもう一度お試しください。')
+    const content = replies[0].state.content
+    assert.match(content, /^作成中にエラーが発生しました（AI の呼び出しに失敗しました（HTTP 500））。時間をおいてもう一度お試しください。\n```\nError: Gemini request failed: HTTP 500 bad auth/)
+    assert.match(content, /at generate \(.*eventDrafter\.js/)
+    assert.match(content, /```$/)
+    assert.ok(content.length <= 2000)
+    for (const secret of ['cf-gateway-secret-token', 'AIzaSyA1234567890abcdefghijklmnopqrstuv']) {
+      assert.ok(!content.includes(secret), `reply leaks ${secret}`)
+      assert.ok(!hooked.mock.calls[0].arguments[0].includes(secret), `webhook leaks ${secret}`)
+    }
     assert.equal(logged.mock.callCount(), 1)
+    assert.match(hooked.mock.calls[0].arguments[0], /^Drafting from a mention in 100 failed: Gemini request failed: HTTP 500 bad auth/)
+  })
+
+  test('a very long error log is cut to fit in one Discord message', async (t) => {
+    t.mock.method(global.logger, 'error', () => {})
+    t.mock.method(global.webhook, 'error', () => {})
+    const { channel, replies } = createChannel()
+    installGemini([new Error('x'.repeat(5000))])
+    await mentionEvent.handle(mention(channel, '<@BOT> 交流会'))
+    const content = replies[0].state.content
+    assert.ok(content.length <= 2000, `length ${content.length}`)
+    assert.match(content, /…（以下省略）\n```$/)
   })
 
   test('a second mention while the first is still running is turned away', async () => {

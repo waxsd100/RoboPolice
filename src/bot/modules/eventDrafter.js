@@ -73,6 +73,15 @@ function buildPrompt ({ request, referenced, channelName, now }) {
   return lines.join('\n')
 }
 
+// A failed Gemini call. `hint` is safe to show the requester (who is server staff); `message` has
+// the response body for the logs.
+class GeminiError extends Error {
+  constructor (message, hint) {
+    super(message)
+    this.hint = hint
+  }
+}
+
 async function generate (contents, declarations) {
   const model = process.env.GEMINI_MODEL || DEFAULT_GEMINI_MODEL
   const url = `https://gateway.ai.cloudflare.com/v1/${process.env.CLOUDFLARE_ACCOUNT_ID}/${process.env.CLOUDFLARE_AI_GATEWAY_ID}/google-ai-studio/v1beta/models/${encodeURIComponent(model)}:generateContent`
@@ -81,6 +90,8 @@ async function generate (contents, declarations) {
   // gateway needs its own token.
   if (process.env.GEMINI_API_KEY) headers['x-goog-api-key'] = process.env.GEMINI_API_KEY
   if (process.env.CLOUDFLARE_AI_GATEWAY_TOKEN) headers['cf-aig-authorization'] = `Bearer ${process.env.CLOUDFLARE_AI_GATEWAY_TOKEN}`
+  // Which stored (BYOK) key to use. Without it the gateway looks for one named "default".
+  if (process.env.CLOUDFLARE_AI_GATEWAY_BYOK_ALIAS) headers['cf-aig-byok-alias'] = process.env.CLOUDFLARE_AI_GATEWAY_BYOK_ALIAS
 
   const res = await fetch(url, {
     method: 'POST',
@@ -96,11 +107,11 @@ async function generate (contents, declarations) {
     })
   })
   if (!res.ok) {
-    throw new Error(`Gemini request failed: HTTP ${res.status} ${(await res.text()).slice(0, 500)}`)
+    throw new GeminiError(`Gemini request failed: HTTP ${res.status} ${(await res.text()).slice(0, 1000)}`, `AI の呼び出しに失敗しました（HTTP ${res.status}）`)
   }
   const data = await res.json()
   const content = data.candidates?.[0]?.content
-  if (!content?.parts?.length) throw new Error(`Gemini returned no content: ${JSON.stringify(data).slice(0, 500)}`)
+  if (!content?.parts?.length) throw new GeminiError(`Gemini returned no content: ${JSON.stringify(data).slice(0, 1000)}`, 'AI から応答がありませんでした')
   return content
 }
 
@@ -115,7 +126,7 @@ async function runAgent (prompt, tools) {
     const calls = content.parts.filter(p => p.functionCall).map(p => p.functionCall)
     const submitted = calls.find(c => SUBMIT_DECLARATIONS.some(d => d.name === c.name))
     if (submitted) return { name: submitted.name, args: submitted.args || {} }
-    if (calls.length === 0) throw new Error(`Gemini answered without a tool call: ${JSON.stringify(content).slice(0, 500)}`)
+    if (calls.length === 0) throw new GeminiError(`Gemini answered without a tool call: ${JSON.stringify(content).slice(0, 1000)}`, 'AI の応答の形式が想定と違いました')
     // Sequential, not parallel: two ask_user calls would otherwise fight over the same message.
     const responses = []
     for (const c of calls) {
@@ -175,4 +186,4 @@ async function draft ({ request, referenced, channelName, guild, member, tools, 
   return result.error ? result : { kind: 'event', ...result }
 }
 
-module.exports = { draft, isConfigured, toScheduledEvent, ENTITY_TYPES }
+module.exports = { draft, isConfigured, toScheduledEvent, ENTITY_TYPES, GeminiError }

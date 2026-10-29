@@ -100,7 +100,7 @@ describe('isConfigured', () => {
 describe('draft', () => {
   let toolCalls
   const tools = {
-    declarations: [{ name: 'lookup', description: 'x', parameters: { type: 'OBJECT', properties: {} } }],
+    declarations: [{ name: 'lookup', description: 'x' }],
     sources: [],
     async call (name, args) {
       toolCalls.push({ name, args })
@@ -132,6 +132,16 @@ describe('draft', () => {
     assert.deepEqual(body.tools[0].functionDeclarations.map(d => d.name), ['lookup', 'submit_event_draft', 'submit_forum_post_draft'])
   })
 
+  test('selects the stored key by alias when one is configured', async () => {
+    delete process.env.GEMINI_API_KEY
+    process.env.CLOUDFLARE_AI_GATEWAY_TOKEN = 'gw-token'
+    process.env.CLOUDFLARE_AI_GATEWAY_BYOK_ALIAS = 'Gemini_API_Key'
+    const requests = installGemini([[submit({ found: false })]])
+    await draft({ request: 'x', channelName: 'general', guild, tools, now: NOW })
+    assert.equal(requests[0].headers['cf-aig-byok-alias'], 'Gemini_API_Key')
+    assert.equal(requests[0].headers['x-goog-api-key'], undefined)
+  })
+
   test('omits optional headers and uses the default model', async () => {
     delete process.env.GEMINI_API_KEY
     const requests = installGemini([[submit({ name: 'A', start: '2026-11-03T19:00:00+09:00' })]])
@@ -139,6 +149,7 @@ describe('draft', () => {
     assert.match(requests[0].url, /models\/gemini-flash-latest:generateContent$/)
     assert.equal(requests[0].headers['x-goog-api-key'], undefined)
     assert.equal(requests[0].headers['cf-aig-authorization'], undefined)
+    assert.equal(requests[0].headers['cf-aig-byok-alias'], undefined)
   })
 
   test('puts the time, channel, request and replied-to message in the prompt', async () => {
@@ -197,8 +208,18 @@ describe('draft', () => {
     await assert.rejects(draft({ request: 'x', channelName: 'general', guild, tools, now: NOW }), /without a tool call/)
   })
 
-  test('fails on an HTTP error from the gateway', async () => {
+  test('fails on an HTTP error from the gateway, with a hint for the requester', async () => {
     installGemini([new Error('quota exceeded')])
-    await assert.rejects(draft({ request: 'x', channelName: 'general', guild, tools, now: NOW }), /HTTP 500 quota exceeded/)
+    await assert.rejects(draft({ request: 'x', channelName: 'general', guild, tools, now: NOW }), {
+      name: 'Error', message: /HTTP 500 quota exceeded/, hint: 'AI の呼び出しに失敗しました（HTTP 500）'
+    })
+  })
+
+  test('sends every submit tool with a non-empty schema', async () => {
+    const requests = installGemini([[submit({ found: false })]])
+    await draft({ request: 'x', channelName: 'general', guild, tools, now: NOW })
+    for (const d of requests[0].body.tools[0].functionDeclarations) {
+      if (d.parameters) assert.ok(Object.keys(d.parameters.properties).length > 0, d.name)
+    }
   })
 })
