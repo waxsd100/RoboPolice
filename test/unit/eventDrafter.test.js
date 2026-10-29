@@ -1,6 +1,6 @@
 const { test, describe, beforeEach } = require('node:test')
 const assert = require('node:assert/strict')
-const { draft, toScheduledEvent, isConfigured, ENTITY_TYPES } = require('../../src/bot/modules/eventDrafter')
+const { draft, revise, toScheduledEvent, isConfigured, ENTITY_TYPES } = require('../../src/bot/modules/eventDrafter')
 const { createGuild, configureGateway, installGemini, call, submit, lastToolResponses } = require('../helpers/fakes')
 
 const NOW = new Date('2026-10-29T15:00:00+09:00')
@@ -73,6 +73,11 @@ describe('toScheduledEvent', () => {
 
   test('passes through the model reason when nothing was found', () => {
     assert.deepEqual(toScheduledEvent({ found: false, reason: '日時がありません' }, guild, NOW), { error: '日時がありません' })
+  })
+
+  test('carries a valid image URL and drops anything else', () => {
+    assert.equal(toScheduledEvent({ ...base, image_url: 'https://e.com/cover.jpg' }, guild, NOW).imageUrl, 'https://e.com/cover.jpg')
+    assert.equal(toScheduledEvent({ ...base, image_url: 'javascript:x' }, guild, NOW).imageUrl, null)
   })
 
   test('rejects a missing name', () => {
@@ -162,6 +167,32 @@ describe('draft', () => {
     assert.match(prompt, /## 依頼メッセージの返信先\n告知文/)
   })
 
+  test('lists attached images and the named forum in the prompt', async () => {
+    const requests = installGemini([[submit({ found: false })]])
+    await draft({ request: 'x', channelName: 'general', forum: { id: '301', name: '募集' }, images: ['https://cdn/a.png'], guild, tools, now: NOW })
+    const prompt = requests[0].body.contents[0].parts[0].text
+    assert.match(prompt, /## 依頼メッセージの添付画像\n- https:\/\/cdn\/a\.png/)
+    assert.match(prompt, /## 投稿先に指定されたフォーラム\n301: 募集/)
+  })
+
+  test('revise sends the correction as the answer to the submit call and checks the new draft', async () => {
+    const requests = installGemini([
+      [submit({ name: 'A', start: '2026-11-03T19:00:00+09:00' })],
+      body => {
+        const last = body.contents[body.contents.length - 1]
+        assert.equal(last.parts[0].functionResponse.name, 'submit_event_draft')
+        assert.match(last.parts[0].functionResponse.response.result, /修正を求めています[\s\S]*開始は20時/)
+        return [submit({ name: 'A', start: '2026-11-03T20:00:00+09:00' })]
+      }
+    ])
+    const first = await draft({ request: 'A', channelName: 'general', guild, tools, now: NOW })
+    const second = await revise(first.conversation, '開始は20時')
+    assert.equal(second.event.scheduled_start_time, '2026-11-03T11:00:00.000Z')
+    assert.equal(second.conversation, first.conversation)
+    // The whole history goes back: prompt, first submit, correction.
+    assert.equal(requests[1].body.contents.length, 3)
+  })
+
   test('runs tool calls in order and returns their results to the model', async () => {
     const requests = installGemini([
       [call('lookup', { n: 1 }), call('lookup', { n: 2 })],
@@ -195,12 +226,12 @@ describe('draft', () => {
 
   test('passes the reason through when the model gives up', async () => {
     installGemini([[submit({ found: false, reason: '日時がありません' })]])
-    assert.deepEqual(await draft({ request: 'x', channelName: 'general', guild, tools, now: NOW }), { error: '日時がありません' })
+    assert.equal((await draft({ request: 'x', channelName: 'general', guild, tools, now: NOW })).error, '日時がありません')
   })
 
   test('routes a forum submission to the forum checks', async () => {
     installGemini([[call('submit_forum_post_draft', { found: false, reason: '投稿先が分かりません' })]])
-    assert.deepEqual(await draft({ request: 'x', channelName: 'general', guild, tools, now: NOW }), { error: '投稿先が分かりません' })
+    assert.equal((await draft({ request: 'x', channelName: 'general', guild, tools, now: NOW })).error, '投稿先が分かりません')
   })
 
   test('fails when the model answers without a tool call', async () => {

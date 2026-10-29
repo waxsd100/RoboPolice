@@ -21,10 +21,18 @@ const SUBMIT_FORUM_DECLARATION = {
       channel_id: { type: 'STRING', description: '投稿先のフォーラムの ID（list_forums で確認したもの）' },
       title: { type: 'STRING', description: `投稿の題名（${MAX_TITLE}文字以内）` },
       content: { type: 'STRING', description: `投稿の本文（${MAX_CONTENT}文字以内、Discord の Markdown 可）。参照元のリンクがあれば末尾に含める` },
-      tags: { type: 'ARRAY', items: { type: 'STRING' }, description: `付けるタグの名前（list_forums に出たものから最大${MAX_TAGS}個）` }
+      tags: { type: 'ARRAY', items: { type: 'STRING' }, description: `付けるタグの名前（list_forums に出たものから最大${MAX_TAGS}個）` },
+      image_url: { type: 'STRING', description: '投稿に添える画像の URL。参照したページの og:image / twitter:image、メッセージの添付画像・埋め込み画像から、内容に合うものを1つ選ぶ。ロゴやアイコンなど小さい画像は選ばない。なければ空文字' }
     },
     required: ['found']
   }
+}
+
+// The image the model picked, if it is a plain http(s) URL. Fetching it later goes through the same
+// address checks as any other URL.
+function imageUrlOf (draft) {
+  const url = String(draft.image_url || '').trim()
+  return /^https?:\/\/\S+$/i.test(url) ? url : null
 }
 
 function canPost (channel, userID) {
@@ -93,8 +101,9 @@ async function toForumPost (draft, guild, member) {
       applied_tags: tags.map(t => t.id)
     },
     tagNames: tags.map(t => t.name),
+    imageUrl: imageUrlOf(draft),
     truncated: content.length > MAX_CONTENT
   }
 }
 
-module.exports = { SUBMIT_FORUM_DECLARATION, toForumPost, describeForums, postableForums, FORUM_TYPES, REQUIRE_TAG }
+module.exports = { SUBMIT_FORUM_DECLARATION, toForumPost, describeForums, postableForums, imageUrlOf, FORUM_TYPES, REQUIRE_TAG }

@@ -8,6 +8,7 @@ const MAX_REDIRECTS = 3
 const MAX_BODY_BYTES = 2 * 1024 * 1024
 // Per page, after HTML is reduced to text. Keeps the Gemini prompt small and cheap.
 const MAX_TEXT_CHARS = 20000
+const MAX_IMAGE_BYTES = 10 * 1024 * 1024
 
 // The URL comes from a Discord message, so without this anyone allowed to trigger the bot could make
 // it request internal addresses (Redis, Postgres, cloud metadata). Checked inside `lookup` so the
@@ -42,13 +43,30 @@ function safeLookup (isBlocked) {
   }
 }
 
-function request (url, isBlocked) {
+// What a request is for: the Accept header, the content types it takes, and how much it reads.
+// A page that is too long is cut (its start is still useful); an image that is too big is refused.
+const KINDS = {
+  page: {
+    accept: 'text/html,text/plain;q=0.9,*/*;q=0.1',
+    types: /^text\/(html|plain)|application\/xhtml\+xml/i,
+    maxBytes: MAX_BODY_BYTES,
+    truncate: true
+  },
+  image: {
+    accept: 'image/*',
+    types: /^image\/(jpeg|png|webp|gif|avif)/i,
+    maxBytes: MAX_IMAGE_BYTES,
+    truncate: false
+  }
+}
+
+function request (url, isBlocked, kind) {
   return new Promise((resolve, reject) => {
     const client = url.protocol === 'https:' ? https : http
     const req = client.get(url, {
       lookup: safeLookup(isBlocked),
       timeout: FETCH_TIMEOUT_MS,
-      headers: { 'User-Agent': 'RoboPolice (+https://github.com/waxsd100/RoboPolice)', Accept: 'text/html,text/plain;q=0.9,*/*;q=0.1' }
+      headers: { 'User-Agent': 'RoboPolice (+https://github.com/waxsd100/RoboPolice)', Accept: kind.accept }
     }, res => {
       if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
         res.resume()
@@ -59,19 +77,23 @@ function request (url, isBlocked) {
         return reject(new Error(`HTTP ${res.statusCode}`))
       }
       const contentType = res.headers['content-type'] || ''
-      if (!/^text\/(html|plain)|application\/xhtml\+xml/i.test(contentType)) {
+      if (!kind.types.test(contentType)) {
         res.resume()
         return reject(new Error(`対応していない形式です (${contentType || '不明'})`))
       }
       const chunks = []
       let size = 0
-      const done = () => resolve({ body: Buffer.concat(chunks).toString('utf8'), contentType })
+      const done = () => resolve({ body: Buffer.concat(chunks), contentType })
       res.on('data', chunk => {
         size += chunk.length
-        if (size > MAX_BODY_BYTES) {
-          // Keep what fits and stop: resolve before destroying, since destroying emits an error.
-          chunks.push(chunk.subarray(0, chunk.length - (size - MAX_BODY_BYTES)))
-          done()
+        if (size > kind.maxBytes) {
+          // Settle before destroying, since destroying emits an error.
+          if (kind.truncate) {
+            chunks.push(chunk.subarray(0, chunk.length - (size - kind.maxBytes)))
+            done()
+          } else {
+            reject(new Error(`ファイルが大きすぎます（${Math.floor(kind.maxBytes / 1024 / 1024)}MB まで）`))
+          }
           req.destroy()
           return
         }
@@ -106,7 +128,7 @@ function htmlToText (html) {
   for (const meta of html.matchAll(/<meta\s[^>]*>/gi)) {
     const key = meta[0].match(/(?:property|name)\s*=\s*["']([^"']+)["']/i)?.[1]
     const content = meta[0].match(/content\s*=\s*["']([^"']*)["']/i)?.[1]
-    if (key && content && /^(description|og:title|og:description|event:|og:start_time|og:end_time)/i.test(key)) {
+    if (key && content && /^(description|og:title|og:description|og:image$|twitter:image$|event:|og:start_time|og:end_time)/i.test(key)) {
       parts.push(`${key}: ${decodeEntities(content).trim()}`)
     }
   }
@@ -124,8 +146,8 @@ function htmlToText (html) {
   return parts.join('\n')
 }
 
-// `isBlocked` exists so tests can reach a local server; production callers never pass it.
-async function fetchPageText (rawUrl, { isBlocked = isBlockedAddress } = {}) {
+// Follows redirects itself so every hop goes through the same address checks.
+async function fetchChecked (rawUrl, kind, isBlocked) {
   let url = new URL(rawUrl)
   for (let i = 0; i <= MAX_REDIRECTS; i++) {
     if (url.protocol !== 'http:' && url.protocol !== 'https:') throw new Error('http/https 以外の URL は取得できません')
@@ -133,15 +155,27 @@ async function fetchPageText (rawUrl, { isBlocked = isBlockedAddress } = {}) {
     const host = url.hostname.replace(/^\[|\]$/g, '')
     const family = net.isIP(host)
     if (family !== 0 && isBlocked(host, family)) throw new Error(`${host} はプライベートアドレスのため取得できません`)
-    const res = await request(url, isBlocked)
+    const res = await request(url, isBlocked, kind)
     if (res.redirect) {
       url = res.redirect
       continue
     }
-    const text = /html/i.test(res.contentType) ? htmlToText(res.body) : res.body.trim()
-    return { url: url.toString(), text: text.slice(0, MAX_TEXT_CHARS) }
+    return { url: url.toString(), ...res }
   }
   throw new Error('リダイレクトが多すぎます')
 }
 
-module.exports = { fetchPageText, htmlToText, isBlockedAddress }
+// `isBlocked` exists so tests can reach a local server; production callers never pass it.
+async function fetchPageText (rawUrl, { isBlocked = isBlockedAddress } = {}) {
+  const res = await fetchChecked(rawUrl, KINDS.page, isBlocked)
+  const body = res.body.toString('utf8')
+  const text = /html/i.test(res.contentType) ? htmlToText(body) : body.trim()
+  return { url: res.url, text: text.slice(0, MAX_TEXT_CHARS) }
+}
+
+async function fetchImage (rawUrl, { isBlocked = isBlockedAddress } = {}) {
+  const res = await fetchChecked(rawUrl, KINDS.image, isBlocked)
+  return { url: res.url, buffer: res.body, contentType: res.contentType }
+}
+
+module.exports = { fetchPageText, fetchImage, htmlToText, isBlockedAddress }

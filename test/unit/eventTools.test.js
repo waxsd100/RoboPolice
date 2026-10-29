@@ -200,12 +200,14 @@ describe('formatMessage', () => {
       timestamp: Date.parse('2026-10-29T00:00:00Z'),
       author: { id: '2', username: 'alice' },
       content: '告知',
-      embeds: [{ title: 'タイトル', fields: [{ name: '日時', value: '11/3' }], url: 'https://e.com' }],
+      embeds: [{ title: 'タイトル', fields: [{ name: '日時', value: '11/3' }], url: 'https://e.com', image: { url: 'https://cdn/banner.png' }, thumbnail: { url: 'https://cdn/thumb.png' } }],
       attachments: [{ filename: 'a.png', url: 'https://cdn/a.png' }]
     })
     assert.equal(text, [
       '[2026-10-29T00:00:00.000Z] alice (2): 告知',
       '  埋め込み: タイトル\n日時: 11/3\nhttps://e.com',
+      '  埋め込み画像: https://cdn/banner.png',
+      '  埋め込み画像: https://cdn/thumb.png',
       '  添付: a.png https://cdn/a.png'
     ].join('\n'))
   })

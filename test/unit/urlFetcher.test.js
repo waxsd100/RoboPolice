@@ -1,6 +1,6 @@
 const { test, describe, after, before } = require('node:test')
 const assert = require('node:assert/strict')
-const { fetchPageText, htmlToText, isBlockedAddress } = require('../../src/bot/utils/urlFetcher')
+const { fetchPageText, fetchImage, htmlToText, isBlockedAddress } = require('../../src/bot/utils/urlFetcher')
 const { startServer } = require('../helpers/fakes')
 
 describe('isBlockedAddress', () => {
@@ -24,6 +24,9 @@ describe('htmlToText', () => {
     <title>技術 &amp; 交流会</title>
     <meta property="og:description" content="11/3 19時〜">
     <meta name="viewport" content="width=device-width">
+    <meta property="og:image" content="https://example.com/cover.jpg">
+    <meta name="twitter:image" content="https://example.com/tw.jpg">
+    <meta property="og:image:width" content="1200">
     <script type="application/ld+json">{"@type":"Event","startDate":"2026-11-03T19:00+09:00"}</script>
     <style>body { color: red }</style>
   </head><body><h1>本文</h1><p>場所:&#x6771;&#20140;</p><script>evil()</script><noscript>no</noscript></body></html>`
@@ -33,6 +36,11 @@ describe('htmlToText', () => {
   test('keeps event-relevant meta tags only', () => {
     assert.match(text, /og:description: 11\/3 19時〜/)
     assert.doesNotMatch(text, /viewport/)
+  })
+  test('keeps og:image and twitter:image, not their size hints', () => {
+    assert.match(text, /og:image: https:\/\/example\.com\/cover\.jpg/)
+    assert.match(text, /twitter:image: https:\/\/example\.com\/tw\.jpg/)
+    assert.doesNotMatch(text, /og:image:width/)
   })
   test('keeps JSON-LD verbatim', () => assert.match(text, /JSON-LD: \{"@type":"Event","startDate":"2026-11-03T19:00\+09:00"\}/))
   test('decodes numeric entities in the body', () => assert.match(text, /場所:東京/))
@@ -56,7 +64,10 @@ describe('fetchPageText', () => {
         '/redirect': () => { res.writeHead(302, { Location: '/page' }); res.end() },
         '/loop': () => { res.writeHead(302, { Location: '/loop' }); res.end() },
         '/to-private': () => { res.writeHead(302, { Location: 'http://10.0.0.1/' }); res.end() },
-        '/huge': () => { res.writeHead(200, { 'Content-Type': 'text/plain' }); res.end('a'.repeat(3 * 1024 * 1024)) }
+        '/huge': () => { res.writeHead(200, { 'Content-Type': 'text/plain' }); res.end('a'.repeat(3 * 1024 * 1024)) },
+        '/image.png': () => { res.writeHead(200, { 'Content-Type': 'image/png' }); res.end(Buffer.from('89504e47', 'hex')) },
+        '/huge.png': () => { res.writeHead(200, { 'Content-Type': 'image/png' }); res.end(Buffer.alloc(11 * 1024 * 1024)) },
+        '/svg': () => { res.writeHead(200, { 'Content-Type': 'image/svg+xml' }); res.end('<svg/>') }
       }
       ;(routes[req.url] || routes['/missing'])()
     })
@@ -109,6 +120,22 @@ describe('fetchPageText', () => {
 
   test('reports HTTP errors', async () => {
     await assert.rejects(fetchPageText(`${server.url}/missing`, { isBlocked: allowLoopback }), /HTTP 404/)
+  })
+
+  test('fetchImage returns the bytes of an image', async () => {
+    const image = await fetchImage(`${server.url}/image.png`, { isBlocked: allowLoopback })
+    assert.equal(image.contentType, 'image/png')
+    assert.equal(image.buffer.toString('hex'), '89504e47')
+  })
+
+  test('fetchImage refuses pages, SVG and images over 10MB', async () => {
+    await assert.rejects(fetchImage(`${server.url}/page`, { isBlocked: allowLoopback }), /対応していない形式/)
+    await assert.rejects(fetchImage(`${server.url}/svg`, { isBlocked: allowLoopback }), /対応していない形式/)
+    await assert.rejects(fetchImage(`${server.url}/huge.png`, { isBlocked: allowLoopback }), /大きすぎます（10MB まで）/)
+  })
+
+  test('fetchImage applies the same address checks', async () => {
+    await assert.rejects(fetchImage('http://169.254.169.254/x.png'), /プライベートアドレス/)
   })
 
   test('caps the returned text', async () => {
