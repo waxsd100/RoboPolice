@@ -53,7 +53,7 @@ function previewEmbed (event, sources, endGuessed, requester) {
 // Shows `buttons` on the reply and waits for the requester to press one. Resolves to the pressed
 // button's index and its interaction, or null if nobody pressed within the timeout.
 async function choose (reply, requesterID, message, buttons) {
-  const { awaitCustomID } = require('../events/interactionCreate')
+  const { awaitCustomID, cancelCustomID } = require('../events/interactionCreate')
   const ids = buttons.map(() => uuidv4())
   await reply.edit({
     ...message,
@@ -67,6 +67,8 @@ async function choose (reply, requesterID, message, buttons) {
     return { index: ids.indexOf(interaction.data.custom_id), interaction }
   } catch (_) {
     return null
+  } finally {
+    ids.forEach(cancelCustomID)
   }
 }
 

@@ -1,4 +1,4 @@
-const { fetchPageText } = require('../utils/urlFetcher')
+const urlFetcher = require('../utils/urlFetcher')
 
 const MAX_RECENT_MESSAGES = 50
 const MAX_QUESTIONS = 3
@@ -96,7 +96,7 @@ function createTools ({ guild, member, ask }) {
   const executors = {
     async fetch_url ({ url }) {
       if (MESSAGE_LINK.test(url)) return executors.get_discord_message({ link: url })
-      const page = await fetchPageText(url)
+      const page = await urlFetcher.fetchPageText(url)
       sources.push(page.url)
       return page.text
     },

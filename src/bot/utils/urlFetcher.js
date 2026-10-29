@@ -30,21 +30,23 @@ function isBlockedAddress (address, family) {
   return blockedAddresses.check(address, 'ipv4')
 }
 
-function safeLookup (hostname, options, callback) {
-  dns.lookup(hostname, { ...options, all: true }, (err, addresses) => {
-    if (err) return callback(err)
-    const allowed = addresses.filter(a => !isBlockedAddress(a.address, a.family))
-    if (allowed.length === 0) return callback(new Error(`${hostname} はプライベートアドレスを指しているため取得できません`))
-    if (options.all) return callback(null, allowed)
-    callback(null, allowed[0].address, allowed[0].family)
-  })
+function safeLookup (isBlocked) {
+  return (hostname, options, callback) => {
+    dns.lookup(hostname, { ...options, all: true }, (err, addresses) => {
+      if (err) return callback(err)
+      const allowed = addresses.filter(a => !isBlocked(a.address, a.family))
+      if (allowed.length === 0) return callback(new Error(`${hostname} はプライベートアドレスを指しているため取得できません`))
+      if (options.all) return callback(null, allowed)
+      callback(null, allowed[0].address, allowed[0].family)
+    })
+  }
 }
 
-function request (url) {
+function request (url, isBlocked) {
   return new Promise((resolve, reject) => {
     const client = url.protocol === 'https:' ? https : http
     const req = client.get(url, {
-      lookup: safeLookup,
+      lookup: safeLookup(isBlocked),
       timeout: FETCH_TIMEOUT_MS,
       headers: { 'User-Agent': 'RoboPolice (+https://github.com/waxsd100/RoboPolice)', Accept: 'text/html,text/plain;q=0.9,*/*;q=0.1' }
     }, res => {
@@ -63,16 +65,19 @@ function request (url) {
       }
       const chunks = []
       let size = 0
+      const done = () => resolve({ body: Buffer.concat(chunks).toString('utf8'), contentType })
       res.on('data', chunk => {
         size += chunk.length
         if (size > MAX_BODY_BYTES) {
+          // Keep what fits and stop: resolve before destroying, since destroying emits an error.
+          chunks.push(chunk.subarray(0, chunk.length - (size - MAX_BODY_BYTES)))
+          done()
           req.destroy()
           return
         }
         chunks.push(chunk)
       })
-      res.on('end', () => resolve({ body: Buffer.concat(chunks).toString('utf8'), contentType }))
-      res.on('close', () => resolve({ body: Buffer.concat(chunks).toString('utf8'), contentType }))
+      res.on('end', done)
       res.on('error', reject)
     })
     req.on('timeout', () => req.destroy(new Error('タイムアウトしました')))
@@ -119,15 +124,16 @@ function htmlToText (html) {
   return parts.join('\n')
 }
 
-async function fetchPageText (rawUrl) {
+// `isBlocked` exists so tests can reach a local server; production callers never pass it.
+async function fetchPageText (rawUrl, { isBlocked = isBlockedAddress } = {}) {
   let url = new URL(rawUrl)
   for (let i = 0; i <= MAX_REDIRECTS; i++) {
     if (url.protocol !== 'http:' && url.protocol !== 'https:') throw new Error('http/https 以外の URL は取得できません')
     // An IP literal is connected to directly without calling `lookup`, so check it here.
     const host = url.hostname.replace(/^\[|\]$/g, '')
     const family = net.isIP(host)
-    if (family !== 0 && isBlockedAddress(host, family)) throw new Error(`${host} はプライベートアドレスのため取得できません`)
-    const res = await request(url)
+    if (family !== 0 && isBlocked(host, family)) throw new Error(`${host} はプライベートアドレスのため取得できません`)
+    const res = await request(url, isBlocked)
     if (res.redirect) {
       url = res.redirect
       continue

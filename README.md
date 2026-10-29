@@ -125,7 +125,12 @@ content. Messages that were never stored at all stay silent, as before.
 node index.js          # the bot
 npm run lint           # eslint
 npm test               # standard
+npm run test:unit      # unit tests (node:test)
+npm run test:it        # integration tests: mention → tools → buttons → event, with Discord and Gemini faked
 ```
+
+Tests need no database, Redis, Discord or Gemini: `test/helpers/fakes.js` stands in for them, and web
+pages come from a local HTTP server. CI runs both suites on every pull request.
 
 ## Contributing
 
