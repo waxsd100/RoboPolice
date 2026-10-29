@@ -1,4 +1,5 @@
 const urlFetcher = require('../utils/urlFetcher')
+const { describeForums } = require('./forumPost')
 
 const MAX_RECENT_MESSAGES = 50
 const MAX_QUESTIONS = 3
@@ -37,6 +38,11 @@ const DECLARATIONS = [
     parameters: { type: 'OBJECT', properties: {} }
   },
   {
+    name: 'list_forums',
+    description: '依頼者とBOTの両方が投稿できるフォーラムチャンネルの一覧（ID・名前・付けられるタグ・投稿ガイドライン）を得る。フォーラムへの投稿を頼まれたら必ず使う。',
+    parameters: { type: 'OBJECT', properties: {} }
+  },
+  {
     name: 'ask_user',
     description: `候補が複数ある・日時や場所が曖昧など、依頼者に決めてもらう必要があるときに、選択肢をボタンで提示して1つ選んでもらう。選択肢は2〜${MAX_OPTIONS}個の短い文。自由記述が必要な質問には使わない。`,
     parameters: {
@@ -55,7 +61,7 @@ const DECLARATIONS = [
   }
 ]
 
-const CHANNEL_TYPES = { 0: 'text', 2: 'voice', 4: 'category', 5: 'announcement', 13: 'stage', 15: 'forum', 10: 'thread', 11: 'thread', 12: 'thread' }
+const CHANNEL_TYPES = { 0: 'text', 2: 'voice', 4: 'category', 5: 'announcement', 13: 'stage', 15: 'forum', 16: 'media', 10: 'thread', 11: 'thread', 12: 'thread' }
 
 function canRead (channel, userID) {
   const perms = channel?.permissionsOf?.(userID)
@@ -120,6 +126,9 @@ function createTools ({ guild, member, ask }) {
         .filter(c => c.permissionsOf(member.id).has('viewChannel'))
         .map(c => `${c.id}: ${c.name}（${CHANNEL_TYPES[c.type] || c.type}）`)
         .join('\n')
+    },
+    async list_forums () {
+      return describeForums(guild, member)
     },
     async ask_user ({ question, options }) {
       const choices = [...new Set((options || []).map(o => String(o).trim()).filter(Boolean))].slice(0, MAX_OPTIONS)

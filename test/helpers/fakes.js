@@ -11,7 +11,7 @@ function perms (names) {
   return { has: name => names.includes(name), json: Object.fromEntries(names.map(n => [n, true])) }
 }
 
-// channels: [{ id, name, type, readers: [userID] }]
+// channels: [{ id, name, type, readers: [userID], posters: [userID], moderators: [userID] }]
 function createGuild ({ id = '100', ownerID = '900', channels = [], botPerms = ['manageEvents'] } = {}) {
   const guild = { id, ownerID, roles: new Map(), members: new Map(), channels: new Map() }
   guild.members.set('BOT', { id: 'BOT', permissions: perms(botPerms) })
@@ -21,7 +21,11 @@ function createGuild ({ id = '100', ownerID = '900', channels = [], botPerms = [
       name: c.name,
       type: c.type ?? 0,
       guild,
-      permissionsOf: userID => perms((c.readers || []).includes(userID) ? READ : [])
+      permissionsOf: userID => perms([
+        ...((c.readers || []).includes(userID) ? READ : []),
+        ...((c.posters || []).includes(userID) ? ['viewChannel', 'sendMessages'] : []),
+        ...((c.moderators || []).includes(userID) ? ['manageThreads'] : [])
+      ])
     })
   }
   return guild
@@ -32,7 +36,8 @@ function createMember ({ id = '1', permissions = ['manageEvents'], roles = [] } 
 }
 
 // messages: { 'channelID/messageID': { content, author, ... } }
-function installBot ({ guilds = [], messages = {}, scheduledEvents = [] } = {}) {
+// forums: { channelID: { available_tags, flags, topic } } as GET /channels/:id returns them
+function installBot ({ guilds = [], messages = {}, scheduledEvents = [], forums = {} } = {}) {
   const calls = []
   global.bot = {
     user: { id: 'BOT' },
@@ -55,7 +60,10 @@ function installBot ({ guilds = [], messages = {}, scheduledEvents = [] } = {}) 
     requestHandler: {
       async request (method, url, auth, body) {
         calls.push({ method, url, body })
+        const forum = url.match(/^\/channels\/(\d+)$/)
+        if (method === 'GET' && forum) return { id: forum[1], type: 15, ...forums[forum[1]] }
         if (method === 'GET') return scheduledEvents
+        if (url.endsWith('/threads')) return { id: 'THREAD1', ...body }
         return { id: 'EVENT1', ...body }
       }
     }

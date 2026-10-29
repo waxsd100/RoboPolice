@@ -18,9 +18,15 @@ const guild = createGuild({
   channels: [
     { id: '201', name: 'general', type: 0, readers: [REQUESTER, OTHER_USER, 'BOT'] },
     { id: '202', name: 'staff', type: 0, readers: ['BOT'] },
-    { id: '204', name: 'ボイス', type: 2, readers: [REQUESTER, 'BOT'] }
+    { id: '204', name: 'ボイス', type: 2, readers: [REQUESTER, 'BOT'] },
+    { id: '206', name: '募集', type: 15, posters: [REQUESTER, 'BOT'] },
+    { id: '207', name: '運営連絡', type: 15, posters: ['BOT'] }
   ]
 })
+const FORUMS = {
+  206: { available_tags: [{ id: 'tag-open', name: '募集中' }, { id: 'tag-staff', name: '運営', moderated: true }], flags: 16, topic: '題名に日付を入れる' },
+  207: { available_tags: [] }
+}
 const MESSAGES = {
   '201/401': { content: '【告知】11/3(火) 19:00〜21:00 #ボイス で交流会をやります', author: { id: '3', username: 'organizer' } },
   '202/403': { content: 'スタッフ会議 11/5 20時', author: { id: '4', username: 'staff' } }
@@ -81,7 +87,7 @@ function press (reply, label, userID = REQUESTER) {
   return interactionCreate.handle(interaction)
 }
 
-describe('mention → event (integration)', () => {
+describe('mention → event / forum post (integration)', () => {
   let site
   let discord
   before(async () => {
@@ -100,7 +106,7 @@ describe('mention → event (integration)', () => {
   after(() => site.close())
   beforeEach(() => {
     configureGateway()
-    discord = installBot({ guilds: [guild], messages: MESSAGES })
+    discord = installBot({ guilds: [guild], messages: MESSAGES, forums: FORUMS })
   })
 
   test('URL → page read → preview → register', async () => {
@@ -174,7 +180,7 @@ describe('mention → event (integration)', () => {
       }
     ])
     await mentionEvent.handle(mention(channel, '<@BOT> https://discord.com/channels/100/202/403'))
-    assert.equal(replies[0].state.content, 'イベントを作成できませんでした: リンク先のメッセージを読めませんでした。')
+    assert.equal(replies[0].state.content, '作成できませんでした: リンク先のメッセージを読めませんでした。')
     assert.equal(discord.some(c => c.method === 'POST'), false)
   })
 
@@ -201,7 +207,7 @@ describe('mention → event (integration)', () => {
     assert.ok(reply.history.some(s => s.content === '「夜の部」で続けます…'))
     await press(reply, 'キャンセル')
     await done
-    assert.equal(reply.state.content, '登録をキャンセルしました。')
+    assert.equal(reply.state.content, 'キャンセルしました。')
     assert.equal(discord.some(c => c.method === 'POST'), false)
   })
 
@@ -225,8 +231,58 @@ describe('mention → event (integration)', () => {
     await new Promise(resolve => setImmediate(resolve))
     t.mock.timers.tick(5 * 60 * 1000)
     await done
-    assert.equal(replies[0].state.content, '時間内に確認されなかったため、登録を取りやめました。')
+    assert.equal(replies[0].state.content, '時間内に確認されなかったため、取りやめました。')
     assert.deepEqual(replies[0].state.components, [])
+  })
+
+  test('forum: reply-mention → list_forums → preview → post with mentions disabled', async () => {
+    const { channel, replies } = createChannel()
+    const requests = installGemini([
+      [call('list_forums')],
+      body => {
+        assert.equal(lastToolResponses(body)[0].response.result, '- 206: 募集\n  タグ: 募集中（1つ以上必須）\n  投稿ガイドライン: 題名に日付を入れる')
+        return [call('submit_forum_post_draft', {
+          found: true, channel_id: '206', title: '11/3 交流会 参加者募集', content: '@everyone 参加者募集！ 詳細は告知を見てください', tags: ['募集中', '運営']
+        })]
+      }
+    ])
+    const done = mentionEvent.handle(mention(channel, '<@BOT> これを募集フォーラムに立てて', { messageReference: { messageID: '401', channelID: '201' } }))
+    const [reply] = replies
+    await waitForButtons(reply, '投稿する')
+    assert.match(requests[0].body.contents[0].parts[0].text, /これを募集フォーラムに立てて[\s\S]*返信先\n.*【告知】/)
+    const [preview] = reply.state.embeds
+    assert.equal(preview.title, '11/3 交流会 参加者募集')
+    assert.equal(preview.fields.find(f => f.name === '投稿先').value, '<#206>')
+    assert.equal(preview.fields.find(f => f.name === 'タグ').value, '募集中')
+
+    await press(reply, '投稿する')
+    await done
+    const post = discord.find(c => c.method === 'POST')
+    assert.equal(post.url, '/channels/206/threads')
+    assert.deepEqual({ ...post.body, reason: undefined }, {
+      name: '11/3 交流会 参加者募集',
+      message: { content: '@everyone 参加者募集！ 詳細は告知を見てください', allowed_mentions: { parse: [] } },
+      applied_tags: ['tag-open'],
+      reason: undefined
+    })
+    assert.equal(reply.state.content, 'フォーラムに投稿しました: https://discord.com/channels/100/THREAD1')
+  })
+
+  test('forum: the requester picks the kind, and a forum they cannot post in is refused', async () => {
+    const { channel, replies } = createChannel()
+    installGemini([
+      [call('ask_user', { question: 'どちらを作りますか？', options: ['イベントを登録', 'フォーラムに投稿'] })],
+      body => {
+        assert.equal(lastToolResponses(body)[0].response.result, '依頼者の回答: フォーラムに投稿')
+        return [call('submit_forum_post_draft', { found: true, channel_id: '207', title: '連絡', content: '本文' })]
+      }
+    ])
+    const done = mentionEvent.handle(mention(channel, '<@BOT> 11/3 交流会'))
+    await waitForButtons(replies[0], 'フォーラムに投稿')
+    await press(replies[0], 'フォーラムに投稿')
+    await done
+    assert.equal(replies[0].state.content, '作成できませんでした: 依頼者が <#207> に投稿する権限を持っていません。')
+    assert.equal(discord.some(c => c.method === 'POST'), false)
   })
 
   test('a Gemini failure is reported to the requester and logged', async (t) => {
@@ -234,7 +290,7 @@ describe('mention → event (integration)', () => {
     const { channel, replies } = createChannel()
     installGemini([new Error('upstream down')])
     await mentionEvent.handle(mention(channel, '<@BOT> 交流会'))
-    assert.equal(replies[0].state.content, 'イベントの作成中にエラーが発生しました。時間をおいてもう一度お試しください。')
+    assert.equal(replies[0].state.content, '作成中にエラーが発生しました。時間をおいてもう一度お試しください。')
     assert.equal(logged.mock.callCount(), 1)
   })
 
@@ -266,7 +322,7 @@ describe('mention → event (integration)', () => {
     test('requires Manage Events from the requester', async () => {
       const { channel, replies } = createChannel()
       await mentionEvent.handle(mention(channel, '<@BOT> 交流会', { member: createMember({ id: REQUESTER, permissions: [] }) }))
-      assert.match(replies[0].state.content, /「イベントの管理」権限が必要です/)
+      assert.match(replies[0].state.content, /この機能を使うには「イベントの管理」権限が必要です/)
     })
 
     test('lets the server owner through without the permission', async () => {
@@ -276,12 +332,17 @@ describe('mention → event (integration)', () => {
       assert.match(replies[0].state.content, /作成できませんでした: なし/)
     })
 
-    test('requires Manage Events for the bot', async () => {
+    test('refuses to register an event when the bot lacks Manage Events', async () => {
       guild.members.get('BOT').permissions = { has: () => false }
       try {
         const { channel, replies } = createChannel()
-        await mentionEvent.handle(mention(channel, '<@BOT> 交流会'))
-        assert.match(replies[0].state.content, /BOTに「イベントの管理」権限がない/)
+        installGemini([[submit({ name: 'A', start: '2026-11-03T19:00:00+09:00' })]])
+        const done = mentionEvent.handle(mention(channel, '<@BOT> 交流会'))
+        await waitForButtons(replies[0], '登録する')
+        await press(replies[0], '登録する')
+        await done
+        assert.equal(replies[0].state.content, 'BOTに「イベントの管理」権限がないため、イベントを登録できませんでした。')
+        assert.equal(discord.some(c => c.method === 'POST'), false)
       } finally {
         guild.members.get('BOT').permissions = { has: name => name === 'manageEvents' }
       }
@@ -290,7 +351,7 @@ describe('mention → event (integration)', () => {
     test('asks for content when the mention is empty', async () => {
       const { channel, replies } = createChannel()
       await mentionEvent.handle(mention(channel, '<@!BOT>'))
-      assert.match(replies[0].state.content, /イベントにしたい内容/)
+      assert.match(replies[0].state.content, /イベントやフォーラム投稿にしたい内容/)
     })
   })
 })

@@ -124,6 +124,15 @@ describe('list_channels', () => {
   })
 })
 
+describe('list_forums', () => {
+  test('describes the forums both can post in, via the API', async () => {
+    const g = createGuild({ channels: [{ id: '205', name: '募集', type: 15, posters: [REQUESTER, 'BOT'] }] })
+    installBot({ guilds: [g], forums: { 205: { available_tags: [{ id: 't1', name: '募集中' }], flags: 16, topic: '題名に日付を' } } })
+    const res = await createTools({ guild: g, member, ask: async () => '' }).call('list_forums')
+    assert.equal(res.result, '- 205: 募集\n  タグ: 募集中（1つ以上必須）\n  投稿ガイドライン: 題名に日付を')
+  })
+})
+
 describe('list_scheduled_events', () => {
   test('says when there are none', async () => {
     assert.equal((await tools().call('list_scheduled_events')).result, '登録済みのイベントはありません')

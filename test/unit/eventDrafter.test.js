@@ -1,6 +1,6 @@
 const { test, describe, beforeEach } = require('node:test')
 const assert = require('node:assert/strict')
-const { draftEvent, toScheduledEvent, isConfigured, ENTITY_TYPES } = require('../../src/bot/modules/eventDrafter')
+const { draft, toScheduledEvent, isConfigured, ENTITY_TYPES } = require('../../src/bot/modules/eventDrafter')
 const { createGuild, configureGateway, installGemini, call, submit, lastToolResponses } = require('../helpers/fakes')
 
 const NOW = new Date('2026-10-29T15:00:00+09:00')
@@ -97,7 +97,7 @@ describe('isConfigured', () => {
   })
 })
 
-describe('draftEvent', () => {
+describe('draft', () => {
   let toolCalls
   const tools = {
     declarations: [{ name: 'lookup', description: 'x', parameters: { type: 'OBJECT', properties: {} } }],
@@ -114,7 +114,8 @@ describe('draftEvent', () => {
 
   test('submits directly when no lookup is needed', async () => {
     installGemini([[submit({ name: 'A', start: '2026-11-03T19:00:00+09:00' })]])
-    const result = await draftEvent({ request: 'A', channelName: 'general', guild, tools, now: NOW })
+    const result = await draft({ request: 'A', channelName: 'general', guild, tools, now: NOW })
+    assert.equal(result.kind, 'event')
     assert.equal(result.event.name, 'A')
   })
 
@@ -122,19 +123,19 @@ describe('draftEvent', () => {
     process.env.CLOUDFLARE_AI_GATEWAY_TOKEN = 'gw-token'
     process.env.GEMINI_MODEL = 'gemini-test'
     const requests = installGemini([[submit({ name: 'A', start: '2026-11-03T19:00:00+09:00' })]])
-    await draftEvent({ request: 'A', channelName: 'general', guild, tools, now: NOW })
+    await draft({ request: 'A', channelName: 'general', guild, tools, now: NOW })
     const [{ url, headers, body }] = requests
     assert.equal(url, 'https://gateway.ai.cloudflare.com/v1/acct/gw/google-ai-studio/v1beta/models/gemini-test:generateContent')
     assert.equal(headers['x-goog-api-key'], 'gemini-key')
     assert.equal(headers['cf-aig-authorization'], 'Bearer gw-token')
     assert.equal(body.toolConfig.functionCallingConfig.mode, 'ANY')
-    assert.deepEqual(body.tools[0].functionDeclarations.map(d => d.name), ['lookup', 'submit_event_draft'])
+    assert.deepEqual(body.tools[0].functionDeclarations.map(d => d.name), ['lookup', 'submit_event_draft', 'submit_forum_post_draft'])
   })
 
   test('omits optional headers and uses the default model', async () => {
     delete process.env.GEMINI_API_KEY
     const requests = installGemini([[submit({ name: 'A', start: '2026-11-03T19:00:00+09:00' })]])
-    await draftEvent({ request: 'A', channelName: 'general', guild, tools, now: NOW })
+    await draft({ request: 'A', channelName: 'general', guild, tools, now: NOW })
     assert.match(requests[0].url, /models\/gemini-flash-latest:generateContent$/)
     assert.equal(requests[0].headers['x-goog-api-key'], undefined)
     assert.equal(requests[0].headers['cf-aig-authorization'], undefined)
@@ -142,7 +143,7 @@ describe('draftEvent', () => {
 
   test('puts the time, channel, request and replied-to message in the prompt', async () => {
     const requests = installGemini([[submit({ found: false })]])
-    await draftEvent({ request: '交流会', referenced: '告知文', channelName: 'general', guild, tools, now: NOW })
+    await draft({ request: '交流会', referenced: '告知文', channelName: 'general', guild, tools, now: NOW })
     const prompt = requests[0].body.contents[0].parts[0].text
     assert.match(prompt, /現在日時: 2026年10月29日木曜日 15:00（Asia\/Tokyo）/)
     assert.match(prompt, /依頼されたチャンネル: #general/)
@@ -161,7 +162,7 @@ describe('draftEvent', () => {
         return [submit({ name: 'B', start: '2026-11-03T19:00:00+09:00' })]
       }
     ])
-    const result = await draftEvent({ request: 'B', channelName: 'general', guild, tools, now: NOW })
+    const result = await draft({ request: 'B', channelName: 'general', guild, tools, now: NOW })
     assert.deepEqual(toolCalls.map(c => c.args.n), [1, 2])
     assert.equal(result.event.name, 'B')
     assert.equal(requests.length, 2)
@@ -170,24 +171,34 @@ describe('draftEvent', () => {
   test('echoes the model turn back unchanged, including thought signatures', async () => {
     const turn = [{ thoughtSignature: 'sig', functionCall: { name: 'lookup', args: {} } }]
     const requests = installGemini([turn, [submit({ found: false })]])
-    await draftEvent({ request: 'x', channelName: 'general', guild, tools, now: NOW })
+    await draft({ request: 'x', channelName: 'general', guild, tools, now: NOW })
     assert.deepEqual(requests[1].body.contents[1], { role: 'model', parts: turn })
   })
 
   test('stops after too many steps', async () => {
     installGemini(Array.from({ length: 10 }, () => [call('lookup')]))
-    const result = await draftEvent({ request: 'x', channelName: 'general', guild, tools, now: NOW })
+    const result = await draft({ request: 'x', channelName: 'general', guild, tools, now: NOW })
     assert.match(result.error, /手順が多すぎた/)
     assert.equal(toolCalls.length, 10)
   })
 
+  test('passes the reason through when the model gives up', async () => {
+    installGemini([[submit({ found: false, reason: '日時がありません' })]])
+    assert.deepEqual(await draft({ request: 'x', channelName: 'general', guild, tools, now: NOW }), { error: '日時がありません' })
+  })
+
+  test('routes a forum submission to the forum checks', async () => {
+    installGemini([[call('submit_forum_post_draft', { found: false, reason: '投稿先が分かりません' })]])
+    assert.deepEqual(await draft({ request: 'x', channelName: 'general', guild, tools, now: NOW }), { error: '投稿先が分かりません' })
+  })
+
   test('fails when the model answers without a tool call', async () => {
     installGemini([[{ text: 'hello' }]])
-    await assert.rejects(draftEvent({ request: 'x', channelName: 'general', guild, tools, now: NOW }), /without a tool call/)
+    await assert.rejects(draft({ request: 'x', channelName: 'general', guild, tools, now: NOW }), /without a tool call/)
   })
 
   test('fails on an HTTP error from the gateway', async () => {
     installGemini([new Error('quota exceeded')])
-    await assert.rejects(draftEvent({ request: 'x', channelName: 'general', guild, tools, now: NOW }), /HTTP 500 quota exceeded/)
+    await assert.rejects(draft({ request: 'x', channelName: 'general', guild, tools, now: NOW }), /HTTP 500 quota exceeded/)
   })
 })
