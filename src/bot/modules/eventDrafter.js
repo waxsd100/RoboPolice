@@ -1,4 +1,5 @@
 const { SUBMIT_FORUM_DECLARATION, toForumPost, imageUrlOf } = require('./forumPost')
+const { gatewayURL, gatewayAuthHeaders, isGatewayConfigured } = require('../utils/aiGateway')
 
 const DEFAULT_GEMINI_MODEL = 'gemini-flash-latest'
 const GEMINI_TIMEOUT_MS = 60000
@@ -57,7 +58,7 @@ const SYSTEM_INSTRUCTION = [
 ].join('\n')
 
 function isConfigured () {
-  return !!(process.env.CLOUDFLARE_ACCOUNT_ID && process.env.CLOUDFLARE_AI_GATEWAY_ID)
+  return isGatewayConfigured()
 }
 
 function formatNow (now) {
@@ -92,12 +93,10 @@ class GeminiError extends Error {
 
 // One generateContent call through the gateway. Returns the first candidate's content.
 async function callGemini (model, body, { timeoutMs = GEMINI_TIMEOUT_MS } = {}) {
-  const url = `https://gateway.ai.cloudflare.com/v1/${process.env.CLOUDFLARE_ACCOUNT_ID}/${process.env.CLOUDFLARE_AI_GATEWAY_ID}/google-ai-studio/v1beta/models/${encodeURIComponent(model)}:generateContent`
-  const headers = { 'Content-Type': 'application/json' }
-  // Both optional: the Gemini key can be stored in the gateway (BYOK), and only an authenticated
-  // gateway needs its own token.
+  const url = gatewayURL(`google-ai-studio/v1beta/models/${encodeURIComponent(model)}:generateContent`)
+  const headers = { 'Content-Type': 'application/json', ...gatewayAuthHeaders() }
+  // Optional: the Gemini key can be stored in the gateway (BYOK) instead.
   if (process.env.GEMINI_API_KEY) headers['x-goog-api-key'] = process.env.GEMINI_API_KEY
-  if (process.env.CLOUDFLARE_AI_GATEWAY_TOKEN) headers['cf-aig-authorization'] = `Bearer ${process.env.CLOUDFLARE_AI_GATEWAY_TOKEN}`
   // Which stored (BYOK) key to use. Without it the gateway looks for one named "default".
   if (process.env.CLOUDFLARE_AI_GATEWAY_BYOK_ALIAS) headers['cf-aig-byok-alias'] = process.env.CLOUDFLARE_AI_GATEWAY_BYOK_ALIAS
 

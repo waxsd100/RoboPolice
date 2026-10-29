@@ -1,4 +1,4 @@
-const { test, describe } = require('node:test')
+const { test, describe, beforeEach, afterEach } = require('node:test')
 const assert = require('node:assert/strict')
 const { parseChannelRef, fetchChannelKnowledge } = require('../../src/bot/utils/youtube')
 
@@ -26,9 +26,9 @@ describe('fetchChannelKnowledge', () => {
   // A fake YouTube API that answers the three calls a sync makes, and records them.
   function fakeApi (overrides = {}) {
     const calls = []
-    global.fetch = async url => {
+    global.fetch = async (url, init) => {
       const u = new URL(url)
-      calls.push({ path: u.pathname.split('/').pop(), params: Object.fromEntries(u.searchParams) })
+      calls.push({ path: u.pathname.split('/').pop(), params: Object.fromEntries(u.searchParams), url, headers: init.headers })
       const answers = {
         channels: { items: [{ id: UC, snippet: { title: 'のばまんチャンネル', description: 'ゲーム配信', customUrl: '@nobaman' }, contentDetails: { relatedPlaylists: { uploads: 'UU' + 'a'.repeat(22) } } }] },
         playlistItems: { items: [{ contentDetails: { videoId: 'v1' } }, { contentDetails: { videoId: 'v2' } }] },
@@ -54,7 +54,9 @@ describe('fetchChannelKnowledge', () => {
     assert.equal(calls[0].params.forHandle, 'nobaman')
     assert.equal(calls[1].params.playlistId, 'UU' + 'a'.repeat(22))
     assert.equal(calls[2].params.id, 'v1,v2')
-    assert.ok(calls.every(c => c.params.key === 'yt-key'))
+    assert.ok(calls.every(c => c.headers['x-goog-api-key'] === 'yt-key'), 'the key is sent as a header')
+    assert.ok(calls.every(c => !c.url.includes('yt-key')), 'and never in the URL')
+    assert.ok(calls.every(c => c.url.startsWith('https://www.googleapis.com/youtube/v3/')), 'straight to Google by default')
 
     assert.deepEqual(result.channel, { id: UC, title: 'のばまんチャンネル', description: 'ゲーム配信', handle: '@nobaman', url: `https://www.youtube.com/channel/${UC}` })
     assert.equal(result.videos[0].description.length, 1000)
@@ -156,5 +158,44 @@ describe('fetchChannelKnowledge paging', () => {
     const { videos, complete } = await fetchChannelKnowledge({ id: UC }, 'k', { maxPages: 3 })
     assert.equal(videos.length, 150)
     assert.equal(complete, false)
+  })
+})
+
+describe('routing through Cloudflare AI Gateway', () => {
+  const env = ['CLOUDFLARE_ACCOUNT_ID', 'CLOUDFLARE_AI_GATEWAY_ID', 'CLOUDFLARE_AI_GATEWAY_TOKEN', 'YOUTUBE_GATEWAY_PROVIDER']
+  let saved
+  beforeEach(() => { saved = Object.fromEntries(env.map(k => [k, process.env[k]])) })
+  afterEach(() => { for (const k of env) saved[k] === undefined ? delete process.env[k] : (process.env[k] = saved[k]) })
+
+  function recordingApi () {
+    const calls = []
+    global.fetch = async (url, init) => {
+      calls.push({ url, headers: init.headers })
+      return { ok: true, json: async () => ({ items: [{ id: UC, snippet: { title: 'ch' }, contentDetails: {} }] }) }
+    }
+    return calls
+  }
+
+  test('goes through the custom provider when YOUTUBE_GATEWAY_PROVIDER is set', async () => {
+    Object.assign(process.env, { CLOUDFLARE_ACCOUNT_ID: 'acct', CLOUDFLARE_AI_GATEWAY_ID: 'gw', CLOUDFLARE_AI_GATEWAY_TOKEN: 'gw-token', YOUTUBE_GATEWAY_PROVIDER: 'youtube' })
+    const calls = recordingApi()
+    await fetchChannelKnowledge({ handle: 'nobaman' }, 'yt-key')
+    assert.equal(calls[0].url, 'https://gateway.ai.cloudflare.com/v1/acct/gw/custom-youtube/youtube/v3/channels?part=snippet%2CcontentDetails&forHandle=nobaman')
+    assert.deepEqual(calls[0].headers, { 'x-goog-api-key': 'yt-key', 'cf-aig-authorization': 'Bearer gw-token' })
+  })
+
+  test('goes straight to Google when the provider is not set, or the gateway is not configured', async () => {
+    Object.assign(process.env, { CLOUDFLARE_ACCOUNT_ID: 'acct', CLOUDFLARE_AI_GATEWAY_ID: 'gw', CLOUDFLARE_AI_GATEWAY_TOKEN: 'gw-token' })
+    delete process.env.YOUTUBE_GATEWAY_PROVIDER
+    let calls = recordingApi()
+    await fetchChannelKnowledge({ handle: 'x' }, 'k')
+    assert.match(calls[0].url, /^https:\/\/www\.googleapis\.com\/youtube\/v3\/channels\?/)
+    assert.deepEqual(calls[0].headers, { 'x-goog-api-key': 'k' }, 'the gateway token never goes to Google')
+
+    process.env.YOUTUBE_GATEWAY_PROVIDER = 'youtube'
+    delete process.env.CLOUDFLARE_AI_GATEWAY_ID
+    calls = recordingApi()
+    await fetchChannelKnowledge({ handle: 'x' }, 'k')
+    assert.match(calls[0].url, /^https:\/\/www\.googleapis\.com\//)
   })
 })

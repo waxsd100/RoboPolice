@@ -1,6 +1,8 @@
 // Reads a YouTube channel and its videos with the YouTube Data API v3. Every call used here costs 1
 // quota unit: 1 for the channel plus 2 per page of 50 videos.
-const API = 'https://www.googleapis.com/youtube/v3'
+const { gatewayURL, gatewayAuthHeaders, isGatewayConfigured } = require('./aiGateway')
+
+const DIRECT_API = 'https://www.googleapis.com/youtube/v3'
 const PAGE_SIZE = 50 // the most playlistItems returns per page, and videos.list takes per call
 // 5000 videos, 201 units: far under the default 10000 units a day, even for a first full read.
 const MAX_PAGES = 100
@@ -24,9 +26,18 @@ function parseChannelRef (input) {
   return null
 }
 
+// Through Cloudflare AI Gateway when YOUTUBE_GATEWAY_PROVIDER names a custom provider whose base URL
+// is https://www.googleapis.com; straight to Google otherwise.
+function apiBase () {
+  const slug = process.env.YOUTUBE_GATEWAY_PROVIDER
+  return slug && isGatewayConfigured() ? gatewayURL(`custom-${slug}/youtube/v3`) : DIRECT_API
+}
+
 async function call (path, params, apiKey) {
-  const url = `${API}/${path}?${new URLSearchParams({ ...params, key: apiKey })}`
-  const res = await fetch(url, { signal: AbortSignal.timeout(TIMEOUT_MS) })
+  const url = `${apiBase()}/${path}?${new URLSearchParams(params)}`
+  // The key goes in a header rather than the query string, so it never appears in a logged URL.
+  const headers = { 'x-goog-api-key': apiKey, ...(url.startsWith(DIRECT_API) ? {} : gatewayAuthHeaders()) }
+  const res = await fetch(url, { headers, signal: AbortSignal.timeout(TIMEOUT_MS) })
   if (!res.ok) {
     const body = await res.text()
     throw new YouTubeError(`YouTube API ${path} failed: HTTP ${res.status} ${body.slice(0, 500)}`, `YouTube API の呼び出しに失敗しました（HTTP ${res.status}）`)

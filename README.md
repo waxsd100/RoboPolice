@@ -101,6 +101,12 @@ accumulates:
   public video's URL to Gemini (low media resolution) and stores the summary. The same video is never
   summarized twice for a server; summaries of videos from other channels are kept as well.
 
+Every Gemini call goes through Cloudflare AI Gateway. YouTube Data API calls can too: in the
+dashboard, add a custom provider (AI Gateway → Custom Providers) with base URL
+`https://www.googleapis.com` and a slug such as `youtube`, then set `YOUTUBE_GATEWAY_PROVIDER=youtube`.
+Requests then go to `…/custom-youtube/youtube/v3/…` with the gateway token. Either way the API key is
+sent in the `x-goog-api-key` header, never in the URL.
+
 The model searches all of it (titles, descriptions and summaries) with the `search_youtube` tool. The
 tables are created on first use, so existing deployments need no migration.
 
@@ -167,6 +173,7 @@ credentials in URLs. The same masked text goes to the error webhook.
 | `GEMINI_API_KEY` | Optional when the key is stored in the gateway (BYOK); otherwise required for drafting from mentions |
 | `GEMINI_MODEL` | Optional. Defaults to `gemini-flash-latest` |
 | `YOUTUBE_API_KEY` | Optional. YouTube Data API v3 key for `/youtube`. Unset disables the command |
+| `YOUTUBE_GATEWAY_PROVIDER` | Optional. Slug of an AI Gateway custom provider (see below). Set, YouTube API calls go through Cloudflare AI Gateway; unset, straight to Google |
 | `GEMINI_IMAGE_MODEL` | Optional. Image model for AI-made covers. Defaults to `gemini-3.1-flash-image` |
 
 Values that never differ between deployments are constants in code rather than environment
