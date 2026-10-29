@@ -77,6 +77,7 @@ function configureGateway () {
   process.env.CLOUDFLARE_AI_GATEWAY_ID = 'gw'
   process.env.GEMINI_API_KEY = 'gemini-key'
   delete process.env.CLOUDFLARE_AI_GATEWAY_TOKEN
+  delete process.env.CLOUDFLARE_AI_GATEWAY_BYOK_ALIAS
   delete process.env.GEMINI_MODEL
 }
 

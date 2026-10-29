@@ -90,6 +90,8 @@ async function generate (contents, declarations) {
   // gateway needs its own token.
   if (process.env.GEMINI_API_KEY) headers['x-goog-api-key'] = process.env.GEMINI_API_KEY
   if (process.env.CLOUDFLARE_AI_GATEWAY_TOKEN) headers['cf-aig-authorization'] = `Bearer ${process.env.CLOUDFLARE_AI_GATEWAY_TOKEN}`
+  // Which stored (BYOK) key to use. Without it the gateway looks for one named "default".
+  if (process.env.CLOUDFLARE_AI_GATEWAY_BYOK_ALIAS) headers['cf-aig-byok-alias'] = process.env.CLOUDFLARE_AI_GATEWAY_BYOK_ALIAS
 
   const res = await fetch(url, {
     method: 'POST',

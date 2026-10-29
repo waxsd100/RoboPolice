@@ -132,6 +132,16 @@ describe('draft', () => {
     assert.deepEqual(body.tools[0].functionDeclarations.map(d => d.name), ['lookup', 'submit_event_draft', 'submit_forum_post_draft'])
   })
 
+  test('selects the stored key by alias when one is configured', async () => {
+    delete process.env.GEMINI_API_KEY
+    process.env.CLOUDFLARE_AI_GATEWAY_TOKEN = 'gw-token'
+    process.env.CLOUDFLARE_AI_GATEWAY_BYOK_ALIAS = 'Gemini_API_Key'
+    const requests = installGemini([[submit({ found: false })]])
+    await draft({ request: 'x', channelName: 'general', guild, tools, now: NOW })
+    assert.equal(requests[0].headers['cf-aig-byok-alias'], 'Gemini_API_Key')
+    assert.equal(requests[0].headers['x-goog-api-key'], undefined)
+  })
+
   test('omits optional headers and uses the default model', async () => {
     delete process.env.GEMINI_API_KEY
     const requests = installGemini([[submit({ name: 'A', start: '2026-11-03T19:00:00+09:00' })]])
@@ -139,6 +149,7 @@ describe('draft', () => {
     assert.match(requests[0].url, /models\/gemini-flash-latest:generateContent$/)
     assert.equal(requests[0].headers['x-goog-api-key'], undefined)
     assert.equal(requests[0].headers['cf-aig-authorization'], undefined)
+    assert.equal(requests[0].headers['cf-aig-byok-alias'], undefined)
   })
 
   test('puts the time, channel, request and replied-to message in the prompt', async () => {

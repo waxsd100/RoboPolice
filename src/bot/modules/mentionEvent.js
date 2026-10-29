@@ -4,8 +4,11 @@ const { draft, isConfigured, ENTITY_TYPES } = require('./eventDrafter')
 const { createTools, StopDrafting } = require('./eventTools')
 const { EMBED_COLORS } = require('../utils/constants')
 const { hasStaffAccess } = require('../utils/staffAccess')
+const { redact } = require('../utils/redact')
 
 const ANSWER_TIMEOUT_MS = 5 * 60 * 1000
+// How much of the error log to show in the reply; Discord messages are capped at 2000 characters.
+const MAX_ERROR_LOG = 1500
 const { BUTTON } = Eris.Constants.ComponentTypes
 const { PRIMARY, SECONDARY, SUCCESS, DANGER } = Eris.Constants.ButtonStyles
 
@@ -29,6 +32,14 @@ function canUseAssistant (member, guild) {
 
 function extractRequest (message) {
   return message.content.replace(new RegExp(`<@!?${global.bot.user.id}>`, 'g'), '').trim()
+}
+
+// The error log for the reply: message and the top of the stack, with secrets masked, since the
+// reply may be in a channel many people can read.
+function errorLog (e) {
+  const text = redact(e.stack || `${e.name}: ${e.message}`)
+  const log = text.length > MAX_ERROR_LOG ? `${text.slice(0, MAX_ERROR_LOG)}\n…（以下省略）` : text
+  return `\`\`\`\n${log.replace(/```/g, '`\u200b``')}\n\`\`\``
 }
 
 function sourcesField (sources) {
@@ -194,11 +205,11 @@ async function handle (message) {
     }
     global.logger.error(e)
     // The console log alone is easy to miss; also send it to the error webhook the operators watch.
-    global.webhook.error(`Drafting from a mention in ${guild.id} failed: ${e.message}`.slice(0, 2000))
+    global.webhook.error(redact(`Drafting from a mention in ${guild.id} failed: ${e.message}`).slice(0, 2000))
     const cause = e.hint || (e.name === 'TimeoutError' ? 'AI の応答が時間内に返りませんでした' : null)
-    const content = `作成中にエラーが発生しました${cause ? `（${cause}）` : ''}。時間をおいてもう一度お試しください。`
+    const content = `作成中にエラーが発生しました${cause ? `（${cause}）` : ''}。時間をおいてもう一度お試しください。\n${errorLog(e)}`
     if (reply) {
-      await reply.edit({ content, components: [] }).catch(() => {})
+      await reply.edit({ content, embeds: [], components: [] }).catch(() => {})
     } else {
       await message.channel.createMessage({ content, ...reference }).catch(() => {})
     }
