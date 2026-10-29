@@ -309,7 +309,7 @@ describe('search_youtube', () => {
     assert.equal(text, [
       'チャンネル: のばまんch（https://y/c）',
       '概要: ゲーム配信',
-      '情報の取得日時: 2026-10-29T12:00:00.000Z（保存している動画 3 件）',
+      '情報の取得日時: 2026-10-29T12:00:00.000Z（保存している動画 3 件、うち内容の要約あり 0 件）',
       '新しい順の動画:',
       '- [配信予定 2026-11-03T11:00:00.000Z] 11/3 記念配信（公開 2026-10-28）https://y/v2',
       '  周年記念',
@@ -324,5 +324,42 @@ describe('search_youtube', () => {
     const text = (await tools().call('search_youtube', { query: 'マイクラ  城' })).result
     assert.match(text, /「マイクラ {2}城」に一致した動画: 1 件\n- マイクラ 建築/)
     assert.doesNotMatch(text, /雑談/)
+  })
+})
+
+describe('YouTube summaries in the tools', () => {
+  const { installYouTubeStore, configureGateway, installGemini } = require('../helpers/fakes')
+  const synced = { channel_ref: '@x', title: 'のばまんch', url: 'https://y/c', synced_at: new Date('2026-10-29T12:00:00Z') }
+  const videos = [{ video_id: 'abcdefghijk', title: '雑談', description: '', live_status: 'none', published_at: new Date('2026-10-27T00:00:00Z'), url: 'https://www.youtube.com/watch?v=abcdefghijk' }]
+
+  test('search_youtube also matches and shows what a video summary says', async () => {
+    installYouTubeStore({ 100: { channel: synced, videos } }, { 100: { abcdefghijk: '後半で 11/3 のオフ会を告知している' } })
+    const text = (await tools().call('search_youtube', { query: 'オフ会' })).result
+    assert.match(text, /保存している動画 1 件、うち内容の要約あり 1 件/)
+    assert.match(text, /「オフ会」に一致した動画: 1 件\n- 雑談.*\n {2}内容の要約: 後半で 11\/3 のオフ会を告知している/)
+  })
+
+  test('search_youtube lists summaries of linked videos from other channels', async () => {
+    installYouTubeStore({ 100: { channel: synced, videos } }, { 100: { otherVideo1: '別チャンネルの勉強会の録画' } })
+    const text = (await tools().call('search_youtube', { query: '勉強会' })).result
+    assert.match(text, /その他の要約済み動画（1 件）:\n- https:\/\/www\.youtube\.com\/watch\?v=otherVideo1\n {2}内容の要約: 別チャンネルの勉強会の録画/)
+  })
+
+  test('search_youtube shows other summaries even when no channel is set', async () => {
+    installYouTubeStore({}, { 100: { otherVideo1: '要約' } })
+    const text = (await tools().call('search_youtube', {})).result
+    assert.match(text, /YouTube チャンネルが設定されていません[\s\S]*その他の要約済み動画（1 件）/)
+  })
+
+  test('summarize_youtube_video returns the summary and records the video as a source', async () => {
+    configureGateway()
+    installYouTubeStore()
+    installGemini([[{ text: '要点: 11/3 記念配信' }]])
+    const t = tools()
+    const res = await t.call('summarize_youtube_video', { url: 'https://youtu.be/abcdefghijk' })
+    assert.equal(res.result, 'https://www.youtube.com/watch?v=abcdefghijk の内容の要約:\n要点: 11/3 記念配信')
+    assert.deepEqual(t.sources, ['https://www.youtube.com/watch?v=abcdefghijk'])
+    const again = await t.call('summarize_youtube_video', { url: 'https://www.youtube.com/watch?v=abcdefghijk' })
+    assert.match(again.result, /の内容の要約（保存済み）:/)
   })
 })

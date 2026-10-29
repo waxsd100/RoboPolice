@@ -605,6 +605,41 @@ describe('mention → event / forum post (integration)', () => {
     assert.equal(discord.find(c => c.method === 'POST').body.scheduled_start_time, '2026-11-08T05:00:00.000Z')
   })
 
+  test('YouTube: a linked video is summarized once, then the stored summary is reused', async () => {
+    const youtube = installYouTubeStore()
+    const turns = (summaryCall) => [
+      [call('summarize_youtube_video', { url: 'https://youtu.be/dQw4w9WgXcQ' })],
+      ...(summaryCall ? [summaryCall] : []),
+      body => {
+        assert.match(lastToolResponses(body)[0].response.result, /11\/15 19時から 1 周年オフ会/)
+        return [submit({ name: '1周年オフ会', start: '2026-11-15T19:00:00+09:00', location: '新宿' })]
+      }
+    ]
+
+    const first = createChannel()
+    const requests = installGemini(turns(body => {
+      assert.deepEqual(body.contents[0].parts[0], { fileData: { fileUri: 'https://www.youtube.com/watch?v=dQw4w9WgXcQ' } })
+      return [{ text: '・11/15 19時から 1 周年オフ会を新宿で開催と告知' }]
+    }))
+    const done = mentionEvent.handle(mention(first.channel, '<@BOT> この動画で告知してたオフ会をイベントにして https://youtu.be/dQw4w9WgXcQ'))
+    await waitForButtons(first.replies[0], '登録する')
+    assert.equal(requests.length, 3, 'drafting turn, video summary, drafting turn')
+    assert.match(first.replies[0].state.embeds[0].fields.find(f => f.name === '参照元').value, /https:\/\/www\.youtube\.com\/watch\?v=dQw4w9WgXcQ/)
+    await press(first.replies[0], 'キャンセル')
+    await done
+    assert.deepEqual(youtube.writes, [{ saveSummary: ['100', 'dQw4w9WgXcQ'] }])
+
+    // Second time: no video call, the stored summary answers.
+    const second = createChannel()
+    const again = installGemini(turns(null))
+    const done2 = mentionEvent.handle(mention(second.channel, '<@BOT> https://youtu.be/dQw4w9WgXcQ のオフ会'))
+    await waitForButtons(second.replies[0], '登録する')
+    assert.equal(again.length, 2)
+    assert.ok(again.every(r => !JSON.stringify(r.body).includes('fileData')))
+    await press(second.replies[0], 'キャンセル')
+    await done2
+  })
+
   test('the draft still works when the server profile cannot be built', async (t) => {
     const warned = t.mock.method(global.logger, 'warn', () => {})
     require('../../src/db/interfaces/postgres/youtube').getKnowledge = async () => { throw new Error('db down') }

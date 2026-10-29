@@ -1,0 +1,43 @@
+// Summarizes what is said and shown in a public YouTube video, by handing its URL to Gemini, and
+// keeps the summary so the same video is never summarized twice for a server. Only run when the
+// model decides it needs a video's contents (a video was linked, or a question is about what a
+// video says): it is far costlier than reading titles and descriptions.
+const { callGemini, DEFAULT_GEMINI_MODEL, GeminiError } = require('./eventDrafter')
+const youtubeDB = require('../../db/interfaces/postgres/youtube')
+const { parseVideoId } = require('../utils/youtube')
+
+const MAX_SUMMARY = 3000
+// Gemini watches the whole video before answering; long videos take a while.
+const SUMMARY_TIMEOUT_MS = 3 * 60 * 1000
+
+const PROMPT = [
+  'この YouTube 動画の内容を、日本語で要約してください（1500文字以内）。',
+  '話している主な話題を順に箇条書きにし、告知・イベント・日時・場所・出演者・URL など、',
+  'イベント登録や告知文作りに使える具体的な情報は漏らさず含めてください。',
+  '分からないことは推測で書かないでください。'
+].join('\n')
+
+async function summarizeVideo (guildID, url) {
+  const videoID = parseVideoId(url)
+  if (!videoID) throw new Error('YouTube の動画リンクではありません')
+  const cached = await youtubeDB.getSummary(guildID, videoID)
+  if (cached) return { videoID, summary: cached, cached: true }
+
+  const content = await callGemini(process.env.GEMINI_MODEL || DEFAULT_GEMINI_MODEL, {
+    contents: [{
+      role: 'user',
+      parts: [
+        { fileData: { fileUri: `https://www.youtube.com/watch?v=${videoID}` } },
+        { text: PROMPT }
+      ]
+    }],
+    // Fewer tokens per frame: the summary is about what is said and roughly shown, not fine detail.
+    generationConfig: { temperature: 0.2, mediaResolution: 'MEDIA_RESOLUTION_LOW' }
+  }, { timeoutMs: SUMMARY_TIMEOUT_MS })
+  const summary = content.parts.map(p => p.text || '').join('').trim().slice(0, MAX_SUMMARY)
+  if (!summary) throw new GeminiError(`Gemini returned no summary for ${videoID}`, 'AI が動画を要約できませんでした')
+  await youtubeDB.saveSummary(guildID, videoID, summary)
+  return { videoID, summary, cached: false }
+}
+
+module.exports = { summarizeVideo }

@@ -46,7 +46,7 @@ Short version; the Privacy Policy is authoritative.
 | Message ID, author ID, channel ID, server ID, timestamp, AES-256 encrypted content and attachment URLs | PostgreSQL `messages` | `MESSAGE_HISTORY_DAYS` days, or forever if unset |
 | Per-server settings (log channels, ignored channels, disabled events) | PostgreSQL `guilds` | Until the app leaves the server |
 | Invite counters, webhook handles, guild settings | Redis | 3 hours |
-| The YouTube channel set with `/youtube`, its description and up to 50 recent videos (public YouTube data) | PostgreSQL `youtube_channels`, `youtube_videos` | Until the next `/youtube sync`/`set`, or the app leaves the server |
+| The YouTube channel set with `/youtube`, its description and every video read from it, plus summaries of linked videos' contents (public YouTube data) | PostgreSQL `youtube_channels`, `youtube_videos`, `youtube_summaries` | Until a different channel is set (videos only), or the app leaves the server |
 
 Message rows are written **only for servers that have a message deletion or edit log channel
 configured** — a server with none never has message content stored, since nothing could read it back.
@@ -86,11 +86,23 @@ messages straight from Discord when nothing is stored.
 ### YouTube knowledge
 
 `/youtube set channel:<URL or @handle>` (Manage Server) sets the server's YouTube channel and reads it
-right away; `/youtube sync` reads it again and `/youtube show` shows what is stored. A read takes the
-channel's description and its 50 most recent uploads, including whether each is upcoming or live and
-when, through the YouTube Data API (`YOUTUBE_API_KEY`, 3 quota units per read), and replaces what was
-stored. The model searches it with the `search_youtube` tool. The tables are created on first use,
-so existing deployments need no migration.
+right away; `/youtube sync` reads it again and `/youtube show` shows what is stored. Knowledge
+accumulates:
+
+- The first read walks the channel's whole upload list (up to 5000 videos, 2 quota units per 50).
+  Later reads stop at the first page of already-stored videos, so they cost 3 units unless much is
+  new, while the newest page is always re-read to catch streams that went live or ended.
+- Videos are added or refreshed, never dropped. Setting the same channel again keeps them; setting a
+  different one starts over.
+- Each video keeps its title, description, publish date, length and stream state and time
+  (`YOUTUBE_API_KEY`, YouTube Data API).
+- What a video actually says is summarized only when needed: when a video link is given or the
+  question is about a video's contents, the model calls `summarize_youtube_video`, which hands the
+  public video's URL to Gemini (low media resolution) and stores the summary. The same video is never
+  summarized twice for a server; summaries of videos from other channels are kept as well.
+
+The model searches all of it (titles, descriptions and summaries) with the `search_youtube` tool. The
+tables are created on first use, so existing deployments need no migration.
 
 What the tools read (the mention, the replied-to message, linked pages and Discord messages, the
 server profile, stored YouTube data) is sent to Google Gemini through Cloudflare AI Gateway. Nothing

@@ -2,6 +2,7 @@ const urlFetcher = require('../utils/urlFetcher')
 const { describeForums } = require('./forumPost')
 const youtubeDB = require('../../db/interfaces/postgres/youtube')
 const messageDB = require('../../db/interfaces/postgres/read')
+const videoSummary = require('./videoSummary')
 
 const MAX_RECENT_MESSAGES = 50
 const MAX_QUESTIONS = 3
@@ -35,6 +36,11 @@ const DECLARATIONS = [
       },
       required: ['channel_id']
     }
+  },
+  {
+    name: 'summarize_youtube_video',
+    description: '公開されている YouTube 動画の中身（話している内容）を要約する。動画のリンクが貼られたときや、動画の内容が必要なときだけ使う。一度要約した動画は保存済みの要約を返す。',
+    parameters: { type: 'OBJECT', properties: { url: { type: 'STRING', description: 'YouTube 動画の URL' } }, required: ['url'] }
   },
   {
     name: 'search_channel_history',
@@ -193,6 +199,12 @@ function createTools ({ guild, member, ask }) {
     },
     async search_youtube ({ query }) {
       return searchYouTube(guild.id, query)
+    },
+    async summarize_youtube_video ({ url }) {
+      const { videoID, summary, cached } = await videoSummary.summarizeVideo(guild.id, url)
+      const link = `https://www.youtube.com/watch?v=${videoID}`
+      sources.push(link)
+      return `${link} の内容の要約${cached ? '（保存済み）' : ''}:\n${summary}`
     }
   }
 
@@ -224,24 +236,37 @@ function formatVideo (v) {
   const published = v.published_at ? new Date(v.published_at).toISOString().slice(0, 10) : '?'
   const head = `- ${when ? `[${when}] ` : ''}${v.title}（公開 ${published}${v.duration ? `、長さ ${v.duration}` : ''}）${v.url}`
   const description = (v.description || '').replace(/\s+/g, ' ').slice(0, 200)
-  return description ? `${head}\n  ${description}` : head
+  const lines = [head]
+  if (description) lines.push(`  ${description}`)
+  if (v.summary) lines.push(`  内容の要約: ${v.summary.replace(/\s+/g, ' ').slice(0, 400)}`)
+  return lines.join('\n')
 }
 
+const matchesAll = (words, text) => words.every(w => text.toLowerCase().includes(w))
+
 async function searchYouTube (guildID, query) {
-  const knowledge = await youtubeDB.getKnowledge(guildID)
-  if (!knowledge) return 'このサーバーには YouTube チャンネルが設定されていません（運営が /youtube set で設定できます）'
-  const { channel, videos } = knowledge
-  if (!channel.synced_at) return `YouTube チャンネル ${channel.channel_ref} は設定済みですが、まだ情報を取得していません（/youtube sync）`
   const words = String(query || '').toLowerCase().split(/\s+/).filter(Boolean)
-  const matches = videos.filter(v => words.every(w => `${v.title}\n${v.description || ''}`.toLowerCase().includes(w)))
+  const knowledge = await youtubeDB.getKnowledge(guildID)
+  // Summaries of linked videos from other channels are knowledge too.
+  const others = (await youtubeDB.getOtherSummaries(guildID))
+    .filter(s => matchesAll(words, s.summary))
+    .map(s => `- https://www.youtube.com/watch?v=${s.video_id}\n  内容の要約: ${s.summary.replace(/\s+/g, ' ').slice(0, 400)}`)
+  const otherLines = others.length ? ['', `その他の要約済み動画（${others.length} 件）:`, ...others.slice(0, MAX_YOUTUBE_RESULTS)] : []
+
+  if (!knowledge) return ['このサーバーには YouTube チャンネルが設定されていません（運営が /youtube set で設定できます）', ...otherLines].join('\n')
+  const { channel, videos } = knowledge
+  if (!channel.synced_at) return [`YouTube チャンネル ${channel.channel_ref} は設定済みですが、まだ情報を取得していません（/youtube sync）`, ...otherLines].join('\n')
+  const matches = videos.filter(v => matchesAll(words, `${v.title}\n${v.description || ''}\n${v.summary || ''}`))
   // Lives first: "the next stream" is the usual question.
   const ordered = [...matches.filter(v => LIVE_LABELS[v.live_status]), ...matches.filter(v => !LIVE_LABELS[v.live_status])]
   return [
     `チャンネル: ${channel.title}（${channel.url}）`,
     channel.description ? `概要: ${channel.description.replace(/\s+/g, ' ').slice(0, 300)}` : '',
-    `情報の取得日時: ${new Date(channel.synced_at).toISOString()}（保存している動画 ${videos.length} 件）`,
+    `情報の取得日時: ${new Date(channel.synced_at).toISOString()}（保存している動画 ${videos.length} 件、うち内容の要約あり ${videos.filter(v => v.summary).length} 件）`,
     words.length ? `「${query}」に一致した動画: ${matches.length} 件` : '新しい順の動画:',
-    ...ordered.slice(0, MAX_YOUTUBE_RESULTS).map(formatVideo)
+    ...ordered.slice(0, MAX_YOUTUBE_RESULTS).map(formatVideo),
+    ...(matches.length > MAX_YOUTUBE_RESULTS ? [`…ほか ${matches.length - MAX_YOUTUBE_RESULTS} 件（query で絞り込めます）`] : []),
+    ...otherLines
   ].filter(Boolean).join('\n')
 }
 

@@ -44,13 +44,13 @@ describe('/youtube', () => {
     const it = interaction('set', [{ name: 'channel', value: ' https://www.youtube.com/@nobaman ' }])
     await command.func(it)
     assert.equal(it.deferred, true, 'deferred before calling YouTube')
-    assert.deepEqual(store.writes, [{ setChannelRef: ['100', 'https://www.youtube.com/@nobaman'] }, { saveSync: '100' }])
+    assert.deepEqual(store.writes, [{ setChannelRef: ['100', 'https://www.youtube.com/@nobaman'] }, { saveSync: '100', videos: ['v1'] }])
     assert.deepEqual(calls, ['channels', 'playlistItems', 'videos'])
     const [reply] = it.replies
     assert.match(reply.content, /設定し、情報を取得しました/)
     const fields = Object.fromEntries(reply.embeds[0].fields.map(f => [f.name, f.value]))
     assert.equal(reply.embeds[0].title, 'のばまんch')
-    assert.equal(fields['保存している動画'], '1 件')
+    assert.equal(fields['保存している動画'], '1 件（内容の要約あり 0 件）')
     assert.equal(fields['配信'], '配信予定: [記念配信](https://www.youtube.com/watch?v=v1)')
   })
 
@@ -70,8 +70,27 @@ describe('/youtube', () => {
     fakeYouTubeApi()
     const again = interaction('sync')
     await command.func(again)
-    assert.match(again.replies[0].content, /最新の情報を取得しました/)
-    assert.deepEqual(store.writes, [{ saveSync: '100' }])
+    assert.match(again.replies[0].content, /最新の情報を取得しました。新しい動画 1 件を追加しました。/)
+    assert.deepEqual(store.writes, [{ saveSync: '100', videos: ['v1'] }])
+  })
+
+  test('sync: keeps what is stored and only adds what is new', async () => {
+    store.knowledge[100] = {
+      channel: { channel_ref: '@nobaman', synced_at: new Date('2026-10-01T00:00:00Z') },
+      videos: [{ video_id: 'old1', title: '昔の動画', published_at: new Date('2025-01-01T00:00:00Z') }]
+    }
+    fakeYouTubeApi()
+    const it = interaction('sync')
+    await command.func(it)
+    assert.match(it.replies[0].content, /新しい動画 1 件を追加しました。/)
+    assert.deepEqual(store.knowledge[100].videos.map(v => v.video_id), ['v1', 'old1'])
+  })
+
+  test('set: setting the same channel again keeps what was accumulated', async () => {
+    store.knowledge[100] = { channel: { channel_ref: '@nobaman', synced_at: new Date() }, videos: [{ video_id: 'old1', title: 'x', published_at: new Date('2025-01-01T00:00:00Z') }] }
+    fakeYouTubeApi()
+    await command.func(interaction('set', [{ name: 'channel', value: '@nobaman' }]))
+    assert.deepEqual(store.knowledge[100].videos.map(v => v.video_id), ['v1', 'old1'])
   })
 
   test('show: displays what is stored without calling YouTube', async () => {

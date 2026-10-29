@@ -73,25 +73,48 @@ function installBot ({ guilds = [], messages = {}, scheduledEvents = [], forums 
 }
 
 // Replaces the YouTube store with an in-memory one, so no test reaches a real database.
-// knowledge: { guildID: { channel, videos } } as getKnowledge() returns it.
-function installYouTubeStore (knowledge = {}) {
+// knowledge: { guildID: { channel, videos } } as getKnowledge() returns it; summaries:
+// { guildID: { videoID: summary } }.
+function installYouTubeStore (knowledge = {}, summaries = {}) {
   const store = require('../../src/db/interfaces/postgres/youtube')
   const writes = []
+  const withSummaries = guildID => knowledge[guildID] && {
+    ...knowledge[guildID],
+    videos: knowledge[guildID].videos.map(v => ({ ...v, summary: summaries[guildID]?.[v.video_id] || v.summary || null }))
+  }
   store.ensureTables = async () => {}
-  store.getKnowledge = async guildID => knowledge[guildID] || null
+  store.getKnowledge = async guildID => withSummaries(guildID) || null
+  store.getVideoIds = async guildID => new Set((knowledge[guildID]?.videos || []).map(v => v.video_id))
   store.setChannelRef = async (guildID, ref) => {
     writes.push({ setChannelRef: [guildID, ref] })
+    if (knowledge[guildID]?.channel.channel_ref === ref) return
     knowledge[guildID] = { channel: { guild_id: guildID, channel_ref: ref, synced_at: null }, videos: [] }
   }
   store.saveSync = async (guildID, { channel, videos }) => {
-    writes.push({ saveSync: guildID })
+    writes.push({ saveSync: guildID, videos: videos.map(v => v.id) })
+    const byID = new Map(knowledge[guildID].videos.map(v => [v.video_id, v]))
+    for (const v of videos) {
+      byID.set(v.id, { video_id: v.id, title: v.title, description: v.description, published_at: v.publishedAt, live_status: v.liveStatus, scheduled_start: v.scheduledStart, duration: v.duration, url: v.url })
+    }
     knowledge[guildID] = {
       channel: { ...knowledge[guildID].channel, channel_id: channel.id, title: channel.title, description: channel.description, handle: channel.handle, url: channel.url, synced_at: new Date('2026-10-29T12:00:00Z') },
-      videos: videos.map(v => ({ video_id: v.id, title: v.title, description: v.description, published_at: v.publishedAt, live_status: v.liveStatus, scheduled_start: v.scheduledStart, duration: v.duration, url: v.url }))
+      videos: [...byID.values()].sort((a, b) => new Date(b.published_at) - new Date(a.published_at))
     }
   }
-  store.deleteGuildYouTube = async guildID => { delete knowledge[guildID] }
-  return { knowledge, writes }
+  store.getSummary = async (guildID, videoID) => summaries[guildID]?.[videoID] || null
+  store.saveSummary = async (guildID, videoID, summary) => {
+    writes.push({ saveSummary: [guildID, videoID] })
+    summaries[guildID] = { ...summaries[guildID], [videoID]: summary }
+  }
+  store.getOtherSummaries = async guildID => {
+    const own = new Set((knowledge[guildID]?.videos || []).map(v => v.video_id))
+    return Object.entries(summaries[guildID] || {}).filter(([id]) => !own.has(id)).map(([videoID, summary]) => ({ video_id: videoID, summary }))
+  }
+  store.deleteGuildYouTube = async guildID => {
+    delete knowledge[guildID]
+    delete summaries[guildID]
+  }
+  return { knowledge, summaries, writes }
 }
 
 function configureGateway () {

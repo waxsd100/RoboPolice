@@ -86,3 +86,75 @@ describe('fetchChannelKnowledge', () => {
     assert.deepEqual(calls.map(c => c.path), ['channels', 'playlistItems'])
   })
 })
+
+describe('parseVideoId', () => {
+  const { parseVideoId } = require('../../src/bot/utils/youtube')
+  for (const [input, id] of [
+    ['https://www.youtube.com/watch?v=dQw4w9WgXcQ', 'dQw4w9WgXcQ'],
+    ['https://www.youtube.com/watch?feature=share&v=dQw4w9WgXcQ&t=10', 'dQw4w9WgXcQ'],
+    ['https://youtu.be/dQw4w9WgXcQ?si=abc', 'dQw4w9WgXcQ'],
+    ['https://www.youtube.com/shorts/dQw4w9WgXcQ', 'dQw4w9WgXcQ'],
+    ['https://www.youtube.com/live/dQw4w9WgXcQ?feature=shared', 'dQw4w9WgXcQ'],
+    ['https://m.youtube.com/watch?v=dQw4w9WgXcQ', 'dQw4w9WgXcQ'],
+    ['見て https://youtu.be/dQw4w9WgXcQ おすすめ', 'dQw4w9WgXcQ']
+  ]) {
+    test(`reads ${input}`, () => assert.equal(parseVideoId(input), id))
+  }
+  for (const input of ['https://www.youtube.com/@nobaman', 'https://example.com/watch?v=dQw4w9WgXcQ', 'https://youtu.be/short', '']) {
+    test(`rejects ${JSON.stringify(input)}`, () => assert.equal(parseVideoId(input), null))
+  }
+})
+
+describe('fetchChannelKnowledge paging', () => {
+  // A channel with `pages` pages of uploads, newest first: page 0 has v0..v49, page 1 v50..v99, …
+  function pagedApi (pages) {
+    const calls = []
+    global.fetch = async url => {
+      const u = new URL(url)
+      const path = u.pathname.split('/').pop()
+      calls.push({ path, token: u.searchParams.get('pageToken') })
+      if (path === 'channels') return { ok: true, json: async () => ({ items: [{ id: UC, snippet: { title: 'ch' }, contentDetails: { relatedPlaylists: { uploads: 'UUx' } } }] }) }
+      if (path === 'playlistItems') {
+        const page = Number(u.searchParams.get('pageToken') || 0)
+        const items = Array.from({ length: 50 }, (_, i) => ({ contentDetails: { videoId: `v${page * 50 + i}` } }))
+        return { ok: true, json: async () => ({ items, ...(page + 1 < pages ? { nextPageToken: String(page + 1) } : {}) }) }
+      }
+      const ids = u.searchParams.get('id').split(',')
+      return { ok: true, json: async () => ({ items: ids.map(id => ({ id, snippet: { title: id, publishedAt: '2026-01-01T00:00:00Z' } })) }) }
+    }
+    return calls
+  }
+
+  test('reads the whole channel when nothing is known yet', async () => {
+    const calls = pagedApi(3)
+    const { videos, complete } = await fetchChannelKnowledge({ id: UC }, 'k')
+    assert.equal(videos.length, 150)
+    assert.equal(complete, true)
+    assert.deepEqual(calls.filter(c => c.path === 'playlistItems').map(c => c.token), [null, '1', '2'])
+  })
+
+  test('afterwards stops at the first page whose videos are all known', async () => {
+    const calls = pagedApi(5)
+    // v0..v9 are new; everything from v10 on is stored, so page 1 is all known.
+    const knownIds = new Set(Array.from({ length: 240 }, (_, i) => `v${i + 10}`))
+    const { videos, complete } = await fetchChannelKnowledge({ id: UC }, 'k', { knownIds })
+    assert.deepEqual(calls.filter(c => c.path === 'playlistItems').map(c => c.token), [null, '1'])
+    assert.equal(videos.length, 100)
+    assert.equal(complete, true)
+  })
+
+  test('always re-reads the newest page, even when it is all known', async () => {
+    const calls = pagedApi(5)
+    const knownIds = new Set(Array.from({ length: 250 }, (_, i) => `v${i}`))
+    const { videos } = await fetchChannelKnowledge({ id: UC }, 'k', { knownIds })
+    assert.deepEqual(calls.map(c => c.path), ['channels', 'playlistItems', 'videos'])
+    assert.equal(videos.length, 50, 'the newest page is refreshed (e.g. an upcoming stream that went live)')
+  })
+
+  test('stops at the page limit and says the read is incomplete', async () => {
+    pagedApi(10)
+    const { videos, complete } = await fetchChannelKnowledge({ id: UC }, 'k', { maxPages: 3 })
+    assert.equal(videos.length, 150)
+    assert.equal(complete, false)
+  })
+})
