@@ -7,7 +7,9 @@ const MAX_OPTIONS = 4
 const MAX_RESULT_CHARS = 20000
 const MESSAGE_LINK = /^https?:\/\/(?:(?:ptb|canary)\.)?discord(?:app)?\.com\/channels\/(\d+)\/(\d+)\/(\d+)/i
 
-// Tools the model can call while drafting. All are read-only and scoped to what the requesting
+// Tools the model can call while drafting. A tool without arguments has no `parameters` at all:
+// Gemini rejects an OBJECT schema whose `properties` is empty, which failed every request.
+// All are read-only and scoped to what the requesting
 // member could see themselves, so a mention can't be used to read channels they have no access to.
 const DECLARATIONS = [
   {
@@ -34,13 +36,11 @@ const DECLARATIONS = [
   },
   {
     name: 'list_channels',
-    description: 'このサーバーで依頼者が閲覧できるチャンネルの一覧（ID・名前・種類）を得る。ボイス/ステージでイベントを行う場合のチャンネル選びにも使う。',
-    parameters: { type: 'OBJECT', properties: {} }
+    description: 'このサーバーで依頼者が閲覧できるチャンネルの一覧（ID・名前・種類）を得る。ボイス/ステージでイベントを行う場合のチャンネル選びにも使う。'
   },
   {
     name: 'list_forums',
-    description: '依頼者とBOTの両方が投稿できるフォーラムチャンネルの一覧（ID・名前・付けられるタグ・投稿ガイドライン）を得る。フォーラムへの投稿を頼まれたら必ず使う。',
-    parameters: { type: 'OBJECT', properties: {} }
+    description: '依頼者とBOTの両方が投稿できるフォーラムチャンネルの一覧（ID・名前・付けられるタグ・投稿ガイドライン）を得る。フォーラムへの投稿を頼まれたら必ず使う。'
   },
   {
     name: 'ask_user',
@@ -56,8 +56,7 @@ const DECLARATIONS = [
   },
   {
     name: 'list_scheduled_events',
-    description: 'このサーバーに登録済みのスケジュールイベントの一覧を得る。同じイベントの重複登録を避けるために使う。',
-    parameters: { type: 'OBJECT', properties: {} }
+    description: 'このサーバーに登録済みのスケジュールイベントの一覧を得る。同じイベントの重複登録を避けるために使う。'
   }
 ]
 

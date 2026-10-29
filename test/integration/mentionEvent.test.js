@@ -285,13 +285,15 @@ describe('mention → event / forum post (integration)', () => {
     assert.equal(discord.some(c => c.method === 'POST'), false)
   })
 
-  test('a Gemini failure is reported to the requester and logged', async (t) => {
+  test('a Gemini failure is reported to the requester with its cause, logged and sent to the error webhook', async (t) => {
     const logged = t.mock.method(global.logger, 'error', () => {})
+    const hooked = t.mock.method(global.webhook, 'error', () => {})
     const { channel, replies } = createChannel()
     installGemini([new Error('upstream down')])
     await mentionEvent.handle(mention(channel, '<@BOT> 交流会'))
-    assert.equal(replies[0].state.content, '作成中にエラーが発生しました。時間をおいてもう一度お試しください。')
+    assert.equal(replies[0].state.content, '作成中にエラーが発生しました（AI の呼び出しに失敗しました（HTTP 500））。時間をおいてもう一度お試しください。')
     assert.equal(logged.mock.callCount(), 1)
+    assert.match(hooked.mock.calls[0].arguments[0], /^Drafting from a mention in 100 failed: Gemini request failed: HTTP 500 upstream down/)
   })
 
   test('a second mention while the first is still running is turned away', async () => {

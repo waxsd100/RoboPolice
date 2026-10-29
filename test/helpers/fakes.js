@@ -4,6 +4,7 @@ const http = require('http')
 
 process.env.AES_KEY = process.env.AES_KEY || 'test-aes-key'
 global.logger = global.logger || { info () {}, warn () {}, error () {}, debug () {}, startup () {}, fatal () {} }
+global.webhook = global.webhook || { generic () {}, warn () {}, error () {}, fatal () {} }
 
 const READ = ['viewChannel', 'readMessageHistory']
 

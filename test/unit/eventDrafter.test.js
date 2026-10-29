@@ -100,7 +100,7 @@ describe('isConfigured', () => {
 describe('draft', () => {
   let toolCalls
   const tools = {
-    declarations: [{ name: 'lookup', description: 'x', parameters: { type: 'OBJECT', properties: {} } }],
+    declarations: [{ name: 'lookup', description: 'x' }],
     sources: [],
     async call (name, args) {
       toolCalls.push({ name, args })
@@ -197,8 +197,18 @@ describe('draft', () => {
     await assert.rejects(draft({ request: 'x', channelName: 'general', guild, tools, now: NOW }), /without a tool call/)
   })
 
-  test('fails on an HTTP error from the gateway', async () => {
+  test('fails on an HTTP error from the gateway, with a hint for the requester', async () => {
     installGemini([new Error('quota exceeded')])
-    await assert.rejects(draft({ request: 'x', channelName: 'general', guild, tools, now: NOW }), /HTTP 500 quota exceeded/)
+    await assert.rejects(draft({ request: 'x', channelName: 'general', guild, tools, now: NOW }), {
+      name: 'Error', message: /HTTP 500 quota exceeded/, hint: 'AI の呼び出しに失敗しました（HTTP 500）'
+    })
+  })
+
+  test('sends every submit tool with a non-empty schema', async () => {
+    const requests = installGemini([[submit({ found: false })]])
+    await draft({ request: 'x', channelName: 'general', guild, tools, now: NOW })
+    for (const d of requests[0].body.tools[0].functionDeclarations) {
+      if (d.parameters) assert.ok(Object.keys(d.parameters.properties).length > 0, d.name)
+    }
   })
 })

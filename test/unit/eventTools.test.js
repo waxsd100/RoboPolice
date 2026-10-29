@@ -170,6 +170,24 @@ describe('ask_user', () => {
   })
 })
 
+describe('declarations', () => {
+  // Gemini answers 400 to an OBJECT schema with empty properties, so no-argument tools must omit
+  // `parameters` entirely. This failed every drafting request in production.
+  test('never send an empty parameters schema', () => {
+    for (const d of tools().declarations) {
+      if (!d.parameters) continue
+      assert.ok(Object.keys(d.parameters.properties || {}).length > 0, `${d.name} has empty properties`)
+    }
+  })
+
+  test('omit parameters for tools without arguments', () => {
+    const byName = Object.fromEntries(tools().declarations.map(d => [d.name, d]))
+    for (const name of ['list_channels', 'list_forums', 'list_scheduled_events']) {
+      assert.equal(byName[name].parameters, undefined, name)
+    }
+  })
+})
+
 describe('call', () => {
   test('reports unknown tools', async () => {
     assert.match((await tools().call('drop_tables')).error, /不明なツール/)

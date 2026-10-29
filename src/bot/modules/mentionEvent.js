@@ -193,7 +193,10 @@ async function handle (message) {
       return
     }
     global.logger.error(e)
-    const content = '作成中にエラーが発生しました。時間をおいてもう一度お試しください。'
+    // The console log alone is easy to miss; also send it to the error webhook the operators watch.
+    global.webhook.error(`Drafting from a mention in ${guild.id} failed: ${e.message}`.slice(0, 2000))
+    const cause = e.hint || (e.name === 'TimeoutError' ? 'AI の応答が時間内に返りませんでした' : null)
+    const content = `作成中にエラーが発生しました${cause ? `（${cause}）` : ''}。時間をおいてもう一度お試しください。`
     if (reply) {
       await reply.edit({ content, components: [] }).catch(() => {})
     } else {
