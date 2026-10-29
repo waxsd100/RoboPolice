@@ -24,6 +24,7 @@ async function generate () {
     port: 5432
   })
   await loggerDB.query('CREATE TABLE messages ( id TEXT PRIMARY KEY, author_id TEXT NOT NULL, content TEXT, attachment_b64 TEXT, ts TIMESTAMPTZ )') // establish messages table
+  for (const sql of require('../db/messageColumns').SCHEMA) await loggerDB.query(sql) // channel/guild of each message, for the mention assistant
   await loggerDB.query('CREATE TABLE guilds ( id TEXT PRIMARY KEY, owner_id TEXT NOT NULL, ignored_channels TEXT[], disabled_events TEXT[], event_logs JSON, log_bots BOOL, custom_settings JSON )') // establish guilds table
   for (const sql of require('../db/interfaces/postgres/youtube').SCHEMA) await loggerDB.query(sql) // YouTube knowledge set with /youtube
   console.log('DB Generated!')

@@ -1,6 +1,7 @@
 const urlFetcher = require('../utils/urlFetcher')
 const { describeForums } = require('./forumPost')
 const youtubeDB = require('../../db/interfaces/postgres/youtube')
+const messageDB = require('../../db/interfaces/postgres/read')
 
 const MAX_RECENT_MESSAGES = 50
 const MAX_QUESTIONS = 3
@@ -31,6 +32,18 @@ const DECLARATIONS = [
       properties: {
         channel_id: { type: 'STRING' },
         limit: { type: 'INTEGER', description: `1〜${MAX_RECENT_MESSAGES}` }
+      },
+      required: ['channel_id']
+    }
+  },
+  {
+    name: 'search_channel_history',
+    description: 'このサーバーのチャンネルについて、BOT が保存しているこれまでのメッセージを新しい順に読む（get_recent_messages より長い期間を見られる）。「このチャンネルの内容をもとに」「これまでの話をまとめて」のような依頼で使う。query を指定するとその語をすべて含むものに絞る。',
+    parameters: {
+      type: 'OBJECT',
+      properties: {
+        channel_id: { type: 'STRING' },
+        query: { type: 'STRING', description: '本文に含まれる語（空白区切りで AND）。省略可' }
       },
       required: ['channel_id']
     }
@@ -69,6 +82,10 @@ const DECLARATIONS = [
   }
 ]
 
+// How much stored history one search reads, and how many matching messages it returns.
+const HISTORY_SCAN = 1000
+const MAX_HISTORY_RESULTS = 100
+const MAX_HISTORY_TEXT = 500
 const MAX_PROFILE_CHANNELS = 80
 const MAX_PROFILE_ROLES = 40
 const MAX_TOPIC = 100
@@ -135,6 +152,24 @@ function createTools ({ guild, member, ask }) {
       const messages = await global.bot.getMessages(channelID, { limit: count })
       sources.push(`<#${channel.id}>`)
       return messages.map(formatMessage).join('\n')
+    },
+    async search_channel_history ({ channel_id: channelID, query }) {
+      const channel = readableChannel(channelID)
+      const rows = await messageDB.getChannelHistory(channelID, HISTORY_SCAN)
+      const words = String(query || '').toLowerCase().split(/\s+/).filter(Boolean)
+      const matches = rows.filter(r => words.every(w => (r.content || '').toLowerCase().includes(w)))
+      sources.push(`<#${channel.id}>`)
+      if (rows.length === 0) return `<#${channel.id}> の保存済みメッセージはありません（保存しているのは削除・編集ログを設定したサーバーの、保持期間内のメッセージのみ）`
+      const name = id => guild.members.get(id)?.username || id
+      // Oldest first, like reading the channel.
+      const lines = matches.slice(0, MAX_HISTORY_RESULTS).reverse()
+        .map(r => `[${new Date(r.ts).toISOString()}] ${name(r.author_id)}: ${(r.content || '').replace(/\s+/g, ' ').slice(0, MAX_HISTORY_TEXT)}`)
+      const oldest = new Date(rows[rows.length - 1].ts).toISOString()
+      return [
+        `<#${channel.id}> の保存済みメッセージ ${rows.length} 件（${oldest} 以降）${words.length ? `のうち「${query}」を含む ${matches.length} 件` : ''}、古い順:`,
+        ...lines,
+        ...(matches.length > MAX_HISTORY_RESULTS ? [`…ほか ${matches.length - MAX_HISTORY_RESULTS} 件（query で絞り込めます）`] : [])
+      ].join('\n')
     },
     async list_channels () {
       return [...guild.channels.values()]

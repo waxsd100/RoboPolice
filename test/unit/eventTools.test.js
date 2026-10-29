@@ -1,8 +1,9 @@
 const { test, describe, beforeEach } = require('node:test')
 const assert = require('node:assert/strict')
+// Load first: it sets the environment the bot modules read when they are required.
+const { createGuild, createMember, installBot } = require('../helpers/fakes')
 const urlFetcher = require('../../src/bot/utils/urlFetcher')
 const { createTools, formatMessage, StopDrafting } = require('../../src/bot/modules/eventTools')
-const { createGuild, createMember, installBot } = require('../helpers/fakes')
 
 const REQUESTER = '1'
 const guild = createGuild({

@@ -2,6 +2,7 @@ global.logger = require('../miscellaneous/logger');
 const format = require('pg-format')
 const pool = require('./clients/postgres')
 const aes = require('./aes')
+const { ensureChannelColumns } = require('./messageColumns')
 const batch = []
 global.timesSubmitted = 0
 global.totalMessagesSubmitted = 0
@@ -17,10 +18,12 @@ async function addItem (messageAsArray) {
   }
 }
 
+// A batch row: [id, author_id, encrypted content, encrypted attachments, ts, channel_id, guild_id]
 async function submitBatch (batchSize) {
   const toSubmit = batch.splice(0, batchSize)
+  await ensureChannelColumns()
   const poolClient = await pool.getPostgresClient()
-  await poolClient.query(format('INSERT INTO messages (id, author_id, content, attachment_b64, ts) VALUES %L ON CONFLICT DO NOTHING', toSubmit))
+  await poolClient.query(format('INSERT INTO messages (id, author_id, content, attachment_b64, ts, channel_id, guild_id) VALUES %L ON CONFLICT DO NOTHING', toSubmit))
   poolClient.release()
   global.timesSubmitted += 1
   global.totalMessagesSubmitted += batchSize
@@ -70,7 +73,16 @@ function updateMessage (messageID, changedAttrs) {
   }
 }
 
+// Messages of `channelID` still waiting in memory, newest first, decrypted like rows from Postgres.
+function getChannelMessages (channelID) {
+  return batch
+    .filter(m => m[5] === channelID)
+    .map(m => ({ id: m[0], author_id: m[1], content: aes.decrypt(m[2]), ts: new Date(m[4]), channel_id: m[5] }))
+    .reverse()
+}
+
 exports.getMessage = getMessage
+exports.getChannelMessages = getChannelMessages
 exports.addItem = addItem
 exports.updateMessage = updateMessage
 exports.submitBatch = submitBatch

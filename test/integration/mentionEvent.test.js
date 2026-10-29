@@ -575,6 +575,36 @@ describe('mention → event / forum post (integration)', () => {
     assert.equal(post.body.entity_metadata.location, 'https://www.youtube.com/watch?v=v2')
   })
 
+  test('channel history: "このチャンネルの内容で" reads the stored messages of the request channel', async (t) => {
+    const read = require('../../src/db/interfaces/postgres/read')
+    t.mock.method(read, 'getChannelHistory', async channelID => channelID === '201'
+      ? [
+          { author_id: '3', content: '決定！ 11/8(土) 14時から渋谷で勉強会やります', ts: new Date('2026-10-28T10:00:00Z') },
+          { author_id: '2', content: '勉強会いつにする？', ts: new Date('2026-10-25T10:00:00Z') }
+        ]
+      : [])
+    const { channel, replies } = createChannel()
+    const requests = installGemini([
+      body => {
+        assert.match(body.contents[0].parts[0].text, /依頼されたチャンネル: #general（ID: 201）/)
+        return [call('search_channel_history', { channel_id: '201', query: '勉強会' })]
+      },
+      body => {
+        const result = lastToolResponses(body)[0].response.result
+        assert.match(result, /保存済みメッセージ 2 件.*のうち「勉強会」を含む 2 件、古い順:\n\[2026-10-25T10:00:00\.000Z\] .*勉強会いつにする？\n\[2026-10-28T10:00:00\.000Z\] .*11\/8\(土\) 14時から渋谷/)
+        return [submit({ name: '勉強会', start: '2026-11-08T14:00:00+09:00', location: '渋谷' })]
+      }
+    ])
+    const done = mentionEvent.handle(mention(channel, '<@BOT> このチャンネルの内容でイベントを作って'))
+    const [reply] = replies
+    await waitForButtons(reply, '登録する')
+    assert.match(requests[0].body.systemInstruction.parts[0].text, /search_channel_history/)
+    assert.equal(reply.state.embeds[0].fields.find(f => f.name === '参照元').value, '<#201>')
+    await press(reply, '登録する')
+    await done
+    assert.equal(discord.find(c => c.method === 'POST').body.scheduled_start_time, '2026-11-08T05:00:00.000Z')
+  })
+
   test('the draft still works when the server profile cannot be built', async (t) => {
     const warned = t.mock.method(global.logger, 'warn', () => {})
     require('../../src/db/interfaces/postgres/youtube').getKnowledge = async () => { throw new Error('db down') }

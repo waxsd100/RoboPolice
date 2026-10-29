@@ -43,7 +43,7 @@ Short version; the Privacy Policy is authoritative.
 
 | Data | Where | Retention |
 |---|---|---|
-| Message ID, author ID, timestamp, AES-256 encrypted content and attachment URLs | PostgreSQL `messages` | `MESSAGE_HISTORY_DAYS` days, or forever if unset |
+| Message ID, author ID, channel ID, server ID, timestamp, AES-256 encrypted content and attachment URLs | PostgreSQL `messages` | `MESSAGE_HISTORY_DAYS` days, or forever if unset |
 | Per-server settings (log channels, ignored channels, disabled events) | PostgreSQL `guilds` | Until the app leaves the server |
 | Invite counters, webhook handles, guild settings | Redis | 3 hours |
 | The YouTube channel set with `/youtube`, its description and up to 50 recent videos (public YouTube data) | PostgreSQL `youtube_channels`, `youtube_videos` | Until the next `/youtube sync`/`set`, or the app leaves the server |
@@ -75,8 +75,13 @@ are refused.
 Every request also carries a profile of the server, fetched fresh each time: its name and
 description, the channels the requester can see (with their topics, grouped by category, the request
 channel marked with its ID), role names, scheduled events, and whether a YouTube channel is stored.
-Questions about "this channel" are answered by reading its recent messages on demand; message
-history is never stored for this.
+Questions about "this channel" are answered from the stored message history: the
+`search_channel_history` tool reads a channel's stored messages (up to the newest 1000, optionally
+narrowed by words) for channels both the requester and the app can read, and sends the matching text
+to Gemini. This is the same `messages` table the deletion and edit logs use, so it covers only servers
+with such a log channel, only messages stored since the channel/server columns were added (older rows
+have no channel), and only within `MESSAGE_HISTORY_DAYS`. `get_recent_messages` still reads the latest
+messages straight from Discord when nothing is stored.
 
 ### YouTube knowledge
 
