@@ -15,10 +15,27 @@ const { PRIMARY, SECONDARY, SUCCESS, DANGER } = Eris.Constants.ButtonStyles
 // One draft at a time per user, so repeated mentions don't stack up Gemini calls.
 const inProgress = new Set()
 
+// The bot's own role, which Discord creates when the bot joins. Typing "@ロボポリス" offers it next
+// to the bot itself, and picking it sends a role mention that otherwise looked like no mention.
+function isOwnRole (guild, roleID) {
+  return guild.roles.get(roleID)?.tags?.bot_id === global.bot.user.id
+}
+
+// Mentions in the text that address the bot: the bot itself or its own role.
+function mentionPattern () {
+  return new RegExp(`<@!?${global.bot.user.id}>|<@&(\\d+)>`, 'g')
+}
+
 // Only an explicit @mention in the text. message.mentions also includes the author of a replied-to
 // message, so replying to one of the bot's own answers would otherwise start a new draft.
 function isMentioned (message) {
-  return new RegExp(`<@!?${global.bot.user.id}>`).test(message.content)
+  const guild = message.channel.guild
+  return [...message.content.matchAll(mentionPattern())].some(m => !m[1] || isOwnRole(guild, m[1]))
+}
+
+let warnedUnconfigured = false
+function missingSettings () {
+  return ['CLOUDFLARE_ACCOUNT_ID', 'CLOUDFLARE_AI_GATEWAY_ID'].filter(name => !process.env[name])
 }
 
 // The assistant is a tool for the people who run the server, so it is limited to members who can
@@ -31,7 +48,10 @@ function canUseAssistant (member, guild) {
 }
 
 function extractRequest (message) {
-  return message.content.replace(new RegExp(`<@!?${global.bot.user.id}>`, 'g'), '').trim()
+  const guild = message.channel.guild
+  return message.content
+    .replace(mentionPattern(), (whole, roleID) => !roleID || isOwnRole(guild, roleID) ? '' : whole)
+    .trim()
 }
 
 // The error log for the reply: message and the top of the stack, with secrets masked, since the
@@ -152,7 +172,16 @@ async function handle (message) {
   const guild = message.channel.guild
   const reference = { messageReference: { messageID: message.id, failIfNotExists: false } }
 
-  if (!isConfigured()) return
+  if (!isConfigured()) {
+    // Say why nothing happens, but only to staff: for everyone else the feature simply isn't there.
+    const missing = missingSettings()
+    if (!warnedUnconfigured) {
+      warnedUnconfigured = true
+      global.logger.warn(`Mention drafting is disabled: ${missing.join(', ')} not set`)
+    }
+    if (!canUseAssistant(message.member, guild)) return
+    return message.channel.createMessage({ content: `メンション機能が設定されていないため使えません（未設定: ${missing.join(', ')}）。`, ...reference }).catch(() => {})
+  }
   if (!canUseAssistant(message.member, guild)) {
     return message.channel.createMessage({ content: 'この機能を使うには「イベントの管理」権限が必要です。', ...reference }).catch(() => {})
   }

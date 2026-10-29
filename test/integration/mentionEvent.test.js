@@ -23,6 +23,10 @@ const guild = createGuild({
     { id: '207', name: '運営連絡', type: 15, posters: ['BOT'] }
   ]
 })
+// The role Discord creates for the bot, and an unrelated role.
+guild.roles.set('800', { id: '800', name: 'ロボポリス', managed: true, tags: { bot_id: 'BOT' } })
+guild.roles.set('801', { id: '801', name: '運営' })
+
 const FORUMS = {
   206: { available_tags: [{ id: 'tag-open', name: '募集中' }, { id: 'tag-staff', name: '運営', moderated: true }], flags: 16, topic: '題名に日付を入れる' },
   207: { available_tags: [] }
@@ -335,10 +339,31 @@ describe('mention → event / forum post (integration)', () => {
       assert.equal(replies.length, 0)
     })
 
-    test('does nothing until the gateway is configured', async () => {
+    test('tells staff which settings are missing, once logs it, and stays silent for others', async (t) => {
+      const warned = t.mock.method(global.logger, 'warn', () => {})
       delete process.env.CLOUDFLARE_ACCOUNT_ID
       const { channel, replies } = createChannel()
       await mentionEvent.handle(mention(channel, '<@BOT> 交流会'))
+      assert.equal(replies[0].state.content, 'メンション機能が設定されていないため使えません（未設定: CLOUDFLARE_ACCOUNT_ID）。')
+      await mentionEvent.handle(mention(channel, '<@BOT> 交流会', { author: OTHER_USER, member: createMember({ id: OTHER_USER, permissions: [] }) }))
+      assert.equal(replies.length, 1)
+      await mentionEvent.handle(mention(channel, '<@BOT> 交流会'))
+      assert.equal(warned.mock.callCount(), 1)
+      assert.match(warned.mock.calls[0].arguments[0], /Mention drafting is disabled: CLOUDFLARE_ACCOUNT_ID not set/)
+    })
+
+    test('treats a mention of the bot\'s own role as a mention of the bot', async () => {
+      const { channel, replies } = createChannel()
+      const requests = installGemini([[submit({ found: false, reason: 'なし' })]])
+      await mentionEvent.handle(mention(channel, '<@&800> 交流会 <@&801> と相談'))
+      assert.equal(replies[0].state.content, '作成できませんでした: なし')
+      // The bot's role is stripped from the request; other role mentions are kept as written.
+      assert.match(requests[0].body.contents[0].parts[0].text, /## 依頼メッセージ\n交流会 <@&801> と相談/)
+    })
+
+    test('ignores a mention of some other role', async () => {
+      const { channel, replies } = createChannel()
+      await mentionEvent.handle(mention(channel, '<@&801> 交流会'))
       assert.equal(replies.length, 0)
     })
 
