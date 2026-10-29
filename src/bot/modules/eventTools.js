@@ -1,6 +1,8 @@
 const { fetchPageText } = require('../utils/urlFetcher')
 
 const MAX_RECENT_MESSAGES = 50
+const MAX_QUESTIONS = 3
+const MAX_OPTIONS = 4
 const MAX_RESULT_CHARS = 20000
 const MESSAGE_LINK = /^https?:\/\/(?:(?:ptb|canary)\.)?discord(?:app)?\.com\/channels\/(\d+)\/(\d+)\/(\d+)/i
 
@@ -35,6 +37,18 @@ const DECLARATIONS = [
     parameters: { type: 'OBJECT', properties: {} }
   },
   {
+    name: 'ask_user',
+    description: `候補が複数ある・日時や場所が曖昧など、依頼者に決めてもらう必要があるときに、選択肢をボタンで提示して1つ選んでもらう。選択肢は2〜${MAX_OPTIONS}個の短い文。自由記述が必要な質問には使わない。`,
+    parameters: {
+      type: 'OBJECT',
+      properties: {
+        question: { type: 'STRING' },
+        options: { type: 'ARRAY', items: { type: 'STRING' } }
+      },
+      required: ['question', 'options']
+    }
+  },
+  {
     name: 'list_scheduled_events',
     description: 'このサーバーに登録済みのスケジュールイベントの一覧を得る。同じイベントの重複登録を避けるために使う。',
     parameters: { type: 'OBJECT', properties: {} }
@@ -58,8 +72,13 @@ function formatMessage (m) {
   return lines.join('\n')
 }
 
-function createTools ({ guild, member }) {
+// Thrown to end the whole draft (the requester cancelled or stopped answering). Unlike a tool error
+// it is not handed back to the model.
+class StopDrafting extends Error {}
+
+function createTools ({ guild, member, ask }) {
   const sources = []
+  let questions = 0
 
   function readableChannel (channelID) {
     const channel = global.bot.getChannel(channelID)
@@ -102,6 +121,14 @@ function createTools ({ guild, member }) {
         .map(c => `${c.id}: ${c.name}（${CHANNEL_TYPES[c.type] || c.type}）`)
         .join('\n')
     },
+    async ask_user ({ question, options }) {
+      const choices = [...new Set((options || []).map(o => String(o).trim()).filter(Boolean))].slice(0, MAX_OPTIONS)
+      if (!question || choices.length < 2) throw new Error(`question と2〜${MAX_OPTIONS}個の options が必要です`)
+      if (questions >= MAX_QUESTIONS) throw new Error('これ以上依頼者に質問できません。分かっている情報で提出してください')
+      questions++
+      const answer = await ask(String(question), choices)
+      return `依頼者の回答: ${answer}`
+    },
     async list_scheduled_events () {
       const events = await global.bot.requestHandler.request('GET', `/guilds/${guild.id}/scheduled-events`, true)
       if (events.length === 0) return '登録済みのイベントはありません'
@@ -117,6 +144,7 @@ function createTools ({ guild, member }) {
       const result = await executors[name](args || {})
       return { result: String(result).slice(0, MAX_RESULT_CHARS) }
     } catch (e) {
+      if (e instanceof StopDrafting) throw e
       return { error: e.message }
     }
   }
@@ -124,4 +152,4 @@ function createTools ({ guild, member }) {
   return { declarations: DECLARATIONS, call, sources, readMessage }
 }
 
-module.exports = { createTools, formatMessage, MESSAGE_LINK }
+module.exports = { createTools, formatMessage, MESSAGE_LINK, StopDrafting }

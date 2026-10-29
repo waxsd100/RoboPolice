@@ -60,7 +60,9 @@ staff) can use it, and the app needs the **Manage Events** permission.
 
 Drafting is a Gemini function-calling loop (`src/bot/modules/eventDrafter.js`) over read-only tools
 (`src/bot/modules/eventTools.js`): fetch a web page, read a Discord message by link, read a channel's
-recent messages, list channels, and list existing scheduled events. Discord reads are limited to this
+recent messages, list channels, and list existing scheduled events. When something can't be decided
+from those (several candidate events, an ambiguous date), the model asks the requester with up to 4
+buttons plus a way to stop, at most 3 times per draft. Discord reads are limited to this
 server and to channels both the requester and the app can read, so a mention can't reveal a channel
 the requester couldn't open. Web pages are fetched by the app itself; private and loopback addresses
 are refused.

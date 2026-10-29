@@ -1,7 +1,8 @@
 const DEFAULT_GEMINI_MODEL = 'gemini-flash-latest'
 const GEMINI_TIMEOUT_MS = 60000
-// Each step is one Gemini round trip; a draft normally needs 1-3 lookups before submitting.
-const MAX_STEPS = 8
+// Each step is one Gemini round trip; a draft normally needs 1-3 lookups (and maybe a question)
+// before submitting.
+const MAX_STEPS = 10
 // Dates in messages and event pages are written for this community's local time.
 const TIMEZONE = 'Asia/Tokyo'
 
@@ -40,7 +41,8 @@ const SYSTEM_INSTRUCTION = [
   '書かれていない情報は推測で埋めず、空にしてください。開始日時が分からなければ found を false にしてください。',
   '依頼メッセージに場所や名前の指定があれば、参照先の内容より依頼メッセージを優先してください。',
   'ボイス/ステージチャンネルで行う場合は list_channels でチャンネル ID を確認してください。',
-  '同じイベントがすでに登録されていそうなら list_scheduled_events で確認し、重複なら found を false にして理由を書いてください。'
+  '同じイベントがすでに登録されていそうなら list_scheduled_events で確認し、重複なら found を false にして理由を書いてください。',
+  '候補のイベントが複数ある、日時・場所・チャンネルが曖昧などで決められないときは、推測せず ask_user で選択肢を示して依頼者に選んでもらってください。調べれば分かることは質問しないでください。'
 ].join('\n')
 
 function isConfigured () {
@@ -108,9 +110,11 @@ async function runAgent (prompt, tools) {
     const submitted = calls.find(c => c.name === SUBMIT_DECLARATION.name)
     if (submitted) return submitted.args || {}
     if (calls.length === 0) throw new Error(`Gemini answered without a tool call: ${JSON.stringify(content).slice(0, 500)}`)
-    const responses = await Promise.all(calls.map(async c => ({
-      functionResponse: { name: c.name, response: await tools.call(c.name, c.args) }
-    })))
+    // Sequential, not parallel: two ask_user calls would otherwise fight over the same message.
+    const responses = []
+    for (const c of calls) {
+      responses.push({ functionResponse: { name: c.name, response: await tools.call(c.name, c.args) } })
+    }
     contents.push({ role: 'user', parts: responses })
   }
   return { found: false, reason: '調べる手順が多すぎたため、下書きを作れませんでした。依頼をもう少し具体的にしてください。' }

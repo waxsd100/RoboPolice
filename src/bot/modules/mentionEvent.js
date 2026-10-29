@@ -1,11 +1,13 @@
 const Eris = require('eris')
 const { v4: uuidv4 } = require('uuid')
 const { draftEvent, isConfigured, ENTITY_TYPES } = require('./eventDrafter')
-const { createTools } = require('./eventTools')
+const { createTools, StopDrafting } = require('./eventTools')
 const { EMBED_COLORS } = require('../utils/constants')
 const { hasStaffAccess } = require('../utils/staffAccess')
 
-const CONFIRM_TIMEOUT_MS = 5 * 60 * 1000
+const ANSWER_TIMEOUT_MS = 5 * 60 * 1000
+const { BUTTON } = Eris.Constants.ComponentTypes
+const { PRIMARY, SECONDARY, SUCCESS, DANGER } = Eris.Constants.ButtonStyles
 
 // One draft at a time per user, so repeated mentions don't stack up Gemini calls.
 const inProgress = new Set()
@@ -48,29 +50,37 @@ function previewEmbed (event, sources, endGuessed, requester) {
   }
 }
 
-async function confirm (reply, requesterID, embed) {
+// Shows `buttons` on the reply and waits for the requester to press one. Resolves to the pressed
+// button's index and its interaction, or null if nobody pressed within the timeout.
+async function choose (reply, requesterID, message, buttons) {
   const { awaitCustomID } = require('../events/interactionCreate')
-  const createID = uuidv4()
-  const cancelID = uuidv4()
+  const ids = buttons.map(() => uuidv4())
   await reply.edit({
-    content: '',
-    embeds: [embed],
+    ...message,
     components: [{
       type: Eris.Constants.ComponentTypes.ACTION_ROW,
-      components: [
-        { type: Eris.Constants.ComponentTypes.BUTTON, style: Eris.Constants.ButtonStyles.SUCCESS, label: '登録する', custom_id: createID },
-        { type: Eris.Constants.ComponentTypes.BUTTON, style: Eris.Constants.ButtonStyles.DANGER, label: 'キャンセル', custom_id: cancelID }
-      ]
+      components: buttons.map((b, i) => ({ type: BUTTON, style: b.style, label: b.label.slice(0, 80), custom_id: ids[i] }))
     }]
   })
   try {
-    const interaction = await Promise.race([
-      awaitCustomID(createID, requesterID, CONFIRM_TIMEOUT_MS),
-      awaitCustomID(cancelID, requesterID, CONFIRM_TIMEOUT_MS)
-    ])
-    return { interaction, confirmed: interaction.data.custom_id === createID }
+    const interaction = await Promise.race(ids.map(id => awaitCustomID(id, requesterID, ANSWER_TIMEOUT_MS)))
+    return { index: ids.indexOf(interaction.data.custom_id), interaction }
   } catch (_) {
-    return { interaction: null, confirmed: false }
+    return null
+  }
+}
+
+// The ask_user tool: the model's question as buttons, plus a way out.
+function asker (reply, requesterID) {
+  return async (question, options) => {
+    const picked = await choose(reply, requesterID, {
+      content: '',
+      embeds: [{ title: '確認させてください', description: question, color: EMBED_COLORS.YELLOW_ORANGE }]
+    }, [...options.map(label => ({ label, style: PRIMARY })), { label: 'やめる', style: SECONDARY }])
+    if (!picked) throw new StopDrafting('時間内に回答がなかったため、作成を取りやめました。')
+    if (picked.index === options.length) throw new StopDrafting('作成をやめました。')
+    await reply.edit({ content: `「${options[picked.index]}」で続けます…`, embeds: [], components: [] })
+    return options[picked.index]
   }
 }
 
@@ -100,7 +110,7 @@ async function handle (message) {
   let reply
   try {
     reply = await message.channel.createMessage({ content: '内容を読み取っています…', ...reference })
-    const tools = createTools({ guild, member: message.member })
+    const tools = createTools({ guild, member: message.member, ask: asker(reply, message.author.id) })
     // A mention sent as a reply ("@bot これをイベントにして") is about the replied-to message.
     const referenced = repliedTo
       ? await tools.readMessage(message.messageReference.channelID || message.channel.id, repliedTo).catch(e => `（読めませんでした: ${e.message}）`)
@@ -112,12 +122,16 @@ async function handle (message) {
     }
 
     const embed = previewEmbed(result.event, [...new Set(tools.sources)], result.endGuessed, message.author)
-    const { interaction, confirmed } = await confirm(reply, message.author.id, embed)
-    if (!interaction) {
+    const picked = await choose(reply, message.author.id, { content: '', embeds: [embed] }, [
+      { label: '登録する', style: SUCCESS },
+      { label: 'キャンセル', style: DANGER }
+    ])
+    if (!picked) {
       await reply.edit({ content: '時間内に確認されなかったため、登録を取りやめました。', components: [] })
       return
     }
-    if (!confirmed) {
+    const { interaction } = picked
+    if (picked.index !== 0) {
       await interaction.editOriginalMessage({ content: '登録をキャンセルしました。', components: [] })
       return
     }
@@ -131,6 +145,10 @@ async function handle (message) {
       components: []
     })
   } catch (e) {
+    if (e instanceof StopDrafting) {
+      await reply.edit({ content: e.message, embeds: [], components: [] }).catch(() => {})
+      return
+    }
     global.logger.error(e)
     const content = 'イベントの作成中にエラーが発生しました。時間をおいてもう一度お試しください。'
     if (reply) {
