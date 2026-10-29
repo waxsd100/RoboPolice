@@ -46,6 +46,7 @@ Short version; the Privacy Policy is authoritative.
 | Message ID, author ID, timestamp, AES-256 encrypted content and attachment URLs | PostgreSQL `messages` | `MESSAGE_HISTORY_DAYS` days, or forever if unset |
 | Per-server settings (log channels, ignored channels, disabled events) | PostgreSQL `guilds` | Until the app leaves the server |
 | Invite counters, webhook handles, guild settings | Redis | 3 hours |
+| The YouTube channel set with `/youtube`, its description and up to 50 recent videos (public YouTube data) | PostgreSQL `youtube_channels`, `youtube_videos` | Until the next `/youtube sync`/`set`, or the app leaves the server |
 
 Message rows are written **only for servers that have a message deletion or edit log channel
 configured** — a server with none never has message content stored, since nothing could read it back.
@@ -71,9 +72,24 @@ server and to channels both the requester and the app can read, so a mention can
 the requester couldn't open. Web pages are fetched by the app itself; private and loopback addresses
 are refused.
 
-What the tools read (the mention, the replied-to message, linked pages and Discord messages, channel
-names) is sent to Google Gemini through Cloudflare AI Gateway. Nothing from this flow is stored by
-the app. Use a paid Gemini API tier: on the free tier Google may use the input to improve its models,
+Every request also carries a profile of the server, fetched fresh each time: its name and
+description, the channels the requester can see (with their topics, grouped by category, the request
+channel marked with its ID), role names, scheduled events, and whether a YouTube channel is stored.
+Questions about "this channel" are answered by reading its recent messages on demand; message
+history is never stored for this.
+
+### YouTube knowledge
+
+`/youtube set channel:<URL or @handle>` (Manage Server) sets the server's YouTube channel and reads it
+right away; `/youtube sync` reads it again and `/youtube show` shows what is stored. A read takes the
+channel's description and its 50 most recent uploads, including whether each is upcoming or live and
+when, through the YouTube Data API (`YOUTUBE_API_KEY`, 3 quota units per read), and replaces what was
+stored. The model searches it with the `search_youtube` tool. The tables are created on first use,
+so existing deployments need no migration.
+
+What the tools read (the mention, the replied-to message, linked pages and Discord messages, the
+server profile, stored YouTube data) is sent to Google Gemini through Cloudflare AI Gateway. Nothing
+from this flow is stored by the app. Use a paid Gemini API tier: on the free tier Google may use the input to improve its models,
 which the intent review answers rule out.
 
 The preview has Register / Post, **Fix** and Cancel buttons. Fix asks the requester to type what to
@@ -133,6 +149,7 @@ credentials in URLs. The same masked text goes to the error webhook.
 | `CLOUDFLARE_AI_GATEWAY_BYOK_ALIAS` | Optional. Name of the Gemini key stored in the gateway (BYOK), sent as `cf-aig-byok-alias`. Unset uses the key named `default` |
 | `GEMINI_API_KEY` | Optional when the key is stored in the gateway (BYOK); otherwise required for drafting from mentions |
 | `GEMINI_MODEL` | Optional. Defaults to `gemini-flash-latest` |
+| `YOUTUBE_API_KEY` | Optional. YouTube Data API v3 key for `/youtube`. Unset disables the command |
 | `GEMINI_IMAGE_MODEL` | Optional. Image model for AI-made covers. Defaults to `gemini-3.1-flash-image` |
 
 Values that never differ between deployments are constants in code rather than environment

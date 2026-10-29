@@ -1,7 +1,7 @@
 const Eris = require('eris')
 const { v4: uuidv4 } = require('uuid')
 const { draft, revise, isConfigured, ENTITY_TYPES } = require('./eventDrafter')
-const { createTools, StopDrafting } = require('./eventTools')
+const { createTools, describeServer, StopDrafting } = require('./eventTools')
 const { EMBED_COLORS } = require('../utils/constants')
 const { hasStaffAccess } = require('../utils/staffAccess')
 const { redact } = require('../utils/redact')
@@ -316,10 +316,17 @@ async function handle (message) {
     const referenced = repliedTo
       ? await tools.readMessage(message.messageReference.channelID || message.channel.id, repliedTo).catch(e => `（読めませんでした: ${e.message}）`)
       : null
+    // Fetched fresh for every request. Without it the draft still works, just with less context.
+    const server = await describeServer(guild, member, message.channel.id).catch(e => {
+      global.logger.warn(`Could not describe server ${guild.id}: ${e.message}`)
+      return null
+    })
     let result = await draft({
       request,
       referenced,
       channelName: message.channel.name,
+      channelID: message.channel.id,
+      server,
       forum: namedForum(message),
       images: attachedImages(message),
       guild,

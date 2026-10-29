@@ -8,6 +8,33 @@ module.exports = {
         description: 'Is the bot still alive? Find out using this!'
       },
       {
+        name: 'youtube',
+        description: 'Set the YouTube channel the assistant knows about, and refresh what it knows',
+        options: [
+          {
+            type: ERIS_CONSTANTS.ApplicationCommandOptionTypes.SUB_COMMAND,
+            name: 'set',
+            description: 'Set this server\'s YouTube channel and read it now',
+            options: [{
+              type: ERIS_CONSTANTS.ApplicationCommandOptionTypes.STRING,
+              name: 'channel',
+              description: 'Channel URL (youtube.com/@name or /channel/UC...) or @name',
+              required: true
+            }]
+          },
+          {
+            type: ERIS_CONSTANTS.ApplicationCommandOptionTypes.SUB_COMMAND,
+            name: 'sync',
+            description: 'Read the channel again (latest videos and lives)'
+          },
+          {
+            type: ERIS_CONSTANTS.ApplicationCommandOptionTypes.SUB_COMMAND,
+            name: 'show',
+            description: 'Show what is stored'
+          }
+        ]
+      },
+      {
         name: 'serverinfo',
         description: 'Shows you information about the server (role count, member count, features)'
       },

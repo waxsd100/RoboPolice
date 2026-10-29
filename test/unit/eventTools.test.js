@@ -212,3 +212,116 @@ describe('formatMessage', () => {
     ].join('\n'))
   })
 })
+
+describe('describeServer', () => {
+  const { describeServer } = require('../../src/bot/modules/eventTools')
+  const { installYouTubeStore } = require('../helpers/fakes')
+
+  function richGuild () {
+    const g = createGuild({
+      channels: [
+        { id: '10', name: 'イベント', type: 4, readers: [REQUESTER] },
+        { id: '11', name: 'お知らせ', type: 5, readers: [REQUESTER] },
+        { id: '12', name: '雑談', type: 0, readers: [REQUESTER] },
+        { id: '13', name: '運営', type: 0, readers: [] },
+        { id: '14', name: 'ボイス', type: 2, readers: [REQUESTER] }
+      ]
+    })
+    Object.assign(g, { name: 'のばまんサーバー', description: 'ゲーム好きの集まり', memberCount: 12000, rulesChannelID: '11' })
+    Object.assign(g.channels.get('10'), { position: 0 })
+    Object.assign(g.channels.get('11'), { parentID: '10', position: 0, topic: '運営からのお知らせ。\n書き込み禁止' })
+    Object.assign(g.channels.get('12'), { parentID: '10', position: 1 })
+    Object.assign(g.channels.get('14'), { position: 5 })
+    g.roles.set(g.id, { id: g.id, name: '@everyone', position: 0 })
+    g.roles.set('r1', { id: 'r1', name: 'メンバー', position: 1 })
+    g.roles.set('r2', { id: 'r2', name: '運営', position: 3 })
+    g.roles.set('r3', { id: 'r3', name: 'ロボポリス', position: 2, managed: true })
+    return g
+  }
+
+  test('describes the server as the requester sees it, marking the request channel', async () => {
+    installYouTubeStore()
+    const g = richGuild()
+    installBot({ guilds: [g], scheduledEvents: [{ name: '定例会', scheduled_start_time: '2026-11-03T10:00:00Z', entity_metadata: { location: '渋谷' } }] })
+    const text = await describeServer(g, member, '12')
+    assert.equal(text, [
+      'サーバー名: のばまんサーバー',
+      '説明: ゲーム好きの集まり',
+      'メンバー数: 12000',
+      'ルールチャンネル: <#11>',
+      '',
+      '### チャンネル（依頼者が見られるもの）',
+      '[（カテゴリなし）]',
+      '- 14: #ボイス（voice）',
+      '[イベント]',
+      '- 11: #お知らせ（announcement） — 運営からのお知らせ。 書き込み禁止',
+      '- 12: #雑談（text） ← 依頼されたチャンネル',
+      '',
+      '### ロール',
+      '運営, メンバー',
+      '',
+      '### 登録済みのイベント',
+      '定例会: 2026-11-03T10:00:00Z〜 渋谷',
+      '',
+      '### YouTube',
+      '設定なし'
+    ].join('\n'))
+  })
+
+  test('mentions the stored YouTube channel', async () => {
+    installYouTubeStore({ 100: { channel: { channel_ref: '@x', title: 'のばまんch', synced_at: new Date('2026-10-29T12:00:00Z') }, videos: [{}, {}] } })
+    const text = await describeServer(createGuild(), member, '1')
+    assert.match(text, /### YouTube\nのばまんch（動画 2 件を保存、取得 2026-10-29T12:00:00\.000Z）。詳しくは search_youtube で調べる/)
+  })
+
+  test('still describes the server when events or YouTube cannot be read', async () => {
+    const store = require('../../src/db/interfaces/postgres/youtube')
+    store.getKnowledge = async () => { throw new Error('db down') }
+    const g = createGuild()
+    installBot({ guilds: [g] })
+    global.bot.requestHandler.request = async () => { throw new Error('503') }
+    const text = await describeServer(g, member, '1')
+    assert.match(text, /### 登録済みのイベント\n（取得できませんでした: 503）/)
+    assert.match(text, /### YouTube\n設定なし/)
+  })
+})
+
+describe('search_youtube', () => {
+  const { installYouTubeStore } = require('../helpers/fakes')
+  const videos = [
+    { title: '11/3 記念配信', description: '周年記念', live_status: 'upcoming', scheduled_start: new Date('2026-11-03T11:00:00Z'), published_at: new Date('2026-10-28T00:00:00Z'), url: 'https://y/v2' },
+    { title: 'マイクラ 建築', description: '城を作る', live_status: 'none', published_at: new Date('2026-10-27T00:00:00Z'), duration: 'PT1H', url: 'https://y/v1' },
+    { title: 'マイクラ 雑談', description: '', live_status: 'none', published_at: new Date('2026-10-20T00:00:00Z'), url: 'https://y/v0' }
+  ]
+  const synced = { channel_ref: '@x', title: 'のばまんch', url: 'https://y/c', description: 'ゲーム配信', synced_at: new Date('2026-10-29T12:00:00Z') }
+
+  test('says when no channel is set, or it has not been read yet', async () => {
+    installYouTubeStore()
+    assert.match((await tools().call('search_youtube', {})).result, /YouTube チャンネルが設定されていません（運営が \/youtube set で設定できます）/)
+    installYouTubeStore({ 100: { channel: { channel_ref: '@x', synced_at: null }, videos: [] } })
+    assert.match((await tools().call('search_youtube', {})).result, /まだ情報を取得していません/)
+  })
+
+  test('lists videos with lives first when there is no query', async () => {
+    installYouTubeStore({ 100: { channel: synced, videos } })
+    const text = (await tools().call('search_youtube', {})).result
+    assert.equal(text, [
+      'チャンネル: のばまんch（https://y/c）',
+      '概要: ゲーム配信',
+      '情報の取得日時: 2026-10-29T12:00:00.000Z（保存している動画 3 件）',
+      '新しい順の動画:',
+      '- [配信予定 2026-11-03T11:00:00.000Z] 11/3 記念配信（公開 2026-10-28）https://y/v2',
+      '  周年記念',
+      '- マイクラ 建築（公開 2026-10-27、長さ PT1H）https://y/v1',
+      '  城を作る',
+      '- マイクラ 雑談（公開 2026-10-20）https://y/v0'
+    ].join('\n'))
+  })
+
+  test('matches every word of the query in the title or description, ignoring case', async () => {
+    installYouTubeStore({ 100: { channel: synced, videos } })
+    const text = (await tools().call('search_youtube', { query: 'マイクラ  城' })).result
+    assert.match(text, /「マイクラ {2}城」に一致した動画: 1 件\n- マイクラ 建築/)
+    assert.doesNotMatch(text, /雑談/)
+  })
+})

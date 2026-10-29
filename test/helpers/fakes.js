@@ -14,7 +14,7 @@ function perms (names) {
 
 // channels: [{ id, name, type, readers: [userID], posters: [userID], moderators: [userID] }]
 function createGuild ({ id = '100', ownerID = '900', channels = [], botPerms = ['manageEvents'] } = {}) {
-  const guild = { id, ownerID, roles: new Map(), members: new Map(), channels: new Map() }
+  const guild = { id, name: 'テストサーバー', memberCount: 42, ownerID, roles: new Map(), members: new Map(), channels: new Map() }
   guild.members.set('BOT', { id: 'BOT', permissions: perms(botPerms) })
   for (const c of channels) {
     guild.channels.set(c.id, {
@@ -72,6 +72,28 @@ function installBot ({ guilds = [], messages = {}, scheduledEvents = [], forums 
   return calls
 }
 
+// Replaces the YouTube store with an in-memory one, so no test reaches a real database.
+// knowledge: { guildID: { channel, videos } } as getKnowledge() returns it.
+function installYouTubeStore (knowledge = {}) {
+  const store = require('../../src/db/interfaces/postgres/youtube')
+  const writes = []
+  store.ensureTables = async () => {}
+  store.getKnowledge = async guildID => knowledge[guildID] || null
+  store.setChannelRef = async (guildID, ref) => {
+    writes.push({ setChannelRef: [guildID, ref] })
+    knowledge[guildID] = { channel: { guild_id: guildID, channel_ref: ref, synced_at: null }, videos: [] }
+  }
+  store.saveSync = async (guildID, { channel, videos }) => {
+    writes.push({ saveSync: guildID })
+    knowledge[guildID] = {
+      channel: { ...knowledge[guildID].channel, channel_id: channel.id, title: channel.title, description: channel.description, handle: channel.handle, url: channel.url, synced_at: new Date('2026-10-29T12:00:00Z') },
+      videos: videos.map(v => ({ video_id: v.id, title: v.title, description: v.description, published_at: v.publishedAt, live_status: v.liveStatus, scheduled_start: v.scheduledStart, duration: v.duration, url: v.url }))
+    }
+  }
+  store.deleteGuildYouTube = async guildID => { delete knowledge[guildID] }
+  return { knowledge, writes }
+}
+
 function configureGateway () {
   process.env.CLOUDFLARE_ACCOUNT_ID = 'acct'
   process.env.CLOUDFLARE_AI_GATEWAY_ID = 'gw'
@@ -116,5 +138,5 @@ async function startServer (handler) {
 }
 
 module.exports = {
-  perms, createGuild, createMember, installBot, configureGateway, installGemini, call, submit, lastToolResponses, startServer
+  perms, createGuild, createMember, installBot, installYouTubeStore, configureGateway, installGemini, call, submit, lastToolResponses, startServer
 }

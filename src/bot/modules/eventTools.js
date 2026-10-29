@@ -1,5 +1,6 @@
 const urlFetcher = require('../utils/urlFetcher')
 const { describeForums } = require('./forumPost')
+const youtubeDB = require('../../db/interfaces/postgres/youtube')
 
 const MAX_RECENT_MESSAGES = 50
 const MAX_QUESTIONS = 3
@@ -57,8 +58,22 @@ const DECLARATIONS = [
   {
     name: 'list_scheduled_events',
     description: 'このサーバーに登録済みのスケジュールイベントの一覧を得る。同じイベントの重複登録を避けるために使う。'
+  },
+  {
+    name: 'search_youtube',
+    description: 'このサーバーに設定された YouTube チャンネルについて保存している情報（チャンネル概要、最近の動画、配信予定・配信中）を探す。動画・配信・チャンネルについての依頼で使う。query を省くと新しい順に返す。',
+    parameters: {
+      type: 'OBJECT',
+      properties: { query: { type: 'STRING', description: '題名・説明に含まれる語（空白区切りで AND）' } }
+    }
   }
 ]
+
+const MAX_PROFILE_CHANNELS = 80
+const MAX_PROFILE_ROLES = 40
+const MAX_TOPIC = 100
+const MAX_YOUTUBE_RESULTS = 15
+const LIVE_LABELS = { live: '配信中', upcoming: '配信予定' }
 
 const CHANNEL_TYPES = { 0: 'text', 2: 'voice', 4: 'category', 5: 'announcement', 13: 'stage', 15: 'forum', 16: 'media', 10: 'thread', 11: 'thread', 12: 'thread' }
 
@@ -139,9 +154,10 @@ function createTools ({ guild, member, ask }) {
       return `依頼者の回答: ${answer}`
     },
     async list_scheduled_events () {
-      const events = await global.bot.requestHandler.request('GET', `/guilds/${guild.id}/scheduled-events`, true)
-      if (events.length === 0) return '登録済みのイベントはありません'
-      return events.map(e => `${e.name}: ${e.scheduled_start_time}〜${e.scheduled_end_time || ''} ${e.entity_metadata?.location || (e.channel_id ? `<#${e.channel_id}>` : '')}`).join('\n')
+      return scheduledEvents(guild)
+    },
+    async search_youtube ({ query }) {
+      return searchYouTube(guild.id, query)
     }
   }
 
@@ -161,4 +177,80 @@ function createTools ({ guild, member, ask }) {
   return { declarations: DECLARATIONS, call, sources, readMessage }
 }
 
-module.exports = { createTools, formatMessage, MESSAGE_LINK, StopDrafting }
+async function scheduledEvents (guild) {
+  const events = await global.bot.requestHandler.request('GET', `/guilds/${guild.id}/scheduled-events`, true)
+  if (events.length === 0) return '登録済みのイベントはありません'
+  return events.map(e => `${e.name}: ${e.scheduled_start_time}〜${e.scheduled_end_time || ''} ${e.entity_metadata?.location || (e.channel_id ? `<#${e.channel_id}>` : '')}`).join('\n')
+}
+
+function formatVideo (v) {
+  const live = LIVE_LABELS[v.live_status]
+  const when = live && v.scheduled_start ? `${live} ${new Date(v.scheduled_start).toISOString()}` : live
+  const published = v.published_at ? new Date(v.published_at).toISOString().slice(0, 10) : '?'
+  const head = `- ${when ? `[${when}] ` : ''}${v.title}（公開 ${published}${v.duration ? `、長さ ${v.duration}` : ''}）${v.url}`
+  const description = (v.description || '').replace(/\s+/g, ' ').slice(0, 200)
+  return description ? `${head}\n  ${description}` : head
+}
+
+async function searchYouTube (guildID, query) {
+  const knowledge = await youtubeDB.getKnowledge(guildID)
+  if (!knowledge) return 'このサーバーには YouTube チャンネルが設定されていません（運営が /youtube set で設定できます）'
+  const { channel, videos } = knowledge
+  if (!channel.synced_at) return `YouTube チャンネル ${channel.channel_ref} は設定済みですが、まだ情報を取得していません（/youtube sync）`
+  const words = String(query || '').toLowerCase().split(/\s+/).filter(Boolean)
+  const matches = videos.filter(v => words.every(w => `${v.title}\n${v.description || ''}`.toLowerCase().includes(w)))
+  // Lives first: "the next stream" is the usual question.
+  const ordered = [...matches.filter(v => LIVE_LABELS[v.live_status]), ...matches.filter(v => !LIVE_LABELS[v.live_status])]
+  return [
+    `チャンネル: ${channel.title}（${channel.url}）`,
+    channel.description ? `概要: ${channel.description.replace(/\s+/g, ' ').slice(0, 300)}` : '',
+    `情報の取得日時: ${new Date(channel.synced_at).toISOString()}（保存している動画 ${videos.length} 件）`,
+    words.length ? `「${query}」に一致した動画: ${matches.length} 件` : '新しい順の動画:',
+    ...ordered.slice(0, MAX_YOUTUBE_RESULTS).map(formatVideo)
+  ].filter(Boolean).join('\n')
+}
+
+function channelLine (c, requestChannelID) {
+  const topic = c.topic ? ` — ${c.topic.replace(/\s+/g, ' ').slice(0, MAX_TOPIC)}` : ''
+  return `- ${c.id}: #${c.name}（${CHANNEL_TYPES[c.type] || c.type}）${c.id === requestChannelID ? ' ← 依頼されたチャンネル' : ''}${topic}`
+}
+
+// The server as the requester can see it. Sent with every request, fresh each time, so questions
+// about "this server" need no lookups.
+async function describeServer (guild, member, requestChannelID) {
+  const lines = [`サーバー名: ${guild.name}`]
+  if (guild.description) lines.push(`説明: ${guild.description}`)
+  if (guild.memberCount) lines.push(`メンバー数: ${guild.memberCount}`)
+  if (guild.rulesChannelID) lines.push(`ルールチャンネル: <#${guild.rulesChannelID}>`)
+
+  const all = [...guild.channels.values()]
+  const order = c => [guild.channels.get(c.parentID)?.position ?? -1, c.position ?? 0]
+  const visible = all
+    .filter(c => c.type !== 4 && c.permissionsOf(member.id).has('viewChannel'))
+    .sort((a, b) => order(a)[0] - order(b)[0] || order(a)[1] - order(b)[1])
+  const byCategory = new Map()
+  for (const c of visible.slice(0, MAX_PROFILE_CHANNELS)) {
+    const category = guild.channels.get(c.parentID)?.name || '（カテゴリなし）'
+    if (!byCategory.has(category)) byCategory.set(category, [])
+    byCategory.get(category).push(channelLine(c, requestChannelID))
+  }
+  lines.push('', '### チャンネル（依頼者が見られるもの）')
+  for (const [category, channels] of byCategory) lines.push(`[${category}]`, ...channels)
+  if (visible.length > MAX_PROFILE_CHANNELS) lines.push(`…ほか ${visible.length - MAX_PROFILE_CHANNELS} 件`)
+
+  const roles = [...guild.roles.values()]
+    .filter(r => r.id !== guild.id && !r.managed)
+    .sort((a, b) => (b.position ?? 0) - (a.position ?? 0))
+    .map(r => r.name)
+  if (roles.length) lines.push('', '### ロール', roles.slice(0, MAX_PROFILE_ROLES).join(', '))
+
+  lines.push('', '### 登録済みのイベント', await scheduledEvents(guild).catch(e => `（取得できませんでした: ${e.message}）`))
+
+  const youtube = await youtubeDB.getKnowledge(guild.id).catch(() => null)
+  lines.push('', '### YouTube', youtube?.channel.synced_at
+    ? `${youtube.channel.title}（動画 ${youtube.videos.length} 件を保存、取得 ${new Date(youtube.channel.synced_at).toISOString()}）。詳しくは search_youtube で調べる`
+    : '設定なし')
+  return lines.join('\n')
+}
+
+module.exports = { createTools, formatMessage, describeServer, searchYouTube, MESSAGE_LINK, StopDrafting }
