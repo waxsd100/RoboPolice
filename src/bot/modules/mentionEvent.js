@@ -1,13 +1,11 @@
 const Eris = require('eris')
 const { v4: uuidv4 } = require('uuid')
 const { draftEvent, isConfigured, ENTITY_TYPES } = require('./eventDrafter')
-const { fetchPageText } = require('../utils/urlFetcher')
+const { createTools } = require('./eventTools')
 const { EMBED_COLORS } = require('../utils/constants')
 const { hasStaffAccess } = require('../utils/staffAccess')
 
-const MAX_URLS = 3
 const CONFIRM_TIMEOUT_MS = 5 * 60 * 1000
-const URL_PATTERN = /https?:\/\/[^\s<>|]+/gi
 
 // One draft at a time per user, so repeated mentions don't stack up Gemini calls.
 const inProgress = new Set()
@@ -26,11 +24,7 @@ function canManageEvents (member, guild) {
 }
 
 function extractRequest (message) {
-  const urls = [...new Set((message.content.match(URL_PATTERN) || []).map(u => u.replace(/[)>\]）」』、。]+$/, '')))]
-  const request = message.content
-    .replace(new RegExp(`<@!?${global.bot.user.id}>`, 'g'), '')
-    .trim()
-  return { urls, request }
+  return message.content.replace(new RegExp(`<@!?${global.bot.user.id}>`, 'g'), '').trim()
 }
 
 function previewEmbed (event, sources, endGuessed, requester) {
@@ -93,9 +87,10 @@ async function handle (message) {
     return message.channel.createMessage({ content: 'BOTに「イベントの管理」権限がないため、イベントを登録できません。', ...reference }).catch(() => {})
   }
 
-  const { urls, request } = extractRequest(message)
-  if (!request && urls.length === 0) {
-    return message.channel.createMessage({ content: 'イベントにしたい内容か、イベントページのURLを添えてメンションしてください。', ...reference }).catch(() => {})
+  const request = extractRequest(message)
+  const repliedTo = message.messageReference?.messageID
+  if (!request && !repliedTo) {
+    return message.channel.createMessage({ content: 'イベントにしたい内容（文章・URL・メッセージリンク）を添えるか、元のメッセージに返信する形でメンションしてください。', ...reference }).catch(() => {})
   }
   if (inProgress.has(message.author.id)) {
     return message.channel.createMessage({ content: '前の依頼を処理中です。終わってからもう一度お試しください。', ...reference }).catch(() => {})
@@ -105,17 +100,18 @@ async function handle (message) {
   let reply
   try {
     reply = await message.channel.createMessage({ content: '内容を読み取っています…', ...reference })
-    const pages = await Promise.all(urls.slice(0, MAX_URLS).map(url => fetchPageText(url).catch(e => ({ url, error: e.message }))))
-    const channels = [...guild.channels.values()]
-      .filter(c => c.type === 2 || c.type === 13)
-      .map(c => ({ id: c.id, name: c.name, type: c.type }))
-    const result = await draftEvent({ request, pages, channels })
+    const tools = createTools({ guild, member: message.member })
+    // A mention sent as a reply ("@bot これをイベントにして") is about the replied-to message.
+    const referenced = repliedTo
+      ? await tools.readMessage(message.messageReference.channelID || message.channel.id, repliedTo).catch(e => `（読めませんでした: ${e.message}）`)
+      : null
+    const result = await draftEvent({ request, referenced, channelName: message.channel.name, guild, tools })
     if (result.error) {
       await reply.edit({ content: `イベントを作成できませんでした: ${result.error}` })
       return
     }
 
-    const embed = previewEmbed(result.event, urls.slice(0, MAX_URLS), result.endGuessed, message.author)
+    const embed = previewEmbed(result.event, [...new Set(tools.sources)], result.endGuessed, message.author)
     const { interaction, confirmed } = await confirm(reply, message.author.id, embed)
     if (!interaction) {
       await reply.edit({ content: '時間内に確認されなかったため、登録を取りやめました。', components: [] })

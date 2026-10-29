@@ -52,16 +52,23 @@ configured** — a server with none never has message content stored, since noth
 
 ## Event drafting
 
-Mention the app with a description or an event page URL (`@RoboPolice 11/3 19時から交流会 https://...`)
-and it drafts a server scheduled event, shows it with Register / Cancel buttons, and creates it only
-after the requester presses Register. Only members who can manage events (or the owner, or
-`STAFF_ROLE_ID` staff) can use it, and the app needs the **Manage Events** permission.
+Mention the app with a description, an event page URL, or a Discord message link
+(`@RoboPolice 11/3 19時から交流会 https://...`), or reply to a message and mention it. It drafts a
+server scheduled event, shows it with Register / Cancel buttons, and creates it only after the
+requester presses Register. Only members who can manage events (or the owner, or `STAFF_ROLE_ID`
+staff) can use it, and the app needs the **Manage Events** permission.
 
-The mention's text, the text of up to 3 linked pages, and the names of the server's voice/stage
-channels are sent to Google Gemini through Cloudflare AI Gateway. Nothing from this flow is stored by
-the app. Use a paid Gemini API tier: on the free tier Google may use the input to improve its
-models, which the intent review answers rule out. Linked pages are fetched by the app itself;
-private and loopback addresses are refused.
+Drafting is a Gemini function-calling loop (`src/bot/modules/eventDrafter.js`) over read-only tools
+(`src/bot/modules/eventTools.js`): fetch a web page, read a Discord message by link, read a channel's
+recent messages, list channels, and list existing scheduled events. Discord reads are limited to this
+server and to channels both the requester and the app can read, so a mention can't reveal a channel
+the requester couldn't open. Web pages are fetched by the app itself; private and loopback addresses
+are refused.
+
+What the tools read (the mention, the replied-to message, linked pages and Discord messages, channel
+names) is sent to Google Gemini through Cloudflare AI Gateway. Nothing from this flow is stored by
+the app. Use a paid Gemini API tier: on the free tier Google may use the input to improve its models,
+which the intent review answers rule out.
 
 ## Requirements
 
