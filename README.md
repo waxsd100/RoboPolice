@@ -74,8 +74,6 @@ configured** — a server with none never has message content stored, since noth
 | `MESSAGE_HISTORY_DAYS` | Retention window. Unset (or 0/non-numeric) means retention is unlimited by design — nothing is ever pruned, and `/help`/`/clearmydata` say so instead of naming a day count. The bot logs which mode it's in at startup. If you go unlimited on a real deployment, update the Privacy Policy's retention section to match, since it currently states a fixed number of days. |
 | `STAFF_ROLE_ID` | Optional. A member holding this role, or any role at or above it in Settings > Roles, bypasses the same permission checks a server owner already bypasses — not creator-only commands, and not what the bot itself needs. Unset disables it entirely. |
 | `PRUNE_EXTERNAL` | Set `true` only when running `prune.js` as a separate cron service, so the bot stops scheduling its own sweep |
-| `SENTRY_URI` | Optional. When set, errors and stack traces are sent to Sentry — a third party, disclosed in the Privacy Policy. Leave unset to keep error reporting local |
-| `PASTE_SITE_ROOT_URL` | Optional. Where `/archive` and bulk-deletion logs upload message text. Anyone with the resulting link can read it, so self-host it. Unset disables both features |
 
 Values that never differ between deployments are constants in code rather than environment
 variables: the support server and legal URLs (`src/bot/utils/constants.js`) and the message batch
