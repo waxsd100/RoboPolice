@@ -122,13 +122,13 @@ module.exports = {
       }
     })
   },
-  awaitCustomID (id, userIDToLock) {
+  awaitCustomID (id, userIDToLock, timeoutMs = 60000) {
     return new Promise((resolve, reject) => {
       waitingTimeouts.set(id, setTimeout(() => {
         waitingCustomIDs.delete(id)
         waitingTimeouts.delete(id)
         reject(new Error(`Custom ID ${id} did not receive a response.`))
-      }, 60000))
+      }, timeoutMs))
       waitingCustomIDs.set(id, {
         userID: userIDToLock,
         run: (...toReturn) => {

@@ -50,11 +50,24 @@ Short version; the Privacy Policy is authoritative.
 Message rows are written **only for servers that have a message deletion or edit log channel
 configured** — a server with none never has message content stored, since nothing could read it back.
 
+## Event drafting
+
+Mention the app with a description or an event page URL (`@RoboPolice 11/3 19時から交流会 https://...`)
+and it drafts a server scheduled event, shows it with Register / Cancel buttons, and creates it only
+after the requester presses Register. Only members who can manage events (or the owner, or
+`STAFF_ROLE_ID` staff) can use it, and the app needs the **Manage Events** permission.
+
+The mention's text, the text of up to 3 linked pages, and the names of the server's voice/stage
+channels are sent to Google Gemini through Cloudflare AI Gateway. Nothing from this flow is stored by
+the app. Use a paid Gemini API tier: on the free tier Google may use the input to improve its
+models, which the intent review answers rule out. Linked pages are fetched by the app itself;
+private and loopback addresses are refused.
+
 ## Requirements
 
 - PostgreSQL 11+
 - Redis
-- Node.js 14.5+
+- Node.js 18+
 
 ## Setup
 
@@ -74,6 +87,10 @@ configured** — a server with none never has message content stored, since noth
 | `MESSAGE_HISTORY_DAYS` | Retention window. Unset (or 0/non-numeric) means retention is unlimited by design — nothing is ever pruned, and `/help`/`/clearmydata` say so instead of naming a day count. The bot logs which mode it's in at startup. If you go unlimited on a real deployment, update the Privacy Policy's retention section to match, since it currently states a fixed number of days. |
 | `STAFF_ROLE_ID` | Optional. A member holding this role, or any role at or above it in Settings > Roles, bypasses the same permission checks a server owner already bypasses — not creator-only commands, and not what the bot itself needs. Unset disables it entirely. |
 | `PRUNE_EXTERNAL` | Set `true` only when running `prune.js` as a separate cron service, so the bot stops scheduling its own sweep |
+| `CLOUDFLARE_ACCOUNT_ID`, `CLOUDFLARE_AI_GATEWAY_ID` | Enable event drafting. Unset means mentions are ignored |
+| `CLOUDFLARE_AI_GATEWAY_TOKEN` | Optional. Sent as `cf-aig-authorization` for an authenticated gateway |
+| `GEMINI_API_KEY` | Optional when the key is stored in the gateway (BYOK); otherwise required for event drafting |
+| `GEMINI_MODEL` | Optional. Defaults to `gemini-flash-latest` |
 
 Values that never differ between deployments are constants in code rather than environment
 variables: the support server and legal URLs (`src/bot/utils/constants.js`) and the message batch
