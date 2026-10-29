@@ -2,7 +2,11 @@
 // video contents made on demand. Public YouTube data only. Videos accumulate: a sync adds new ones
 // and refreshes known ones but never drops any. Everything goes when the server sets a different
 // channel (summaries excepted) or the bot leaves the server.
+const format = require('pg-format')
 const pool = require('../../clients/postgres')
+
+// Rows per multi-row INSERT: a first sync can store thousands of videos.
+const INSERT_CHUNK = 500
 
 const SCHEMA = [
   `CREATE TABLE IF NOT EXISTS youtube_channels (
@@ -34,7 +38,9 @@ const SCHEMA = [
     summary TEXT NOT NULL,
     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     PRIMARY KEY (guild_id, video_id)
-  )`
+  )`,
+  // Where an interrupted read of a large channel continues (a playlistItems page token).
+  'ALTER TABLE youtube_channels ADD COLUMN IF NOT EXISTS backfill_token TEXT'
 ]
 
 // Deployments made before these tables existed get them on first use, without a manual migration.
@@ -51,15 +57,20 @@ function ensureTables () {
   return ready
 }
 
-// Setting the same channel again keeps everything accumulated; a different one starts over.
-async function setChannelRef (guildID, channelRef) {
+// Sets the server's channel, already resolved to its ID. The same channel (however it was written)
+// keeps everything accumulated; a different one starts over.
+async function setChannel (guildID, channelRef, channelID) {
   await ensureTables()
-  const current = await pool.query('SELECT channel_ref FROM youtube_channels WHERE guild_id = $1', [guildID])
-  if (current.rows[0]?.channel_ref === channelRef) return
+  const current = await pool.query('SELECT channel_id FROM youtube_channels WHERE guild_id = $1', [guildID])
+  if (current.rows[0]?.channel_id === channelID) {
+    await pool.query('UPDATE youtube_channels SET channel_ref = $2 WHERE guild_id = $1', [guildID, channelRef])
+    return
+  }
   await pool.query(
-    `INSERT INTO youtube_channels (guild_id, channel_ref) VALUES ($1, $2)
-     ON CONFLICT (guild_id) DO UPDATE SET channel_ref = $2, channel_id = NULL, title = NULL, description = NULL, handle = NULL, url = NULL, synced_at = NULL`,
-    [guildID, channelRef])
+    `INSERT INTO youtube_channels (guild_id, channel_ref, channel_id) VALUES ($1, $2, $3)
+     ON CONFLICT (guild_id) DO UPDATE SET channel_ref = $2, channel_id = $3, title = NULL, description = NULL,
+       handle = NULL, url = NULL, synced_at = NULL, backfill_token = NULL`,
+    [guildID, channelRef, channelID])
   await pool.query('DELETE FROM youtube_videos WHERE guild_id = $1', [guildID])
 }
 
@@ -71,21 +82,26 @@ async function getVideoIds (guildID) {
 
 // Adds new videos and refreshes known ones (titles change, upcoming streams go live), in one
 // transaction so a failed sync leaves the store as it was.
-async function saveSync (guildID, { channel, videos }) {
+async function saveSync (guildID, { channel, videos, backfillToken = null }) {
   await ensureTables()
   const client = await pool.getPostgresClient()
   try {
     await client.query('BEGIN')
     await client.query(
-      'UPDATE youtube_channels SET channel_id = $2, title = $3, description = $4, handle = $5, url = $6, synced_at = now() WHERE guild_id = $1',
-      [guildID, channel.id, channel.title, channel.description, channel.handle, channel.url])
-    for (const v of videos) {
-      await client.query(
+      'UPDATE youtube_channels SET channel_id = $2, title = $3, description = $4, handle = $5, url = $6, backfill_token = $7, synced_at = now() WHERE guild_id = $1',
+      [guildID, channel.id, channel.title, channel.description, channel.handle, channel.url, backfillToken])
+    // A page re-read during backfill can repeat a video; one row per ID keeps ON CONFLICT happy.
+    const unique = [...new Map(videos.map(v => [v.id, v])).values()]
+    for (let i = 0; i < unique.length; i += INSERT_CHUNK) {
+      const rows = unique.slice(i, i + INSERT_CHUNK)
+        .map(v => [guildID, v.id, v.title, v.description, v.publishedAt, v.liveStatus, v.scheduledStart, v.duration, v.url])
+      await client.query(format(
         `INSERT INTO youtube_videos (guild_id, video_id, title, description, published_at, live_status, scheduled_start, duration, url)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
-         ON CONFLICT (guild_id, video_id) DO UPDATE SET title = $3, description = $4, published_at = $5,
-           live_status = $6, scheduled_start = $7, duration = $8, url = $9`,
-        [guildID, v.id, v.title, v.description, v.publishedAt, v.liveStatus, v.scheduledStart, v.duration, v.url])
+         VALUES %L
+         ON CONFLICT (guild_id, video_id) DO UPDATE SET title = EXCLUDED.title, description = EXCLUDED.description,
+           published_at = EXCLUDED.published_at, live_status = EXCLUDED.live_status,
+           scheduled_start = EXCLUDED.scheduled_start, duration = EXCLUDED.duration, url = EXCLUDED.url`,
+        rows))
     }
     await client.query('COMMIT')
   } catch (e) {
@@ -108,6 +124,18 @@ async function getKnowledge (guildID) {
      WHERE v.guild_id = $1 ORDER BY v.published_at DESC NULLS LAST`,
     [guildID])
   return { channel: channels.rows[0], videos: videos.rows }
+}
+
+// The channel row and how many videos and summaries are stored, without reading the videos.
+async function getOverview (guildID) {
+  await ensureTables()
+  const rows = await pool.query(
+    `SELECT c.*,
+       (SELECT count(*) FROM youtube_videos v WHERE v.guild_id = c.guild_id)::int AS video_count,
+       (SELECT count(*) FROM youtube_summaries s WHERE s.guild_id = c.guild_id)::int AS summary_count
+     FROM youtube_channels c WHERE c.guild_id = $1`,
+    [guildID])
+  return rows.rows[0] || null
 }
 
 async function getSummary (guildID, videoID) {
@@ -142,4 +170,4 @@ async function deleteGuildYouTube (guildID) {
   await pool.query('DELETE FROM youtube_channels WHERE guild_id = $1', [guildID])
 }
 
-module.exports = { SCHEMA, ensureTables, setChannelRef, getVideoIds, saveSync, getKnowledge, getSummary, saveSummary, getOtherSummaries, deleteGuildYouTube }
+module.exports = { SCHEMA, ensureTables, setChannel, getVideoIds, saveSync, getKnowledge, getOverview, getSummary, saveSummary, getOtherSummaries, deleteGuildYouTube }

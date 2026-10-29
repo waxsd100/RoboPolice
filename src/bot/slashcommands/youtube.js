@@ -1,5 +1,5 @@
 const { EMBED_COLORS } = require('../utils/constants')
-const { parseChannelRef, fetchChannelKnowledge, MAX_PAGES } = require('../utils/youtube')
+const { parseChannelRef, resolveChannel, fetchChannelKnowledge } = require('../utils/youtube')
 const youtubeDB = require('../../db/interfaces/postgres/youtube')
 const { redact } = require('../utils/redact')
 
@@ -25,13 +25,15 @@ function summary ({ channel, videos }) {
 // Reads the configured channel from YouTube and adds to what is stored: the whole channel the first
 // time, afterwards only what is new (plus the newest page again, for streams that changed state).
 async function sync (guildID) {
-  const stored = await youtubeDB.getKnowledge(guildID)
+  const stored = await youtubeDB.getOverview(guildID)
   const knownIds = await youtubeDB.getVideoIds(guildID)
-  const knowledge = await fetchChannelKnowledge(parseChannelRef(stored.channel.channel_ref), process.env.YOUTUBE_API_KEY, { knownIds })
+  // Rows set before channel IDs were stored have only the reference.
+  const ref = stored.channel_id ? { id: stored.channel_id } : parseChannelRef(stored.channel_ref)
+  const knowledge = await fetchChannelKnowledge(ref, process.env.YOUTUBE_API_KEY, { knownIds, backfillToken: stored.backfill_token })
   await youtubeDB.saveSync(guildID, knowledge)
-  const added = knowledge.videos.filter(v => !knownIds.has(v.id)).length
-  const note = [`新しい動画 ${added} 件を追加しました。`]
-  if (!knowledge.complete) note.push(`動画が多いため、新しい方から ${MAX_PAGES * 50} 件までを取得しました。`)
+  const added = new Set(knowledge.videos.filter(v => !knownIds.has(v.id)).map(v => v.id)).size
+  const note = [`新しく ${added} 件の動画を保存しました。`]
+  if (knowledge.backfillToken) note.push('動画が多いため、残りの古い動画は次の `/youtube sync` で続きから取得します。')
   return { knowledge: await youtubeDB.getKnowledge(guildID), note: note.join('') }
 }
 
@@ -42,10 +44,13 @@ async function run (interaction) {
   }
   if (sub.name === 'set') {
     const input = sub.options.find(o => o.name === 'channel').value
-    if (!parseChannelRef(input)) {
+    const ref = parseChannelRef(input)
+    if (!ref) {
       return { content: 'YouTube チャンネルの URL（https://www.youtube.com/@名前 または /channel/UC…）か、@名前 を指定してください。' }
     }
-    await youtubeDB.setChannelRef(interaction.guildID, input.trim())
+    // Resolved before anything is stored: a channel that does not exist changes nothing.
+    const channel = await resolveChannel(ref, process.env.YOUTUBE_API_KEY)
+    await youtubeDB.setChannel(interaction.guildID, input.trim(), channel.id)
     const { knowledge, note } = await sync(interaction.guildID)
     return { content: `YouTube チャンネルを設定し、情報を取得しました。${note}メンションで依頼したときに AI が参照します。`, embeds: [summary(knowledge)] }
   }

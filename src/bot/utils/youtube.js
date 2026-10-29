@@ -17,11 +17,15 @@ class YouTubeError extends Error {
 }
 
 // Accepts what people paste: a channel URL (/@handle, /channel/UC…), "@handle", or a UC… ID.
+// Handles may be in any script (@ロボポリス), and browsers copy those percent-encoded.
 function parseChannelRef (input) {
-  const text = String(input || '').trim()
+  let text = String(input || '').trim()
+  try {
+    text = decodeURIComponent(text)
+  } catch (_) {} // a stray % is not an encoding; keep the text as is
   const id = text.match(/(?:^|\/channel\/)(UC[\w-]{22})(?:[/?#]|$)/)
   if (id) return { id: id[1] }
-  const handle = text.match(/(?:^|youtube\.com\/)@([\w.-]{3,30})(?:[/?#]|$)/i)
+  const handle = text.match(/(?:^|youtube\.com\/)@([^\s/?#&@]{3,30})(?:[/?#]|$)/iu)
   if (handle) return { handle: handle[1] }
   return null
 }
@@ -66,9 +70,13 @@ function toVideo (v) {
   }
 }
 
-async function readUploads (playlistId, apiKey, knownIds, maxPages) {
+// Walks the uploads playlist from `startToken` (newest first when absent). Without a start token it
+// stops at the first page whose videos are all in `knownIds`: everything older is stored already.
+// Returns the videos read, the pages used, and `nextToken` if it stopped at the page limit with
+// more left (where a later read should continue), or null.
+async function readUploads (playlistId, apiKey, { startToken = null, knownIds = new Set(), maxPages }) {
   const videos = []
-  let pageToken
+  let pageToken = startToken
   for (let page = 0; page < maxPages; page++) {
     const playlist = await call('playlistItems', {
       part: 'contentDetails',
@@ -82,29 +90,45 @@ async function readUploads (playlistId, apiKey, knownIds, maxPages) {
       videos.push(...(details.items || []).map(toVideo))
     }
     pageToken = playlist.nextPageToken
-    // A page of only known videos means everything older is stored already.
-    if (!pageToken || (ids.length !== 0 && ids.every(id => knownIds.has(id)))) return { videos, complete: true }
+    const allKnown = !startToken && ids.length !== 0 && ids.every(id => knownIds.has(id))
+    if (!pageToken || allKnown) return { videos, pages: page + 1, nextToken: null }
   }
-  return { videos, complete: false }
+  return { videos, pages: maxPages, nextToken: pageToken }
 }
 
-// Reads the channel and walks its uploads newest first, stopping after the first page whose videos
-// are all in `knownIds`. The newest page is therefore always re-read (refreshing upcoming and live
-// streams), and with nothing known yet the whole channel is read, up to MAX_PAGES. Returns
-// { channel, videos, complete }; complete is false when MAX_PAGES cut the walk short.
-async function fetchChannelKnowledge (ref, apiKey, { knownIds = new Set(), maxPages = MAX_PAGES } = {}) {
+// The channel itself (1 quota unit). Throws with a hint when it does not exist.
+async function resolveChannel (ref, apiKey) {
   const channels = await call('channels', {
     part: 'snippet,contentDetails',
     ...(ref.id ? { id: ref.id } : { forHandle: ref.handle })
   }, apiKey)
   const channel = channels.items?.[0]
   if (!channel) throw new YouTubeError(`YouTube channel not found: ${JSON.stringify(ref)}`, 'YouTube チャンネルが見つかりませんでした')
+  return channel
+}
 
+// Reads the channel and its uploads: what is new since the last read (the newest page is always
+// re-read, refreshing upcoming and live streams), then, if an earlier read stopped at the page
+// limit, older videos from where it stopped (`backfillToken`). With nothing known yet that is the
+// whole channel, MAX_PAGES at a time. Returns { channel, videos, backfillToken } where
+// backfillToken is where the next read should continue, or null when every video has been read.
+async function fetchChannelKnowledge (ref, apiKey, { knownIds = new Set(), backfillToken = null, maxPages = MAX_PAGES } = {}) {
+  const channel = await resolveChannel(ref, apiKey)
   const uploads = channel.contentDetails?.relatedPlaylists?.uploads
-  const { videos, complete } = uploads
-    ? await readUploads(uploads, apiKey, knownIds, maxPages)
-    : { videos: [], complete: true }
-
+  const videos = []
+  let nextBackfill = backfillToken
+  if (uploads) {
+    const newest = await readUploads(uploads, apiKey, { knownIds, maxPages })
+    videos.push(...newest.videos)
+    if (newest.nextToken) {
+      // So much is new that the limit cut it; continue from here next time.
+      nextBackfill = newest.nextToken
+    } else if (backfillToken && newest.pages < maxPages) {
+      const older = await readUploads(uploads, apiKey, { startToken: backfillToken, maxPages: maxPages - newest.pages })
+      videos.push(...older.videos)
+      nextBackfill = older.nextToken
+    }
+  }
   return {
     channel: {
       id: channel.id,
@@ -114,8 +138,8 @@ async function fetchChannelKnowledge (ref, apiKey, { knownIds = new Set(), maxPa
       url: `https://www.youtube.com/channel/${channel.id}`
     },
     videos,
-    complete
+    backfillToken: nextBackfill
   }
 }
 
-module.exports = { parseChannelRef, parseVideoId, fetchChannelKnowledge, YouTubeError, MAX_PAGES }
+module.exports = { parseChannelRef, parseVideoId, resolveChannel, fetchChannelKnowledge, YouTubeError, MAX_PAGES }

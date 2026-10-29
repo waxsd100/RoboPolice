@@ -165,10 +165,24 @@ async function fetchChecked (rawUrl, kind, isBlocked) {
   throw new Error('リダイレクトが多すぎます')
 }
 
+// The page's charset: from Content-Type, else a <meta> near the top of the page, else UTF-8.
+// Japanese sites still serve Shift_JIS and EUC-JP, which read as UTF-8 come out garbled.
+function decodeBody (buffer, contentType) {
+  const head = buffer.subarray(0, 4096).toString('latin1')
+  const label = contentType.match(/charset=["']?([\w-]+)/i)?.[1] ||
+    head.match(/<meta[^>]+charset=["']?([\w-]+)/i)?.[1] ||
+    'utf-8'
+  try {
+    return new TextDecoder(label).decode(buffer)
+  } catch (_) {
+    return buffer.toString('utf8') // unknown label
+  }
+}
+
 // `isBlocked` exists so tests can reach a local server; production callers never pass it.
 async function fetchPageText (rawUrl, { isBlocked = isBlockedAddress } = {}) {
   const res = await fetchChecked(rawUrl, KINDS.page, isBlocked)
-  const body = res.body.toString('utf8')
+  const body = decodeBody(res.body, res.contentType)
   const text = /html/i.test(res.contentType) ? htmlToText(body) : body.trim()
   return { url: res.url, text: text.slice(0, MAX_TEXT_CHARS) }
 }
@@ -178,4 +192,4 @@ async function fetchImage (rawUrl, { isBlocked = isBlockedAddress } = {}) {
   return { url: res.url, buffer: res.body, contentType: res.contentType }
 }
 
-module.exports = { fetchPageText, fetchImage, htmlToText, isBlockedAddress }
+module.exports = { fetchPageText, fetchImage, htmlToText, decodeBody, isBlockedAddress }

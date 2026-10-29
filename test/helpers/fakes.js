@@ -85,19 +85,27 @@ function installYouTubeStore (knowledge = {}, summaries = {}) {
   store.ensureTables = async () => {}
   store.getKnowledge = async guildID => withSummaries(guildID) || null
   store.getVideoIds = async guildID => new Set((knowledge[guildID]?.videos || []).map(v => v.video_id))
-  store.setChannelRef = async (guildID, ref) => {
-    writes.push({ setChannelRef: [guildID, ref] })
-    if (knowledge[guildID]?.channel.channel_ref === ref) return
-    knowledge[guildID] = { channel: { guild_id: guildID, channel_ref: ref, synced_at: null }, videos: [] }
+  store.setChannel = async (guildID, ref, channelID) => {
+    writes.push({ setChannel: [guildID, ref, channelID] })
+    if (knowledge[guildID] && knowledge[guildID].channel.channel_id === channelID) {
+      knowledge[guildID].channel.channel_ref = ref
+      return
+    }
+    knowledge[guildID] = { channel: { guild_id: guildID, channel_ref: ref, channel_id: channelID, synced_at: null, backfill_token: null }, videos: [] }
   }
-  store.saveSync = async (guildID, { channel, videos }) => {
-    writes.push({ saveSync: guildID, videos: videos.map(v => v.id) })
+  store.getOverview = async guildID => knowledge[guildID] && {
+    ...knowledge[guildID].channel,
+    video_count: knowledge[guildID].videos.length,
+    summary_count: Object.keys(summaries[guildID] || {}).length
+  }
+  store.saveSync = async (guildID, { channel, videos, backfillToken = null }) => {
+    writes.push({ saveSync: guildID, videos: videos.map(v => v.id), backfillToken })
     const byID = new Map(knowledge[guildID].videos.map(v => [v.video_id, v]))
     for (const v of videos) {
       byID.set(v.id, { video_id: v.id, title: v.title, description: v.description, published_at: v.publishedAt, live_status: v.liveStatus, scheduled_start: v.scheduledStart, duration: v.duration, url: v.url })
     }
     knowledge[guildID] = {
-      channel: { ...knowledge[guildID].channel, channel_id: channel.id, title: channel.title, description: channel.description, handle: channel.handle, url: channel.url, synced_at: new Date('2026-10-29T12:00:00Z') },
+      channel: { ...knowledge[guildID].channel, channel_id: channel.id, title: channel.title, description: channel.description, handle: channel.handle, url: channel.url, backfill_token: backfillToken, synced_at: new Date('2026-10-29T12:00:00Z') },
       videos: [...byID.values()].sort((a, b) => new Date(b.published_at) - new Date(a.published_at))
     }
   }

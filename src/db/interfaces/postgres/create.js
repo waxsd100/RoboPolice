@@ -63,9 +63,17 @@ async function cacheMessage (message) {
   // Note that we can use '|' as a separator since base64 encoded strings (the output of aes.encrypt) cannot contain the '|' character.
   message.attachment_b64 = images.map(attachment => aes.encrypt(Buffer.from(attachment.url).toString("base64url"))).join("|")
 
-  batchHandler.addItem([message.id, message.author.id, message.content, message.attachment_b64, new Date().toISOString(), message.channel.id, message.channel.guild?.id || null])
+  await batchHandler.addItem([message.id, message.author.id, message.content, message.attachment_b64, new Date().toISOString(), message.channel.id, message.channel.guild?.id || null])
+}
+
+// The text as the user wrote it, from toStoredContent's form: markdown-escape put a backslash before
+// each of * # / ( ) [ ] _ ` and ~ was escaped the same way; 'None' stands for an empty message.
+function fromStoredContent (stored) {
+  if (!stored || stored === 'None') return ''
+  return stored.replace(/\\([*#/()[\]_`~])/g, '$1')
 }
 
 exports.cacheMessage = cacheMessage
 exports.toStoredContent = toStoredContent
+exports.fromStoredContent = fromStoredContent
 exports.createGuild = createGuild

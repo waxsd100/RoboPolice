@@ -12,7 +12,9 @@ describe('parseChannelRef', () => {
     [`https://www.youtube.com/channel/${UC}`, { id: UC }],
     [`https://www.youtube.com/channel/${UC}/live`, { id: UC }],
     [UC, { id: UC }],
-    ['  @nobaman  ', { handle: 'nobaman' }]
+    ['  @nobaman  ', { handle: 'nobaman' }],
+    ['@ロボポリス', { handle: 'ロボポリス' }],
+    ['https://www.youtube.com/@%E3%83%AD%E3%83%9C%E3%83%9D%E3%83%AA%E3%82%B9/videos', { handle: 'ロボポリス' }]
   ]) {
     test(`reads ${input.trim()}`, () => assert.deepEqual(parseChannelRef(input), expected))
   }
@@ -129,9 +131,9 @@ describe('fetchChannelKnowledge paging', () => {
 
   test('reads the whole channel when nothing is known yet', async () => {
     const calls = pagedApi(3)
-    const { videos, complete } = await fetchChannelKnowledge({ id: UC }, 'k')
+    const { videos, backfillToken } = await fetchChannelKnowledge({ id: UC }, 'k')
     assert.equal(videos.length, 150)
-    assert.equal(complete, true)
+    assert.equal(backfillToken, null)
     assert.deepEqual(calls.filter(c => c.path === 'playlistItems').map(c => c.token), [null, '1', '2'])
   })
 
@@ -139,10 +141,10 @@ describe('fetchChannelKnowledge paging', () => {
     const calls = pagedApi(5)
     // v0..v9 are new; everything from v10 on is stored, so page 1 is all known.
     const knownIds = new Set(Array.from({ length: 240 }, (_, i) => `v${i + 10}`))
-    const { videos, complete } = await fetchChannelKnowledge({ id: UC }, 'k', { knownIds })
+    const { videos, backfillToken } = await fetchChannelKnowledge({ id: UC }, 'k', { knownIds })
     assert.deepEqual(calls.filter(c => c.path === 'playlistItems').map(c => c.token), [null, '1'])
     assert.equal(videos.length, 100)
-    assert.equal(complete, true)
+    assert.equal(backfillToken, null)
   })
 
   test('always re-reads the newest page, even when it is all known', async () => {
@@ -153,11 +155,28 @@ describe('fetchChannelKnowledge paging', () => {
     assert.equal(videos.length, 50, 'the newest page is refreshed (e.g. an upcoming stream that went live)')
   })
 
-  test('stops at the page limit and says the read is incomplete', async () => {
+  test('stops at the page limit and returns where to continue', async () => {
     pagedApi(10)
-    const { videos, complete } = await fetchChannelKnowledge({ id: UC }, 'k', { maxPages: 3 })
+    const { videos, backfillToken } = await fetchChannelKnowledge({ id: UC }, 'k', { maxPages: 3 })
     assert.equal(videos.length, 150)
-    assert.equal(complete, false)
+    assert.equal(backfillToken, '3')
+  })
+
+  test('a later read takes what is new, then continues the interrupted backfill', async () => {
+    const calls = pagedApi(10)
+    // The first read stored v0..v149 and stopped before page 3. Nothing new since.
+    const knownIds = new Set(Array.from({ length: 150 }, (_, i) => `v${i}`))
+    const { videos, backfillToken } = await fetchChannelKnowledge({ id: UC }, 'k', { knownIds, backfillToken: '3', maxPages: 4 })
+    assert.deepEqual(calls.filter(c => c.path === 'playlistItems').map(c => c.token), [null, '3', '4', '5'])
+    assert.equal(videos.length, 200, 'the refreshed newest page plus three older pages')
+    assert.equal(backfillToken, '6')
+  })
+
+  test('the backfill finishes when the oldest page is reached', async () => {
+    pagedApi(5)
+    const knownIds = new Set(Array.from({ length: 150 }, (_, i) => `v${i}`))
+    const { backfillToken } = await fetchChannelKnowledge({ id: UC }, 'k', { knownIds, backfillToken: '3' })
+    assert.equal(backfillToken, null)
   })
 })
 

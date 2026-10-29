@@ -136,7 +136,8 @@ async function runAgent (contents, tools) {
     contents.push(content)
     const calls = content.parts.filter(p => p.functionCall).map(p => p.functionCall)
     const submitted = calls.find(c => SUBMIT_DECLARATIONS.some(d => d.name === c.name))
-    if (submitted) return { name: submitted.name, args: submitted.args || {} }
+    // `calls` is kept: a correction must answer every call of this turn, not just the submit.
+    if (submitted) return { name: submitted.name, args: submitted.args || {}, calls }
     if (calls.length === 0) throw new GeminiError(`Gemini answered without a tool call: ${JSON.stringify(content).slice(0, 1000)}`, 'AI の応答の形式が想定と違いました')
     // Sequential, not parallel: two ask_user calls would otherwise fight over the same message.
     const responses = []
@@ -187,9 +188,9 @@ function toScheduledEvent (draft, guild, now) {
 // Returns { kind: 'event', event, endGuessed }, { kind: 'forum', post, tagNames, truncated }, or
 // { error } with a reason to show the requester.
 // Every result carries `conversation`, which revise() continues.
-async function check (conversation, { name, args }) {
+async function check (conversation, { name, args, calls = [] }) {
   const { guild, member, now, forum } = conversation
-  conversation.submittedWith = name
+  conversation.lastCalls = calls
   if (name === SUBMIT_FORUM_DECLARATION.name) {
     // A forum named in the request wins over whatever the model picked.
     const result = await toForumPost(forum ? { ...args, channel_id: forum.id } : args, guild, member)
@@ -215,15 +216,19 @@ async function draft ({ request, referenced, channelName, channelID, server, for
 
 // The requester read the preview and wrote what to change. It goes back as the answer to the
 // model's submit call, so the model revises its own draft with everything it already looked up.
+// Gemini wants one response per call of the turn, so tools called alongside the submit (which were
+// not run) are answered too.
 async function revise (conversation, correction) {
   conversation.contents.push({
     role: 'user',
-    parts: [{
+    parts: conversation.lastCalls.map(call => ({
       functionResponse: {
-        name: conversation.submittedWith,
-        response: { result: `依頼者が下書きを確認し、次のように修正を求めています。修正した下書きを、もう一度提出してください。\n${correction}` }
+        name: call.name,
+        response: SUBMIT_DECLARATIONS.some(d => d.name === call.name)
+          ? { result: `依頼者が下書きを確認し、次のように修正を求めています。修正した下書きを、もう一度提出してください。\n${correction}` }
+          : { error: '下書きの提出と同時に呼ばれたため実行していません。必要ならもう一度呼んでください。' }
       }
-    }]
+    }))
   })
   return check(conversation, await runAgent(conversation.contents, conversation.tools))
 }

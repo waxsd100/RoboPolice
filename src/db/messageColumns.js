@@ -4,10 +4,11 @@
 // nullable, so ADD COLUMN does not rewrite the table.
 const pool = require('./clients/postgres')
 
+// CONCURRENTLY: building the index must not block the inserts that log messages meanwhile.
 const SCHEMA = [
   'ALTER TABLE messages ADD COLUMN IF NOT EXISTS channel_id TEXT',
   'ALTER TABLE messages ADD COLUMN IF NOT EXISTS guild_id TEXT',
-  'CREATE INDEX IF NOT EXISTS messages_channel_ts ON messages (channel_id, ts DESC)'
+  'CREATE INDEX CONCURRENTLY IF NOT EXISTS messages_channel_ts ON messages (channel_id, ts DESC)'
 ]
 
 let ready = null

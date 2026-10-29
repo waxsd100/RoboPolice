@@ -44,8 +44,8 @@ describe('/youtube', () => {
     const it = interaction('set', [{ name: 'channel', value: ' https://www.youtube.com/@nobaman ' }])
     await command.func(it)
     assert.equal(it.deferred, true, 'deferred before calling YouTube')
-    assert.deepEqual(store.writes, [{ setChannelRef: ['100', 'https://www.youtube.com/@nobaman'] }, { saveSync: '100', videos: ['v1'] }])
-    assert.deepEqual(calls, ['channels', 'playlistItems', 'videos'])
+    assert.deepEqual(store.writes, [{ setChannel: ['100', 'https://www.youtube.com/@nobaman', UC] }, { saveSync: '100', videos: ['v1'], backfillToken: null }])
+    assert.deepEqual(calls, ['channels', 'channels', 'playlistItems', 'videos'], 'the channel is resolved before anything is stored')
     const [reply] = it.replies
     assert.match(reply.content, /設定し、情報を取得しました/)
     const fields = Object.fromEntries(reply.embeds[0].fields.map(f => [f.name, f.value]))
@@ -70,27 +70,60 @@ describe('/youtube', () => {
     fakeYouTubeApi()
     const again = interaction('sync')
     await command.func(again)
-    assert.match(again.replies[0].content, /最新の情報を取得しました。新しい動画 1 件を追加しました。/)
-    assert.deepEqual(store.writes, [{ saveSync: '100', videos: ['v1'] }])
+    assert.match(again.replies[0].content, /最新の情報を取得しました。新しく 1 件の動画を保存しました。/)
+    assert.deepEqual(store.writes, [{ saveSync: '100', videos: ['v1'], backfillToken: null }])
   })
 
   test('sync: keeps what is stored and only adds what is new', async () => {
     store.knowledge[100] = {
-      channel: { channel_ref: '@nobaman', synced_at: new Date('2026-10-01T00:00:00Z') },
+      channel: { channel_ref: '@nobaman', channel_id: UC, synced_at: new Date('2026-10-01T00:00:00Z') },
       videos: [{ video_id: 'old1', title: '昔の動画', published_at: new Date('2025-01-01T00:00:00Z') }]
     }
     fakeYouTubeApi()
     const it = interaction('sync')
     await command.func(it)
-    assert.match(it.replies[0].content, /新しい動画 1 件を追加しました。/)
+    assert.match(it.replies[0].content, /新しく 1 件の動画を保存しました。/)
     assert.deepEqual(store.knowledge[100].videos.map(v => v.video_id), ['v1', 'old1'])
   })
 
   test('set: setting the same channel again keeps what was accumulated', async () => {
-    store.knowledge[100] = { channel: { channel_ref: '@nobaman', synced_at: new Date() }, videos: [{ video_id: 'old1', title: 'x', published_at: new Date('2025-01-01T00:00:00Z') }] }
+    store.knowledge[100] = { channel: { channel_ref: '@nobaman', channel_id: UC, synced_at: new Date() }, videos: [{ video_id: 'old1', title: 'x', published_at: new Date('2025-01-01T00:00:00Z') }] }
     fakeYouTubeApi()
-    await command.func(interaction('set', [{ name: 'channel', value: '@nobaman' }]))
+    // Another way of writing the same channel still keeps what was accumulated.
+    await command.func(interaction('set', [{ name: 'channel', value: `https://www.youtube.com/channel/${UC}` }]))
     assert.deepEqual(store.knowledge[100].videos.map(v => v.video_id), ['v1', 'old1'])
+    assert.equal(store.knowledge[100].channel.channel_ref, `https://www.youtube.com/channel/${UC}`)
+  })
+
+  test('set: a channel that does not exist changes nothing', async (t) => {
+    t.mock.method(global.logger, 'error', () => {})
+    store.knowledge[100] = { channel: { channel_ref: '@nobaman', channel_id: UC, synced_at: new Date() }, videos: [{ video_id: 'old1', title: 'x' }] }
+    global.fetch = async () => ({ ok: true, json: async () => ({ items: [] }) })
+    const it = interaction('set', [{ name: 'channel', value: '@typo-name' }])
+    await command.func(it)
+    assert.equal(it.replies[0].content, 'YouTube の情報を取得できませんでした: YouTube チャンネルが見つかりませんでした')
+    assert.deepEqual(store.writes, [])
+    assert.equal(store.knowledge[100].videos.length, 1)
+  })
+
+  test('sync: says when older videos are left for the next sync, and saves where to continue', async () => {
+    store.knowledge[100] = { channel: { channel_ref: '@nobaman', channel_id: UC, synced_at: new Date() }, videos: [] }
+    // Every page says there is another: the walk stops at the page limit.
+    let page = 0
+    global.fetch = async url => {
+      const path = new URL(url).pathname.split('/').pop()
+      if (path === 'channels') return { ok: true, json: async () => ({ items: [{ id: UC, snippet: { title: 'ch' }, contentDetails: { relatedPlaylists: { uploads: 'UUx' } } }] }) }
+      if (path === 'playlistItems') {
+        page++
+        return { ok: true, json: async () => ({ items: [{ contentDetails: { videoId: `v${page}` } }], nextPageToken: `p${page}` }) }
+      }
+      const id = new URL(url).searchParams.get('id')
+      return { ok: true, json: async () => ({ items: [{ id, snippet: { title: id, publishedAt: '2026-01-01T00:00:00Z' } }] }) }
+    }
+    const it = interaction('sync')
+    await command.func(it)
+    assert.match(it.replies[0].content, /新しく 100 件の動画を保存しました。動画が多いため、残りの古い動画は次の `\/youtube sync` で続きから取得します。/)
+    assert.equal(store.writes[0].backfillToken, 'p100')
   })
 
   test('show: displays what is stored without calling YouTube', async () => {

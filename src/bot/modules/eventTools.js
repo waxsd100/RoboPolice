@@ -3,6 +3,7 @@ const { describeForums } = require('./forumPost')
 const youtubeDB = require('../../db/interfaces/postgres/youtube')
 const messageDB = require('../../db/interfaces/postgres/read')
 const videoSummary = require('./videoSummary')
+const { fromStoredContent } = require('../../db/interfaces/postgres/create')
 
 const MAX_RECENT_MESSAGES = 50
 const MAX_QUESTIONS = 3
@@ -161,7 +162,10 @@ function createTools ({ guild, member, ask }) {
     },
     async search_channel_history ({ channel_id: channelID, query }) {
       const channel = readableChannel(channelID)
-      const rows = await messageDB.getChannelHistory(channelID, HISTORY_SCAN)
+      // Stored text is escaped for log embeds; search and show what people actually wrote.
+      const rows = (await messageDB.getChannelHistory(channelID, HISTORY_SCAN))
+        .map(r => ({ ...r, content: fromStoredContent(r.content) }))
+        .filter(r => r.content)
       const words = String(query || '').toLowerCase().split(/\s+/).filter(Boolean)
       const matches = rows.filter(r => words.every(w => (r.content || '').toLowerCase().includes(w)))
       sources.push(`<#${channel.id}>`)
@@ -306,9 +310,9 @@ async function describeServer (guild, member, requestChannelID) {
 
   lines.push('', '### 登録済みのイベント', await scheduledEvents(guild).catch(e => `（取得できませんでした: ${e.message}）`))
 
-  const youtube = await youtubeDB.getKnowledge(guild.id).catch(() => null)
-  lines.push('', '### YouTube', youtube?.channel.synced_at
-    ? `${youtube.channel.title}（動画 ${youtube.videos.length} 件を保存、取得 ${new Date(youtube.channel.synced_at).toISOString()}）。詳しくは search_youtube で調べる`
+  const youtube = await youtubeDB.getOverview(guild.id).catch(() => null)
+  lines.push('', '### YouTube', youtube?.synced_at
+    ? `${youtube.title}（動画 ${youtube.video_count} 件を保存、取得 ${new Date(youtube.synced_at).toISOString()}）。詳しくは search_youtube で調べる`
     : '設定なし')
   return lines.join('\n')
 }

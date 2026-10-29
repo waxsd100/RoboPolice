@@ -18,12 +18,26 @@ async function addItem (messageAsArray) {
   }
 }
 
+// Whether messages can be stored with their channel. If adding the columns failed (no ALTER
+// privilege, a lock timeout), messages are still stored as before rather than lost.
+async function channelColumnsReady () {
+  try {
+    await ensureChannelColumns()
+    return true
+  } catch (e) {
+    global.logger.warn(`Storing messages without their channel: ${e.message}`)
+    return false
+  }
+}
+
 // A batch row: [id, author_id, encrypted content, encrypted attachments, ts, channel_id, guild_id]
 async function submitBatch (batchSize) {
+  const withChannel = await channelColumnsReady()
   const toSubmit = batch.splice(0, batchSize)
-  await ensureChannelColumns()
   const poolClient = await pool.getPostgresClient()
-  await poolClient.query(format('INSERT INTO messages (id, author_id, content, attachment_b64, ts, channel_id, guild_id) VALUES %L ON CONFLICT DO NOTHING', toSubmit))
+  await poolClient.query(withChannel
+    ? format('INSERT INTO messages (id, author_id, content, attachment_b64, ts, channel_id, guild_id) VALUES %L ON CONFLICT DO NOTHING', toSubmit)
+    : format('INSERT INTO messages (id, author_id, content, attachment_b64, ts) VALUES %L ON CONFLICT DO NOTHING', toSubmit.map(row => row.slice(0, 5))))
   poolClient.release()
   global.timesSubmitted += 1
   global.totalMessagesSubmitted += batchSize
@@ -81,7 +95,14 @@ function getChannelMessages (channelID) {
     .reverse()
 }
 
+// Drops a message that is still waiting in memory, so a deletion reaches it before it is stored.
+function removeMessage (messageID) {
+  const index = batch.findIndex(m => m[0] === messageID)
+  if (index !== -1) batch.splice(index, 1)
+}
+
 exports.getMessage = getMessage
+exports.removeMessage = removeMessage
 exports.getChannelMessages = getChannelMessages
 exports.addItem = addItem
 exports.updateMessage = updateMessage

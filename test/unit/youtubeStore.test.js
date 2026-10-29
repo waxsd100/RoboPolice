@@ -15,7 +15,8 @@ beforeEach((t) => {
   t.mock.method(pool, 'query', async (sql, args) => {
     const flat = sql.replace(/\s+/g, ' ').trim()
     queries.push({ sql: flat, args })
-    if (flat.startsWith('SELECT channel_ref')) return { rows: currentRef ? [{ channel_ref: currentRef }] : [] }
+    if (flat.startsWith('SELECT channel_id FROM youtube_channels')) return { rows: currentRef ? [{ channel_id: currentRef }] : [] }
+    if (flat.startsWith('SELECT c.*')) return { rows: [{ guild_id: '1', title: 't', video_count: 12, summary_count: 3 }] }
     if (flat.startsWith('SELECT * FROM youtube_channels')) return { rows: [{ guild_id: '1', channel_ref: '@x' }] }
     if (flat.startsWith('SELECT video_id')) return { rows: [{ video_id: 'v1' }, { video_id: 'v2' }] }
     if (flat.startsWith('SELECT summary')) return { rows: args[1] === 'v1' ? [{ summary: '要約' }] : [] }
@@ -24,7 +25,7 @@ beforeEach((t) => {
   t.mock.method(pool, 'getPostgresClient', async () => ({
     query: async (sql, args) => {
       transaction.push(sql.replace(/\s+/g, ' ').trim())
-      if (args?.[1] === 'boom') throw new Error('insert failed')
+      if (sql.includes("'boom'")) throw new Error('insert failed')
     },
     release: () => transaction.push('release')
   }))
@@ -38,29 +39,48 @@ describe('youtube store', () => {
     const creates = () => queries.filter(q => q.sql.startsWith('CREATE TABLE IF NOT EXISTS')).map(q => q.sql.split(' ')[5])
     await store.getKnowledge('1')
     assert.deepEqual(creates(), ['youtube_channels', 'youtube_videos', 'youtube_summaries'])
+    assert.ok(queries.some(q => q.sql === 'ALTER TABLE youtube_channels ADD COLUMN IF NOT EXISTS backfill_token TEXT'), 'tables made before the column existed get it')
     await store.getKnowledge('1')
     await store.getVideoIds('1')
     assert.equal(creates().length, 3)
   })
 
   test('setting a different channel starts over', async () => {
-    currentRef = '@old'
-    await store.setChannelRef('1', '@new')
-    assert.match(queries[1].sql, /^INSERT INTO youtube_channels .* ON CONFLICT \(guild_id\) DO UPDATE SET channel_ref = \$2, channel_id = NULL/)
+    currentRef = 'UCold'
+    await store.setChannel('1', '@new', 'UCnew')
+    assert.match(queries[1].sql, /^INSERT INTO youtube_channels .* ON CONFLICT \(guild_id\) DO UPDATE SET channel_ref = \$2, channel_id = \$3, title = NULL.* backfill_token = NULL$/)
+    assert.deepEqual(queries[1].args, ['1', '@new', 'UCnew'])
     assert.deepEqual(queries[2], { sql: 'DELETE FROM youtube_videos WHERE guild_id = $1', args: ['1'] })
   })
 
-  test('setting the same channel again keeps what was accumulated', async () => {
-    currentRef = '@same'
-    await store.setChannelRef('1', '@same')
-    assert.deepEqual(queries.map(q => q.sql), ['SELECT channel_ref FROM youtube_channels WHERE guild_id = $1'])
+  test('setting the same channel, however it is written, keeps what was accumulated', async () => {
+    currentRef = 'UCsame'
+    await store.setChannel('1', 'https://www.youtube.com/channel/UCsame', 'UCsame')
+    assert.deepEqual(queries.map(q => q.sql), [
+      'SELECT channel_id FROM youtube_channels WHERE guild_id = $1',
+      'UPDATE youtube_channels SET channel_ref = $2 WHERE guild_id = $1'
+    ])
   })
 
   test('a sync adds and refreshes videos in one transaction, never deleting any', async () => {
-    await store.saveSync('1', { channel: { id: 'UC', title: 't' }, videos: [{ id: 'v1' }, { id: 'v2' }] })
-    assert.deepEqual(verbs(transaction), ['BEGIN', 'UPDATE youtube_channels SET', 'INSERT INTO youtube_videos', 'INSERT INTO youtube_videos', 'COMMIT', 'release'])
-    assert.match(transaction[2], /ON CONFLICT \(guild_id, video_id\) DO UPDATE SET title = \$3/)
+    await store.saveSync('1', { channel: { id: 'UC', title: 't' }, videos: [{ id: 'v1' }, { id: 'v2' }], backfillToken: 'tok' })
+    assert.deepEqual(verbs(transaction), ['BEGIN', 'UPDATE youtube_channels SET', 'INSERT INTO youtube_videos', 'COMMIT', 'release'])
+    assert.match(transaction[2], /VALUES \('1', 'v1', .*\), \('1', 'v2', .*\) ON CONFLICT \(guild_id, video_id\) DO UPDATE SET title = EXCLUDED\.title/)
     assert.ok(!transaction.some(sql => sql.startsWith('DELETE')))
+  })
+
+  test('a large sync is written in chunks of 500 rows, without duplicate IDs', async () => {
+    const videos = Array.from({ length: 1200 }, (_, i) => ({ id: `v${i}` }))
+    await store.saveSync('1', { channel: { id: 'UC' }, videos: [...videos, { id: 'v0' }] })
+    const inserts = transaction.filter(sql => sql.startsWith('INSERT'))
+    assert.equal(inserts.length, 3)
+    assert.equal((inserts[0].match(/\('1', 'v\d+'/g) || []).length, 500)
+    assert.equal((inserts.join(' ').match(/'v0'/g) || []).length, 1)
+  })
+
+  test('getOverview counts videos and summaries without reading them', async () => {
+    assert.deepEqual(await store.getOverview('1'), { guild_id: '1', title: 't', video_count: 12, summary_count: 3 })
+    assert.match(queries.at(-1).sql, /count\(\*\) FROM youtube_videos/)
   })
 
   test('a failed sync rolls back and still releases the client', async () => {

@@ -36,7 +36,7 @@ describe('stored messages carry their channel and server', () => {
     assert.deepEqual(queries.map(q => q.sql), [
       'ALTER TABLE messages ADD COLUMN IF NOT EXISTS channel_id TEXT',
       'ALTER TABLE messages ADD COLUMN IF NOT EXISTS guild_id TEXT',
-      'CREATE INDEX IF NOT EXISTS messages_channel_ts ON messages (channel_id, ts DESC)'
+      'CREATE INDEX CONCURRENTLY IF NOT EXISTS messages_channel_ts ON messages (channel_id, ts DESC)'
     ])
     assert.equal(inserted.length, 2)
     assert.match(inserted[0], /^INSERT INTO messages \(id, author_id, content, attachment_b64, ts, channel_id, guild_id\) VALUES \('m0', '1', '[^']+', '', '2026-10-29T00:00:00.000Z', '201', '100'\)/)
@@ -126,5 +126,29 @@ describe('search_channel_history', () => {
     assert.match(text, /…ほか 50 件（query で絞り込めます）$/)
     // The newest 100 are kept, shown oldest first.
     assert.match(text.split('\n')[1], /msg 99$/)
+  })
+})
+
+describe('stored text as people wrote it', () => {
+  const { toStoredContent, fromStoredContent } = require('../../src/db/interfaces/postgres/create')
+
+  test('fromStoredContent undoes the escaping exactly', () => {
+    for (const text of ['meetup_2026 *free* <@123> ~strike~ #tag [link](x) `code` https://e.com/a_b', 'a\\b \\* \\\\', '普通の文章']) {
+      assert.equal(fromStoredContent(toStoredContent(text)), text)
+    }
+    assert.equal(fromStoredContent('None'), '')
+  })
+
+  test('search_channel_history matches and shows the original text, and skips empty messages', async (t) => {
+    const guild = createGuild({ channels: [{ id: '201', name: 'general', type: 0, readers: ['1', 'BOT'] }] })
+    t.mock.method(read, 'getChannelHistory', async () => [
+      { author_id: '2', content: toStoredContent('meetup_2026 は *無料*'), ts: new Date('2026-10-28T00:00:00Z') },
+      { author_id: '2', content: toStoredContent(''), ts: new Date('2026-10-27T00:00:00Z') }
+    ])
+    installBot({ guilds: [guild] })
+    const res = await createTools({ guild, member: createMember({ id: '1' }), ask: async () => '' }).call('search_channel_history', { channel_id: '201', query: 'meetup_2026' })
+    assert.match(res.result, /保存済みメッセージ 1 件.*「meetup_2026」を含む 1 件/)
+    assert.match(res.result, /: meetup_2026 は \*無料\*$/)
+    assert.doesNotMatch(res.result, /None|\\_/)
   })
 })

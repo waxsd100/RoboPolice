@@ -277,7 +277,7 @@ describe('describeServer', () => {
 
   test('still describes the server when events or YouTube cannot be read', async () => {
     const store = require('../../src/db/interfaces/postgres/youtube')
-    store.getKnowledge = async () => { throw new Error('db down') }
+    store.getOverview = async () => { throw new Error('db down') }
     const g = createGuild()
     installBot({ guilds: [g] })
     global.bot.requestHandler.request = async () => { throw new Error('503') }

@@ -1,6 +1,6 @@
 const { test, describe, after, before } = require('node:test')
 const assert = require('node:assert/strict')
-const { fetchPageText, fetchImage, htmlToText, isBlockedAddress } = require('../../src/bot/utils/urlFetcher')
+const { fetchPageText, fetchImage, htmlToText, decodeBody, isBlockedAddress } = require('../../src/bot/utils/urlFetcher')
 const { startServer } = require('../helpers/fakes')
 
 describe('isBlockedAddress', () => {
@@ -141,5 +141,20 @@ describe('fetchPageText', () => {
   test('caps the returned text', async () => {
     const page = await fetchPageText(`${server.url}/huge`, { isBlocked: allowLoopback })
     assert.equal(page.text.length, 20000)
+  })
+})
+
+describe('decodeBody', () => {
+  const sjis = Buffer.from('3c6d65746120636861727365743d2253686966745f4a4953223e93fa967b8cea', 'hex') // <meta charset="Shift_JIS">日本語
+  test('uses the charset from Content-Type', () => {
+    assert.equal(decodeBody(Buffer.from('93fa967b8cea', 'hex'), 'text/html; charset=Shift_JIS'), '日本語')
+    assert.equal(decodeBody(Buffer.from('c6fccbdcb8ec', 'hex'), 'text/html; charset="EUC-JP"'), '日本語')
+  })
+  test('falls back to a <meta charset> in the page', () => {
+    assert.equal(decodeBody(sjis, 'text/html'), '<meta charset="Shift_JIS">日本語')
+  })
+  test('defaults to UTF-8, also for an unknown label', () => {
+    assert.equal(decodeBody(Buffer.from('日本語'), 'text/html'), '日本語')
+    assert.equal(decodeBody(Buffer.from('日本語'), 'text/html; charset=x-unknown-thing'), '日本語')
   })
 })
