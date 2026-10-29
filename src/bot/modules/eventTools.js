@@ -72,6 +72,7 @@ function formatMessage (m) {
   for (const e of m.embeds || []) {
     const text = [e.title, e.description, ...(e.fields || []).map(f => `${f.name}: ${f.value}`), e.url].filter(Boolean).join('\n')
     if (text) lines.push(`  埋め込み: ${text}`)
+    for (const image of [e.image, e.thumbnail].filter(i => i?.url)) lines.push(`  埋め込み画像: ${image.url}`)
   }
   for (const a of m.attachments || []) lines.push(`  添付: ${a.filename} ${a.url}`)
   return lines.join('\n')

@@ -76,6 +76,19 @@ names) is sent to Google Gemini through Cloudflare AI Gateway. Nothing from this
 the app. Use a paid Gemini API tier: on the free tier Google may use the input to improve its models,
 which the intent review answers rule out.
 
+The preview has Register / Post, **Fix** and Cancel buttons. Fix asks the requester to type what to
+change as their next message in the channel; the correction goes back to the model, which revises
+its own draft (up to 3 times). Questions the model asks can likewise be answered in words with
+"その他（文字で入力）". A forum mentioned in the request (`@RoboPolice #募集 に立てて`) is always the
+one posted to.
+
+The model can also pick an image for the event cover or the forum post: an `og:image` /
+`twitter:image` of a page it read, an image attached to the mention or the replied-to message, or an
+embed image. The app downloads it (same address checks as pages, images only, 10MB at most) and
+crops it with sharp's attention strategy, which keeps the most salient region: 800×320 for an event
+cover, 1280×720 for a forum post. If the image can't be used the draft is still created, and the
+reply says why.
+
 If drafting fails, the reply shows the cause and the top of the error log so staff can tell what
 went wrong without server access. Secrets are masked first (`src/bot/utils/redact.js`): values of
 environment variables whose names look secret (`*TOKEN*`, `*KEY*`, `*PASSWORD*`, webhook URLs, the

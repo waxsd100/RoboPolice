@@ -59,8 +59,8 @@ function installBot ({ guilds = [], messages = {}, scheduledEvents = [], forums 
         .slice(0, limit)
     },
     requestHandler: {
-      async request (method, url, auth, body) {
-        calls.push({ method, url, body })
+      async request (method, url, auth, body, files) {
+        calls.push({ method, url, body, files })
         const forum = url.match(/^\/channels\/(\d+)$/)
         if (method === 'GET' && forum) return { id: forum[1], type: 15, ...forums[forum[1]] }
         if (method === 'GET') return scheduledEvents

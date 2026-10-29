@@ -1,6 +1,6 @@
 const { test, describe, beforeEach } = require('node:test')
 const assert = require('node:assert/strict')
-const { toForumPost, describeForums, postableForums, REQUIRE_TAG } = require('../../src/bot/modules/forumPost')
+const { toForumPost, describeForums, postableForums, imageUrlOf, REQUIRE_TAG } = require('../../src/bot/modules/forumPost')
 const { createGuild, createMember, installBot } = require('../helpers/fakes')
 
 const REQUESTER = '1'
@@ -25,6 +25,19 @@ beforeEach(() => {
 })
 
 const base = { found: true, channel_id: '301', title: '11/3 交流会の参加者募集', content: '参加したい人はこのスレッドに書き込んでください', tags: ['募集中'] }
+
+describe('imageUrlOf', () => {
+  test('accepts only a plain http(s) URL', () => {
+    assert.equal(imageUrlOf({ image_url: ' https://e.com/a.png ' }), 'https://e.com/a.png')
+    for (const bad of ['', 'javascript:alert(1)', 'data:image/png;base64,AAA', 'file:///etc/passwd', 'https://e.com/a b.png', undefined]) {
+      assert.equal(imageUrlOf({ image_url: bad }), null, String(bad))
+    }
+  })
+
+  test('is carried on a forum post', async () => {
+    assert.equal((await toForumPost({ ...base, image_url: 'https://e.com/a.png' }, guild, member)).imageUrl, 'https://e.com/a.png')
+  })
+})
 
 describe('postableForums', () => {
   test('only forum and media channels both the requester and the bot can post in', () => {
@@ -58,6 +71,7 @@ describe('toForumPost', () => {
         applied_tags: ['t1']
       },
       tagNames: ['募集中'],
+      imageUrl: null,
       truncated: false
     })
     assert.deepEqual(calls.map(c => `${c.method} ${c.url}`), ['GET /channels/301'])
