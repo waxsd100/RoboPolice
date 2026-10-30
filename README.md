@@ -118,27 +118,30 @@ server profile, stored YouTube data) is sent to Google Gemini through Cloudflare
 from this flow is stored by the app. Use a paid Gemini API tier: on the free tier Google may use the input to improve its models,
 which the intent review answers rule out.
 
-The preview has Register / Post, **Fix** and Cancel buttons. Fix asks the requester to type what to
-change as their next message in the channel; the correction goes back to the model, which revises
+The preview has Register / Post, **内容を修正** (fix the text) and Cancel buttons. 内容を修正 is about
+the draft itself (name, time, place and description; or title, body, tags and forum), not the image,
+and asks the requester to type what to change as their next message in the channel; the correction goes back to the model, which revises
 its own draft (up to 3 times). Questions the model asks can likewise be answered in words with
 "その他（文字で入力）". A forum mentioned in the request (`@RoboPolice #募集 に立てて`) is always the
 one posted to.
 
-The model can also pick an image for the event cover or the forum post: an `og:image` /
-`twitter:image` of a page it read, an image attached to the mention or the replied-to message, or an
-embed image. The app downloads it (same address checks as pages, images only, 10MB at most) and the
-preview shows the actual result, 800×320 for an event cover or 1280×720 for a forum post. A second
-row of buttons switches how it is made (`src/bot/modules/coverImage.js`):
+The model can also propose images for the event cover or the forum post, up to 4 best first: the
+`og:image` / `twitter:image` of pages it read, images attached to the mention or the replied-to
+message, or embed images. The app downloads them (same address checks as pages, images only, 10MB at
+most). With more than one, the preview shows them side by side ("画像の候補", the selected one framed
+in yellow) with a row of 画像1…画像4 buttons to pick one. The preview shows the actual result, 800×320
+for an event cover or 1280×720 for a forum post, and one more row of buttons switches how it is made
+(`src/bot/modules/coverImage.js`):
 
 | Mode | What it does | Default for |
 |---|---|---|
 | 切り抜き | Crops with sharp's attention strategy, keeping the most salient region | Images close to the target shape (photos) |
 | 全体表示 | Shows the whole image over a blurred, darkened copy of itself | Posters and anything far from the target shape |
-| AIで作成 | Gemini's image model (`GEMINI_IMAGE_MODEL`) makes a new cover from the title and description, based on the source image if there is one, without text | — |
+| AIで作成 | Gemini's image model (`GEMINI_IMAGE_MODEL`) makes a new cover from the title and description, based on the selected image if there is one, without text | — |
 | なし | No image | Drafts without an image |
 
-"AIで作成" sends the title, description and the source image to Gemini, the same way drafting does.
-If an image can't be used the draft still works, and the preview says why.
+"AIで作成" sends the title, description and the selected image to Gemini, the same way drafting does.
+Images that can't be used are left out of the candidates, the draft still works, and the preview says why.
 
 One mention usually takes 2-4 Gemini requests (one per tool step, up to 10), plus one per
 correction, AI-made image or video summary; each mention logs how many it used. HTTP 429 is retried

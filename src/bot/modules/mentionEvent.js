@@ -118,12 +118,32 @@ function sourcesField (sources) {
 
 // The preview shows the rendered cover as an attachment, so the requester sees the real result.
 const PREVIEW_IMAGE = 'cover.jpg'
+const CANDIDATES_IMAGE = 'candidates.jpg'
 
 function coverParts (cover) {
   return {
     fields: [{ name: '画像', value: cover.describe() }],
     image: cover.buffer ? { url: `attachment://${PREVIEW_IMAGE}` } : undefined
   }
+}
+
+// The candidates side by side, as a second embed under the draft, when there is more than one.
+function candidatesEmbed (cover) {
+  if (!cover.sheet) return []
+  return [{
+    title: '画像の候補',
+    description: '左上から 画像1・画像2・画像3・画像4。黄色の枠が選択中です。下の「画像」ボタンで選べます。',
+    color: EMBED_COLORS.YELLOW_ORANGE,
+    image: { url: `attachment://${CANDIDATES_IMAGE}` }
+  }]
+}
+
+// The files the preview shows: the cover as it will be set, and the candidate sheet.
+function previewFiles (cover) {
+  return [
+    ...(cover.buffer ? [{ filename: PREVIEW_IMAGE, file: cover.buffer }] : []),
+    ...(cover.sheet ? [{ filename: CANDIDATES_IMAGE, file: cover.sheet }] : [])
+  ]
 }
 
 function eventPreview ({ event, endGuessed }, sources, requester, cover) {
@@ -172,6 +192,7 @@ const KINDS = {
   event: {
     preview: eventPreview,
     confirmLabel: '登録する',
+    revisePrompt: 'イベントの内容（名前・日時・場所・説明）で直したいことを入力してください。画像は「画像」のボタンで変えられます（例: 開始は20時、場所はボイスチャンネル）',
     size: SIZES.eventCover,
     text: ({ event }) => ({ title: event.name, summary: event.description }),
     async create (result, guild, author, cover) {
@@ -189,6 +210,7 @@ const KINDS = {
   forum: {
     preview: forumPreview,
     confirmLabel: '投稿する',
+    revisePrompt: '投稿の内容（題名・本文・タグ・投稿先）で直したいことを入力してください。画像は「画像」のボタンで変えられます（例: 題名に日付を入れて、タグは募集中）',
     size: SIZES.forumImage,
     text: ({ post }) => ({ title: post.name, summary: post.message.content }),
     async create (result, guild, author, cover) {
@@ -208,12 +230,15 @@ const KINDS = {
 
 // Edits the reply. With `image` (a Buffer, or null to remove it) the edit goes through the REST
 // API directly: the pinned Eris cannot attach files when editing a message.
-async function editReply (reply, payload, image) {
-  if (image === undefined) return reply.edit(payload)
+// Edits the reply. With `files` ([{ filename, file }], or null to remove all) the edit goes through
+// the REST API directly: the pinned Eris cannot attach files when editing a message.
+async function editReply (reply, payload, files) {
+  if (files === undefined) return reply.edit(payload)
+  const list = files || []
   return global.bot.requestHandler.request('PATCH', `/channels/${reply.channel.id}/messages/${reply.id}`, true, {
     ...payload,
-    attachments: image ? [{ id: 0, filename: PREVIEW_IMAGE }] : []
-  }, image ? [{ name: 'files[0]', file: image }] : undefined)
+    attachments: list.map((f, id) => ({ id, filename: f.filename }))
+  }, list.length ? list.map((f, i) => ({ name: `files[${i}]`, file: f.file })) : undefined)
 }
 
 // Lays buttons out in rows: buttons with the same `row` (default 0) share rows of up to five.
@@ -235,10 +260,10 @@ function buttonRows (buttons, ids) {
 
 // Shows `buttons` on the reply and waits for the requester to press one. Resolves to the pressed
 // button's index and its interaction, or null if nobody pressed within the timeout.
-async function choose (reply, requesterID, message, buttons, image) {
+async function choose (reply, requesterID, message, buttons, files) {
   const { awaitCustomID, cancelCustomID } = require('../events/interactionCreate')
   const ids = buttons.map(() => uuidv4())
-  await editReply(reply, { ...message, components: buttonRows(buttons, ids) }, image)
+  await editReply(reply, { ...message, components: buttonRows(buttons, ids) }, files)
   try {
     const interaction = await Promise.race(ids.map(id => awaitCustomID(id, requesterID, ANSWER_TIMEOUT_MS)))
     return { index: ids.indexOf(interaction.data.custom_id), interaction }
@@ -355,23 +380,37 @@ async function handle (message) {
         if (needsCover) {
           // A correction can switch between event and forum post, which use different sizes.
           if (!cover || cover.size !== kind.size) cover = new CoverImage(kind.size)
-          await cover.useDraft({ imageUrl: result.imageUrl, ...kind.text(result) })
+          await cover.useDraft({ imageUrls: result.imageUrls, ...kind.text(result) })
           needsCover = false
         }
         const embed = kind.preview(result, [...new Set(tools.sources)], message.author, cover)
         const canRevise = revisions < MAX_REVISIONS
+        const usingCandidate = cover.mode === 'crop' || cover.mode === 'fit'
         const buttons = [
           { label: kind.confirmLabel, style: SUCCESS, action: 'create' },
-          ...(canRevise ? [{ label: '修正する', style: PRIMARY, action: 'revise' }] : []),
+          ...(canRevise ? [{ label: '内容を修正', style: PRIMARY, action: 'revise' }] : []),
           { label: 'キャンセル', style: DANGER, action: 'cancel' },
+          // Which candidate, then how it becomes the image: separate rows, so it is clear these
+          // buttons are about the image and 内容を修正 is about the text.
+          ...(cover.candidates.length > 1
+            ? cover.candidates.map((_, i) => ({
+              label: `画像${i + 1}`,
+              style: usingCandidate && i === cover.selected ? SUCCESS : SECONDARY,
+              action: `candidate:${i}`,
+              row: 1
+            }))
+            : []),
           ...cover.modes().map(mode => ({
             label: `画像: ${MODES[mode]}`,
             style: mode === cover.mode ? SUCCESS : SECONDARY,
             action: `image:${mode}`,
-            row: 1
+            row: 2
           }))
         ]
-        const picked = await choose(reply, message.author.id, { content: canRevise ? '' : `修正は${MAX_REVISIONS}回までです。`, embeds: [embed] }, buttons, cover.buffer)
+        const picked = await choose(reply, message.author.id, {
+          content: canRevise ? '' : `内容の修正は${MAX_REVISIONS}回までです。`,
+          embeds: [embed, ...candidatesEmbed(cover)]
+        }, buttons, previewFiles(cover))
         if (!picked) {
           await reply.edit({ content: '時間内に確認されなかったため、取りやめました。', components: [] })
           return
@@ -386,13 +425,17 @@ async function handle (message) {
           await interaction.editOriginalMessage({ content: await kind.create(result, guild, message.author, cover), components: [] })
           return
         }
+        if (action.startsWith('candidate:')) {
+          await cover.choose(Number(action.slice('candidate:'.length)))
+          continue
+        }
         if (action.startsWith('image:')) {
           const mode = action.slice('image:'.length)
-          if (mode === 'ai' && !cover.rendered.has('ai')) await reply.edit({ content: 'AI で画像を作成しています…', components: [] })
+          if (mode === 'ai' && !cover.rendered.has(cover.key('ai'))) await reply.edit({ content: 'AI で画像を作成しています…', components: [] })
           await cover.select(mode)
           continue
         }
-        const correction = await typedAnswer(reply, message.channel.id, message.author.id, '直したい内容を入力してください（例: 開始は20時、場所はボイスチャンネル）')
+        const correction = await typedAnswer(reply, message.channel.id, message.author.id, kind.revisePrompt)
         await reply.edit({ content: '修正を反映しています…' })
         result = await revise(result.conversation, correction)
         revisions++

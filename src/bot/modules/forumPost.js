@@ -9,6 +9,7 @@ const REQUIRE_TAG = 1 << 4
 const MAX_TAGS = 5
 const MAX_TITLE = 100
 const MAX_CONTENT = 2000
+const MAX_IMAGE_CANDIDATES = 4
 
 const SUBMIT_FORUM_DECLARATION = {
   name: 'submit_forum_post_draft',
@@ -22,17 +23,20 @@ const SUBMIT_FORUM_DECLARATION = {
       title: { type: 'STRING', description: `投稿の題名（${MAX_TITLE}文字以内）` },
       content: { type: 'STRING', description: `投稿の本文（${MAX_CONTENT}文字以内、Discord の Markdown 可）。参照元のリンクがあれば末尾に含める` },
       tags: { type: 'ARRAY', items: { type: 'STRING' }, description: `付けるタグの名前（list_forums に出たものから最大${MAX_TAGS}個）` },
-      image_url: { type: 'STRING', description: '投稿に添える画像の URL。参照したページの og:image / twitter:image、メッセージの添付画像・埋め込み画像から、内容に合うものを1つ選ぶ。ロゴやアイコンなど小さい画像は選ばない。なければ空文字' }
+      image_urls: { type: 'ARRAY', items: { type: 'STRING' }, description: `投稿に添える画像の候補 URL（良い順、最大${MAX_IMAGE_CANDIDATES}つ）。参照したページの og:image / twitter:image、メッセージの添付画像・埋め込み画像から内容に合うものを選ぶ。ロゴやアイコンなど小さい画像は選ばない。なければ空` }
     },
     required: ['found']
   }
 }
 
-// The image the model picked, if it is a plain http(s) URL. Fetching it later goes through the same
-// address checks as any other URL.
-function imageUrlOf (draft) {
-  const url = String(draft.image_url || '').trim()
-  return /^https?:\/\/\S+$/i.test(url) ? url : null
+// The image candidates the model picked, best first: plain http(s) URLs only, without duplicates.
+// Fetching them later goes through the same address checks as any other URL. A single image_url
+// is accepted too.
+function imageUrlsOf (draft) {
+  const urls = [...(Array.isArray(draft.image_urls) ? draft.image_urls : []), draft.image_url]
+    .map(u => String(u || '').trim())
+    .filter(u => /^https?:\/\/\S+$/i.test(u))
+  return [...new Set(urls)].slice(0, MAX_IMAGE_CANDIDATES)
 }
 
 function canPost (channel, userID) {
@@ -101,9 +105,9 @@ async function toForumPost (draft, guild, member) {
       applied_tags: tags.map(t => t.id)
     },
     tagNames: tags.map(t => t.name),
-    imageUrl: imageUrlOf(draft),
+    imageUrls: imageUrlsOf(draft),
     truncated: content.length > MAX_CONTENT
   }
 }
 
-module.exports = { SUBMIT_FORUM_DECLARATION, toForumPost, describeForums, postableForums, imageUrlOf, FORUM_TYPES, REQUIRE_TAG }
+module.exports = { SUBMIT_FORUM_DECLARATION, toForumPost, describeForums, postableForums, imageUrlsOf, MAX_IMAGE_CANDIDATES, FORUM_TYPES, REQUIRE_TAG }

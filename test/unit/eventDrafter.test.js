@@ -75,9 +75,9 @@ describe('toScheduledEvent', () => {
     assert.deepEqual(toScheduledEvent({ found: false, reason: '日時がありません' }, guild, NOW), { error: '日時がありません' })
   })
 
-  test('carries a valid image URL and drops anything else', () => {
-    assert.equal(toScheduledEvent({ ...base, image_url: 'https://e.com/cover.jpg' }, guild, NOW).imageUrl, 'https://e.com/cover.jpg')
-    assert.equal(toScheduledEvent({ ...base, image_url: 'javascript:x' }, guild, NOW).imageUrl, null)
+  test('carries valid image candidates and drops anything else', () => {
+    assert.deepEqual(toScheduledEvent({ ...base, image_urls: ['https://e.com/cover.jpg', 'javascript:x', 'https://e.com/b.png'] }, guild, NOW).imageUrls, ['https://e.com/cover.jpg', 'https://e.com/b.png'])
+    assert.deepEqual(toScheduledEvent(base, guild, NOW).imageUrls, [])
   })
 
   test('rejects a missing name', () => {

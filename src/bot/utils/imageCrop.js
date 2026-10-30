@@ -56,4 +56,22 @@ async function forReference (buffer) {
   return toJpeg(load(buffer).resize({ width: 1536, height: 1536, fit: 'inside', withoutEnlargement: true }))
 }
 
-module.exports = { cropTo, fitWithBlur, defaultMode, forReference, SIZES }
+// Image candidates side by side, two per row in reading order (1 top left, 2 top right, 3 and 4
+// below), so the requester can compare them. The selected one gets a yellow frame. No digits are
+// drawn: the container may have no fonts, and the order is stated in text next to the sheet.
+const TILE = { width: 400, height: 225 }
+const FRAME = 6
+async function contactSheet (buffers, selected) {
+  const tiles = await Promise.all(buffers.map(async (buffer, i) => {
+    const inner = await fitWithBlur(buffer, { width: TILE.width - FRAME * 2, height: TILE.height - FRAME * 2 })
+    return sharp(inner)
+      .extend({ top: FRAME, bottom: FRAME, left: FRAME, right: FRAME, background: i === selected ? '#ffcc00' : '#202225' })
+      .toBuffer()
+  }))
+  const columns = Math.min(buffers.length, 2)
+  const rows = Math.ceil(buffers.length / 2)
+  return toJpeg(sharp({ create: { width: TILE.width * columns, height: TILE.height * rows, channels: 3, background: '#202225' } })
+    .composite(tiles.map((input, i) => ({ input, left: (i % 2) * TILE.width, top: Math.floor(i / 2) * TILE.height }))))
+}
+
+module.exports = { cropTo, fitWithBlur, defaultMode, forReference, contactSheet, SIZES }
