@@ -5,13 +5,12 @@ const database = require('./database')
 const { installBot, createGuild } = require('../helpers/fakes')
 
 describe('stores', { skip: !database.available && 'needs PGHOST' }, () => {
-  let pool, aes
+  let pool
   const q = async (sql, args) => (await pool.query(sql, args)).rows
 
   before(async () => {
     await database.create()
     pool = require('../../src/db/clients/postgres')
-    aes = require('../../src/db/aes')
     await require('../../src/db/migrate').migrate()
     const guilds = [createGuild({ id: 'g1', ownerID: 'o1' }), createGuild({ id: 'g2', ownerID: 'o2' })]
     installBot({ guilds })
@@ -73,10 +72,9 @@ describe('stores', { skip: !database.available && 'needs PGHOST' }, () => {
 
   describe('messages', () => {
     const batcher = () => require('../../src/db/messageBatcher')
-    const enc = s => aes.encrypt(s)
 
     test('a batch is stored with its images; edits and deletes reach them', async () => {
-      for (let i = 0; i < 10; i++) await batcher().addItem([`m${i}`, 'u1', enc(`text ${i}`), i === 0 ? [enc('https://cdn/a.png'), enc('https://cdn/b.png')] : [], `2026-10-0${i % 9 + 1}T00:00:00Z`, 'c1', 'g1'])
+      for (let i = 0; i < 10; i++) await batcher().addItem([`m${i}`, 'u1', `text ${i}`, i === 0 ? ['https://cdn/a.png', 'https://cdn/b.png'] : [], `2026-10-0${i % 9 + 1}T00:00:00Z`, 'c1', 'g1'])
       const read = require('../../src/db/interfaces/postgres/read')
       const m0 = await read.getMessageById('m0')
       assert.equal(m0.content, 'text 0')

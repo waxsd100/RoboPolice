@@ -1,19 +1,17 @@
 // Embeddings of stored messages and YouTube videos, for searching by meaning.
 //
-// A message's embedding is encrypted like its content (it says much of what the message said) and
-// goes with it: the foreign key deletes it when the message is deleted for any reason (retention,
+// A message's embedding goes with its message: the foreign key deletes it when the message is deleted for any reason (retention,
 // /clearmydata, the bot leaving), and an edit drops it to be made again. messages.embedded marks
 // what has been handled, so finding new messages uses a small partial index, not a table scan.
-// Videos are public data: their vectors are stored as they are, one per video.
+// Videos have one vector each.
 const pool = require('../../clients/postgres')
-const aes = require('../../aes')
 
-// Newest messages not handled yet, decrypted: [{ id, guild_id, channel_id, ts, content }].
+// Newest messages not handled yet: [{ id, guild_id, channel_id, ts, content }].
 async function pendingMessages (limit) {
   const rows = await pool.query(
     'SELECT id, guild_id, channel_id, ts, content FROM messages WHERE NOT embedded ORDER BY ts DESC LIMIT $1',
     [limit])
-  return rows.rows.map(r => ({ ...r, content: aes.decrypt(r.content) }))
+  return rows.rows
 }
 
 // Stores [{ id, embedding, model }] and marks `handledIds` (which also covers messages that get no
@@ -25,7 +23,7 @@ async function saveMessageEmbeddings (rows, handledIds) {
       `INSERT INTO message_embeddings (message_id, embedding, model)
        SELECT $1, $2, $3 WHERE EXISTS (SELECT 1 FROM messages WHERE id = $1)
        ON CONFLICT (message_id) DO UPDATE SET embedding = EXCLUDED.embedding, model = EXCLUDED.model`,
-      [r.id, aes.encrypt(r.embedding), r.model])
+      [r.id, r.embedding, r.model])
   }
   if (handledIds.length) await pool.query('UPDATE messages SET embedded = true WHERE id = ANY($1)', [handledIds])
 }
@@ -50,7 +48,7 @@ async function invalidateMessage (messageID) {
 }
 
 // The stored message embeddings of a server in `channelIDs` made by `model`, newest first, `pageSize` at a time:
-// an async iterator of [{ message_id, channel_id, ts, embedding }] pages (embedding decrypted),
+// an async iterator of [{ message_id, channel_id, ts, embedding }] pages,
 // stopping after `max` rows.
 async function * messageEmbeddingPages (guildID, channelIDs, { model, pageSize = 5000, max = 50000 } = {}) {
   let before = null
@@ -65,15 +63,15 @@ async function * messageEmbeddingPages (guildID, channelIDs, { model, pageSize =
     if (rows.length === 0) return
     read += rows.length
     before = rows[rows.length - 1].ts
-    yield rows.map(r => ({ ...r, embedding: aes.decrypt(r.embedding) }))
+    yield rows
   }
 }
 
-// Decrypted messages by ID: [{ id, author_id, channel_id, ts, content }].
+// Messages by ID: [{ id, author_id, channel_id, ts, content }].
 async function getMessages (ids) {
   if (ids.length === 0) return []
   const rows = await pool.query('SELECT id, author_id, channel_id, ts, content FROM messages WHERE id = ANY($1)', [ids])
-  return rows.rows.map(r => ({ ...r, content: aes.decrypt(r.content) }))
+  return rows.rows
 }
 
 // Every stored video with what its embedding is made from: [{ video_id, title, description,

@@ -29,7 +29,7 @@ describe('migrations', { skip: !database.available && 'needs PGHOST' }, () => {
       ('m1', 'u1', $1, $2, '2026-10-01', 'c1', 'g1', true),
       ('m2', 'u1', $1, '', '2026-10-02', 'c1', 'g1', false)`,
     [aes.encrypt('hi'), [piece('https://cdn/a.png'), piece('https://cdn/b.png')].join('|')])
-    await q("INSERT INTO message_embeddings (message_id, guild_id, channel_id, ts, embedding, model) VALUES ('m1', 'g1', 'c1', '2026-10-01', 'vec', 'model-a')")
+    await q("INSERT INTO message_embeddings (message_id, guild_id, channel_id, ts, embedding, model) VALUES ('m1', 'g1', 'c1', '2026-10-01', $1, 'model-a')", [aes.encrypt('vec')])
     // Two servers with the same channel, so every video is stored twice; one legacy row without an ID.
     await q(`INSERT INTO youtube_channels (guild_id, channel_ref, channel_id, title, synced_at, backfill_token, live_events) VALUES
       ('g1', '@chan', 'UC1', 'チャンネル', '2026-10-01', NULL, true),
@@ -70,9 +70,9 @@ describe('migrations', { skip: !database.available && 'needs PGHOST' }, () => {
     assert.deepEqual(columns, ['id', 'log_bots', 'owner_id'])
   })
 
-  test('image URLs become rows, encrypted as they are', async () => {
+  test('image URLs become rows', async () => {
     const rows = await q('SELECT message_id, position, url FROM message_attachments ORDER BY position')
-    assert.deepEqual(rows.map(r => [r.message_id, r.position, aes.decrypt(r.url)]), [['m1', 0, 'https://cdn/a.png'], ['m1', 1, 'https://cdn/b.png']])
+    assert.deepEqual(rows.map(r => [r.message_id, r.position, r.url]), [['m1', 0, 'https://cdn/a.png'], ['m1', 1, 'https://cdn/b.png']])
     const read = require('../../src/db/interfaces/postgres/read')
     assert.deepEqual((await read.getMessageById('m1')).attachment_urls, ['https://cdn/a.png', 'https://cdn/b.png'])
     assert.deepEqual((await read.getMessageById('m2')).attachment_urls, [])
@@ -82,6 +82,12 @@ describe('migrations', { skip: !database.available && 'needs PGHOST' }, () => {
     const columns = (await q("SELECT column_name FROM information_schema.columns WHERE table_name = 'message_embeddings' ORDER BY column_name")).map(r => r.column_name)
     assert.deepEqual(columns, ['embedding', 'message_id', 'model'])
     assert.deepEqual(await q('SELECT message_id, model FROM message_embeddings'), [{ message_id: 'm1', model: 'model-a' }])
+  })
+
+  test('message content, image URLs and embeddings are no longer encrypted in the app', async () => {
+    assert.deepEqual(await q('SELECT id, content FROM messages ORDER BY id'), [{ id: 'm1', content: 'hi' }, { id: 'm2', content: 'hi' }])
+    assert.deepEqual((await q('SELECT url FROM message_attachments ORDER BY position')).map(r => r.url), ['https://cdn/a.png', 'https://cdn/b.png'])
+    assert.deepEqual(await q('SELECT embedding FROM message_embeddings'), [{ embedding: 'vec' }])
   })
 
   test('channels and videos are stored once, servers point at them', async () => {

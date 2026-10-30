@@ -43,10 +43,16 @@ Short version; the Privacy Policy is authoritative.
 
 | Data | Where | Retention |
 |---|---|---|
-| Message ID, author ID, channel ID, server ID, timestamp, AES-256 encrypted content and image URLs | PostgreSQL `messages`, `message_attachments` | `MESSAGE_HISTORY_DAYS` days, or forever if unset |
+| Message ID, author ID, channel ID, server ID, timestamp, content and image URLs (not encrypted by the app; see below) | PostgreSQL `messages`, `message_attachments` | `MESSAGE_HISTORY_DAYS` days, or forever if unset |
 | Per-server settings (log channels, ignored channels, disabled events) | PostgreSQL `guilds`, `guild_event_logs`, `guild_ignored_channels`, `guild_disabled_events` | Until the app leaves the server |
 | Invite counters, webhook handles, guild settings | Redis | 3 hours |
 | The YouTube channel set with `/youtube`, its description and every video read from it, plus summaries of linked videos' contents (public YouTube data) | PostgreSQL `guild_youtube`, `youtube_channels`, `youtube_videos`, `youtube_summaries`, `guild_youtube_summaries` | Channels and videos until no server has the channel set; summaries until no server that asked for them remains |
+
+Message content, image URLs and message embeddings are stored as they are: the app no longer
+encrypts them with `AES_KEY` (migration 006 decrypted what was stored), since encryption is moving
+into the database with pgcrypto. Until then, anyone who can read the database can read them.
+`AES_KEY` is still needed: for invite codes in Redis, and to run migrations 003 and 006 on a database
+that still has encrypted rows.
 
 Message rows are written **only for servers that have a message deletion or edit log channel
 configured** — a server with none never has message content stored, since nothing could read it back.
@@ -184,7 +190,7 @@ that contains every word of the query still comes first.
 - Each vector records the model that made it, and only vectors of the current model are compared.
   Changing `GEMINI_EMBEDDING_MODEL` makes everything again on the following runs (videos at once,
   messages up to 1000 a run); meanwhile search uses what has been redone.
-- A message's embedding is encrypted with `AES_KEY` like its content, and goes with it: a foreign key
+- A message's embedding goes with its message: a foreign key
   deletes it when the message is deleted (retention, `/clearmydata`, leaving a server), and an edit
   drops it to be made again. Messages stored before channels were recorded are not embedded.
 - With message embeddings on, **every stored message is sent to Google Gemini** to be embedded, not

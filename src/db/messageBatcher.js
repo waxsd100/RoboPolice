@@ -1,7 +1,6 @@
 global.logger = require('../miscellaneous/logger');
 const format = require('pg-format')
 const pool = require('./clients/postgres')
-const aes = require('./aes')
 const batch = []
 global.timesSubmitted = 0
 global.totalMessagesSubmitted = 0
@@ -17,7 +16,7 @@ async function addItem (messageAsArray) {
   }
 }
 
-// A batch row: [id, author_id, encrypted content, [encrypted image URLs], ts, channel_id, guild_id]
+// A batch row: [id, author_id, content, [image URLs], ts, channel_id, guild_id]
 async function submitBatch (batchSize) {
   const toSubmit = batch.splice(0, batchSize)
   const attachments = toSubmit.flatMap(row => row[3].map((url, position) => [row[0], position, url]))
@@ -49,8 +48,8 @@ function getMessage (messageID) {
   return {
     id: message[0],
     author_id: message[1],
-    content: aes.decrypt(message[2]),
-    attachment_urls: message[3].map(url => aes.decrypt(url)),
+    content: message[2],
+    attachment_urls: [...message[3]],
     ts: Date.parse(message[4])
   }
 }
@@ -63,11 +62,11 @@ function updateMessage (messageID, changedAttrs) {
       // changed on a message still sitting in the in-memory batch (not yet flushed to Postgres).
       let handled = false
       if ('content' in changedAttrs) {
-        batch[i][2] = aes.encrypt(changedAttrs.content || 'None')
+        batch[i][2] = changedAttrs.content || 'None'
         handled = true
       }
       if ('imageUrls' in changedAttrs) {
-        batch[i][3] = changedAttrs.imageUrls.map(url => aes.encrypt(url))
+        batch[i][3] = [...changedAttrs.imageUrls]
         handled = true
       }
       if (!handled) {
@@ -80,11 +79,11 @@ function updateMessage (messageID, changedAttrs) {
   }
 }
 
-// Messages of `channelID` still waiting in memory, newest first, decrypted like rows from Postgres.
+// Messages of `channelID` still waiting in memory, newest first, like rows from Postgres.
 function getChannelMessages (channelID) {
   return batch
     .filter(m => m[5] === channelID)
-    .map(m => ({ id: m[0], author_id: m[1], content: aes.decrypt(m[2]), ts: new Date(m[4]), channel_id: m[5] }))
+    .map(m => ({ id: m[0], author_id: m[1], content: m[2], ts: new Date(m[4]), channel_id: m[5] }))
     .reverse()
 }
 
