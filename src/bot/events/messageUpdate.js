@@ -103,8 +103,8 @@ module.exports = {
 
       let newUrls = [];
       let imagesRemoved = false
-      if (oldMessage.attachment_b64) {
-        const oldImageUrls = oldMessage.attachment_b64.split("|").map(base64url => Buffer.from(base64url, "base64url").toString("utf-8")).filter(Boolean)
+      if (oldMessage.attachment_urls.length) {
+        const oldImageUrls = oldMessage.attachment_urls
         newAttachmentImages = newMessage.attachments.filter(attachment => attachment.content_type.startsWith("image"))
         if (oldImageUrls.length > newAttachmentImages.length) {
           // Removed at least one image from the message

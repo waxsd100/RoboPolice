@@ -10,10 +10,8 @@ const { createTools } = require('../../src/bot/modules/eventTools')
 global.webhook = global.webhook || { generic () {}, warn () {}, error () {} }
 
 let queries
-let inserted
 beforeEach((t) => {
   queries = []
-  inserted = []
   t.mock.method(pool, 'query', async (sql, args) => {
     queries.push({ sql: sql.replace(/\s+/g, ' ').trim(), args })
     if (/FROM messages WHERE channel_id/.test(sql)) {
@@ -21,27 +19,10 @@ beforeEach((t) => {
     }
     return { rows: [] }
   })
-  t.mock.method(pool, 'getPostgresClient', async () => ({
-    query: async sql => inserted.push(sql),
-    release () {}
-  }))
+  t.mock.method(pool, 'getPostgresClient', async () => ({ query: async () => ({ rows: [] }), release () {} }))
 })
 
 describe('stored messages carry their channel and server', () => {
-  // First test in this file on purpose: it is the first use of the columns in this process.
-  test('the columns and index are added once, before the first write', async () => {
-    const row = (id) => [id, '1', aes.encrypt('hi'), '', '2026-10-29T00:00:00.000Z', '201', '100']
-    for (let i = 0; i < 10; i++) await batcher.addItem(row(`m${i}`))
-    for (let i = 10; i < 20; i++) await batcher.addItem(row(`m${i}`))
-    assert.deepEqual(queries.map(q => q.sql), [
-      'ALTER TABLE messages ADD COLUMN IF NOT EXISTS channel_id TEXT',
-      'ALTER TABLE messages ADD COLUMN IF NOT EXISTS guild_id TEXT',
-      'CREATE INDEX CONCURRENTLY IF NOT EXISTS messages_channel_ts ON messages (channel_id, ts DESC)'
-    ])
-    assert.equal(inserted.length, 2)
-    assert.match(inserted[0], /^INSERT INTO messages \(id, author_id, content, attachment_b64, ts, channel_id, guild_id\) VALUES \('m0', '1', '[^']+', '', '2026-10-29T00:00:00.000Z', '201', '100'\)/)
-  })
-
   test('cacheMessage records the channel and server', async (t) => {
     const added = t.mock.method(batcher, 'addItem', async () => {})
     await require('../../src/db/interfaces/postgres/create').cacheMessage({
@@ -51,12 +32,25 @@ describe('stored messages carry their channel and server', () => {
     assert.deepEqual(row.slice(5), ['201', '100'])
     assert.equal(aes.decrypt(row[2]), 'hello')
   })
+
+  test('cacheMessage keeps each image URL once, in order, encrypted', async (t) => {
+    const added = t.mock.method(batcher, 'addItem', async () => {})
+    const image = url => ({ url, content_type: 'image/png' })
+    await require('../../src/db/interfaces/postgres/create').cacheMessage({
+      id: 'm',
+      content: '',
+      attachments: [image('https://cdn/a.png'), { url: 'https://cdn/f.zip', content_type: 'application/zip' }, image('https://cdn/b.png'), image('https://cdn/a.png')],
+      author: { id: '1' },
+      channel: { id: '201', guild: { id: '100' } }
+    })
+    assert.deepEqual(added.mock.calls[0].arguments[0][3].map(u => aes.decrypt(u)), ['https://cdn/a.png', 'https://cdn/b.png'])
+  })
 })
 
 describe('getChannelHistory', () => {
   test('returns messages still in memory first, then Postgres, decrypted and capped', async () => {
-    await batcher.addItem(['pending1', '4', aes.encrypt('まだメモリ'), '', '2026-10-29T01:00:00.000Z', '301', '100'])
-    await batcher.addItem(['other', '4', aes.encrypt('別チャンネル'), '', '2026-10-29T01:00:00.000Z', '999', '100'])
+    await batcher.addItem(['pending1', '4', aes.encrypt('まだメモリ'), [], '2026-10-29T01:00:00.000Z', '301', '100'])
+    await batcher.addItem(['other', '4', aes.encrypt('別チャンネル'), [], '2026-10-29T01:00:00.000Z', '999', '100'])
     const rows = await read.getChannelHistory('301', 2)
     assert.deepEqual(rows.map(r => [r.id, r.content]), [['pending1', 'まだメモリ'], ['db2', 'DBの新しい方']])
     const select = queries.find(q => q.sql.startsWith('SELECT'))

@@ -43,10 +43,10 @@ Short version; the Privacy Policy is authoritative.
 
 | Data | Where | Retention |
 |---|---|---|
-| Message ID, author ID, channel ID, server ID, timestamp, AES-256 encrypted content and attachment URLs | PostgreSQL `messages` | `MESSAGE_HISTORY_DAYS` days, or forever if unset |
-| Per-server settings (log channels, ignored channels, disabled events) | PostgreSQL `guilds` | Until the app leaves the server |
+| Message ID, author ID, channel ID, server ID, timestamp, AES-256 encrypted content and image URLs | PostgreSQL `messages`, `message_attachments` | `MESSAGE_HISTORY_DAYS` days, or forever if unset |
+| Per-server settings (log channels, ignored channels, disabled events) | PostgreSQL `guilds`, `guild_event_logs`, `guild_ignored_channels`, `guild_disabled_events` | Until the app leaves the server |
 | Invite counters, webhook handles, guild settings | Redis | 3 hours |
-| The YouTube channel set with `/youtube`, its description and every video read from it, plus summaries of linked videos' contents (public YouTube data) | PostgreSQL `youtube_channels`, `youtube_videos`, `youtube_summaries` | Until a different channel is set (videos only), or the app leaves the server |
+| The YouTube channel set with `/youtube`, its description and every video read from it, plus summaries of linked videos' contents (public YouTube data) | PostgreSQL `guild_youtube`, `youtube_channels`, `youtube_videos`, `youtube_summaries`, `guild_youtube_summaries` | Channels and videos until no server has the channel set; summaries until no server that asked for them remains |
 
 Message rows are written **only for servers that have a message deletion or edit log channel
 configured** — a server with none never has message content stored, since nothing could read it back.
@@ -196,8 +196,7 @@ dashboard, add a custom provider (AI Gateway → Custom Providers) with base URL
 Requests then go to `…/custom-youtube/youtube/v3/…` with the gateway token. Either way the API key is
 sent in the `x-goog-api-key` header, never in the URL.
 
-The model searches all of it (titles, descriptions and summaries) with the `search_youtube` tool. The
-tables are created on first use, so existing deployments need no migration.
+The model searches all of it (titles, descriptions and summaries) with the `search_youtube` tool.
 
 What the tools read (the mention, the replied-to message, linked pages and Discord messages, the
 server profile, stored YouTube data) is sent to Google Gemini through Cloudflare AI Gateway. Nothing
@@ -274,10 +273,27 @@ credentials in URLs. The same masked text goes to the error webhook.
 2. Clone the repo and enter the folder
 3. `cp .env.example .env` and fill it in. Every value is required except the ones marked optional
 4. `npm install`
-5. `node src/miscellaneous/generateDB.js` to create the database and tables
+5. `node src/miscellaneous/generateDB.js` to create the database and its tables
 6. `node index.js`
 7. Register slash commands with the text prefix: `%setcmd global` for global commands, or
    `%setcmd guild` for faster server-scoped registration (substitute your `GLOBAL_BOT_PREFIX`)
+
+## Database migrations
+
+The schema is kept in `src/db/migrations`: numbered files, applied in order, each once, recorded in
+`schema_migrations`. The app applies the ones not applied yet when it starts, before any worker
+connects to Discord, so an update needs no manual step; `npm run migrate` applies them by hand. An
+existing database, whatever it already had, is brought up to date the same way: the first migration
+only creates what is missing.
+
+Take a backup before the first start with migrations (`pg_dump`). Migration 002 to 005 change the
+layout: settings, image URLs and YouTube data move to their own tables and the old columns are
+dropped, so going back to an older version needs the backup.
+
+A change to the schema is a new file (`NNN_name.sql`, or `NNN_name.js` exporting
+`async client => {}` for data SQL alone can't change); a file already applied is never edited.
+`npm run test:db` runs the migrations and the stores against a scratch database on the Postgres
+that `PGHOST`, `PGUSER` and `PGPASSWORD` point at.
 
 ## Secrets in Google Cloud Secret Manager
 

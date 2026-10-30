@@ -78,14 +78,13 @@ function installBot ({ guilds = [], messages = {}, scheduledEvents = [], forums 
 function installEmbeddingStore ({ videos = {}, messages = [], pending = [] } = {}) {
   const store = require('../../src/db/interfaces/postgres/embeddings')
   const saved = { videos: [], messages: [], handled: [], invalidated: [] }
-  store.ensureTables = async () => {}
   store.videoEmbeddings = async guildID => videos[guildID] || {}
   store.resetStaleMessageEmbeddings = async (model) => {
     saved.resetFor = model
     return 0
   }
   store.videosForEmbedding = async () => []
-  store.saveVideoEmbedding = async (guildID, videoID, embedding, hash, model) => saved.videos.push({ guildID, videoID, embedding, hash, model })
+  store.saveVideoEmbedding = async (videoID, embedding, hash, model) => saved.videos.push({ videoID, embedding, hash, model })
   store.pendingMessages = async limit => pending.slice(0, limit)
   store.saveMessageEmbeddings = async (rows, handled) => {
     saved.messages.push(...rows)
@@ -122,7 +121,6 @@ function installYouTubeStore (knowledge = {}, summaries = {}) {
     ...knowledge[guildID],
     videos: knowledge[guildID].videos.map(v => ({ ...v, summary: summaries[guildID]?.[v.video_id] || v.summary || null }))
   }
-  store.ensureTables = async () => {}
   store.getKnowledge = async guildID => withSummaries(guildID) || null
   store.getVideoIds = async guildID => new Set((knowledge[guildID]?.videos || []).map(v => v.video_id))
   store.setChannel = async (guildID, ref, channelID) => {
@@ -170,10 +168,11 @@ function installYouTubeStore (knowledge = {}, summaries = {}) {
       videos: [...byID.values()].sort((a, b) => new Date(b.published_at) - new Date(a.published_at))
     }
   }
-  store.getSummary = async (guildID, videoID) => summaries[guildID]?.[videoID] || null
-  store.saveSummary = async (guildID, videoID, summary) => {
+  // Summaries are shared: one made for any server is found for all.
+  store.getSummary = async videoID => Object.values(summaries).find(s => s[videoID])?.[videoID] || null
+  store.saveSummary = async (guildID, videoID, summary = null) => {
     writes.push({ saveSummary: [guildID, videoID] })
-    summaries[guildID] = { ...summaries[guildID], [videoID]: summary }
+    summaries[guildID] = { ...summaries[guildID], [videoID]: summary ?? await store.getSummary(videoID) }
   }
   store.getOtherSummaries = async guildID => {
     const own = new Set((knowledge[guildID]?.videos || []).map(v => v.video_id))

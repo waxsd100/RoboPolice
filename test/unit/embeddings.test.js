@@ -50,11 +50,11 @@ describe('embeddingIndexer', () => {
   test('embeds videos whose text changed, and leaves the rest', async () => {
     installEmbeddingModel()
     const saved = installEmbeddingStore()
-    const same = { guild_id: '100', video_id: 'v1', title: 'ホラーゲーム実況', description: '', summary: null }
-    same.embedding_hash = indexer.hashOf(`gemini-embedding-001\n${indexer.videoText(same)}`)
+    const same = { video_id: 'v1', title: 'ホラーゲーム実況', description: '', summary: null }
+    same.text_hash = indexer.hashOf(`gemini-embedding-001\n${indexer.videoText(same)}`)
     require('../../src/db/interfaces/postgres/embeddings').videosForEmbedding = async () => [
       same,
-      { guild_id: '100', video_id: 'v2', title: 'マイクラ建築', description: '城', summary: '大きな城を建てる', embedding_hash: 'old' }
+      { video_id: 'v2', title: 'マイクラ建築', description: '城', summary: '大きな城を建てる', text_hash: 'old' }
     ]
     assert.equal(await indexer.indexVideos(), 1)
     assert.deepEqual(saved.videos.map(v => [v.videoID, v.model]), [['v2', 'gemini-embedding-001']])

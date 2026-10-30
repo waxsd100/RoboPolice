@@ -1,129 +1,68 @@
 const pool = require('../../clients/postgres')
-const escape = require('markdown-escape')
 const getDoc = require('./read').getGuild
-const getMessageById = require('./read').getMessageById
 const cacheGuild = require('../../../bot/utils/cacheGuild')
 const getMessageFromBatch = require('../../messageBatcher').getMessage
 const updateBatchMessage = require('../../messageBatcher').updateMessage
 const aes = require('../../aes')
+const { ALL_EVENTS } = require('../../../bot/utils/constants')
 
-const eventList = [
-  'channelCreate',
-  'channelUpdate',
-  'channelDelete',
-  'guildBanAdd',
-  'guildBanRemove',
-  'guildRoleCreate',
-  'guildRoleDelete',
-  'guildRoleUpdate',
-  'guildUpdate',
-  'messageDelete',
-  'messageDeleteBulk',
-  'messageUpdate',
-  'guildMemberAdd',
-  'guildMemberKick',
-  'guildMemberRemove',
-  'guildMemberUpdate',
-  'voiceChannelLeave',
-  'voiceChannelJoin',
-  'voiceStateUpdate',
-  'voiceChannelSwitch',
-  'guildEmojisUpdate',
-  'guildStickersUpdate',
-  'guildMemberNickUpdate',
-  'presenceUpdate'
-]
-
-const eventLogs = {
-  channelCreate: '',
-  channelUpdate: '',
-  channelDelete: '',
-  guildBanAdd: '',
-  guildBanRemove: '',
-  guildRoleCreate: '',
-  guildRoleDelete: '',
-  guildRoleUpdate: '',
-  guildUpdate: '',
-  messageDelete: '',
-  messageDeleteBulk: '',
-  messageUpdate: '',
-  guildMemberAdd: '',
-  guildMemberKick: '',
-  guildMemberRemove: '',
-  guildMemberUpdate: '',
-  voiceChannelLeave: '',
-  voiceChannelJoin: '',
-  voiceStateUpdate: '',
-  voiceChannelSwitch: '',
-  guildEmojisUpdate: '',
-  guildStickersUpdate: '',
-  guildMemberNickUpdate: '',
-  guildMemberBoostUpdate: '',
-  guildMemberVerify: '', // I am a moron for having an object representing
-  presenceUpdate: ''
-} // default event settings in multiple places instead of in constants.js
-
-async function clearEventLog (guildID) {
-  await cacheGuild(guildID)
-  return await pool.query('UPDATE guilds SET event_logs=$1 WHERE id=$2', [eventLogs, guildID])
+// Settings rows refer to the server's row, which getDoc makes if it is missing.
+async function ensureGuild (guildID) {
+  await getDoc(guildID)
 }
 
+async function clearEventLog (guildID) {
+  await pool.query('DELETE FROM guild_event_logs WHERE guild_id = $1', [guildID])
+  await cacheGuild(guildID)
+}
+
+// Stops logging every event that was logged to `channelID`.
 async function clearEventByID (guildID, channelID) {
-  const doc = await getDoc(guildID)
-  const eventLogs = doc.event_logs
-  Object.keys(eventLogs).forEach(event => {
-    if (eventLogs[event] === channelID) {
-      eventLogs[event] = ''
+  await pool.query('DELETE FROM guild_event_logs WHERE guild_id = $1 AND channel_id = $2', [guildID, channelID])
+  await cacheGuild(guildID)
+}
+
+// Logs `events` to `channelID`, or stops logging them when it is ''.
+async function setEventsLogId (guildID, channelID, events) {
+  if (events.length) {
+    if (channelID) {
+      await ensureGuild(guildID)
+      await pool.query(
+        `INSERT INTO guild_event_logs (guild_id, event, channel_id) SELECT $1, unnest($3::text[]), $2
+         ON CONFLICT (guild_id, event) DO UPDATE SET channel_id = EXCLUDED.channel_id`,
+        [guildID, channelID, [...new Set(events)]])
+    } else {
+      await pool.query('DELETE FROM guild_event_logs WHERE guild_id = $1 AND event = ANY($2)', [guildID, events])
     }
-  })
-  await pool.query('UPDATE guilds SET event_logs=$1 WHERE id=$2', [eventLogs, guildID])
+  }
   await cacheGuild(guildID)
 }
 
 async function setAllEventsOneId (guildID, channelID) {
-  const doc = await getDoc(guildID)
-  const eventLogs = doc.event_logs
-  Object.keys(eventLogs).forEach(event => {
-    eventLogs[event] = channelID
-  })
-  await pool.query('UPDATE guilds SET event_logs=$1 WHERE id=$2', [eventLogs, guildID])
-  await cacheGuild(guildID)
+  await setEventsLogId(guildID, channelID, ALL_EVENTS)
 }
 
-async function setEventsLogId (guildID, channelID, events) {
-  const doc = await getDoc(guildID)
-  events.forEach(event => {
-    doc.event_logs[event] = channelID
-  })
-  await pool.query('UPDATE guilds SET event_logs=$1 WHERE id=$2', [doc.event_logs, guildID])
-  await cacheGuild(guildID)
-}
-
+// Ignores the channel, or stops ignoring it if it was. Resolves to whether it is now ignored.
 async function ignoreChannel (guildID, channelID) {
-  const doc = await getDoc(guildID)
-  let disabled = true
-  if (doc.ignored_channels.includes(channelID)) {
-    const index = doc.ignored_channels.indexOf(channelID)
-    doc.ignored_channels.splice(index, 1)
-    disabled = false
-  } else {
-    doc.ignored_channels.push(channelID)
-  }
-  global.bot.guildSettingsCache[guildID].ignoredChannels = doc.ignored_channels
-  await pool.query('UPDATE guilds SET ignored_channels=$1 WHERE id=$2', [doc.ignored_channels, guildID])
+  await ensureGuild(guildID)
+  const removed = await pool.query('DELETE FROM guild_ignored_channels WHERE guild_id = $1 AND channel_id = $2', [guildID, channelID])
+  const disabled = removed.rowCount === 0
+  if (disabled) await pool.query('INSERT INTO guild_ignored_channels (guild_id, channel_id) VALUES ($1, $2) ON CONFLICT DO NOTHING', [guildID, channelID])
+  await cacheGuild(guildID)
   return disabled
 }
 
 async function clearIgnoredChannels (guildID) {
-  global.bot.guildSettingsCache[guildID].ignoredChannels = []
-  await pool.query('UPDATE guilds SET ignored_channels=$1 WHERE id=$2', [[], guildID])
+  await pool.query('DELETE FROM guild_ignored_channels WHERE guild_id = $1', [guildID])
+  await cacheGuild(guildID)
 }
 
+// Resolves to whether bots are logged now.
 async function toggleLogBots (guildID) {
-  const doc = await getDoc(guildID)
-  await pool.query('UPDATE guilds SET log_bots=$1 WHERE id=$2', [!doc.log_bots, guildID])
-  global.bot.guildSettingsCache[guildID].logBots = !doc.log_bots
-  return !doc.log_bots
+  await ensureGuild(guildID)
+  const rows = await pool.query('UPDATE guilds SET log_bots = NOT log_bots WHERE id = $1 RETURNING log_bots', [guildID])
+  await cacheGuild(guildID)
+  return rows.rows[0].log_bots
 }
 
 async function updateMessageByID (id, changedAttrs) {
@@ -135,27 +74,33 @@ async function updateMessageByID (id, changedAttrs) {
   return result
 }
 
+// changedAttrs: { content } and/or { imageUrls } (the message's images now, in order).
 async function updateMessageRow (id, changedAttrs) {
-  const batchMessage = getMessageFromBatch(id)
-  if (!batchMessage) {
+  if (!('content' in changedAttrs) && !('imageUrls' in changedAttrs)) {
+    const msg = `updateMessageById called with unsupported changedAttrs: ${JSON.stringify(changedAttrs)}`
+    global.logger.warn(msg)
+    global.webhook.warn(msg)
+    return
+  }
+  if (getMessageFromBatch(id)) return updateBatchMessage(id, changedAttrs)
+  const client = await pool.getPostgresClient()
+  try {
+    await client.query('BEGIN')
+    if ('content' in changedAttrs) await client.query('UPDATE messages SET content = $1 WHERE id = $2', [aes.encrypt(changedAttrs.content || 'None'), id])
     if ('imageUrls' in changedAttrs) {
-      const newAttachmentB64 = changedAttrs.imageUrls.map(url => aes.encrypt(Buffer.from(url).toString("base64url"))).join("|")
-      if ('content' in changedAttrs) {
-        // Image(s) and content changed
-        return await pool.query('UPDATE messages SET content=$1, attachment_b64=$2  WHERE id=$3', [aes.encrypt(changedAttrs.content || 'None'), newAttachmentB64, id])
+      await client.query('DELETE FROM message_attachments WHERE message_id = $1', [id])
+      for (const [position, url] of changedAttrs.imageUrls.entries()) {
+        await client.query(
+          'INSERT INTO message_attachments (message_id, position, url) SELECT $1, $2, $3 WHERE EXISTS (SELECT 1 FROM messages WHERE id = $1)',
+          [id, position, aes.encrypt(url)])
       }
-      // Just image(s) changed
-      return await pool.query('UPDATE messages SET attachment_b64=$1 WHERE id=$2', [newAttachmentB64, id])
-    } else if ('content' in changedAttrs) {
-      // Just content changed
-      return await pool.query('UPDATE messages SET content=$1 WHERE id=$2', [aes.encrypt(changedAttrs.content || 'None'), id])
-    } else {
-      const msg = `updateMessageById called with unsupported changedAttrs: ${JSON.stringify(changedAttrs)}`
-      global.logger.warn(msg)
-      global.webhook.warn(msg);
     }
-  } else {
-    updateBatchMessage(id, changedAttrs)
+    await client.query('COMMIT')
+  } catch (e) {
+    await client.query('ROLLBACK').catch(() => {})
+    throw e
+  } finally {
+    client.release()
   }
 }
 

@@ -178,7 +178,7 @@ describe('summarizing the newest videos', () => {
     const store = require('../../src/db/interfaces/postgres/youtube')
     await youtubeSync.summarizeLatest('100', [picked[1]], { force: true })
     assert.equal(requests.length, 1, 'the stored summary is not reused')
-    assert.equal(await store.getSummary('100', id(3)), '新しい要約')
+    assert.equal(await store.getSummary(id(3)), '新しい要約')
   })
 
   test('summarizes them one by one, reporting progress and failures without stopping', async () => {

@@ -35,11 +35,11 @@ async function indexVideos () {
   const current = model()
   const changed = (await store.videosForEmbedding())
     .map(v => ({ ...v, text: videoText(v), hash: hashOf(`${current}\n${videoText(v)}`) }))
-    .filter(v => v.embedding_hash !== v.hash)
+    .filter(v => v.text_hash !== v.hash)
     .slice(0, VIDEOS_PER_RUN)
   if (changed.length === 0) return 0
   const vectors = await embed(changed.map(v => v.text))
-  for (const [i, v] of changed.entries()) await store.saveVideoEmbedding(v.guild_id, v.video_id, toBase64(vectors[i]), v.hash, current)
+  for (const [i, v] of changed.entries()) await store.saveVideoEmbedding(v.video_id, toBase64(vectors[i]), v.hash, current)
   return changed.length
 }
 
@@ -61,7 +61,7 @@ async function indexMessages () {
   const wanted = pending.map(m => ({ ...m, text: plainText(m.content) })).filter(m => m.text && m.channel_id && m.guild_id)
   const vectors = wanted.length ? await embed(wanted.map(m => m.text)) : []
   await store.saveMessageEmbeddings(
-    wanted.map((m, i) => ({ id: m.id, guild_id: m.guild_id, channel_id: m.channel_id, ts: m.ts, embedding: toBase64(vectors[i]), model: model() })),
+    wanted.map((m, i) => ({ id: m.id, embedding: toBase64(vectors[i]), model: model() })),
     pending.map(m => m.id))
   return wanted.length
 }
