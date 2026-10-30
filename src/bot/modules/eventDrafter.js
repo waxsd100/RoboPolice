@@ -1,6 +1,7 @@
 const { SUBMIT_FORUM_DECLARATION, toForumPost, imageUrlOf } = require('./forumPost')
 const { Agent } = require('undici')
 const { gatewayURL, gatewayAuthHeaders, isGatewayConfigured } = require('../utils/aiGateway')
+const { currentUsage } = require('../utils/geminiUsage')
 
 const DEFAULT_GEMINI_MODEL = 'gemini-flash-latest'
 const GEMINI_TIMEOUT_MS = 60000
@@ -105,6 +106,26 @@ function dispatcherFor (timeoutMs) {
   return longCallAgents.get(timeoutMs)
 }
 
+// HTTP 429 is retried: from AI Gateway's own rate limit (requests per interval, set on the gateway)
+// or from Gemini's quota. Waits Retry-After when given, else 2s, 4s, 8s; never longer than 30s.
+const MAX_RETRIES = 3
+const MAX_RETRY_WAIT_MS = 30 * 1000
+const retryTimer = { sleep: ms => new Promise(resolve => setTimeout(resolve, ms)) }
+
+function retryDelayMs (retryAfter, attempt) {
+  const seconds = Number(retryAfter)
+  const ms = seconds > 0 ? seconds * 1000 : 2000 * 2 ** attempt
+  return Math.min(ms, MAX_RETRY_WAIT_MS)
+}
+
+// Which limit a 429 hit, for the requester: the gateway's (fixable in the Cloudflare dashboard)
+// or Gemini's.
+function rateLimitHint (body) {
+  return /AiGatewayError|"internalCode":2003/.test(body)
+    ? 'AI Gateway のリクエスト数の上限に達しました。Cloudflare の AI Gateway の Rate-limiting 設定を確認してください'
+    : 'Gemini の利用上限に達しました（HTTP 429）'
+}
+
 // One generateContent call through the gateway. Returns the first candidate's content.
 async function callGemini (model, body, { timeoutMs = GEMINI_TIMEOUT_MS } = {}) {
   const url = gatewayURL(`google-ai-studio/v1beta/models/${encodeURIComponent(model)}:generateContent`)
@@ -114,15 +135,30 @@ async function callGemini (model, body, { timeoutMs = GEMINI_TIMEOUT_MS } = {}) 
   // Which stored (BYOK) key to use. Without it the gateway looks for one named "default".
   if (process.env.CLOUDFLARE_AI_GATEWAY_BYOK_ALIAS) headers['cf-aig-byok-alias'] = process.env.CLOUDFLARE_AI_GATEWAY_BYOK_ALIAS
 
-  const res = await fetch(url, {
-    method: 'POST',
-    headers,
-    signal: AbortSignal.timeout(timeoutMs),
-    dispatcher: dispatcherFor(timeoutMs),
-    body: JSON.stringify(body)
-  })
+  const usage = currentUsage()
+  let res
+  for (let attempt = 0; ; attempt++) {
+    if (usage) usage.requests++
+    res = await fetch(url, {
+      method: 'POST',
+      headers,
+      signal: AbortSignal.timeout(timeoutMs),
+      dispatcher: dispatcherFor(timeoutMs),
+      body: JSON.stringify(body)
+    })
+    if (res.status !== 429 || attempt === MAX_RETRIES) break
+    const wait = retryDelayMs(res.headers?.get?.('retry-after'), attempt)
+    await res.text().catch(() => {}) // let the connection be reused
+    if (usage) {
+      usage.retries++
+      await usage.onWait(wait)
+    }
+    await retryTimer.sleep(wait)
+  }
   if (!res.ok) {
-    throw new GeminiError(`Gemini request failed: HTTP ${res.status} ${(await res.text()).slice(0, 1000)}`, `AI の呼び出しに失敗しました（HTTP ${res.status}）`)
+    const text = (await res.text()).slice(0, 1000)
+    const hint = res.status === 429 ? rateLimitHint(text) : `AI の呼び出しに失敗しました（HTTP ${res.status}）`
+    throw new GeminiError(`Gemini request failed: HTTP ${res.status} ${text}`, hint)
   }
   const data = await res.json()
   const content = data.candidates?.[0]?.content
@@ -248,4 +284,4 @@ async function revise (conversation, correction) {
   return check(conversation, await runAgent(conversation.contents, conversation.tools))
 }
 
-module.exports = { draft, revise, isConfigured, toScheduledEvent, callGemini, DEFAULT_GEMINI_MODEL, ENTITY_TYPES, GeminiError }
+module.exports = { draft, revise, isConfigured, toScheduledEvent, callGemini, retryTimer, DEFAULT_GEMINI_MODEL, ENTITY_TYPES, GeminiError }

@@ -640,6 +640,32 @@ describe('mention → event / forum post (integration)', () => {
     await done2
   })
 
+  test('rate limit: a 429 is waited out, the requester is told, and the request count is logged', async (t) => {
+    const { retryTimer } = require('../../src/bot/modules/eventDrafter')
+    t.mock.method(retryTimer, 'sleep', async () => {})
+    const logged = t.mock.method(global.logger, 'info', () => {})
+    const { channel, replies } = createChannel()
+    const turns = [
+      { status: 429 },
+      [call('list_channels')],
+      [submit({ name: 'A', start: '2026-11-03T19:00:00+09:00' })]
+    ]
+    let i = 0
+    global.fetch = async () => {
+      const turn = turns[i++]
+      if (turn.status) return { ok: false, status: 429, headers: { get: () => '3' }, text: async () => '{"name":"AiGatewayError","internalCode":2003}' }
+      return { ok: true, json: async () => ({ candidates: [{ content: { role: 'model', parts: turn } }] }) }
+    }
+    const done = mentionEvent.handle(mention(channel, '<@BOT> A'))
+    const [reply] = replies
+    await waitForButtons(reply, '登録する')
+    assert.ok(reply.history.some(s => s.content === 'AI が混み合っているため、3 秒待ってから再試行します…'))
+    await press(reply, 'キャンセル')
+    await done
+    const line = logged.mock.calls.map(c => c.arguments[0]).find(m => /^Mention drafting in 100/.test(m))
+    assert.equal(line, 'Mention drafting in 100: 3 Gemini request(s), 1 retried after HTTP 429')
+  })
+
   test('the draft still works when the server profile cannot be built', async (t) => {
     const warned = t.mock.method(global.logger, 'warn', () => {})
     require('../../src/db/interfaces/postgres/youtube').getKnowledge = async () => { throw new Error('db down') }

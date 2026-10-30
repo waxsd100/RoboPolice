@@ -268,3 +268,90 @@ describe('draft', () => {
     }
   })
 })
+
+describe('rate limits (HTTP 429)', () => {
+  const { callGemini, retryTimer } = require('../../src/bot/modules/eventDrafter')
+  const { trackUsage } = require('../../src/bot/utils/geminiUsage')
+  const GATEWAY_429 = '{"success":false,"error":[{"code":2003,"message":"Rate limited"}],"name":"AiGatewayError","httpCode":429,"internalCode":2003}'
+
+  // Answers each call with the next status; 200 answers carry a model turn.
+  function scriptedFetch (statuses, { retryAfter } = {}) {
+    let i = 0
+    global.fetch = async () => {
+      const status = statuses[i++]
+      if (status === 200) return { ok: true, status, json: async () => ({ candidates: [{ content: { parts: [{ text: 'ok' }] } }] }) }
+      return {
+        ok: false,
+        status,
+        headers: { get: name => (name === 'retry-after' && retryAfter) || null },
+        text: async () => status === 429 ? GATEWAY_429 : 'boom'
+      }
+    }
+    return () => i
+  }
+
+  let waits
+  beforeEach((t) => {
+    configureGateway()
+    waits = []
+    t.mock.method(retryTimer, 'sleep', async ms => { waits.push(ms) })
+  })
+
+  test('retries with 2s, 4s, 8s backoff and succeeds', async () => {
+    const calls = scriptedFetch([429, 429, 429, 200])
+    const content = await callGemini('m', {})
+    assert.equal(content.parts[0].text, 'ok')
+    assert.deepEqual(waits, [2000, 4000, 8000])
+    assert.equal(calls(), 4)
+  })
+
+  test('honors Retry-After, capped at 30 seconds', async () => {
+    scriptedFetch([429, 200], { retryAfter: '5' })
+    await callGemini('m', {})
+    assert.deepEqual(waits, [5000])
+    scriptedFetch([429, 200], { retryAfter: '600' })
+    await callGemini('m', {})
+    assert.deepEqual(waits, [5000, 30000])
+  })
+
+  test('gives up after 3 retries and says it was the gateway\'s limit', async () => {
+    const calls = scriptedFetch([429, 429, 429, 429])
+    await assert.rejects(callGemini('m', {}), {
+      hint: 'AI Gateway のリクエスト数の上限に達しました。Cloudflare の AI Gateway の Rate-limiting 設定を確認してください',
+      message: /HTTP 429 .*AiGatewayError/
+    })
+    assert.equal(calls(), 4)
+  })
+
+  test('a 429 from Gemini itself is reported as Gemini\'s limit', async () => {
+    global.fetch = async () => ({ ok: false, status: 429, headers: { get: () => null }, text: async () => '{"error":{"code":429,"status":"RESOURCE_EXHAUSTED"}}' })
+    await assert.rejects(callGemini('m', {}), { hint: 'Gemini の利用上限に達しました（HTTP 429）' })
+  })
+
+  test('other errors are not retried', async () => {
+    const calls = scriptedFetch([500])
+    await assert.rejects(callGemini('m', {}), { hint: 'AI の呼び出しに失敗しました（HTTP 500）' })
+    assert.equal(calls(), 1)
+    assert.deepEqual(waits, [])
+  })
+
+  test('requests and retries are counted for the mention being handled, and waits announced', async () => {
+    scriptedFetch([429, 200, 200])
+    const announced = []
+    const usage = await trackUsage(async usage => {
+      usage.onWait = ms => announced.push(ms)
+      await callGemini('m', {})
+      await callGemini('m', {})
+      return usage
+    })
+    assert.equal(usage.requests, 3)
+    assert.equal(usage.retries, 1)
+    assert.deepEqual(announced, [2000])
+  })
+
+  test('outside of a mention nothing is counted', async () => {
+    scriptedFetch([200])
+    await callGemini('m', {})
+    assert.equal(require('../../src/bot/utils/geminiUsage').currentUsage(), null)
+  })
+})

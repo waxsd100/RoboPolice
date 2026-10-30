@@ -140,6 +140,12 @@ row of buttons switches how it is made (`src/bot/modules/coverImage.js`):
 "AIで作成" sends the title, description and the source image to Gemini, the same way drafting does.
 If an image can't be used the draft still works, and the preview says why.
 
+One mention usually takes 2-4 Gemini requests (one per tool step, up to 10), plus one per
+correction, AI-made image or video summary; each mention logs how many it used. HTTP 429 is retried
+up to 3 times (Retry-After, else 2s, 4s, 8s), telling the requester it is waiting. A 429 from AI
+Gateway itself (`AiGatewayError`, code 2003) comes from the gateway's Rate-limiting setting, which
+counts requests, not tokens: allow something like 30 requests per 60 seconds.
+
 If drafting fails, the reply shows the cause and the top of the error log so staff can tell what
 went wrong without server access. Secrets are masked first (`src/bot/utils/redact.js`): values of
 environment variables whose names look secret (`*TOKEN*`, `*KEY*`, `*PASSWORD*`, webhook URLs, the
