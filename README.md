@@ -62,10 +62,11 @@ have **Manage Events**; a forum post needs both the requester and the app to be 
 forum, and is sent with mentions disabled so drafted text can't ping anyone.
 
 A mention that does not ask for an event or a forum post (a greeting, a question, small talk) gets a
-plain chat reply (`submit_chat_reply`), with pings disabled. The model is told to talk like a member
-of the community of the server's YouTube channel (set with `/youtube`), in the mood of its videos and
-streams, looking them up with `search_youtube`, and never to pose as the creator. `CHAT_PERSONA`
-adds the operator's own character notes. A request that is for an event or a post but can't be
+plain chat reply (`submit_chat_reply`), with pings disabled. The model plays the creator of the
+server's YouTube channel (set with `/youtube`), taking their way of talking from the stored videos
+and streams (`search_youtube`); Discord's BOT tag marks the replies as the bot's. It plays the voice
+only: schedules, announcements or promises that are not in the stored data are never made up as the
+creator's. `CHAT_PERSONA` adds the operator's own character notes. A request that is for an event or a post but can't be
 made (no date, or the linked message is about something else) is an error, not a chat reply, and is
 shown as `⚠️ 作成できませんでした`.
 

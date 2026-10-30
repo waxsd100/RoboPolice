@@ -152,7 +152,7 @@ describe('draft', () => {
     const instruction = requests[0].body.systemInstruction.parts[0].text
     assert.match(instruction, /頼んでいないとき（あいさつ・雑談・質問・相談など）は[\s\S]*submit_chat_reply/)
     assert.match(instruction, /頼んでいるのに[\s\S]*found: false と理由つきで提出/)
-    assert.match(instruction, /## 返事をするときのキャラクター[\s\S]*配信者本人ではありません/)
+    assert.match(instruction, /## 返事をするときのキャラクター[\s\S]*配信者本人になりきって[\s\S]*なりきるのは話し方までです/)
     assert.doesNotMatch(instruction, /運営者が設定したキャラクター/)
   })
 
