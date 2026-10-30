@@ -1,84 +1,185 @@
-// The image for one draft: where it came from, how it is turned into the cover (cropped, shown
-// whole, made by AI, or none), and the rendered result for each mode already tried, so switching
-// back and forth in the preview does not redo work.
+// The image for one draft: the candidates the model proposed, which one is selected, how it is
+// turned into the cover (cropped, shown whole, made by AI, kept as it is, or none), and every
+// rendering already made, so switching back and forth in the preview does not redo work.
+//
+// Only the image buttons change the image. A correction of the text keeps it as it is: new
+// candidates the model proposes are added to the list, but nothing is selected or redrawn for them.
 const urlFetcher = require('../utils/urlFetcher')
-const { cropTo, fitWithBlur, defaultMode, forReference } = require('../utils/imageCrop')
+const { cropTo, fitWithBlur, defaultMode, forReference, contactSheet } = require('../utils/imageCrop')
 const { generateCover } = require('./imageGen')
+const { MAX_IMAGE_CANDIDATES } = require('./forumPost')
 
 const MODES = {
+  keep: '今の画像のまま',
   crop: '切り抜き',
   fit: '全体表示',
   ai: 'AIで作成',
   none: 'なし'
 }
 
+const POSITIONS = ['左上', '右上', '左下', '右下']
+
 class CoverImage {
-  constructor (size) {
+  // current: when editing something already posted that has an image, { buffer } of that image
+  // (buffer null if it could not be downloaded). It is kept unless the requester picks another.
+  constructor (size, { current = null } = {}) {
     this.size = size
-    this.sourceUrl = null
-    this.source = null
-    this.mode = 'none'
-    this.rendered = new Map()
-    this.note = null
+    this.current = current
+    this.candidates = [] // [{ url, source, defaultMode }], only the ones that could be read
+    this.selected = null // index into candidates
+    this.mode = current ? 'keep' : 'none'
+    this.rendered = new Map() // key(mode) -> JPEG
+    this.sheet = null
+    this.readNote = null // candidates that could not be read
+    this.modeNote = null // the last mode that failed to render
+    this.aiText = null // the text the current AI image was made from
   }
 
-  // Called with every new draft (first one and each correction).
-  async useDraft ({ imageUrl, title, summary }) {
-    const textChanged = title !== this.title || summary !== this.summary
+  // The first draft: reads every candidate and selects the best one, unless an existing image is
+  // being kept.
+  async useDraft ({ imageUrls = [], title, summary }) {
     this.title = title
     this.summary = summary
-    this.note = null
-    // The AI image is made from the text, so it is stale once the text changes.
-    if (textChanged) this.rendered.delete('ai')
-    if (imageUrl === this.sourceUrl) return this.mode === 'ai' ? this.select('ai') : undefined
-
-    this.sourceUrl = imageUrl
-    this.source = null
-    this.rendered.clear()
-    this.mode = 'none'
-    if (!imageUrl) return
-    try {
-      this.source = (await urlFetcher.fetchImage(imageUrl)).buffer
-      await this.select(await defaultMode(this.source, this.size))
-    } catch (e) {
-      this.source = null
-      this.note = `元の画像を使えませんでした: ${e.message}`
-    }
+    await this.addCandidates(imageUrls)
+    if (this.candidates.length && !this.current) await this.choose(0)
   }
 
-  // Cropping and showing whole need a source image; the AI can also start from the text alone.
+  // A corrected draft: the text changes, the image does not. The one exception is a draft that had
+  // no image to begin with, where a candidate the correction brings (a URL the requester typed) is
+  // what they asked for.
+  async revise ({ imageUrls = [], title, summary }) {
+    this.title = title
+    this.summary = summary
+    const hadNone = this.candidates.length === 0 && this.mode === 'none' && !this.touched
+    await this.addCandidates(imageUrls)
+    if (hadNone && this.candidates.length) await this.choose(0)
+    else await this.updateSheet()
+  }
+
+  async addCandidates (imageUrls) {
+    const known = new Set(this.candidates.map(c => c.url))
+    const urls = imageUrls.filter(url => !known.has(url)).slice(0, MAX_IMAGE_CANDIDATES - this.candidates.length)
+    const read = await Promise.all(urls.map(async url => {
+      try {
+        const source = (await urlFetcher.fetchImage(url)).buffer
+        return { url, source, defaultMode: await defaultMode(source, this.size) }
+      } catch (e) {
+        return { url, error: e.message }
+      }
+    }))
+    this.candidates.push(...read.filter(c => !c.error))
+    const failed = read.filter(c => c.error)
+    if (failed.length) this.readNote = `使えなかった画像: ${failed.map(c => c.error).join(' / ')}`
+  }
+
+  async updateSheet () {
+    this.sheet = this.candidates.length > 1
+      ? await contactSheet(this.candidates.map(c => c.source), this.usesCandidate() ? this.selected : -1)
+      : null
+  }
+
+  usesCandidate () {
+    return this.selected !== null && (this.mode === 'crop' || this.mode === 'fit')
+  }
+
+  // Selects candidate `index`, in the mode that suits it.
+  async choose (index) {
+    if (!this.candidates[index]) return
+    this.selected = index
+    await this.select(this.candidates[index].defaultMode)
+  }
+
+  // Cropping and showing whole need a candidate; the AI can also start from the text alone.
   modes () {
-    return this.source ? ['crop', 'fit', 'ai', 'none'] : ['ai', 'none']
+    return [
+      ...(this.current ? ['keep'] : []),
+      ...(this.selected !== null ? ['crop', 'fit'] : []),
+      'ai',
+      'none'
+    ]
+  }
+
+  key (mode) {
+    if (mode === 'ai' || mode === 'keep') return mode
+    return `${this.selected}:${mode}`
   }
 
   // Switches to `mode`, rendering it if needed. A failure keeps the previous mode and says why.
-  async select (mode) {
+  // `again` makes a new AI image even if one was made already.
+  async select (mode, { again = false } = {}) {
     const previous = this.mode
     this.mode = mode
-    this.note = null
-    if (mode === 'none' || this.rendered.has(mode)) return
-    try {
-      this.rendered.set(mode, await this.render(mode))
-    } catch (e) {
-      this.mode = previous
-      this.note = `${MODES[mode]}に失敗しました: ${e.hint || e.message}`
+    this.modeNote = null
+    if (again) this.rendered.delete(this.key(mode))
+    if (mode !== 'none' && mode !== 'keep' && !this.rendered.has(this.key(mode))) {
+      try {
+        this.rendered.set(this.key(mode), await this.render(mode))
+        if (mode === 'ai') this.aiText = `${this.title}\n${this.summary}`
+      } catch (e) {
+        this.mode = previous
+        this.modeNote = `${MODES[mode]}に失敗しました: ${e.hint || e.message}`
+      }
     }
+    await this.updateSheet()
+  }
+
+  // A button pressed by the requester, as opposed to a change that follows a draft.
+  async pick (action) {
+    this.touched = true
+    if (action.startsWith('candidate:')) return this.choose(Number(action.slice('candidate:'.length)))
+    const mode = action.slice('image:'.length)
+    return this.select(mode, { again: mode === 'ai' && this.mode === 'ai' })
+  }
+
+  // Whether pressing the AI button would make a new image (as opposed to showing the one made).
+  needsAiRender () {
+    return this.mode === 'ai' || !this.rendered.has('ai')
+  }
+
+  // The draft became the other kind (event <-> forum post), which has another size. Everything is
+  // redone at the new size from the same choices; an AI image is cropped rather than redrawn.
+  async resize (size) {
+    const ai = this.rendered.get('ai')
+    this.size = size
+    this.rendered.clear()
+    for (const c of this.candidates) c.defaultMode = await defaultMode(c.source, size)
+    if (ai) this.rendered.set('ai', await cropTo(ai, size))
+    if (this.mode === 'crop' || this.mode === 'fit') await this.select(this.mode)
   }
 
   render (mode) {
-    if (mode === 'crop') return cropTo(this.source, this.size)
-    if (mode === 'fit') return fitWithBlur(this.source, this.size)
-    return (this.source ? forReference(this.source) : Promise.resolve(null))
+    const source = this.selected !== null ? this.candidates[this.selected].source : null
+    if (mode === 'crop') return cropTo(source, this.size)
+    if (mode === 'fit') return fitWithBlur(source, this.size)
+    return (source ? forReference(source) : Promise.resolve(null))
       .then(reference => generateCover({ title: this.title, summary: this.summary, source: reference, size: this.size }))
   }
 
   get buffer () {
-    return this.mode === 'none' ? null : this.rendered.get(this.mode) || null
+    if (this.mode === 'none') return null
+    if (this.mode === 'keep') return this.current?.buffer || null
+    return this.rendered.get(this.key(this.mode)) || null
   }
 
   describe () {
-    const lines = [this.buffer ? `${MODES[this.mode]}（${this.size.width}×${this.size.height}）` : 'なし']
-    if (this.note) lines.push(this.note)
+    const lines = []
+    if (this.mode === 'keep') {
+      lines.push(MODES.keep)
+    } else if (this.buffer) {
+      const which = this.candidates.length > 1 && this.mode !== 'ai' ? `画像${this.selected + 1}・` : ''
+      lines.push(`${which}${MODES[this.mode]}（${this.size.width}×${this.size.height}）`)
+    } else {
+      lines.push('なし')
+    }
+    if (this.mode === 'ai' && this.aiText !== `${this.title}\n${this.summary}`) {
+      lines.push('内容を修正する前に作った画像です。作り直すときは「画像: AIで作り直す」を押してください')
+    }
+    if (this.candidates.length > 1) {
+      const frame = this.usesCandidate() ? '、黄色の枠が選択中' : ''
+      lines.push(`候補 ${this.candidates.length} 枚（下の一覧で ${this.candidates.map((_, i) => `画像${i + 1}=${POSITIONS[i]}`).join('、')}${frame}）`)
+    }
+    if (this.modeNote) lines.push(this.modeNote)
+    if (this.readNote) lines.push(this.readNote)
     return lines.join('\n')
   }
 }

@@ -5,9 +5,13 @@ const { createTools, describeServer, StopDrafting } = require('./eventTools')
 const { EMBED_COLORS } = require('../utils/constants')
 const { hasStaffAccess } = require('../utils/staffAccess')
 const { redact } = require('../utils/redact')
+const { trackUsage } = require('../utils/geminiUsage')
+const mentionQuota = require('../utils/mentionQuota')
 const { SIZES } = require('../utils/imageCrop')
 const { CoverImage, MODES } = require('./coverImage')
 const { FORUM_TYPES } = require('./forumPost')
+const postedEdit = require('./postedEdit')
+const { EDIT_HINT } = postedEdit
 
 const ANSWER_TIMEOUT_MS = 5 * 60 * 1000
 // How much of the error log to show in the reply; Discord messages are capped at 2000 characters.
@@ -103,6 +107,14 @@ function extractRequest (message) {
     .trim()
 }
 
+// What the bot says in a chat reply comes from the model; it must never ping anyone.
+const NO_MENTIONS = { everyone: false, roles: false, users: false }
+
+// A draft that could not be made: marked so it is not mistaken for a chat reply.
+function failure (reason) {
+  return `⚠️ **作成できませんでした**\n${reason}`
+}
+
 // The error log for the reply: message and the top of the stack, with secrets masked, since the
 // reply may be in a channel many people can read.
 function errorLog (e) {
@@ -117,6 +129,7 @@ function sourcesField (sources) {
 
 // The preview shows the rendered cover as an attachment, so the requester sees the real result.
 const PREVIEW_IMAGE = 'cover.jpg'
+const CANDIDATES_IMAGE = 'candidates.jpg'
 
 function coverParts (cover) {
   return {
@@ -125,7 +138,32 @@ function coverParts (cover) {
   }
 }
 
-function eventPreview ({ event, endGuessed }, sources, requester, cover) {
+// The candidates side by side, as a second embed under the draft, when there is more than one.
+function candidatesEmbed (cover) {
+  if (!cover.sheet) return []
+  return [{
+    title: '画像の候補',
+    description: '左上から 画像1・画像2・画像3・画像4。黄色の枠が選択中です。下の「画像」ボタンで選べます。',
+    color: EMBED_COLORS.YELLOW_ORANGE,
+    image: { url: `attachment://${CANDIDATES_IMAGE}` }
+  }]
+}
+
+// The files the preview shows: the cover as it will be set, and the candidate sheet.
+function previewFiles (cover) {
+  return [
+    ...(cover.buffer ? [{ filename: PREVIEW_IMAGE, file: cover.buffer }] : []),
+    ...(cover.sheet ? [{ filename: CANDIDATES_IMAGE, file: cover.sheet }] : [])
+  ]
+}
+
+// Where an edit says which fields it changes, so the requester can see nothing else is touched.
+function changesField (changed) {
+  if (!changed) return []
+  return [{ name: '変更する項目', value: changed.length ? changed.join('、') : '（文章の変更なし）' }]
+}
+
+function eventPreview ({ event, endGuessed }, sources, requester, cover, { confirmLabel, changed }) {
   const start = Math.floor(Date.parse(event.scheduled_start_time) / 1000)
   const end = Math.floor(Date.parse(event.scheduled_end_time) / 1000)
   const where = event.entity_type === ENTITY_TYPES.external
@@ -140,15 +178,16 @@ function eventPreview ({ event, endGuessed }, sources, requester, cover) {
       { name: '開始', value: `<t:${start}:F>（<t:${start}:R>）`, inline: true },
       { name: '終了', value: `<t:${end}:F>${endGuessed ? '\n（不明のため開始から1時間後）' : ''}`, inline: true },
       { name: '場所', value: where },
+      ...changesField(changed),
       ...image.fields,
       ...sourcesField(sources)
     ],
     image: image.image,
-    footer: { text: `${requester.username} さんの依頼 ・ この内容でよければ「登録する」を押してください` }
+    footer: { text: `${requester.username} さんの依頼 ・ この内容でよければ「${confirmLabel}」を押してください` }
   }
 }
 
-function forumPreview ({ post, tagNames, truncated }, sources, requester, cover) {
+function forumPreview ({ post, tagNames, truncated }, sources, requester, cover, { confirmLabel, changed }) {
   const image = coverParts(cover)
   return {
     title: post.name,
@@ -158,11 +197,12 @@ function forumPreview ({ post, tagNames, truncated }, sources, requester, cover)
       { name: '投稿先', value: `<#${post.channelID}>`, inline: true },
       { name: 'タグ', value: tagNames.join(', ') || 'なし', inline: true },
       ...(truncated ? [{ name: '注意', value: '本文が2000文字を超えたため、超えた分は切り捨てます。' }] : []),
+      ...changesField(changed),
       ...image.fields,
       ...sourcesField(sources)
     ],
     image: image.image,
-    footer: { text: `${requester.username} さんの依頼 ・ この内容でよければ「投稿する」を押してください` }
+    footer: { text: `${requester.username} さんの依頼 ・ この内容でよければ「${confirmLabel}」を押してください` }
   }
 }
 
@@ -171,6 +211,7 @@ const KINDS = {
   event: {
     preview: eventPreview,
     confirmLabel: '登録する',
+    revisePrompt: 'イベントの内容（名前・日時・場所・説明）で直したいことを入力してください。画像は「画像」のボタンで変えられます（例: 開始は20時、場所はボイスチャンネル）',
     size: SIZES.eventCover,
     text: ({ event }) => ({ title: event.name, summary: event.description }),
     async create (result, guild, author, cover) {
@@ -182,12 +223,13 @@ const KINDS = {
         ...(cover.buffer ? { image: `data:image/jpeg;base64,${cover.buffer.toString('base64')}` } : {}),
         reason: `Requested by ${author.username} (${author.id})`
       })
-      return `イベントを登録しました: https://discord.com/events/${guild.id}/${created.id}`
+      return `イベントを登録しました: https://discord.com/events/${guild.id}/${created.id}\n${EDIT_HINT}`
     }
   },
   forum: {
     preview: forumPreview,
     confirmLabel: '投稿する',
+    revisePrompt: '投稿の内容（題名・本文・タグ・投稿先）で直したいことを入力してください。画像は「画像」のボタンで変えられます（例: 題名に日付を入れて、タグは募集中）',
     size: SIZES.forumImage,
     text: ({ post }) => ({ title: post.name, summary: post.message.content }),
     async create (result, guild, author, cover) {
@@ -200,19 +242,23 @@ const KINDS = {
         ...body,
         reason: `Requested by ${author.username} (${author.id})`
       }, files)
-      return `フォーラムに投稿しました: https://discord.com/channels/${guild.id}/${thread.id}`
+      return `フォーラムに投稿しました: https://discord.com/channels/${guild.id}/${thread.id}\n${EDIT_HINT}`
     }
   }
 }
 
-// Edits the reply. With `image` (a Buffer, or null to remove it) the edit goes through the REST
-// API directly: the pinned Eris cannot attach files when editing a message.
-async function editReply (reply, payload, image) {
-  if (image === undefined) return reply.edit(payload)
+// Edits the reply. With `files` ([{ filename, file }], or null to remove all) the edit goes through
+// the REST API directly: the pinned Eris cannot attach files when editing a message.
+async function editReply (reply, payload, files) {
+  if (files === undefined) return reply.edit(payload)
+  const list = files || []
+  const { allowedMentions, ...body } = payload
   return global.bot.requestHandler.request('PATCH', `/channels/${reply.channel.id}/messages/${reply.id}`, true, {
-    ...payload,
-    attachments: image ? [{ id: 0, filename: PREVIEW_IMAGE }] : []
-  }, image ? [{ name: 'files[0]', file: image }] : undefined)
+    ...body,
+    // The REST API's own name for it; nothing the bot edits in should ping anyone.
+    allowed_mentions: { parse: [] },
+    attachments: list.map((f, id) => ({ id, filename: f.filename }))
+  }, list.length ? list.map((f, i) => ({ name: `files[${i}]`, file: f.file })) : undefined)
 }
 
 // Lays buttons out in rows: buttons with the same `row` (default 0) share rows of up to five.
@@ -234,10 +280,10 @@ function buttonRows (buttons, ids) {
 
 // Shows `buttons` on the reply and waits for the requester to press one. Resolves to the pressed
 // button's index and its interaction, or null if nobody pressed within the timeout.
-async function choose (reply, requesterID, message, buttons, image) {
+async function choose (reply, requesterID, message, buttons, files) {
   const { awaitCustomID, cancelCustomID } = require('../events/interactionCreate')
   const ids = buttons.map(() => uuidv4())
-  await editReply(reply, { ...message, components: buttonRows(buttons, ids) }, image)
+  await editReply(reply, { ...message, components: buttonRows(buttons, ids) }, files)
   try {
     const interaction = await Promise.race(ids.map(id => awaitCustomID(id, requesterID, ANSWER_TIMEOUT_MS)))
     return { index: ids.indexOf(interaction.data.custom_id), interaction }
@@ -300,118 +346,171 @@ async function handle (message) {
   const request = extractRequest(message)
   const repliedTo = message.messageReference?.messageID
   if (!request && !repliedTo) {
-    return message.channel.createMessage({ content: 'イベントやフォーラム投稿にしたい内容（文章・URL・メッセージリンク）を添えるか、元のメッセージに返信する形でメンションしてください。', ...reference }).catch(() => {})
+    return message.channel.createMessage({ content: '話したいことか、イベントやフォーラム投稿にしたい内容（文章・URL・メッセージリンク）を添えるか、元のメッセージに返信する形でメンションしてください。', ...reference }).catch(() => {})
   }
   if (inProgress.has(message.author.id)) {
     return message.channel.createMessage({ content: '前の依頼を処理中です。終わってからもう一度お試しください。', ...reference }).catch(() => {})
   }
 
   inProgress.add(message.author.id)
-  let reply
-  try {
-    reply = await message.channel.createMessage({ content: '内容を読み取っています…', ...reference })
-    const member = message.member
-    const tools = createTools({
-      guild,
-      member,
-      ask: asker(reply, message.channel.id, message.author.id),
-      progress: text => reply.edit({ content: text }).catch(() => {})
-    })
-    // A mention sent as a reply ("@bot これをイベントにして") is about the replied-to message.
-    const referenced = repliedTo
-      ? await tools.readMessage(message.messageReference.channelID || message.channel.id, repliedTo).catch(e => `（読めませんでした: ${e.message}）`)
-      : null
-    // Fetched fresh for every request. Without it the draft still works, just with less context.
-    const server = await describeServer(guild, member, message.channel.id).catch(e => {
-      global.logger.warn(`Could not describe server ${guild.id}: ${e.message}`)
-      return null
-    })
-    let result = await draft({
-      request,
-      referenced,
-      channelName: message.channel.name,
-      channelID: message.channel.id,
-      server,
-      forum: namedForum(message),
-      images: attachedImages(message),
-      guild,
-      member,
-      tools
-    })
-    let revisions = 0
-    let cover = null
-    let needsCover = true
-    for (;;) {
-      if (result.error) {
-        await editReply(reply, { content: `作成できませんでした: ${result.error}`, embeds: [], components: [] }, null)
-        return
-      }
+  // Every Gemini request made for this mention is counted, and logged when it is done.
+  await trackUsage(async usage => {
+    let reply
+    try {
+      reply = await message.channel.createMessage({ content: '内容を読み取っています…', ...reference })
+      const quota = await mentionQuota.take(message.author.id)
+      if (!quota.allowed) throw new StopDrafting(`今日の利用回数の上限（1日${quota.limit}回）に達しました。明日（日本時間の0時以降）またお試しください。`)
+      usage.onWait = ms => reply.edit({ content: `AI が混み合っているため、${Math.ceil(ms / 1000)} 秒待ってから再試行します…` }).catch(() => {})
+      const member = message.member
+      const tools = createTools({
+        guild,
+        member,
+        ask: asker(reply, message.channel.id, message.author.id),
+        progress: text => reply.edit({ content: text }).catch(() => {})
+      })
+      // Replying to something the bot made (or to the message saying it did) is a request to change it.
+      const editTarget = repliedTo
+        ? await postedEdit.findTarget(guild, message.messageReference.channelID || message.channel.id, repliedTo)
+        : null
+      if (editTarget && !request) throw new StopDrafting('直したいこと（例: 開始を20時に、題名に日付を入れて）を書いてメンションしてください。')
+      const edit = editTarget && await postedEdit.load(guild, editTarget)
+      // A mention sent as a reply ("@bot これをイベントにして") is about the replied-to message.
+      const referenced = repliedTo && !edit
+        ? await tools.readMessage(message.messageReference.channelID || message.channel.id, repliedTo).catch(e => `（読めませんでした: ${e.message}）`)
+        : null
+      // Fetched fresh for every request. Without it the draft still works, just with less context.
+      const server = await describeServer(guild, member, message.channel.id).catch(e => {
+        global.logger.warn(`Could not describe server ${guild.id}: ${e.message}`)
+        return null
+      })
+      let result = await draft({
+        request,
+        referenced,
+        channelName: message.channel.name,
+        channelID: message.channel.id,
+        server,
+        forum: namedForum(message),
+        images: attachedImages(message),
+        edit,
+        guild,
+        member,
+        tools
+      })
+      let revisions = 0
+      let cover = null
+      let needsCover = true
+      let previous = null // the draft shown before the latest correction
+      let note = ''
+      for (;;) {
+        if (result.kind === 'chat') {
+          if (!previous) {
+            await reply.edit({ content: result.text, embeds: [], components: [], allowedMentions: NO_MENTIONS })
+            return
+          }
+          // The requester asked something about the draft instead of correcting it: answer, and
+          // show the draft again.
+          note = result.text
+          result = { ...previous, conversation: result.conversation }
+          continue
+        }
+        if (result.error) {
+          await editReply(reply, { content: failure(result.error), embeds: [], components: [] }, null)
+          return
+        }
 
-      const kind = KINDS[result.kind]
-      if (needsCover) {
-        // A correction can switch between event and forum post, which use different sizes.
-        if (!cover || cover.size !== kind.size) cover = new CoverImage(kind.size)
-        await cover.useDraft({ imageUrl: result.imageUrl, ...kind.text(result) })
+        const kind = KINDS[result.kind]
+        if (!cover) {
+          cover = new CoverImage(kind.size, { current: edit?.image })
+          await cover.useDraft({ imageUrls: result.imageUrls, ...kind.text(result) })
+        } else if (needsCover) {
+          // Corrections are about the text: the image stays as it was. Switching between event and
+          // forum post changes only its size.
+          if (cover.size !== kind.size) await cover.resize(kind.size)
+          await cover.revise({ imageUrls: result.imageUrls, ...kind.text(result) })
+        }
         needsCover = false
+        const confirmLabel = edit ? '更新する' : kind.confirmLabel
+        const embed = kind.preview(result, [...new Set(tools.sources)], message.author, cover, {
+          confirmLabel,
+          changed: edit ? postedEdit.changes(edit, result) : null
+        })
+        const canRevise = revisions < MAX_REVISIONS
+        const buttons = [
+          { label: confirmLabel, style: SUCCESS, action: 'create' },
+          ...(canRevise ? [{ label: '内容を修正', style: PRIMARY, action: 'revise' }] : []),
+          { label: 'キャンセル', style: DANGER, action: 'cancel' },
+          // Which candidate, then how it becomes the image: separate rows, so it is clear these
+          // buttons are about the image and 内容を修正 is about the text.
+          ...(cover.candidates.length > 1
+            ? cover.candidates.map((_, i) => ({
+              label: `画像${i + 1}`,
+              style: cover.usesCandidate() && i === cover.selected ? SUCCESS : SECONDARY,
+              action: `candidate:${i}`,
+              row: 1
+            }))
+            : []),
+          ...cover.modes().map(mode => ({
+            label: `画像: ${mode === 'ai' && cover.mode === 'ai' ? 'AIで作り直す' : MODES[mode]}`,
+            style: mode === cover.mode ? SUCCESS : SECONDARY,
+            action: `image:${mode}`,
+            row: 2
+          }))
+        ]
+        const picked = await choose(reply, message.author.id, {
+          content: [note.slice(0, 1500), canRevise ? '' : `内容の修正は${MAX_REVISIONS}回までです。`].filter(Boolean).join('\n\n'),
+          allowedMentions: NO_MENTIONS,
+          embeds: [embed, ...candidatesEmbed(cover)]
+        }, buttons, previewFiles(cover))
+        if (!picked) {
+          await reply.edit({ content: '時間内に確認されなかったため、取りやめました。', components: [] })
+          return
+        }
+        const { interaction } = picked
+        const action = buttons[picked.index].action
+        if (action === 'cancel') {
+          await interaction.editOriginalMessage({ content: 'キャンセルしました。', components: [] })
+          return
+        }
+        if (action === 'create') {
+          const done = edit
+            ? await postedEdit.update(guild, edit, result, cover, message.author)
+            : await kind.create(result, guild, message.author, cover)
+          await interaction.editOriginalMessage({ content: done, components: [] })
+          return
+        }
+        if (action.startsWith('candidate:') || action.startsWith('image:')) {
+          if (action === 'image:ai' && cover.needsAiRender()) await reply.edit({ content: 'AI で画像を作成しています…', components: [] })
+          await cover.pick(action)
+          continue
+        }
+        const correction = await typedAnswer(reply, message.channel.id, message.author.id, kind.revisePrompt)
+        await reply.edit({ content: '修正を反映しています…' })
+        previous = result
+        note = ''
+        result = await revise(result.conversation, correction)
+        revisions++
+        needsCover = true
       }
-      const embed = kind.preview(result, [...new Set(tools.sources)], message.author, cover)
-      const canRevise = revisions < MAX_REVISIONS
-      const buttons = [
-        { label: kind.confirmLabel, style: SUCCESS, action: 'create' },
-        ...(canRevise ? [{ label: '修正する', style: PRIMARY, action: 'revise' }] : []),
-        { label: 'キャンセル', style: DANGER, action: 'cancel' },
-        ...cover.modes().map(mode => ({
-          label: `画像: ${MODES[mode]}`,
-          style: mode === cover.mode ? SUCCESS : SECONDARY,
-          action: `image:${mode}`,
-          row: 1
-        }))
-      ]
-      const picked = await choose(reply, message.author.id, { content: canRevise ? '' : `修正は${MAX_REVISIONS}回までです。`, embeds: [embed] }, buttons, cover.buffer)
-      if (!picked) {
-        await reply.edit({ content: '時間内に確認されなかったため、取りやめました。', components: [] })
+    } catch (e) {
+      if (e instanceof StopDrafting || e instanceof postedEdit.EditRefused) {
+        await editReply(reply, { content: e.message, embeds: [], components: [] }, null).catch(() => {})
         return
       }
-      const { interaction } = picked
-      const action = buttons[picked.index].action
-      if (action === 'cancel') {
-        await interaction.editOriginalMessage({ content: 'キャンセルしました。', components: [] })
-        return
+      global.logger.error(e)
+      // The console log alone is easy to miss; also send it to the error webhook the operators watch.
+      global.webhook.error(redact(`Drafting from a mention in ${guild.id} failed: ${e.message}`).slice(0, 2000))
+      const cause = e.hint || (e.name === 'TimeoutError' ? 'AI の応答が時間内に返りませんでした' : null)
+      const content = `⚠️ エラーが発生しました${cause ? `（${cause}）` : ''}。時間をおいてもう一度お試しください。\n${errorLog(e)}`
+      if (reply) {
+        await editReply(reply, { content, embeds: [], components: [] }, null).catch(() => {})
+      } else {
+        await message.channel.createMessage({ content, ...reference }).catch(() => {})
       }
-      if (action === 'create') {
-        await interaction.editOriginalMessage({ content: await kind.create(result, guild, message.author, cover), components: [] })
-        return
-      }
-      if (action.startsWith('image:')) {
-        const mode = action.slice('image:'.length)
-        if (mode === 'ai' && !cover.rendered.has('ai')) await reply.edit({ content: 'AI で画像を作成しています…', components: [] })
-        await cover.select(mode)
-        continue
-      }
-      const correction = await typedAnswer(reply, message.channel.id, message.author.id, '直したい内容を入力してください（例: 開始は20時、場所はボイスチャンネル）')
-      await reply.edit({ content: '修正を反映しています…' })
-      result = await revise(result.conversation, correction)
-      revisions++
-      needsCover = true
+    } finally {
+      inProgress.delete(message.author.id)
+      global.logger.info(`Mention drafting in ${guild.id}: ${usage.requests} Gemini request(s), ${usage.retries} retried after HTTP 429`)
     }
-  } catch (e) {
-    if (e instanceof StopDrafting) {
-      await editReply(reply, { content: e.message, embeds: [], components: [] }, null).catch(() => {})
-      return
-    }
-    global.logger.error(e)
-    // The console log alone is easy to miss; also send it to the error webhook the operators watch.
-    global.webhook.error(redact(`Drafting from a mention in ${guild.id} failed: ${e.message}`).slice(0, 2000))
-    const cause = e.hint || (e.name === 'TimeoutError' ? 'AI の応答が時間内に返りませんでした' : null)
-    const content = `作成中にエラーが発生しました${cause ? `（${cause}）` : ''}。時間をおいてもう一度お試しください。\n${errorLog(e)}`
-    if (reply) {
-      await editReply(reply, { content, embeds: [], components: [] }, null).catch(() => {})
-    } else {
-      await message.channel.createMessage({ content, ...reference }).catch(() => {})
-    }
-  } finally {
-    inProgress.delete(message.author.id)
-  }
+  })
 }
 
 module.exports = { handle, extractRequest }

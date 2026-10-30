@@ -75,9 +75,15 @@ describe('toScheduledEvent', () => {
     assert.deepEqual(toScheduledEvent({ found: false, reason: '日時がありません' }, guild, NOW), { error: '日時がありません' })
   })
 
-  test('carries a valid image URL and drops anything else', () => {
-    assert.equal(toScheduledEvent({ ...base, image_url: 'https://e.com/cover.jpg' }, guild, NOW).imageUrl, 'https://e.com/cover.jpg')
-    assert.equal(toScheduledEvent({ ...base, image_url: 'javascript:x' }, guild, NOW).imageUrl, null)
+  test('an edited event may keep a start time that has passed, but not move to one', () => {
+    const past = '2026-01-01T10:00:00.000Z'
+    assert.ok(toScheduledEvent({ ...base, start: past }, guild, NOW, { keepStart: new Date(past) }).event)
+    assert.match(toScheduledEvent({ ...base, start: '2026-01-01T11:00:00.000Z' }, guild, NOW, { keepStart: new Date(past) }).error, /過去/)
+  })
+
+  test('carries valid image candidates and drops anything else', () => {
+    assert.deepEqual(toScheduledEvent({ ...base, image_urls: ['https://e.com/cover.jpg', 'javascript:x', 'https://e.com/b.png'] }, guild, NOW).imageUrls, ['https://e.com/cover.jpg', 'https://e.com/b.png'])
+    assert.deepEqual(toScheduledEvent(base, guild, NOW).imageUrls, [])
   })
 
   test('rejects a missing name', () => {
@@ -135,7 +141,30 @@ describe('draft', () => {
     assert.equal(headers['cf-aig-authorization'], 'Bearer gw-token')
     assert.equal(body.toolConfig.functionCallingConfig.mode, 'ANY')
     assert.equal(requests[0].dispatcher, undefined, 'ordinary calls keep fetch\'s default limits')
-    assert.deepEqual(body.tools[0].functionDeclarations.map(d => d.name), ['lookup', 'submit_event_draft', 'submit_forum_post_draft'])
+    assert.deepEqual(body.tools[0].functionDeclarations.map(d => d.name), ['lookup', 'submit_event_draft', 'submit_forum_post_draft', 'submit_chat_reply'])
+  })
+
+  test('answers talk that is not a request with a chat reply, in the community\'s character', async () => {
+    const requests = installGemini([[call('submit_chat_reply', { text: '  こんにちは！  ' })]])
+    const result = await draft({ request: 'こんにちは', channelName: 'general', guild, tools, now: NOW })
+    assert.equal(result.kind, 'chat')
+    assert.equal(result.text, 'こんにちは！')
+    const instruction = requests[0].body.systemInstruction.parts[0].text
+    assert.match(instruction, /頼んでいないとき（あいさつ・雑談・質問・相談など）は[\s\S]*submit_chat_reply/)
+    assert.match(instruction, /頼んでいるのに[\s\S]*found: false と理由つきで提出/)
+    assert.match(instruction, /## 返事をするときのキャラクター[\s\S]*配信者本人になりきって[\s\S]*なりきるのは話し方までです/)
+    assert.doesNotMatch(instruction, /運営者が設定したキャラクター/)
+  })
+
+  test('adds the operator\'s character notes from CHAT_PERSONA', async () => {
+    process.env.CHAT_PERSONA = '語尾は「〜だぜ」'
+    try {
+      const requests = installGemini([[call('submit_chat_reply', { text: 'よろしくだぜ' })]])
+      await draft({ request: 'よろしく', channelName: 'general', guild, tools, now: NOW })
+      assert.match(requests[0].body.systemInstruction.parts[0].text, /## 運営者が設定したキャラクター\n語尾は「〜だぜ」$/)
+    } finally {
+      delete process.env.CHAT_PERSONA
+    }
   })
 
   test('selects the stored key by alias when one is configured', async () => {
@@ -266,5 +295,92 @@ describe('draft', () => {
     for (const d of requests[0].body.tools[0].functionDeclarations) {
       if (d.parameters) assert.ok(Object.keys(d.parameters.properties).length > 0, d.name)
     }
+  })
+})
+
+describe('rate limits (HTTP 429)', () => {
+  const { callGemini, retryTimer } = require('../../src/bot/modules/eventDrafter')
+  const { trackUsage } = require('../../src/bot/utils/geminiUsage')
+  const GATEWAY_429 = '{"success":false,"error":[{"code":2003,"message":"Rate limited"}],"name":"AiGatewayError","httpCode":429,"internalCode":2003}'
+
+  // Answers each call with the next status; 200 answers carry a model turn.
+  function scriptedFetch (statuses, { retryAfter } = {}) {
+    let i = 0
+    global.fetch = async () => {
+      const status = statuses[i++]
+      if (status === 200) return { ok: true, status, json: async () => ({ candidates: [{ content: { parts: [{ text: 'ok' }] } }] }) }
+      return {
+        ok: false,
+        status,
+        headers: { get: name => (name === 'retry-after' && retryAfter) || null },
+        text: async () => status === 429 ? GATEWAY_429 : 'boom'
+      }
+    }
+    return () => i
+  }
+
+  let waits
+  beforeEach((t) => {
+    configureGateway()
+    waits = []
+    t.mock.method(retryTimer, 'sleep', async ms => { waits.push(ms) })
+  })
+
+  test('retries with 2s, 4s, 8s backoff and succeeds', async () => {
+    const calls = scriptedFetch([429, 429, 429, 200])
+    const content = await callGemini('m', {})
+    assert.equal(content.parts[0].text, 'ok')
+    assert.deepEqual(waits, [2000, 4000, 8000])
+    assert.equal(calls(), 4)
+  })
+
+  test('honors Retry-After, capped at 30 seconds', async () => {
+    scriptedFetch([429, 200], { retryAfter: '5' })
+    await callGemini('m', {})
+    assert.deepEqual(waits, [5000])
+    scriptedFetch([429, 200], { retryAfter: '600' })
+    await callGemini('m', {})
+    assert.deepEqual(waits, [5000, 30000])
+  })
+
+  test('gives up after 3 retries and says it was the gateway\'s limit', async () => {
+    const calls = scriptedFetch([429, 429, 429, 429])
+    await assert.rejects(callGemini('m', {}), {
+      hint: 'AI Gateway のリクエスト数の上限に達しました。Cloudflare の AI Gateway の Rate-limiting 設定を確認してください',
+      message: /HTTP 429 .*AiGatewayError/
+    })
+    assert.equal(calls(), 4)
+  })
+
+  test('a 429 from Gemini itself is reported as Gemini\'s limit', async () => {
+    global.fetch = async () => ({ ok: false, status: 429, headers: { get: () => null }, text: async () => '{"error":{"code":429,"status":"RESOURCE_EXHAUSTED"}}' })
+    await assert.rejects(callGemini('m', {}), { hint: 'Gemini の利用上限に達しました（HTTP 429）' })
+  })
+
+  test('other errors are not retried', async () => {
+    const calls = scriptedFetch([500])
+    await assert.rejects(callGemini('m', {}), { hint: 'AI の呼び出しに失敗しました（HTTP 500）' })
+    assert.equal(calls(), 1)
+    assert.deepEqual(waits, [])
+  })
+
+  test('requests and retries are counted for the mention being handled, and waits announced', async () => {
+    scriptedFetch([429, 200, 200])
+    const announced = []
+    const usage = await trackUsage(async usage => {
+      usage.onWait = ms => announced.push(ms)
+      await callGemini('m', {})
+      await callGemini('m', {})
+      return usage
+    })
+    assert.equal(usage.requests, 3)
+    assert.equal(usage.retries, 1)
+    assert.deepEqual(announced, [2000])
+  })
+
+  test('outside of a mention nothing is counted', async () => {
+    scriptedFetch([200])
+    await callGemini('m', {})
+    assert.equal(require('../../src/bot/utils/geminiUsage').currentUsage(), null)
   })
 })

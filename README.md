@@ -61,6 +61,19 @@ who can manage events (or the owner, or `STAFF_ROLE_ID` staff) can use it. Event
 have **Manage Events**; a forum post needs both the requester and the app to be able to post in that
 forum, and is sent with mentions disabled so drafted text can't ping anyone.
 
+A mention that does not ask for an event or a forum post (a greeting, a question, small talk) gets a
+plain chat reply (`submit_chat_reply`), with pings disabled. The model plays the creator of the
+server's YouTube channel (set with `/youtube`), taking their way of talking from the stored videos
+and streams (`search_youtube`); Discord's BOT tag marks the replies as the bot's. It plays the voice
+only: schedules, announcements or promises that are not in the stored data are never made up as the
+creator's. `CHAT_PERSONA` adds the operator's own character notes. A request that is for an event or a post but can't be
+made (no date, or the linked message is about something else) is an error, not a chat reply, and is
+shown as `⚠️ 作成できませんでした`.
+
+Each user can have 30 mentions answered per day (Japan time), across servers, counted in Redis
+(`src/bot/utils/mentionQuota.js`, `MENTION_DAILY_LIMIT`). If Redis is unreachable the mention goes
+through.
+
 Drafting is a Gemini function-calling loop (`src/bot/modules/eventDrafter.js`) over read-only tools
 (`src/bot/modules/eventTools.js`): fetch a web page, read a Discord message by link, read a channel's
 recent messages, list channels, list forums with their tags and guidelines, and list existing
@@ -118,27 +131,48 @@ server profile, stored YouTube data) is sent to Google Gemini through Cloudflare
 from this flow is stored by the app. Use a paid Gemini API tier: on the free tier Google may use the input to improve its models,
 which the intent review answers rule out.
 
-The preview has Register / Post, **Fix** and Cancel buttons. Fix asks the requester to type what to
-change as their next message in the channel; the correction goes back to the model, which revises
+The preview has Register / Post, **内容を修正** (fix the text) and Cancel buttons. 内容を修正 is about
+the draft itself (name, time, place and description; or title, body, tags and forum), not the image,
+and asks the requester to type what to change as their next message in the channel; the correction goes back to the model, which revises
 its own draft (up to 3 times). Questions the model asks can likewise be answered in words with
 "その他（文字で入力）". A forum mentioned in the request (`@RoboPolice #募集 に立てて`) is always the
 one posted to.
 
-The model can also pick an image for the event cover or the forum post: an `og:image` /
-`twitter:image` of a page it read, an image attached to the mention or the replied-to message, or an
-embed image. The app downloads it (same address checks as pages, images only, 10MB at most) and the
-preview shows the actual result, 800×320 for an event cover or 1280×720 for a forum post. A second
-row of buttons switches how it is made (`src/bot/modules/coverImage.js`):
+A correction changes the text only. The image stays as the requester left it: new candidates the
+correction brings are added to the list without being selected, and an AI image is not redrawn
+(the preview says so; "画像: AIで作り直す" makes a new one).
+
+What the bot made can be changed later (`src/bot/modules/postedEdit.js`): reply with a mention to the
+"イベントを登録しました / フォーラムに投稿しました" message, or to the forum post itself, and say what to
+change (`@RoboPolice 開始を20時に`). The model gets the present content and changes only what was
+asked; the preview lists the changed fields and an **更新する** button updates the event or post in
+place (a forum post stays in its forum). The image is kept unless another is picked. Only events
+and posts the bot made can be changed, with the same permissions it takes to make them, and
+finished or cancelled events can't.
+
+The model can also propose images for the event cover or the forum post, up to 4 best first: the
+`og:image` / `twitter:image` of pages it read, images attached to the mention or the replied-to
+message, or embed images. The app downloads them (same address checks as pages, images only, 10MB at
+most). With more than one, the preview shows them side by side ("画像の候補", the selected one framed
+in yellow) with a row of 画像1…画像4 buttons to pick one. The preview shows the actual result, 800×320
+for an event cover or 1280×720 for a forum post, and one more row of buttons switches how it is made
+(`src/bot/modules/coverImage.js`):
 
 | Mode | What it does | Default for |
 |---|---|---|
 | 切り抜き | Crops with sharp's attention strategy, keeping the most salient region | Images close to the target shape (photos) |
 | 全体表示 | Shows the whole image over a blurred, darkened copy of itself | Posters and anything far from the target shape |
-| AIで作成 | Gemini's image model (`GEMINI_IMAGE_MODEL`) makes a new cover from the title and description, based on the source image if there is one, without text | — |
+| AIで作成 | Gemini's image model (`GEMINI_IMAGE_MODEL`) makes a new cover from the title and description, based on the selected image if there is one, without text | — |
 | なし | No image | Drafts without an image |
 
-"AIで作成" sends the title, description and the source image to Gemini, the same way drafting does.
-If an image can't be used the draft still works, and the preview says why.
+"AIで作成" sends the title, description and the selected image to Gemini, the same way drafting does.
+Images that can't be used are left out of the candidates, the draft still works, and the preview says why.
+
+One mention usually takes 2-4 Gemini requests (one per tool step, up to 10), plus one per
+correction, AI-made image or video summary; each mention logs how many it used. HTTP 429 is retried
+up to 3 times (Retry-After, else 2s, 4s, 8s), telling the requester it is waiting. A 429 from AI
+Gateway itself (`AiGatewayError`, code 2003) comes from the gateway's Rate-limiting setting, which
+counts requests, not tokens: allow something like 30 requests per 60 seconds.
 
 If drafting fails, the reply shows the cause and the top of the error log so staff can tell what
 went wrong without server access. Secrets are masked first (`src/bot/utils/redact.js`): values of
@@ -179,6 +213,8 @@ credentials in URLs. The same masked text goes to the error webhook.
 | `VIDEO_SUMMARY_TIMEOUT_MINUTES` | Optional. How long a video summary may take. Defaults to 10 |
 | `YOUTUBE_GATEWAY_PROVIDER` | Optional. Slug of an AI Gateway custom provider (see below). Set, YouTube API calls go through Cloudflare AI Gateway; unset, straight to Google |
 | `GEMINI_IMAGE_MODEL` | Optional. Image model for AI-made covers. Defaults to `gemini-3.1-flash-image` |
+| `CHAT_PERSONA` | Optional. Character notes added to chat replies (tone, catchphrases, how to address members) |
+| `MENTION_DAILY_LIMIT` | Optional. Mentions each user can have answered per day (Japan time). Defaults to 30; 0 turns the limit off |
 
 Values that never differ between deployments are constants in code rather than environment
 variables: the support server and legal URLs (`src/bot/utils/constants.js`) and the message batch

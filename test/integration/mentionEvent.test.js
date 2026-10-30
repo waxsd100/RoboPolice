@@ -1,17 +1,18 @@
 // Integration: a mention runs through the real mentionEvent -> eventDrafter -> eventTools ->
 // urlFetcher chain and the real interactionCreate button handling. Only Discord's API and Gemini
 // are faked; web pages come from a local HTTP server.
-const { test, describe, before, after, beforeEach } = require('node:test')
+const { test, describe, before, after, beforeEach, afterEach } = require('node:test')
 const assert = require('node:assert/strict')
 // Load first: it sets the environment the bot modules read when they are required.
 const {
-  createGuild, createMember, installBot, installYouTubeStore, configureGateway, installGemini, call, submit, lastToolResponses, startServer
+  createGuild, createMember, installBot, installYouTubeStore, installQuotaStore, configureGateway, installGemini, call, submit, lastToolResponses, startServer
 } = require('../helpers/fakes')
 const Eris = require('eris')
 const sharp = require('sharp')
 const urlFetcher = require('../../src/bot/utils/urlFetcher')
 const interactionCreate = require('../../src/bot/events/interactionCreate')
 const mentionEvent = require('../../src/bot/modules/mentionEvent')
+const { EDIT_HINT } = require('../../src/bot/modules/postedEdit')
 
 const REQUESTER = '1'
 const OTHER_USER = '2'
@@ -99,6 +100,7 @@ function press (reply, label, userID = REQUESTER) {
 describe('mention → event / forum post (integration)', () => {
   let site
   let discord
+  let quota
   before(async () => {
     // A poster is far from a banner's shape (shown whole by default); the photo is close to it
     // (cropped by default).
@@ -133,12 +135,13 @@ describe('mention → event / forum post (integration)', () => {
   beforeEach(() => {
     configureGateway()
     installYouTubeStore()
+    quota = installQuotaStore()
     discord = installBot({ guilds: [guild], messages: MESSAGES, forums: FORUMS })
     // A message edit with files goes over REST; apply it to the reply like Discord would.
     const request = global.bot.requestHandler.request
     global.bot.requestHandler.request = async (method, url, auth, body, files) => {
       const edit = method === 'PATCH' && url.match(/^\/channels\/\d+\/messages\/(\w+)$/)
-      if (!edit) return request(method, url, auth, body, files)
+      if (!edit || !repliesByID.has(edit[1])) return request(method, url, auth, body, files)
       const { attachments, ...update } = body
       repliesByID.get(edit[1]).apply({ ...update, files: (files || []).map((f, i) => ({ ...f, filename: attachments[i].filename })) })
       return {}
@@ -181,7 +184,7 @@ describe('mention → event / forum post (integration)', () => {
       reason: undefined
     })
     assert.equal(post.body.reason, `Requested by user${REQUESTER} (${REQUESTER})`)
-    assert.equal(reply.state.content, 'イベントを登録しました: https://discord.com/events/100/EVENT1')
+    assert.equal(reply.state.content, `イベントを登録しました: https://discord.com/events/100/EVENT1\n${EDIT_HINT}`)
     assert.deepEqual(reply.state.components, [])
   })
 
@@ -216,7 +219,7 @@ describe('mention → event / forum post (integration)', () => {
       }
     ])
     await mentionEvent.handle(mention(channel, '<@BOT> https://discord.com/channels/100/202/403'))
-    assert.equal(replies[0].state.content, '作成できませんでした: リンク先のメッセージを読めませんでした。')
+    assert.equal(replies[0].state.content, '⚠️ **作成できませんでした**\nリンク先のメッセージを読めませんでした。')
     assert.equal(discord.some(c => c.method === 'POST'), false)
   })
 
@@ -301,7 +304,7 @@ describe('mention → event / forum post (integration)', () => {
       applied_tags: ['tag-open'],
       reason: undefined
     })
-    assert.equal(reply.state.content, 'フォーラムに投稿しました: https://discord.com/channels/100/THREAD1')
+    assert.equal(reply.state.content, `フォーラムに投稿しました: https://discord.com/channels/100/THREAD1\n${EDIT_HINT}`)
   })
 
   test('forum: the requester picks the kind, and a forum they cannot post in is refused', async () => {
@@ -317,11 +320,11 @@ describe('mention → event / forum post (integration)', () => {
     await waitForButtons(replies[0], 'フォーラムに投稿')
     await press(replies[0], 'フォーラムに投稿')
     await done
-    assert.equal(replies[0].state.content, '作成できませんでした: 依頼者が <#207> に投稿する権限を持っていません。')
+    assert.equal(replies[0].state.content, '⚠️ **作成できませんでした**\n依頼者が <#207> に投稿する権限を持っていません。')
     assert.equal(discord.some(c => c.method === 'POST'), false)
   })
 
-  test('修正する: a typed correction goes back to the model and a new preview replaces the old one', async () => {
+  test('内容を修正: a typed correction goes back to the model and a new preview replaces the old one', async () => {
     const { channel, replies } = createChannel()
     installGemini([
       [submit({ name: '交流会', start: '2026-11-03T19:00:00+09:00', location: '渋谷' })],
@@ -334,9 +337,9 @@ describe('mention → event / forum post (integration)', () => {
     ])
     const done = mentionEvent.handle(mention(channel, '<@BOT> 交流会'))
     const [reply] = replies
-    assert.deepEqual((await waitForButtons(reply, '修正する')).map(b => b.label), ['登録する', '修正する', 'キャンセル', '画像: AIで作成', '画像: なし'])
-    await press(reply, '修正する')
-    await waitFor(() => /直したい内容を入力してください/.test(reply.state.content), 'the correction prompt')
+    assert.deepEqual((await waitForButtons(reply, '内容を修正')).map(b => b.label), ['登録する', '内容を修正', 'キャンセル', '画像: AIで作成', '画像: なし'])
+    await press(reply, '内容を修正')
+    await waitFor(() => /で直したいことを入力してください/.test(reply.state.content), 'the correction prompt')
 
     // Someone else's message, and a new mention from the requester, are not the correction.
     await mentionEvent.handle(mention(channel, '関係ない話', { author: OTHER_USER, member: createMember({ id: OTHER_USER }) }))
@@ -351,20 +354,20 @@ describe('mention → event / forum post (integration)', () => {
     assert.equal(discord.find(c => c.method === 'POST').body.scheduled_start_time, '2026-11-03T11:00:00.000Z')
   })
 
-  test('修正する is offered three times, then only register or cancel', async () => {
+  test('内容を修正 is offered three times, then only register or cancel', async () => {
     const { channel, replies } = createChannel()
     const draftTurn = [submit({ name: 'A', start: '2026-11-03T19:00:00+09:00' })]
     installGemini([draftTurn, draftTurn, draftTurn, draftTurn])
     const done = mentionEvent.handle(mention(channel, '<@BOT> A'))
     const [reply] = replies
     for (let i = 0; i < 3; i++) {
-      await waitForButtons(reply, '修正する')
-      await press(reply, '修正する')
-      await waitFor(() => /直したい内容/.test(reply.state.content), 'the correction prompt')
+      await waitForButtons(reply, '内容を修正')
+      await press(reply, '内容を修正')
+      await waitFor(() => /で直したいことを/.test(reply.state.content), 'the correction prompt')
       await mentionEvent.handle(mention(channel, `修正${i}`))
     }
     assert.deepEqual((await waitForButtons(reply, 'キャンセル')).map(b => b.label), ['登録する', 'キャンセル', '画像: AIで作成', '画像: なし'])
-    assert.equal(reply.state.content, '修正は3回までです。')
+    assert.equal(reply.state.content, '内容の修正は3回までです。')
     await press(reply, 'キャンセル')
     await done
   })
@@ -385,7 +388,7 @@ describe('mention → event / forum post (integration)', () => {
     await waitFor(() => /「何時からですか？」への答えを入力してください/.test(reply.state.content), 'the typed-answer prompt')
     await mentionEvent.handle(mention(channel, '21時半から'))
     await done
-    assert.equal(reply.state.content, '作成できませんでした: ok')
+    assert.equal(reply.state.content, '⚠️ **作成できませんでした**\nok')
   })
 
   test('no typed correction within 5 minutes cancels the draft', async (t) => {
@@ -394,7 +397,7 @@ describe('mention → event / forum post (integration)', () => {
     installGemini([[submit({ name: 'A', start: '2026-11-03T19:00:00+09:00' })]])
     const done = mentionEvent.handle(mention(channel, '<@BOT> A'))
     for (let i = 0; i < 50 && !buttons(replies[0] || { state: { components: [] } }).length; i++) await new Promise(resolve => setImmediate(resolve))
-    press(replies[0], '修正する')
+    press(replies[0], '内容を修正')
     for (let i = 0; i < 20; i++) await new Promise(resolve => setImmediate(resolve))
     t.mock.timers.tick(5 * 60 * 1000)
     await done
@@ -407,13 +410,13 @@ describe('mention → event / forum post (integration)', () => {
       [call('fetch_url', { url: `${site.url}/event` })],
       body => {
         assert.match(lastToolResponses(body)[0].response.result, new RegExp(`og:image: ${site.url}/poster\\.png`))
-        return [submit({ name: '秋の勉強会', start: '2026-11-07T13:00:00+09:00', location: '渋谷ホール', image_url: `${site.url}/poster.png` })]
+        return [submit({ name: '秋の勉強会', start: '2026-11-07T13:00:00+09:00', location: '渋谷ホール', image_urls: [`${site.url}/poster.png`] })]
       }
     ])
     const done = mentionEvent.handle(mention(channel, `<@BOT> ${site.url}/event`))
     const [reply] = replies
     const labels = (await waitForButtons(reply, '登録する')).map(b => b.label)
-    assert.deepEqual(labels, ['登録する', '修正する', 'キャンセル', '画像: 切り抜き', '画像: 全体表示', '画像: AIで作成', '画像: なし'])
+    assert.deepEqual(labels, ['登録する', '内容を修正', 'キャンセル', '画像: 切り抜き', '画像: 全体表示', '画像: AIで作成', '画像: なし'])
     assert.equal(reply.state.components.length, 2, 'image modes get their own row')
     assert.equal(reply.state.embeds[0].image.url, 'attachment://cover.jpg')
     assert.equal(reply.state.embeds[0].fields.find(f => f.name === '画像').value, '全体表示（800×320）')
@@ -430,7 +433,7 @@ describe('mention → event / forum post (integration)', () => {
 
   test('image: a photo close to the banner shape is cropped by default; the requester can switch modes', async () => {
     const { channel, replies } = createChannel()
-    installGemini([[submit({ name: 'A', start: '2026-11-03T19:00:00+09:00', image_url: `${site.url}/photo.png` })]])
+    installGemini([[submit({ name: 'A', start: '2026-11-03T19:00:00+09:00', image_urls: [`${site.url}/photo.png`] })]])
     const done = mentionEvent.handle(mention(channel, '<@BOT> A'))
     const [reply] = replies
     await waitForButtons(reply, '画像: 全体表示')
@@ -451,11 +454,36 @@ describe('mention → event / forum post (integration)', () => {
     assert.equal(discord.find(c => c.method === 'POST').body.image, undefined)
   })
 
+  test('image: several candidates are proposed side by side, and the chosen one is registered', async () => {
+    const { channel, replies } = createChannel()
+    installGemini([[submit({ name: 'A', start: '2026-11-03T19:00:00+09:00', image_urls: [`${site.url}/photo.png`, `${site.url}/poster.png`, `${site.url}/missing.png`] })]])
+    const done = mentionEvent.handle(mention(channel, '<@BOT> A'))
+    const [reply] = replies
+    const labels = (await waitForButtons(reply, '画像2')).map(b => b.label)
+    assert.deepEqual(labels, ['登録する', '内容を修正', 'キャンセル', '画像1', '画像2', '画像: 切り抜き', '画像: 全体表示', '画像: AIで作成', '画像: なし'])
+    assert.equal(reply.state.components.length, 3, 'candidates and modes get rows of their own')
+    assert.equal(reply.state.embeds[1].title, '画像の候補')
+    assert.equal(reply.state.embeds[1].image.url, 'attachment://candidates.jpg')
+    assert.deepEqual(reply.state.files.map(f => f.filename), ['cover.jpg', 'candidates.jpg'])
+    assert.equal(reply.state.embeds[0].fields.find(f => f.name === '画像').value,
+      '画像1・切り抜き（800×320）\n候補 2 枚（下の一覧で 画像1=左上、画像2=右上、黄色の枠が選択中）\n使えなかった画像: HTTP 404')
+    const firstSheet = reply.state.files[1].file
+
+    await press(reply, '画像2')
+    await waitFor(() => /^画像2・全体表示/.test(reply.state.embeds[0]?.fields.find(f => f.name === '画像')?.value), 'the second candidate')
+    assert.ok(!reply.state.files[1].file.equals(firstSheet), 'the frame moves to the chosen candidate')
+
+    await press(reply, '登録する')
+    await done
+    const { image } = discord.find(c => c.method === 'POST').body
+    assert.ok(Buffer.from(image.split(',')[1], 'base64').equals(reply.state.files[0].file))
+  })
+
   test('image: AI makes a cover from the text and the source image, cropped to size', async () => {
     const { channel, replies } = createChannel()
     const generated = await sharp({ create: { width: 1344, height: 576, channels: 3, background: '#22aa66' } }).png().toBuffer()
     const requests = installGemini([
-      [submit({ name: '秋の勉強会', description: '参加無料', start: '2026-11-07T13:00:00+09:00', image_url: `${site.url}/poster.png` })],
+      [submit({ name: '秋の勉強会', description: '参加無料', start: '2026-11-07T13:00:00+09:00', image_urls: [`${site.url}/poster.png`] })],
       [{ text: 'here you go' }, { inlineData: { mimeType: 'image/png', data: generated.toString('base64') } }]
     ])
     const done = mentionEvent.handle(mention(channel, '<@BOT> 勉強会'))
@@ -481,7 +509,7 @@ describe('mention → event / forum post (integration)', () => {
   test('image: when AI fails, the previous image stays and the preview says why', async () => {
     const { channel, replies } = createChannel()
     installGemini([
-      [submit({ name: 'A', start: '2026-11-03T19:00:00+09:00', image_url: `${site.url}/photo.png` })],
+      [submit({ name: 'A', start: '2026-11-03T19:00:00+09:00', image_urls: [`${site.url}/photo.png`] })],
       [{ text: 'no image for you' }]
     ])
     const done = mentionEvent.handle(mention(channel, '<@BOT> A'))
@@ -496,22 +524,22 @@ describe('mention → event / forum post (integration)', () => {
 
   test('image: without a source image the AI can still make one; a failed download is explained', async () => {
     const { channel, replies } = createChannel()
-    installGemini([[submit({ name: 'A', start: '2026-11-03T19:00:00+09:00', image_url: `${site.url}/missing.png` })]])
+    installGemini([[submit({ name: 'A', start: '2026-11-03T19:00:00+09:00', image_urls: [`${site.url}/missing.png`] })]])
     const done = mentionEvent.handle(mention(channel, '<@BOT> A'))
     const [reply] = replies
     assert.deepEqual((await waitForButtons(reply, '登録する')).map(b => b.label).slice(3), ['画像: AIで作成', '画像: なし'])
-    assert.equal(reply.state.embeds[0].fields.find(f => f.name === '画像').value, 'なし\n元の画像を使えませんでした: HTTP 404')
+    assert.equal(reply.state.embeds[0].fields.find(f => f.name === '画像').value, 'なし\n使えなかった画像: HTTP 404')
     await press(reply, '登録する')
     await done
     assert.equal(discord.find(c => c.method === 'POST').body.image, undefined)
-    assert.equal(reply.state.content, 'イベントを登録しました: https://discord.com/events/100/EVENT1')
+    assert.equal(reply.state.content, `イベントを登録しました: https://discord.com/events/100/EVENT1\n${EDIT_HINT}`)
   })
 
   test('forum: a forum named in the request wins, and an attached image is uploaded cropped to 16:9', async () => {
     const { channel, replies } = createChannel()
     const requests = installGemini([
       // The model picks another forum; the named one must win.
-      [call('submit_forum_post_draft', { found: true, channel_id: '207', title: '写真', content: '本文', tags: ['募集中'], image_url: `${site.url}/poster.png` })]
+      [call('submit_forum_post_draft', { found: true, channel_id: '207', title: '写真', content: '本文', tags: ['募集中'], image_urls: [`${site.url}/poster.png`] })]
     ])
     const done = mentionEvent.handle(mention(channel, '<@BOT> <#206> に投稿して', {
       attachments: [{ url: `${site.url}/poster.png`, filename: 'poster.png', content_type: 'image/png' }, { url: `${site.url}/notes.txt`, filename: 'notes.txt', content_type: 'text/plain' }]
@@ -542,7 +570,7 @@ describe('mention → event / forum post (integration)', () => {
     assert.match(prompt, /- 201: #general（text） ← 依頼されたチャンネル/)
     assert.doesNotMatch(prompt, /#staff/, 'channels the requester cannot see are left out')
     assert.match(prompt, /### YouTube\n設定なし/)
-    assert.equal(replies[0].state.content, '作成できませんでした: x')
+    assert.equal(replies[0].state.content, '⚠️ **作成できませんでした**\nx')
   })
 
   test('YouTube: the stored channel is searchable and an upcoming stream becomes an event', async () => {
@@ -640,6 +668,32 @@ describe('mention → event / forum post (integration)', () => {
     await done2
   })
 
+  test('rate limit: a 429 is waited out, the requester is told, and the request count is logged', async (t) => {
+    const { retryTimer } = require('../../src/bot/modules/eventDrafter')
+    t.mock.method(retryTimer, 'sleep', async () => {})
+    const logged = t.mock.method(global.logger, 'info', () => {})
+    const { channel, replies } = createChannel()
+    const turns = [
+      { status: 429 },
+      [call('list_channels')],
+      [submit({ name: 'A', start: '2026-11-03T19:00:00+09:00' })]
+    ]
+    let i = 0
+    global.fetch = async () => {
+      const turn = turns[i++]
+      if (turn.status) return { ok: false, status: 429, headers: { get: () => '3' }, text: async () => '{"name":"AiGatewayError","internalCode":2003}' }
+      return { ok: true, json: async () => ({ candidates: [{ content: { role: 'model', parts: turn } }] }) }
+    }
+    const done = mentionEvent.handle(mention(channel, '<@BOT> A'))
+    const [reply] = replies
+    await waitForButtons(reply, '登録する')
+    assert.ok(reply.history.some(s => s.content === 'AI が混み合っているため、3 秒待ってから再試行します…'))
+    await press(reply, 'キャンセル')
+    await done
+    const line = logged.mock.calls.map(c => c.arguments[0]).find(m => /^Mention drafting in 100/.test(m))
+    assert.equal(line, 'Mention drafting in 100: 3 Gemini request(s), 1 retried after HTTP 429')
+  })
+
   test('the draft still works when the server profile cannot be built', async (t) => {
     const warned = t.mock.method(global.logger, 'warn', () => {})
     require('../../src/db/interfaces/postgres/youtube').getKnowledge = async () => { throw new Error('db down') }
@@ -650,7 +704,7 @@ describe('mention → event / forum post (integration)', () => {
       const requests = installGemini([[submit({ found: false, reason: 'x' })]])
       await mentionEvent.handle(mention(channel, '<@BOT> 交流会'))
       assert.doesNotMatch(requests[0].body.contents[0].parts[0].text, /このサーバーの情報/)
-      assert.equal(replies[0].state.content, '作成できませんでした: x')
+      assert.equal(replies[0].state.content, '⚠️ **作成できませんでした**\nx')
       assert.match(warned.mock.calls[0].arguments[0], /Could not describe server 100: cache broken/)
     } finally {
       guild.channels.values = original
@@ -666,7 +720,7 @@ describe('mention → event / forum post (integration)', () => {
     installGemini([new Error('bad auth Bearer cf-gateway-secret-token key AIzaSyA1234567890abcdefghijklmnopqrstuv at /v1/acct/gw')])
     await mentionEvent.handle(mention(channel, '<@BOT> 交流会'))
     const content = replies[0].state.content
-    assert.match(content, /^作成中にエラーが発生しました（AI の呼び出しに失敗しました（HTTP 500））。時間をおいてもう一度お試しください。\n```\nError: Gemini request failed: HTTP 500 bad auth/)
+    assert.match(content, /^⚠️ エラーが発生しました（AI の呼び出しに失敗しました（HTTP 500））。時間をおいてもう一度お試しください。\n```\nError: Gemini request failed: HTTP 500 bad auth/)
     assert.match(content, /at callGemini \(.*eventDrafter\.js/)
     assert.match(content, /```$/)
     assert.ok(content.length <= 2000)
@@ -687,6 +741,205 @@ describe('mention → event / forum post (integration)', () => {
     const content = replies[0].state.content
     assert.ok(content.length <= 2000, `length ${content.length}`)
     assert.match(content, /…（以下省略）\n```$/)
+  })
+
+  test('内容を修正 changes the text only: the chosen image stays, and new candidates are only offered', async () => {
+    const { channel, replies } = createChannel()
+    installGemini([
+      [submit({ name: 'A', start: '2026-11-03T19:00:00+09:00', image_urls: [`${site.url}/photo.png`, `${site.url}/poster.png`] })],
+      [submit({ name: 'B', start: '2026-11-03T19:00:00+09:00', image_urls: [`${site.url}/photo.png`, `${site.url}/missing.png`] })]
+    ])
+    const done = mentionEvent.handle(mention(channel, '<@BOT> A'))
+    const [reply] = replies
+    await waitForButtons(reply, '画像2')
+    await press(reply, '画像2')
+    await waitFor(() => /^画像2・全体表示/.test(reply.state.embeds[0]?.fields.find(f => f.name === '画像')?.value), 'the second candidate')
+    const chosen = reply.state.files[0].file
+
+    await press(reply, '内容を修正')
+    await waitFor(() => /で直したいことを/.test(reply.state.content), 'the correction prompt')
+    await mentionEvent.handle(mention(channel, '名前はB'))
+    await waitFor(() => reply.state.embeds[0]?.title === 'B', 'the corrected preview')
+    assert.match(reply.state.embeds[0].fields.find(f => f.name === '画像').value, /^画像2・全体表示（800×320）\n/)
+    assert.ok(reply.state.files[0].file.equals(chosen))
+
+    await press(reply, '登録する')
+    await done
+    const { image } = discord.find(c => c.method === 'POST').body
+    assert.ok(Buffer.from(image.split(',')[1], 'base64').equals(chosen))
+  })
+
+  test('chat: talk that is not a request gets a plain reply, without pings and without buttons', async () => {
+    const { channel, replies } = createChannel()
+    installGemini([[call('submit_chat_reply', { text: 'こんにちは！ <@&801> 今日も配信楽しみ！' })]])
+    await mentionEvent.handle(mention(channel, '<@BOT> こんにちは'))
+    assert.equal(replies[0].state.content, 'こんにちは！ <@&801> 今日も配信楽しみ！')
+    assert.deepEqual(replies[0].state.allowedMentions, { everyone: false, roles: false, users: false })
+    assert.deepEqual(replies[0].state.components, [])
+    assert.doesNotMatch(replies[0].state.content, /⚠️/)
+  })
+
+  test('chat: a question asked in place of a correction is answered above the same draft', async () => {
+    const { channel, replies } = createChannel()
+    installGemini([
+      [submit({ name: '交流会', start: '2026-11-03T19:00:00+09:00' })],
+      [call('submit_chat_reply', { text: '終了時刻は書かれていなかったので1時間にしています' })]
+    ])
+    const done = mentionEvent.handle(mention(channel, '<@BOT> 交流会'))
+    const [reply] = replies
+    await waitForButtons(reply, '内容を修正')
+    await press(reply, '内容を修正')
+    await waitFor(() => /で直したいことを/.test(reply.state.content), 'the correction prompt')
+    await mentionEvent.handle(mention(channel, '終わりの時間はどうなってる？'))
+    await waitForButtons(reply, '登録する')
+    assert.equal(reply.state.content, '終了時刻は書かれていなかったので1時間にしています')
+    assert.equal(reply.state.embeds[0].title, '交流会')
+    await press(reply, '登録する')
+    await done
+    assert.equal(discord.find(c => c.method === 'POST').body.name, '交流会')
+  })
+
+  test('each user gets 30 mentions a day', async () => {
+    const { channel, replies } = createChannel()
+    for (let i = 0; i < 30; i++) quota.set(`mention-quota:${REQUESTER}:${require('../../src/bot/utils/mentionQuota').today(new Date())}`, i + 1)
+    installGemini([])
+    await mentionEvent.handle(mention(channel, '<@BOT> こんにちは'))
+    assert.equal(replies[0].state.content, '今日の利用回数の上限（1日30回）に達しました。明日（日本時間の0時以降）またお試しください。')
+    installGemini([[call('submit_chat_reply', { text: 'やあ' })]])
+    await mentionEvent.handle(mention(channel, '<@BOT> こんにちは', { author: OTHER_USER, member: createMember({ id: OTHER_USER }) }))
+    assert.equal(replies[1].state.content, 'やあ')
+  })
+
+  describe('changing what the bot made', () => {
+    const EVENT = {
+      id: '901',
+      creator_id: 'BOT',
+      status: 1,
+      name: '交流会',
+      description: '誰でも参加できます',
+      scheduled_start_time: '2026-11-03T10:00:00.000Z',
+      scheduled_end_time: '2026-11-03T11:00:00.000Z',
+      entity_type: 3,
+      entity_metadata: { location: '渋谷' },
+      image: null
+    }
+    let saved
+    let eventChanges // fields of EVENT a test overrides
+    beforeEach(() => {
+      saved = { ...MESSAGES }
+      eventChanges = {}
+      MESSAGES['201/600'] = { content: `イベントを登録しました: https://discord.com/events/100/901\n${EDIT_HINT}`, author: { id: 'BOT', username: 'bot' } }
+      MESSAGES['700/700'] = {
+        content: '参加したい人は書き込んでください',
+        author: { id: 'BOT', username: 'bot' },
+        attachments: [{ url: `${site.url}/photo.png`, filename: 'image.jpg', content_type: 'image/jpeg' }]
+      }
+      FORUMS['700'] = { type: 11, guild_id: '100', parent_id: '206', name: '11/3 交流会', applied_tags: ['tag-open'] }
+      const request = global.bot.requestHandler.request
+      global.bot.requestHandler.request = async (method, url, auth, body, files) => {
+        if (method === 'GET' && url === '/guilds/100/scheduled-events/901') {
+          discord.push({ method, url })
+          return { ...EVENT, ...eventChanges }
+        }
+        return request(method, url, auth, body, files)
+      }
+    })
+    afterEach(() => {
+      for (const key of Object.keys(MESSAGES)) if (!(key in saved)) delete MESSAGES[key]
+      delete FORUMS['700']
+    })
+
+    test('replying to "イベントを登録しました" changes only what is asked, and the image is left alone', async () => {
+      const { channel, replies } = createChannel()
+      const requests = installGemini([body => {
+        const prompt = body.contents[0].parts[0].text
+        assert.match(prompt, /## 修正するイベント（BOT が作成済み）/)
+        assert.match(prompt, /"name": "交流会"[\s\S]*"start": "2026-11-03T10:00:00.000Z"[\s\S]*"location": "渋谷"/)
+        assert.doesNotMatch(prompt, /## 依頼メッセージの返信先/)
+        return [submit({ name: '交流会', description: '誰でも参加できます', start: '2026-11-03T20:00:00+09:00', end: '2026-11-03T21:00:00+09:00', location: '渋谷' })]
+      }])
+      const done = mentionEvent.handle(mention(channel, '<@BOT> 開始を20時にして', { messageReference: { messageID: '600', channelID: '201' } }))
+      const [reply] = replies
+      assert.deepEqual((await waitForButtons(reply, '更新する')).map(b => b.label), ['更新する', '内容を修正', 'キャンセル', '画像: AIで作成', '画像: なし'])
+      const declared = requests[0].body.tools[0].functionDeclarations.map(d => d.name)
+      assert.ok(declared.includes('submit_event_draft') && !declared.includes('submit_forum_post_draft'), 'only the same kind can be submitted')
+      assert.equal(reply.state.embeds[0].fields.find(f => f.name === '変更する項目').value, '開始、終了')
+      assert.match(reply.state.embeds[0].footer.text, /「更新する」を押してください/)
+
+      await press(reply, '更新する')
+      await done
+      assert.equal(discord.filter(c => c.method === 'POST').length, 0, 'nothing new is created')
+      const patch = discord.find(c => c.method === 'PATCH')
+      assert.equal(patch.url, '/guilds/100/scheduled-events/901')
+      assert.deepEqual(patch.body, {
+        name: '交流会',
+        description: '誰でも参加できます',
+        scheduled_start_time: '2026-11-03T11:00:00.000Z',
+        scheduled_end_time: '2026-11-03T12:00:00.000Z',
+        entity_type: 3,
+        channel_id: null,
+        entity_metadata: { location: '渋谷' },
+        reason: `Requested by user${REQUESTER} (${REQUESTER})`
+      })
+      assert.equal(reply.state.content, `イベントを更新しました: https://discord.com/events/100/901\n${EDIT_HINT}`)
+    })
+
+    test('replying to a forum post changes it in place; its forum stays and its image can be removed', async () => {
+      const { channel, replies } = createChannel()
+      installGemini([body => {
+        assert.match(body.contents[0].parts[0].text, /## 修正するフォーラム投稿[\s\S]*"title": "11\/3 交流会"[\s\S]*"tags": \[\n\s+"募集中"/)
+        // The model names another forum; a post can't move, so its own forum is kept.
+        return [call('submit_forum_post_draft', { found: true, channel_id: '207', title: '11/3 交流会【締切】', content: '参加したい人は書き込んでください', tags: ['募集中'] })]
+      }])
+      const done = mentionEvent.handle(mention(channel, '<@BOT> 題名に締切って入れて', { messageReference: { messageID: '700', channelID: '700' } }))
+      const [reply] = replies
+      await waitForButtons(reply, '更新する')
+      assert.deepEqual(buttons(reply).map(b => b.label).slice(3), ['画像: 今の画像のまま', '画像: AIで作成', '画像: なし'])
+      const fields = reply.state.embeds[0].fields
+      assert.equal(fields.find(f => f.name === '投稿先').value, '<#206>')
+      assert.equal(fields.find(f => f.name === '変更する項目').value, '題名')
+      assert.equal(fields.find(f => f.name === '画像').value, '今の画像のまま')
+      assert.ok(reply.state.files[0].file.length > 0, 'the present image is shown')
+
+      await press(reply, '画像: なし')
+      await waitFor(() => reply.state.embeds[0]?.fields.find(f => f.name === '画像')?.value === 'なし', 'no image')
+      await press(reply, '更新する')
+      await done
+      const patches = discord.filter(c => c.method === 'PATCH')
+      assert.deepEqual(patches.map(c => c.url), ['/channels/700', '/channels/700/messages/700'])
+      assert.deepEqual(patches[0].body, { name: '11/3 交流会【締切】', applied_tags: ['tag-open'], reason: `Requested by user${REQUESTER} (${REQUESTER})` })
+      assert.deepEqual(patches[1].body, { content: '参加したい人は書き込んでください', allowed_mentions: { parse: [] }, attachments: [] })
+      assert.equal(reply.state.content, `フォーラムの投稿を更新しました: https://discord.com/channels/100/700\n${EDIT_HINT}`)
+    })
+
+    test('keeping the image leaves the attachments untouched', async () => {
+      const { channel, replies } = createChannel()
+      installGemini([[call('submit_forum_post_draft', { found: true, channel_id: '206', title: '11/3 交流会', content: '本文を直しました', tags: ['募集中'] })]])
+      const done = mentionEvent.handle(mention(channel, '<@BOT> 本文を直して', { messageReference: { messageID: '700', channelID: '700' } }))
+      const [reply] = replies
+      await waitForButtons(reply, '更新する')
+      await press(reply, '更新する')
+      await done
+      const message = discord.find(c => c.method === 'PATCH' && c.url.endsWith('/messages/700'))
+      assert.equal('attachments' in message.body, false)
+      assert.equal(message.files, undefined)
+    })
+
+    test('only what the bot made can be changed, and the request must say what to change', async () => {
+      const { channel, replies } = createChannel()
+      installGemini([])
+      eventChanges = { creator_id: '3' }
+      await mentionEvent.handle(mention(channel, '<@BOT> 開始を20時にして', { messageReference: { messageID: '600', channelID: '201' } }))
+      assert.equal(replies[0].state.content, 'BOT が登録したイベントではないため、直せません。')
+
+      eventChanges = { status: 3 }
+      await mentionEvent.handle(mention(channel, '<@BOT> 開始を20時にして', { messageReference: { messageID: '600', channelID: '201' } }))
+      assert.equal(replies[1].state.content, '終了または中止したイベントは直せません。')
+
+      await mentionEvent.handle(mention(channel, '<@BOT>', { messageReference: { messageID: '600', channelID: '201' } }))
+      assert.match(replies[2].state.content, /^直したいこと/)
+      assert.equal(discord.filter(c => c.method === 'PATCH').length, 0)
+    })
   })
 
   test('a second mention while the first is still running is turned away', async () => {
@@ -724,7 +977,7 @@ describe('mention → event / forum post (integration)', () => {
       const { channel, replies } = createChannel()
       const requests = installGemini([[submit({ found: false, reason: 'なし' })]])
       await mentionEvent.handle(mention(channel, '<@&800> 交流会 <@&801> と相談'))
-      assert.equal(replies[0].state.content, '作成できませんでした: なし')
+      assert.equal(replies[0].state.content, '⚠️ **作成できませんでした**\nなし')
       // The bot's role is stripped from the request; other role mentions are kept as written.
       assert.match(requests[0].body.contents[0].parts[0].text, /## 依頼メッセージ\n交流会 <@&801> と相談/)
     })
@@ -737,7 +990,7 @@ describe('mention → event / forum post (integration)', () => {
 
     test('requires Manage Events from the requester', async () => {
       const { channel, replies } = createChannel()
-      await mentionEvent.handle(mention(channel, '<@BOT> 交流会', { member: createMember({ id: REQUESTER, permissions: [] }) }))
+      await mentionEvent.handle(mention(channel, '<@BOT> こんにちは', { member: createMember({ id: REQUESTER, permissions: [] }) }))
       assert.match(replies[0].state.content, /この機能を使うには「イベントの管理」権限が必要です/)
     })
 
@@ -745,7 +998,7 @@ describe('mention → event / forum post (integration)', () => {
       const { channel, replies } = createChannel()
       installGemini([[submit({ found: false, reason: 'なし' })]])
       await mentionEvent.handle(mention(channel, '<@BOT> 交流会', { author: guild.ownerID, member: createMember({ id: guild.ownerID, permissions: [] }) }))
-      assert.match(replies[0].state.content, /作成できませんでした: なし/)
+      assert.match(replies[0].state.content, /作成できませんでした\*\*\nなし/)
     })
 
     test('refuses to register an event when the bot lacks Manage Events', async () => {
@@ -767,7 +1020,7 @@ describe('mention → event / forum post (integration)', () => {
     test('asks for content when the mention is empty', async () => {
       const { channel, replies } = createChannel()
       await mentionEvent.handle(mention(channel, '<@!BOT>'))
-      assert.match(replies[0].state.content, /イベントやフォーラム投稿にしたい内容/)
+      assert.match(replies[0].state.content, /話したいことか、イベントやフォーラム投稿にしたい内容/)
     })
   })
 })

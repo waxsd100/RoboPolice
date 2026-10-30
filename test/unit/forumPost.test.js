@@ -1,6 +1,6 @@
 const { test, describe, beforeEach } = require('node:test')
 const assert = require('node:assert/strict')
-const { toForumPost, describeForums, postableForums, imageUrlOf, REQUIRE_TAG } = require('../../src/bot/modules/forumPost')
+const { toForumPost, describeForums, postableForums, imageUrlsOf, REQUIRE_TAG } = require('../../src/bot/modules/forumPost')
 const { createGuild, createMember, installBot } = require('../helpers/fakes')
 
 const REQUESTER = '1'
@@ -26,16 +26,26 @@ beforeEach(() => {
 
 const base = { found: true, channel_id: '301', title: '11/3 交流会の参加者募集', content: '参加したい人はこのスレッドに書き込んでください', tags: ['募集中'] }
 
-describe('imageUrlOf', () => {
-  test('accepts only a plain http(s) URL', () => {
-    assert.equal(imageUrlOf({ image_url: ' https://e.com/a.png ' }), 'https://e.com/a.png')
-    for (const bad of ['', 'javascript:alert(1)', 'data:image/png;base64,AAA', 'file:///etc/passwd', 'https://e.com/a b.png', undefined]) {
-      assert.equal(imageUrlOf({ image_url: bad }), null, String(bad))
+describe('imageUrlsOf', () => {
+  test('accepts only plain http(s) URLs', () => {
+    assert.deepEqual(imageUrlsOf({ image_urls: [' https://e.com/a.png '] }), ['https://e.com/a.png'])
+    for (const bad of ['', 'javascript:alert(1)', 'data:image/png;base64,AAA', 'file:///etc/passwd', 'https://e.com/a b.png', undefined, 42]) {
+      assert.deepEqual(imageUrlsOf({ image_urls: [bad] }), [], String(bad))
     }
+    assert.deepEqual(imageUrlsOf({ image_urls: 'https://e.com/a.png' }), [])
+  })
+
+  test('keeps the order, drops duplicates and keeps at most 4', () => {
+    const urls = ['https://e.com/1.png', 'https://e.com/2.png', 'https://e.com/1.png', 'https://e.com/3.png', 'https://e.com/4.png', 'https://e.com/5.png']
+    assert.deepEqual(imageUrlsOf({ image_urls: urls }), ['https://e.com/1.png', 'https://e.com/2.png', 'https://e.com/3.png', 'https://e.com/4.png'])
+  })
+
+  test('also accepts a single image_url', () => {
+    assert.deepEqual(imageUrlsOf({ image_url: 'https://e.com/a.png' }), ['https://e.com/a.png'])
   })
 
   test('is carried on a forum post', async () => {
-    assert.equal((await toForumPost({ ...base, image_url: 'https://e.com/a.png' }, guild, member)).imageUrl, 'https://e.com/a.png')
+    assert.deepEqual((await toForumPost({ ...base, image_urls: ['https://e.com/a.png'] }, guild, member)).imageUrls, ['https://e.com/a.png'])
   })
 })
 
@@ -71,7 +81,7 @@ describe('toForumPost', () => {
         applied_tags: ['t1']
       },
       tagNames: ['募集中'],
-      imageUrl: null,
+      imageUrls: [],
       truncated: false
     })
     assert.deepEqual(calls.map(c => `${c.method} ${c.url}`), ['GET /channels/301'])

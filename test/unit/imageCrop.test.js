@@ -1,7 +1,7 @@
 const { test, describe } = require('node:test')
 const assert = require('node:assert/strict')
 const sharp = require('sharp')
-const { cropTo, fitWithBlur, defaultMode, forReference, SIZES } = require('../../src/bot/utils/imageCrop')
+const { cropTo, fitWithBlur, defaultMode, forReference, contactSheet, SIZES } = require('../../src/bot/utils/imageCrop')
 
 // A tall image with one bright, busy square near the bottom: an "interesting" region that a plain
 // center crop would cut off.
@@ -83,5 +83,32 @@ describe('forReference', () => {
     assert.deepEqual([big.format, big.width, big.height], ['jpeg', 1536, 768])
     const small = await sharp(await forReference(await sharp({ create: { width: 300, height: 200, channels: 3, background: '#123456' } }).png().toBuffer())).metadata()
     assert.deepEqual([small.width, small.height], [300, 200])
+  })
+})
+
+describe('contactSheet', () => {
+  const solid = color => sharp({ create: { width: 320, height: 180, channels: 3, background: color } }).png().toBuffer()
+  const pixel = async (jpeg, x, y) => {
+    const { data, info } = await sharp(jpeg).raw().toBuffer({ resolveWithObject: true })
+    const i = (y * info.width + x) * info.channels
+    return [data[i], data[i + 1], data[i + 2]]
+  }
+
+  test('lays candidates out two per row in reading order', async () => {
+    const sheet = await contactSheet([await solid('#ff0000'), await solid('#00ff00'), await solid('#0000ff')], 0)
+    const meta = await sharp(sheet).metadata()
+    assert.deepEqual([meta.format, meta.width, meta.height], ['jpeg', 800, 450])
+    const [r1] = await pixel(sheet, 200, 112)
+    const [, g2] = await pixel(sheet, 600, 112)
+    const [, , b3] = await pixel(sheet, 200, 337)
+    assert.ok(r1 > 200 && g2 > 200 && b3 > 200)
+  })
+
+  test('frames the selected candidate in yellow', async () => {
+    const images = [await solid('#ff0000'), await solid('#00ff00')]
+    const [r0, g0, b0] = await pixel(await contactSheet(images, 1), 402, 112)
+    assert.ok(r0 > 200 && g0 > 150 && b0 < 80, 'second tile framed')
+    const [r1] = await pixel(await contactSheet(images, 0), 402, 112)
+    assert.ok(r1 < 80, 'second tile not framed')
   })
 })
