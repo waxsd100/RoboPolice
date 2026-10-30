@@ -21,6 +21,7 @@ function summary ({ channel, videos }) {
       { name: '設定', value: channel.channel_ref, inline: true },
       { name: '最終取得', value: synced, inline: true },
       { name: '保存している動画', value: `${videos.length} 件（内容の要約あり ${videos.filter(v => v.summary).length} 件）`, inline: true },
+      { name: '配信のイベント登録', value: channel.live_events ? '有効' : '無効（`/youtube liveevents enabled:True`）', inline: true },
       ...(lives.length ? [{ name: '配信', value: lives.slice(0, 5).map(v => `${LIVE_LABELS[v.live_status]}: [${v.title}](${v.url})`).join('\n') }] : [])
     ]
   }
@@ -66,6 +67,21 @@ async function confirmChannel (interaction, channel) {
     return false
   } finally {
     [yes, no].forEach(cancelCustomID)
+  }
+}
+
+// Turns stream events on or off (src/bot/modules/liveWatcher.js).
+async function liveEvents (interaction, sub) {
+  const enabled = sub.options?.find(o => o.name === 'enabled')?.value === true
+  const guild = global.bot.guilds.get(interaction.guildID)
+  if (enabled && !guild?.members.get(global.bot.user.id)?.permissions.has('manageEvents')) {
+    return { content: 'BOT に「イベントの管理」権限がないため、配信をイベントに登録できません。権限を付けてからもう一度お試しください。' }
+  }
+  await youtubeDB.setLiveEvents(interaction.guildID, enabled)
+  return {
+    content: enabled
+      ? 'これから始まる配信と、配信予定の枠を、サーバーのイベントとして自動で登録します。配信が始まるとイベントも開始し、終わると終了します（通常の動画は対象外です）。'
+      : '配信のイベント登録をやめました。登録済みのイベントはそのまま残ります。'
   }
 }
 
@@ -162,6 +178,7 @@ async function run (interaction) {
     return { content: `最新の情報を取得しました。${note}`, embeds: [summary(knowledge)] }
   }
   if (sub.name === 'summarize') return summarize(interaction, sub)
+  if (sub.name === 'liveevents') return liveEvents(interaction, sub)
   return { embeds: [summary(stored)] }
 }
 

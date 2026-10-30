@@ -63,7 +63,7 @@ describe('fetchChannelKnowledge', () => {
     assert.deepEqual(result.channel, { id: UC, title: 'のばまんチャンネル', description: 'ゲーム配信', handle: '@nobaman', url: `https://www.youtube.com/channel/${UC}` })
     assert.equal(result.videos[0].description.length, 1000)
     assert.deepEqual(result.videos[1], {
-      id: 'v2', title: '11/3 記念配信', description: '告知', publishedAt: '2026-10-28T10:00:00Z', liveStatus: 'upcoming', scheduledStart: '2026-11-03T11:00:00Z', duration: 'P0D', url: 'https://www.youtube.com/watch?v=v2'
+      id: 'v2', title: '11/3 記念配信', description: '告知', publishedAt: '2026-10-28T10:00:00Z', liveStatus: 'upcoming', scheduledStart: '2026-11-03T11:00:00Z', actualStart: null, actualEnd: null, isStream: true, thumbnail: null, duration: 'P0D', url: 'https://www.youtube.com/watch?v=v2'
     })
   })
 

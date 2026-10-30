@@ -65,6 +65,11 @@ function toVideo (v) {
     // none | upcoming | live
     liveStatus: v.snippet.liveBroadcastContent || 'none',
     scheduledStart: v.liveStreamingDetails?.scheduledStartTime || null,
+    // Only streams have these: when it really started and ended.
+    actualStart: v.liveStreamingDetails?.actualStartTime || null,
+    actualEnd: v.liveStreamingDetails?.actualEndTime || null,
+    isStream: !!v.liveStreamingDetails,
+    thumbnail: v.snippet.thumbnails?.maxres?.url || v.snippet.thumbnails?.high?.url || v.snippet.thumbnails?.medium?.url || null,
     duration: v.contentDetails?.duration || null,
     url: `https://www.youtube.com/watch?v=${v.id}`
   }
@@ -142,4 +147,15 @@ async function fetchChannelKnowledge (ref, apiKey, { knownIds = new Set(), backf
   }
 }
 
-module.exports = { parseChannelRef, parseVideoId, resolveChannel, fetchChannelKnowledge, YouTubeError, MAX_PAGES }
+// The current state of videos by ID, PAGE_SIZE per call (1 quota unit each). Videos that are gone
+// (deleted or made private) are simply missing from the result.
+async function fetchVideos (ids, apiKey) {
+  const videos = []
+  for (let i = 0; i < ids.length; i += PAGE_SIZE) {
+    const details = await call('videos', { part: 'snippet,contentDetails,liveStreamingDetails', id: ids.slice(i, i + PAGE_SIZE).join(',') }, apiKey)
+    videos.push(...(details.items || []).map(toVideo))
+  }
+  return videos
+}
+
+module.exports = { parseChannelRef, parseVideoId, resolveChannel, fetchChannelKnowledge, fetchVideos, toVideo, YouTubeError, MAX_PAGES }

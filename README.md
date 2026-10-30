@@ -133,11 +133,36 @@ accumulates:
   any public channel and without a channel set, and shows the summary), one at a time, showing progress. A long
   run can outlast the 15 minutes an interaction can be edited; the result is then posted in the
   channel.
-- New videos are picked up automatically (`src/bot/modules/youtubeSync.js`). Every
+- New videos are picked up automatically (`src/bot/modules/youtubeSync.js`). With YouTube pushes
+  set up (`YOUTUBE_WEBSUB_URL`, see "Streams as server events"), a channel is synced when YouTube
+  pushes an upload, a new stream or an edit, and there is no timed sync. Without them, every
   `YOUTUBE_AUTO_SYNC_MINUTES` (default 15, 0 turns it off) each worker checks the servers it hosts:
   the channel's public feed (`/feeds/videos.xml`, no API quota) shows whether there is a video not
   stored yet, and only then is the channel synced. A server with a live or upcoming stream, or with
   older videos left from a first read, is synced on every check, so stream states stay current.
+
+### Streams as server events
+
+`/youtube liveevents enabled:True` (Manage Server; the bot needs Manage Events) makes the server's
+YouTube streams scheduled events (`src/bot/modules/liveWatcher.js`). Ordinary videos never become
+events. Each stream's event follows it: made when the stream is scheduled, with its title,
+description, link and thumbnail as the cover (an unscheduled stream gets one when it starts, started
+straight away); moved when the start time changes; started when the stream goes live; kept open past
+its planned end while it runs; completed when it ends, or cancelled if the stream is called off or
+deleted. An event someone deletes is left alone.
+
+Each worker checks the servers it hosts every `YOUTUBE_LIVE_POLL_SECONDS` (default 60, 0 is off).
+A check reads the channel's public feed (no API quota) and asks the API only about new entries and
+streams already upcoming or live (1 unit per 50), so a scheduled stream is followed for about 1,440
+units a day at most.
+
+With `YOUTUBE_WEBSUB_URL` and `YOUTUBE_WEBSUB_SECRET` set, YouTube also pushes new uploads and
+streams (`src/miscellaneous/websub.js`, WebSub): the master process listens on `PORT` at
+`/youtube/websub`, subscribes every configured channel at Google's hub (renewing before the 5-day
+lease ends, checked hourly), verifies the hub's HMAC signature, and has the workers check that
+channel at once; every server with that channel is synced too. On Railway, generate a public domain for the service and set
+`YOUTUBE_WEBSUB_URL=https://<domain>`. A stream going live is not always pushed, which the poll
+covers.
 
 ### Search by meaning
 
@@ -315,6 +340,8 @@ the secrets if it leaks, so keep it only on the platform and delete it in the co
 | `YOUTUBE_API_KEY` | Optional. YouTube Data API v3 key for `/youtube`. Unset disables the command |
 | `VIDEO_SUMMARY_TIMEOUT_MINUTES` | Optional. How long a video summary may take. Defaults to 10 |
 | `YOUTUBE_AUTO_SYNC_MINUTES` | Optional. How often to check each server's YouTube channel for new videos. Defaults to 15; 0 turns it off |
+| `YOUTUBE_LIVE_POLL_SECONDS` | Optional. How often to check for streams on servers with stream events on. Defaults to 60; 0 turns it off |
+| `YOUTUBE_WEBSUB_URL`, `YOUTUBE_WEBSUB_SECRET` | Optional. The service's public HTTPS address and a secret, to receive YouTube pushes (see above). `PORT` sets the port listened on (Railway sets it) |
 | `MESSAGE_EMBEDDINGS` | Optional. `true` embeds every stored message for search by meaning (sends them to Gemini; see above). Off by default |
 | `EMBEDDING_INTERVAL_MINUTES` | Optional. How often to embed new videos and messages. Defaults to 5; 0 turns it off |
 | `GEMINI_EMBEDDING_MODEL` | Optional. Defaults to `gemini-embedding-001` |

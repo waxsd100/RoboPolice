@@ -52,6 +52,17 @@ module.exports = {
           },
           {
             type: ERIS_CONSTANTS.ApplicationCommandOptionTypes.SUB_COMMAND,
+            name: 'liveevents',
+            description: 'Register this channel\'s streams as server events automatically',
+            options: [{
+              type: ERIS_CONSTANTS.ApplicationCommandOptionTypes.BOOLEAN,
+              name: 'enabled',
+              description: 'True to turn it on, False to turn it off',
+              required: true
+            }]
+          },
+          {
+            type: ERIS_CONSTANTS.ApplicationCommandOptionTypes.SUB_COMMAND,
             name: 'show',
             description: 'Show what is stored'
           }

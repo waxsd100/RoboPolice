@@ -141,7 +141,24 @@ function installYouTubeStore (knowledge = {}, summaries = {}) {
   }
   store.listChannels = async () => Object.entries(knowledge)
     .filter(([, k]) => k.channel.channel_id)
-    .map(([guildID, k]) => ({ guild_id: guildID, channel_id: k.channel.channel_id }))
+    .map(([guildID, k]) => ({ guild_id: guildID, channel_id: k.channel.channel_id, live_events: !!k.channel.live_events }))
+  const liveEvents = {}
+  store.setLiveEvents = async (guildID, enabled) => {
+    writes.push({ setLiveEvents: [guildID, enabled] })
+    knowledge[guildID].channel.live_events = enabled
+  }
+  store.upsertVideos = async (guildID, videos) => {
+    writes.push({ upsertVideos: guildID, videos: videos.map(v => v.id) })
+    const byID = new Map((knowledge[guildID]?.videos || []).map(v => [v.video_id, v]))
+    for (const v of videos) byID.set(v.id, { ...byID.get(v.id), video_id: v.id, title: v.title, live_status: v.liveStatus, scheduled_start: v.scheduledStart, url: v.url })
+    if (knowledge[guildID]) knowledge[guildID].videos = [...byID.values()]
+  }
+  store.getLiveVideoIds = async guildID => (knowledge[guildID]?.videos || []).filter(v => ['live', 'upcoming'].includes(v.live_status)).map(v => v.video_id)
+  store.getLiveEvents = async guildID => ({ ...(liveEvents[guildID] || {}) })
+  store.saveLiveEvent = async (guildID, videoID, { eventID, status, scheduledStart, scheduledEnd }) => {
+    liveEvents[guildID] = liveEvents[guildID] || {}
+    liveEvents[guildID][videoID] = { event_id: eventID, status, scheduled_start: scheduledStart, scheduled_end: scheduledEnd }
+  }
   store.saveSync = async (guildID, { channel, videos, backfillToken = null }) => {
     writes.push({ saveSync: guildID, videos: videos.map(v => v.id), backfillToken })
     const byID = new Map(knowledge[guildID].videos.map(v => [v.video_id, v]))
@@ -166,7 +183,7 @@ function installYouTubeStore (knowledge = {}, summaries = {}) {
     delete knowledge[guildID]
     delete summaries[guildID]
   }
-  return { knowledge, summaries, writes }
+  return { knowledge, summaries, writes, liveEvents }
 }
 
 function configureGateway () {
