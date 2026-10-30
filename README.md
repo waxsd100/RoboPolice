@@ -129,7 +129,8 @@ accumulates:
   summarized twice for a server; summaries of videos from other channels are kept as well.
 - `/youtube summarize count:<1-10>` summarizes the newest stored videos that have no summary yet
   (default 3, streams that are live or upcoming skipped; `force:True` takes the newest whether or not
-  they have one and replaces the stored summary), one at a time, showing progress. A long
+  they have one and replaces the stored summary; `url:<video link>` summarizes that one video, from
+  any public channel and without a channel set, and shows the summary), one at a time, showing progress. A long
   run can outlast the 15 minutes an interaction can be edited; the result is then posted in the
   channel.
 - New videos are picked up automatically (`src/bot/modules/youtubeSync.js`). Every

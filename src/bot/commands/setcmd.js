@@ -30,7 +30,7 @@ module.exports = {
           {
             type: ERIS_CONSTANTS.ApplicationCommandOptionTypes.SUB_COMMAND,
             name: 'summarize',
-            description: 'Summarize what the newest videos say, for the ones not summarized yet',
+            description: 'Summarize what the newest videos (or the video at url) say',
             options: [{
               type: ERIS_CONSTANTS.ApplicationCommandOptionTypes.INTEGER,
               name: 'count',
@@ -42,6 +42,11 @@ module.exports = {
               type: ERIS_CONSTANTS.ApplicationCommandOptionTypes.BOOLEAN,
               name: 'force',
               description: 'Summarize again even if already summarized, replacing the stored summary',
+              required: false
+            }, {
+              type: ERIS_CONSTANTS.ApplicationCommandOptionTypes.STRING,
+              name: 'url',
+              description: 'Summarize this video instead (any public YouTube video link)',
               required: false
             }]
           },

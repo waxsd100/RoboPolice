@@ -248,4 +248,31 @@ describe('/youtube', () => {
     await done
     assert.equal(store.writes.length, 2)
   })
+
+  test('summarize url: summarizes one video by its link, even with no channel set, and shows the summary', async () => {
+    require('../helpers/fakes').configureGateway()
+    const requests = require('../helpers/fakes').installGemini([[{ text: '・告知あり' }]])
+    const it = interaction('summarize', [{ name: 'url', value: ' https://youtu.be/dQw4w9WgXcQ ' }])
+    await command.func(it)
+    assert.equal(requests[0].body.contents[0].parts[0].fileData.fileUri, 'https://www.youtube.com/watch?v=dQw4w9WgXcQ')
+    assert.equal(it.replies[0].content, '動画の内容を要約しています…\n長い動画は数分かかります。')
+    assert.equal(it.replies.at(-1).content, '要約しました。メンションで依頼したときに AI が参照します。\nhttps://www.youtube.com/watch?v=dQw4w9WgXcQ\n・告知あり')
+    assert.equal(store.summaries[100].dQw4w9WgXcQ, '・告知あり')
+
+    const cached = interaction('summarize', [{ name: 'url', value: 'https://www.youtube.com/watch?v=dQw4w9WgXcQ' }])
+    require('../helpers/fakes').installGemini([])
+    await command.func(cached)
+    assert.match(cached.replies.at(-1).content, /^保存済みの要約です（`force:True` で要約し直せます）。/)
+
+    require('../helpers/fakes').installGemini([[{ text: '・作り直し' }]])
+    const forced = interaction('summarize', [{ name: 'url', value: 'https://youtu.be/dQw4w9WgXcQ' }, { name: 'force', value: true }])
+    await command.func(forced)
+    assert.match(forced.replies.at(-1).content, /^要約し直しました。[\s\S]*・作り直し$/)
+  })
+
+  test('summarize url: rejects a link that is not a video', async () => {
+    const it = interaction('summarize', [{ name: 'url', value: 'https://www.youtube.com/@nobaman' }])
+    await command.func(it)
+    assert.match(it.replies[0].content, /YouTube の動画リンク/)
+  })
 })

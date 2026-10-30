@@ -1,8 +1,9 @@
 const Eris = require('eris')
 const { v4: uuidv4 } = require('uuid')
 const { EMBED_COLORS } = require('../utils/constants')
-const { parseChannelRef, resolveChannel } = require('../utils/youtube')
+const { parseChannelRef, parseVideoId, resolveChannel } = require('../utils/youtube')
 const { sync, videosToSummarize, summarizeLatest } = require('../modules/youtubeSync')
+const { summarizeVideo } = require('../modules/videoSummary')
 const youtubeDB = require('../../db/interfaces/postgres/youtube')
 const { redact } = require('../utils/redact')
 
@@ -74,10 +75,42 @@ const summarizing = new Set()
 
 // Summarizes the newest videos that have none. Each can take minutes, longer than an interaction
 // can be edited (15 minutes), so the result also goes to the channel if the edit fails.
+const MAX_SHOWN_SUMMARY = 1500
+
+// Edits the interaction's reply, or posts in the channel once the reply can no longer be edited.
+async function finish (interaction, content) {
+  const edited = await interaction.editOriginalMessage({ content }).then(() => true, () => false)
+  if (!edited && interaction.channel?.id) await global.bot.createMessage(interaction.channel.id, { content }).catch(() => {})
+}
+
+// One video by its link, which may be from any public channel. Shows the summary.
+async function summarizeOne (interaction, url, force) {
+  const guildID = interaction.guildID
+  if (!parseVideoId(url)) return { content: 'YouTube の動画リンク（https://www.youtube.com/watch?v=… や https://youtu.be/…）を指定してください。' }
+  if (summarizing.has(guildID)) return { content: '別の要約を実行中です。終わってからもう一度お試しください。' }
+  summarizing.add(guildID)
+  try {
+    const { videoID, summary, cached } = await summarizeVideo(guildID, url, {
+      force,
+      onStart: () => interaction.editOriginalMessage({ content: '動画の内容を要約しています…\n長い動画は数分かかります。' }).catch(() => {})
+    })
+    const head = cached
+      ? '保存済みの要約です（`force:True` で要約し直せます）。'
+      : `${force ? '要約し直しました' : '要約しました'}。メンションで依頼したときに AI が参照します。`
+    const text = summary.length > MAX_SHOWN_SUMMARY ? `${summary.slice(0, MAX_SHOWN_SUMMARY)}…` : summary
+    await finish(interaction, `${head}\nhttps://www.youtube.com/watch?v=${videoID}\n${text}`.slice(0, 2000))
+    return null
+  } finally {
+    summarizing.delete(guildID)
+  }
+}
+
 async function summarize (interaction, sub) {
   const count = sub.options?.find(o => o.name === 'count')?.value || DEFAULT_SUMMARIES
   // force: the newest videos whether or not they were summarized, replacing what is stored.
   const force = sub.options?.find(o => o.name === 'force')?.value === true
+  const url = sub.options?.find(o => o.name === 'url')?.value
+  if (url) return summarizeOne(interaction, url.trim(), force)
   const guildID = interaction.guildID
   if (summarizing.has(guildID)) return { content: '別の要約を実行中です。終わってからもう一度お試しください。' }
   const videos = await videosToSummarize(guildID, count, { force })
@@ -92,8 +125,7 @@ async function summarize (interaction, sub) {
     })
     const lines = results.map(({ video, error }) => error ? `⚠️ ${video.title}: ${error}` : `✅ [${video.title}](${video.url})`)
     const content = `${results.filter(r => !r.error).length}/${results.length} 本の動画を${force ? '要約し直しました' : '要約しました'}。メンションで依頼したときに AI が参照します。\n${lines.join('\n')}`.slice(0, 2000)
-    const edited = await interaction.editOriginalMessage({ content }).then(() => true, () => false)
-    if (!edited && interaction.channel?.id) await global.bot.createMessage(interaction.channel.id, { content }).catch(() => {})
+    await finish(interaction, content)
     return null
   } finally {
     summarizing.delete(guildID)
@@ -121,6 +153,8 @@ async function run (interaction) {
     const { knowledge, note } = await sync(interaction.guildID)
     return { content: `YouTube チャンネルを設定し、情報を取得しました。${note}メンションで依頼したときに AI が参照します。`, embeds: [summary(knowledge)], components: [] }
   }
+  // A video given by its link needs no channel to be set.
+  if (sub.name === 'summarize' && sub.options?.some(o => o.name === 'url')) return summarize(interaction, sub)
   const stored = await youtubeDB.getKnowledge(interaction.guildID)
   if (!stored) return { content: 'YouTube チャンネルが設定されていません。`/youtube set` で設定してください。' }
   if (sub.name === 'sync') {
