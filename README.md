@@ -57,6 +57,59 @@ that still has encrypted rows.
 Message rows are written **only for servers that have a message deletion or edit log channel
 configured** — a server with none never has message content stored, since nothing could read it back.
 
+## コマンド一覧
+
+### メンション（BOT に話しかける）
+
+`@ロボポリス` と BOT にメンションして、文章で頼みます。1人1日30回まで（`MENTION_DAILY_LIMIT`）。
+
+| 使い方 | 例 | 必要な権限 |
+|---|---|---|
+| 話しかける（チャット） | `@ロボポリス 最近の配信でおすすめは？` | なし |
+| イベントを登録する | `@ロボポリス 11/3 19時から交流会` / `@ロボポリス これ登録して https://…` | イベントの管理 |
+| フォーラムに投稿する | `@ロボポリス #募集 に交流会の募集を立てて` | そのフォーラムに投稿できること |
+| メッセージをもとに作る | 元のメッセージに返信する形で `@ロボポリス これをイベントにして` | 上と同じ |
+| 作ったものを後から直す | BOT の「登録しました / 投稿しました」かフォーラムの投稿に返信して `@ロボポリス 開始を20時に` | 上と同じ |
+| 画像を差し替える・AI で編集する | 上の返信に画像を添付する、または `@ロボポリス 画像を夕焼けにして` | 上と同じ |
+| 会話を続ける | BOT の返事に返信する形でメンション | なし |
+
+プレビューには「登録する / 投稿する」「内容を修正」「画像を指示で変更」「キャンセル」と、画像の候補（画像1〜4）と作り方（切り抜き・全体表示・AIで作成・なし）のボタンが出ます。ボタンを押せるのは依頼した人だけです。
+
+### スラッシュコマンド
+
+| コマンド | 内容 | 必要な権限 |
+|---|---|---|
+| `/youtube set channel:<URL か @名前>` | サーバーの YouTube チャンネルを設定し、動画の情報を読み込む。見つかったチャンネルを表示して「はい / いいえ」で確認する。別のチャンネルに変えると、保存していた動画の情報は消える | サーバーの管理 |
+| `/youtube sync` | チャンネルを読み直し、新しい動画と配信の状態を取り込む（普段は自動） | サーバーの管理 |
+| `/youtube summarize count:<1〜10> force:<True/False> url:<動画リンク>` | まだ要約していない動画を新しい順に `count` 本（初期値 3）要約する。`force:True` で要約済みも作り直す。`url` を指定するとその1本だけを要約して内容を表示する（他のチャンネルの動画でも可） | サーバーの管理 |
+| `/youtube liveevents enabled:<True/False>` | 配信をサーバーのイベントとして自動で登録する（予定の枠で作成、開始で開催中、終了で終了）。通常の動画は対象外 | サーバーの管理（BOT にイベントの管理） |
+| `/youtube show` | 設定しているチャンネル、保存している動画の数、配信の予定、配信のイベント登録の有無を表示する | サーバーの管理 |
+| `/setup via_presets` | よく使うログをまとめて有効にする | Webhook の管理・チャンネルの管理・監査ログの表示 |
+| `/setup via_individual_event` | ログの種類を1つずつ選んで有効にする | 同上 |
+| `/setup list` | ログの出力先チャンネルの一覧を表示する | 同上 |
+| `/stoplogging channel:<チャンネル>` | 指定したチャンネルへのログ出力を止める（`other` ですべて止める） | Webhook の管理・チャンネルの管理 |
+| `/ignorechannel channel-to-ignore:<チャンネル>` | 指定したチャンネルの出来事をログに出さない／出すを切り替える（`optional` で一覧・リセット） | Webhook の管理・チャンネルの管理 |
+| `/logbots` | 他の BOT の操作もログに出すかを切り替える（初期値: 出さない） | Webhook の管理・チャンネルの管理 |
+| `/serverinfo` | サーバーの情報（ロール数・メンバー数・機能など）を表示する | なし |
+| `/userinfo user:<ユーザー>` | ユーザーの情報（参加日・作成日・ロールなど）を表示する | なし |
+| `/clearmydata` | 保存データの削除の方法を表示する | なし |
+| `/invite` | BOT の招待リンクを表示する | なし |
+| `/help event:<イベント> guide:<項目>` | ヘルプを表示する | なし |
+| `/ping` | BOT が動いているか確認する | なし |
+
+`/youtube` の新しいサブコマンドを追加したときは、下の `%setcmd` でコマンドを登録し直さないと Discord に表示されません。
+
+### テキストコマンド（`%` は `GLOBAL_BOT_PREFIX`）
+
+| コマンド | 内容 | 使える人 |
+|---|---|---|
+| `%setcmd guild` / `%setcmd global` | スラッシュコマンドを Discord に登録する（`guild` はこのサーバーだけですぐ反映、`global` は全サーバー） | `CREATOR_IDS` の人 |
+| `%setchannel` | ログの出力先チャンネルとイベントを設定する | Webhook の管理・チャンネルの管理・監査ログの表示 |
+| `%stoplogging` / `%ignorechannel` / `%logbots` | スラッシュコマンドと同じ | 管理者・チャンネルの管理 |
+| `%reset` | サーバーのログ設定をすべて消す（`yes` と返信して確定） | 管理者 |
+| `%help` / `%info` / `%invite` / `%ping` / `%serverinfo` / `%userinfo` / `%clearmydata` | ヘルプ・BOT の情報・招待リンクなど | だれでも |
+| `%eval` / `%reload` / `%reindexcommands` | 開発用 | `CREATOR_IDS` の人 |
+
 ## Events and forum posts from a mention
 
 Mention the app with a description, an event page URL, or a Discord message link
@@ -298,6 +351,12 @@ dropped, so going back to an older version needs the backup.
 
 Everything stored for a server refers to its `guilds` row with a foreign key, so it is all
 deleted when the app leaves the server. `%reset` clears only the settings.
+
+Messages stored before channels were recorded have no `channel_id` and `guild_id`, so channel
+history and message search never find them. `npm run backfill-channels` fills them in once: it
+reads every channel and thread of each server back to the oldest such message (100 messages a
+request, waiting out rate limits) and matches IDs. Messages no longer on Discord stay unknown. It
+needs `BOT_TOKEN` and the `PG*` settings, and can be stopped and run again.
 
 A change to the schema is a new file (`NNN_name.sql`, or `NNN_name.js` exporting
 `async client => {}` for data SQL alone can't change); a file already applied is never edited.

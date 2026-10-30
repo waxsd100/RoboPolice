@@ -9,6 +9,7 @@
     "test:it": "node --test 'test/integration/**/*.test.js'",
     "test:db": "node --test --test-concurrency=1 'test/db/**/*.test.js'",
     "migrate": "node src/db/migrate.js",
+    "backfill-channels": "node src/miscellaneous/backfillChannels.js",
     "lint": "node_modules/.bin/eslint . --ext .js"
   },
   "keywords": [
