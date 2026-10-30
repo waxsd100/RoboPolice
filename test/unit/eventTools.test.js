@@ -387,6 +387,19 @@ describe('search_youtube', () => {
     ].join('\n'))
   })
 
+  test('ranks by meaning when the videos have embeddings, so other wording finds them', async () => {
+    const { configureGateway, installEmbeddingModel, installEmbeddingStore } = require('../helpers/fakes')
+    configureGateway()
+    installYouTubeStore({ 100: { channel: synced, videos: videos.map(v => ({ ...v, video_id: v.url.slice(-2) })) } })
+    installEmbeddingModel()
+    const { embed, toBase64 } = require('../../src/bot/utils/embeddings')
+    const [minecraft, other] = await embed(['マイクラ', 'その他'])
+    installEmbeddingStore({ videos: { 100: { v1: toBase64(minecraft), v0: toBase64(minecraft), v2: toBase64(other) } } })
+    const text = (await tools().call('search_youtube', { query: 'minecraft の建築' })).result
+    assert.match(text, /「minecraft の建築」に意味が近い順の動画（語をすべて含むもの 0 件を優先）:\n- マイクラ 建築/)
+    assert.ok(text.indexOf('マイクラ 雑談') < text.indexOf('記念配信'), 'the stream comes after the videos close in meaning')
+  })
+
   test('matches every word of the query in the title or description, ignoring case', async () => {
     installYouTubeStore({ 100: { channel: synced, videos } })
     const text = (await tools().call('search_youtube', { query: 'マイクラ  城' })).result

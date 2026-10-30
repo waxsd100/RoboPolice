@@ -127,6 +127,15 @@ async function toggleLogBots (guildID) {
 }
 
 async function updateMessageByID (id, changedAttrs) {
+  const result = await updateMessageRow(id, changedAttrs)
+  // Edited text is embedded again (only when message embeddings are on, see embeddings.js).
+  if ('content' in changedAttrs && process.env.MESSAGE_EMBEDDINGS === 'true') {
+    await require('./embeddings').invalidateMessage(id).catch(e => global.logger.warn(`Could not reset the embedding of ${id}: ${e.message}`))
+  }
+  return result
+}
+
+async function updateMessageRow (id, changedAttrs) {
   const batchMessage = getMessageFromBatch(id)
   if (!batchMessage) {
     if ('imageUrls' in changedAttrs) {

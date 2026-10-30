@@ -152,3 +152,67 @@ describe('stored text as people wrote it', () => {
     assert.doesNotMatch(res.result, /None|\\_/)
   })
 })
+
+describe('searching messages by meaning (MESSAGE_EMBEDDINGS=true)', () => {
+  const { configureGateway, installEmbeddingModel, installEmbeddingStore } = require('../helpers/fakes')
+  const { embed, toBase64 } = require('../../src/bot/utils/embeddings')
+  const REQUESTER = '1'
+  const guild = createGuild({
+    channels: [
+      { id: '201', name: 'general', type: 0, readers: [REQUESTER, 'BOT'] },
+      { id: '202', name: 'staff', type: 0, readers: ['BOT'] },
+      { id: '203', name: 'game', type: 0, readers: [REQUESTER, 'BOT'] }
+    ]
+  })
+  guild.members.set('2', { id: '2', username: 'alice' })
+  const member = createMember({ id: REQUESTER })
+
+  let stored
+  beforeEach(async () => {
+    process.env.MESSAGE_EMBEDDINGS = 'true'
+    configureGateway()
+    installEmbeddingModel()
+    const [horror, minecraft] = await embed(['ホラー', 'マイクラ'])
+    stored = [
+      { message_id: 'h1', guild_id: '100', channel_id: '201', ts: new Date('2026-10-01T00:00:00Z'), author_id: '2', content: 'ホラーゲームやろう', embedding: toBase64(horror) },
+      { message_id: 'm1', guild_id: '100', channel_id: '201', ts: new Date('2026-10-02T00:00:00Z'), author_id: '2', content: 'マイクラで城', embedding: toBase64(minecraft) },
+      { message_id: 's1', guild_id: '100', channel_id: '202', ts: new Date('2026-10-03T00:00:00Z'), author_id: '3', content: '怖い話（運営だけ）', embedding: toBase64(horror) },
+      { message_id: 'g1', guild_id: '100', channel_id: '203', ts: new Date('2026-10-04T00:00:00Z'), author_id: '3', content: 'こわいゲームの配信', embedding: toBase64(horror) }
+    ]
+    installEmbeddingStore({ messages: stored })
+  })
+  require('node:test').afterEach(() => { delete process.env.MESSAGE_EMBEDDINGS })
+
+  function tools () {
+    installBot({ guilds: [guild] })
+    installEmbeddingModel()
+    return createTools({ guild, member, ask: async () => '' })
+  }
+
+  test('search_channel_history ranks the channel\'s messages by meaning', async (t) => {
+    t.mock.method(read, 'getChannelHistory', async () => [{ id: 'new', author_id: '2', content: '怖いの新着', ts: new Date('2026-10-30T00:00:00Z') }])
+    const text = (await tools().call('search_channel_history', { channel_id: '201', query: '怖い' })).result
+    assert.equal(text, [
+      '<#201> の保存済みメッセージから「怖い」に意味が近いもの（近い順）:',
+      '[2026-10-01T00:00:00.000Z] alice: ホラーゲームやろう',
+      '[2026-10-02T00:00:00.000Z] alice: マイクラで城',
+      '',
+      '語を含む最近のメッセージ:',
+      '[2026-10-30T00:00:00.000Z] alice: 怖いの新着'
+    ].join('\n'))
+  })
+
+  test('search_server_messages searches every channel the requester can read', async () => {
+    const tl = tools()
+    assert.ok(tl.declarations.some(d => d.name === 'search_server_messages'))
+    const text = (await tl.call('search_server_messages', { query: 'こわいゲーム' })).result
+    assert.match(text, /^「こわいゲーム」に意味が近いメッセージ（近い順、依頼者が読めるチャンネルのみ）:\n\[2026-10-04T00:00:00\.000Z\] <#203> 3: こわいゲームの配信\n\[2026-10-01T00:00:00\.000Z\] <#201> alice: ホラーゲームやろう/)
+    assert.doesNotMatch(text, /運営だけ/, 'not from a channel the requester cannot read')
+    assert.deepEqual(tl.sources.sort(), ['<#201>', '<#203>'])
+  })
+
+  test('is not offered when message embeddings are off', () => {
+    delete process.env.MESSAGE_EMBEDDINGS
+    assert.ok(!tools().declarations.some(d => d.name === 'search_server_messages'))
+  })
+})
