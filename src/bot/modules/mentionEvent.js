@@ -76,9 +76,12 @@ function missingSettings () {
   return ['CLOUDFLARE_ACCOUNT_ID', 'CLOUDFLARE_AI_GATEWAY_ID'].filter(name => !process.env[name])
 }
 
-// The assistant is a tool for the people who run the server, so it is limited to members who can
-// manage events. Posting to a forum additionally needs permission to post in that forum.
-function canUseAssistant (member, guild) {
+// Anyone can talk with the bot. What a request makes is checked when it is made: an event needs
+// Manage Events (or the owner, an administrator, or staff), a forum post needs permission to post
+// in that forum (checked in forumPost.js).
+const NO_EVENT_PERMISSION = 'イベントを登録・変更するには「イベントの管理」権限が必要です。'
+
+function canManageEvents (member, guild) {
   return member.id === guild.ownerID ||
     member.permissions.has('manageEvents') ||
     member.permissions.has('administrator') ||
@@ -336,11 +339,8 @@ async function handle (message) {
       warnedUnconfigured = true
       global.logger.warn(`Mention drafting is disabled: ${missing.join(', ')} not set`)
     }
-    if (!canUseAssistant(message.member, guild)) return
+    if (!canManageEvents(message.member, guild)) return
     return message.channel.createMessage({ content: `メンション機能が設定されていないため使えません（未設定: ${missing.join(', ')}）。`, ...reference }).catch(() => {})
-  }
-  if (!canUseAssistant(message.member, guild)) {
-    return message.channel.createMessage({ content: 'この機能を使うには「イベントの管理」権限が必要です。', ...reference }).catch(() => {})
   }
 
   const request = extractRequest(message)
@@ -373,6 +373,7 @@ async function handle (message) {
         ? await postedEdit.findTarget(guild, message.messageReference.channelID || message.channel.id, repliedTo)
         : null
       if (editTarget && !request) throw new StopDrafting('直したいこと（例: 開始を20時に、題名に日付を入れて）を書いてメンションしてください。')
+      if (editTarget?.kind === 'event' && !canManageEvents(message.member, guild)) throw new StopDrafting(failure(NO_EVENT_PERMISSION))
       const edit = editTarget && await postedEdit.load(guild, editTarget)
       // A mention sent as a reply ("@bot これをイベントにして") is about the replied-to message.
       // Following the replies back makes a reply to the bot's answer continue that conversation.
@@ -413,6 +414,9 @@ async function handle (message) {
           note = withServerEmojis(result.text, guild)
           result = { ...previous, conversation: result.conversation }
           continue
+        }
+        if (!result.error && result.kind === 'event' && !canManageEvents(message.member, guild)) {
+          result = { ...result, error: NO_EVENT_PERMISSION }
         }
         if (result.error) {
           await editReply(reply, { content: failure(result.error), embeds: [], components: [] }, null)

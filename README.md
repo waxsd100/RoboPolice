@@ -56,9 +56,10 @@ configured** — a server with none never has message content stored, since noth
 Mention the app with a description, an event page URL, or a Discord message link
 (`@RoboPolice 11/3 19時から交流会 https://...`, `@RoboPolice これを募集フォーラムに立てて`), or reply to a
 message and mention it. It drafts either a server scheduled event or a forum post, shows it with
-Register / Post and Cancel buttons, and creates it only after the requester confirms. Only members
-who can manage events (or the owner, or `STAFF_ROLE_ID` staff) can use it. Events need the app to
-have **Manage Events**; a forum post needs both the requester and the app to be able to post in that
+Register / Post and Cancel buttons, and creates it only after the requester confirms. Anyone can
+mention it; what a request makes is checked when it is drafted. Registering or changing an event
+needs **Manage Events** from the requester (or the owner, an administrator, or `STAFF_ROLE_ID`
+staff) and from the app; a forum post needs both the requester and the app to be able to post in that
 forum, and is sent with mentions disabled so drafted text can't ping anyone.
 
 A mention that does not ask for an event or a forum post (a greeting, a question, small talk) gets a

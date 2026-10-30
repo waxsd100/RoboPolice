@@ -959,6 +959,14 @@ describe('mention → event / forum post (integration)', () => {
       assert.equal(message.files, undefined)
     })
 
+    test('changing an event needs Manage Events, and is refused before asking the model', async () => {
+      const { channel, replies } = createChannel()
+      const requests = installGemini([])
+      await mentionEvent.handle(mention(channel, '<@BOT> 開始を20時にして', { member: createMember({ id: REQUESTER, permissions: [] }), messageReference: { messageID: '600', channelID: '201' } }))
+      assert.equal(replies[0].state.content, '⚠️ **作成できませんでした**\nイベントを登録・変更するには「イベントの管理」権限が必要です。')
+      assert.equal(requests.length, 0)
+    })
+
     test('only what the bot made can be changed, and the request must say what to change', async () => {
       const { channel, replies } = createChannel()
       installGemini([])
@@ -1022,10 +1030,32 @@ describe('mention → event / forum post (integration)', () => {
       assert.equal(replies.length, 0)
     })
 
-    test('requires Manage Events from the requester', async () => {
+    test('anyone can chat; an event needs Manage Events, checked when one is drafted', async () => {
       const { channel, replies } = createChannel()
-      await mentionEvent.handle(mention(channel, '<@BOT> こんにちは', { member: createMember({ id: REQUESTER, permissions: [] }) }))
-      assert.match(replies[0].state.content, /この機能を使うには「イベントの管理」権限が必要です/)
+      const member = () => createMember({ id: REQUESTER, permissions: [] })
+      installGemini([[call('submit_chat_reply', { text: 'こんにちは！' })]])
+      await mentionEvent.handle(mention(channel, '<@BOT> こんにちは', { member: member() }))
+      assert.equal(replies[0].state.content, 'こんにちは！')
+
+      installGemini([[submit({ name: '交流会', start: '2026-11-03T19:00:00+09:00' })]])
+      await mentionEvent.handle(mention(channel, '<@BOT> 交流会を登録して', { member: member() }))
+      assert.equal(replies[1].state.content, '⚠️ **作成できませんでした**\nイベントを登録・変更するには「イベントの管理」権限が必要です。')
+      assert.deepEqual(replies[1].state.components, [])
+      assert.equal(discord.some(c => c.method === 'POST'), false)
+    })
+
+    test('without Manage Events, a forum post can still be made where the requester can post', async () => {
+      const { channel, replies } = createChannel()
+      installGemini([[call('submit_forum_post_draft', { found: true, channel_id: '206', title: '募集', content: '本文', tags: ['募集中'] })]])
+      const done = mentionEvent.handle(mention(channel, '<@BOT> 募集に立てて', { member: createMember({ id: REQUESTER, permissions: [] }) }))
+      await waitForButtons(replies[0], '投稿する')
+      await press(replies[0], '投稿する')
+      await done
+      assert.equal(discord.find(c => c.method === 'POST').url, '/channels/206/threads')
+
+      installGemini([[call('submit_forum_post_draft', { found: true, channel_id: '207', title: '連絡', content: '本文' })]])
+      await mentionEvent.handle(mention(channel, '<@BOT> 運営連絡に立てて', { member: createMember({ id: REQUESTER, permissions: [] }) }))
+      assert.equal(replies[1].state.content, '⚠️ **作成できませんでした**\n依頼者が <#207> に投稿する権限を持っていません。')
     })
 
     test('lets the server owner through without the permission', async () => {
