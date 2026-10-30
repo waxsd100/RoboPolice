@@ -24,10 +24,11 @@ const PROMPT = [
 ].join('\n')
 
 // onStart is called just before Gemini is asked, i.e. only when the requester will have to wait.
-async function summarizeVideo (guildID, url, { onStart = () => {} } = {}) {
+// force: summarize again even if a summary is stored, replacing it.
+async function summarizeVideo (guildID, url, { onStart = () => {}, force = false } = {}) {
   const videoID = parseVideoId(url)
   if (!videoID) throw new Error('YouTube の動画リンクではありません')
-  const cached = await youtubeDB.getSummary(guildID, videoID)
+  const cached = !force && await youtubeDB.getSummary(guildID, videoID)
   if (cached) return { videoID, summary: cached, cached: true }
   await onStart(summaryTimeoutMs())
 

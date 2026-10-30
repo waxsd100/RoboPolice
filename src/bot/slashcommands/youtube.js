@@ -1,5 +1,9 @@
+const Eris = require('eris')
+const { v4: uuidv4 } = require('uuid')
 const { EMBED_COLORS } = require('../utils/constants')
-const { parseChannelRef, resolveChannel, fetchChannelKnowledge } = require('../utils/youtube')
+const { parseChannelRef, parseVideoId, resolveChannel } = require('../utils/youtube')
+const { sync, videosToSummarize, summarizeLatest } = require('../modules/youtubeSync')
+const { summarizeVideo } = require('../modules/videoSummary')
 const youtubeDB = require('../../db/interfaces/postgres/youtube')
 const { redact } = require('../utils/redact')
 
@@ -22,19 +26,110 @@ function summary ({ channel, videos }) {
   }
 }
 
-// Reads the configured channel from YouTube and adds to what is stored: the whole channel the first
-// time, afterwards only what is new (plus the newest page again, for streams that changed state).
-async function sync (guildID) {
-  const stored = await youtubeDB.getOverview(guildID)
-  const knownIds = await youtubeDB.getVideoIds(guildID)
-  // Rows set before channel IDs were stored have only the reference.
-  const ref = stored.channel_id ? { id: stored.channel_id } : parseChannelRef(stored.channel_ref)
-  const knowledge = await fetchChannelKnowledge(ref, process.env.YOUTUBE_API_KEY, { knownIds, backfillToken: stored.backfill_token })
-  await youtubeDB.saveSync(guildID, knowledge)
-  const added = new Set(knowledge.videos.filter(v => !knownIds.has(v.id)).map(v => v.id)).size
-  const note = [`新しく ${added} 件の動画を保存しました。`]
-  if (knowledge.backfillToken) note.push('動画が多いため、残りの古い動画は次の `/youtube sync` で続きから取得します。')
-  return { knowledge: await youtubeDB.getKnowledge(guildID), note: note.join('') }
+const CONFIRM_TIMEOUT_MS = 2 * 60 * 1000
+const { BUTTON, ACTION_ROW } = Eris.Constants.ComponentTypes
+const { SUCCESS, DANGER } = Eris.Constants.ButtonStyles
+
+// Shows the channel that was found and waits for the member who ran the command to press はい or
+// いいえ. Setting a different channel drops what is stored for the current one, so that is said.
+// Resolves to true only for はい.
+async function confirmChannel (interaction, channel) {
+  const { awaitCustomID, cancelCustomID } = require('../events/interactionCreate')
+  const current = await youtubeDB.getOverview(interaction.guildID)
+  const replacing = current?.channel_id && current.channel_id !== channel.id
+  const [yes, no] = [uuidv4(), uuidv4()]
+  await interaction.editOriginalMessage({
+    content: [
+      'このチャンネルを設定しますか？',
+      replacing ? `⚠️ 今の「${current.title || current.channel_ref}」から変わり、保存している動画 ${current.video_count} 件と情報は削除されます。` : ''
+    ].filter(Boolean).join('\n'),
+    embeds: [{
+      title: channel.snippet.title,
+      url: `https://www.youtube.com/channel/${channel.id}`,
+      description: (channel.snippet.description || '').slice(0, 200) || undefined,
+      thumbnail: channel.snippet.thumbnails?.default?.url ? { url: channel.snippet.thumbnails.default.url } : undefined,
+      color: EMBED_COLORS.PURPLED_BLUE
+    }],
+    components: [{
+      type: ACTION_ROW,
+      components: [
+        { type: BUTTON, style: SUCCESS, label: 'はい', custom_id: yes },
+        { type: BUTTON, style: DANGER, label: 'いいえ', custom_id: no }
+      ]
+    }]
+  })
+  const userID = interaction.member?.user?.id || interaction.user?.id
+  try {
+    const pressed = await Promise.race([yes, no].map(id => awaitCustomID(id, userID, CONFIRM_TIMEOUT_MS)))
+    return pressed.data.custom_id === yes
+  } catch (_) {
+    return false
+  } finally {
+    [yes, no].forEach(cancelCustomID)
+  }
+}
+
+const DEFAULT_SUMMARIES = 3
+// One bulk summary at a time per server: each is several long Gemini calls.
+const summarizing = new Set()
+
+// Summarizes the newest videos that have none. Each can take minutes, longer than an interaction
+// can be edited (15 minutes), so the result also goes to the channel if the edit fails.
+const MAX_SHOWN_SUMMARY = 1500
+
+// Edits the interaction's reply, or posts in the channel once the reply can no longer be edited.
+async function finish (interaction, content) {
+  const edited = await interaction.editOriginalMessage({ content }).then(() => true, () => false)
+  if (!edited && interaction.channel?.id) await global.bot.createMessage(interaction.channel.id, { content }).catch(() => {})
+}
+
+// One video by its link, which may be from any public channel. Shows the summary.
+async function summarizeOne (interaction, url, force) {
+  const guildID = interaction.guildID
+  if (!parseVideoId(url)) return { content: 'YouTube の動画リンク（https://www.youtube.com/watch?v=… や https://youtu.be/…）を指定してください。' }
+  if (summarizing.has(guildID)) return { content: '別の要約を実行中です。終わってからもう一度お試しください。' }
+  summarizing.add(guildID)
+  try {
+    const { videoID, summary, cached } = await summarizeVideo(guildID, url, {
+      force,
+      onStart: () => interaction.editOriginalMessage({ content: '動画の内容を要約しています…\n長い動画は数分かかります。' }).catch(() => {})
+    })
+    const head = cached
+      ? '保存済みの要約です（`force:True` で要約し直せます）。'
+      : `${force ? '要約し直しました' : '要約しました'}。メンションで依頼したときに AI が参照します。`
+    const text = summary.length > MAX_SHOWN_SUMMARY ? `${summary.slice(0, MAX_SHOWN_SUMMARY)}…` : summary
+    await finish(interaction, `${head}\nhttps://www.youtube.com/watch?v=${videoID}\n${text}`.slice(0, 2000))
+    return null
+  } finally {
+    summarizing.delete(guildID)
+  }
+}
+
+async function summarize (interaction, sub) {
+  const count = sub.options?.find(o => o.name === 'count')?.value || DEFAULT_SUMMARIES
+  // force: the newest videos whether or not they were summarized, replacing what is stored.
+  const force = sub.options?.find(o => o.name === 'force')?.value === true
+  const url = sub.options?.find(o => o.name === 'url')?.value
+  if (url) return summarizeOne(interaction, url.trim(), force)
+  const guildID = interaction.guildID
+  if (summarizing.has(guildID)) return { content: '別の要約を実行中です。終わってからもう一度お試しください。' }
+  const videos = await videosToSummarize(guildID, count, { force })
+  if (videos.length === 0) {
+    return { content: force ? '要約できる動画がありません（配信中・配信予定のものは除きます）。' : '要約していない動画はありません（配信中・配信予定のものは除きます）。`force:True` で要約し直せます。' }
+  }
+  summarizing.add(guildID)
+  try {
+    const results = await summarizeLatest(guildID, videos, {
+      force,
+      onProgress: (done, total, video) => interaction.editOriginalMessage({ content: `動画の内容を要約しています（${done + 1}/${total}）: ${video.title}\n長い動画は1本で数分かかります。` }).catch(() => {})
+    })
+    const lines = results.map(({ video, error }) => error ? `⚠️ ${video.title}: ${error}` : `✅ [${video.title}](${video.url})`)
+    const content = `${results.filter(r => !r.error).length}/${results.length} 本の動画を${force ? '要約し直しました' : '要約しました'}。メンションで依頼したときに AI が参照します。\n${lines.join('\n')}`.slice(0, 2000)
+    await finish(interaction, content)
+    return null
+  } finally {
+    summarizing.delete(guildID)
+  }
 }
 
 async function run (interaction) {
@@ -50,16 +145,23 @@ async function run (interaction) {
     }
     // Resolved before anything is stored: a channel that does not exist changes nothing.
     const channel = await resolveChannel(ref, process.env.YOUTUBE_API_KEY)
+    if (!await confirmChannel(interaction, channel)) {
+      return { content: 'YouTube チャンネルの設定をやめました。', embeds: [], components: [] }
+    }
+    await interaction.editOriginalMessage({ content: 'チャンネルの情報を取得しています…', embeds: [], components: [] }).catch(() => {})
     await youtubeDB.setChannel(interaction.guildID, input.trim(), channel.id)
     const { knowledge, note } = await sync(interaction.guildID)
-    return { content: `YouTube チャンネルを設定し、情報を取得しました。${note}メンションで依頼したときに AI が参照します。`, embeds: [summary(knowledge)] }
+    return { content: `YouTube チャンネルを設定し、情報を取得しました。${note}メンションで依頼したときに AI が参照します。`, embeds: [summary(knowledge)], components: [] }
   }
+  // A video given by its link needs no channel to be set.
+  if (sub.name === 'summarize' && sub.options?.some(o => o.name === 'url')) return summarize(interaction, sub)
   const stored = await youtubeDB.getKnowledge(interaction.guildID)
   if (!stored) return { content: 'YouTube チャンネルが設定されていません。`/youtube set` で設定してください。' }
   if (sub.name === 'sync') {
     const { knowledge, note } = await sync(interaction.guildID)
     return { content: `最新の情報を取得しました。${note}`, embeds: [summary(knowledge)] }
   }
+  if (sub.name === 'summarize') return summarize(interaction, sub)
   return { embeds: [summary(stored)] }
 }
 
@@ -75,8 +177,9 @@ module.exports = {
       reply = await run(interaction)
     } catch (e) {
       global.logger.error(e)
-      reply = { content: `YouTube の情報を取得できませんでした: ${e.hint || redact(e.message).slice(0, 300)}` }
+      reply = { content: `YouTube の情報を取得できませんでした: ${e.hint || redact(e.message).slice(0, 300)}`, embeds: [], components: [] }
     }
-    await interaction.editOriginalMessage(reply).catch(() => {})
+    // summarize answers by itself.
+    if (reply) await interaction.editOriginalMessage(reply).catch(() => {})
   }
 }

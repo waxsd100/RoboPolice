@@ -1,0 +1,105 @@
+// Keeping each server's YouTube knowledge current: the sync /youtube runs, the same sync run
+// automatically when the channel has something new, and summaries of the newest videos in bulk.
+const { parseChannelRef, fetchChannelKnowledge } = require('../utils/youtube')
+const youtubeDB = require('../../db/interfaces/postgres/youtube')
+const { summarizeVideo } = require('./videoSummary')
+
+const DEFAULT_AUTO_SYNC_MINUTES = 15
+const FEED_TIMEOUT_MS = 15000
+const MAX_SUMMARIES = 10
+
+// Reads the configured channel from YouTube and adds to what is stored: the whole channel the first
+// time, afterwards only what is new (plus the newest page again, for streams that changed state).
+async function sync (guildID) {
+  const stored = await youtubeDB.getOverview(guildID)
+  const knownIds = await youtubeDB.getVideoIds(guildID)
+  // Rows set before channel IDs were stored have only the reference.
+  const ref = stored.channel_id ? { id: stored.channel_id } : parseChannelRef(stored.channel_ref)
+  const knowledge = await fetchChannelKnowledge(ref, process.env.YOUTUBE_API_KEY, { knownIds, backfillToken: stored.backfill_token })
+  await youtubeDB.saveSync(guildID, knowledge)
+  const added = new Set(knowledge.videos.filter(v => !knownIds.has(v.id)).map(v => v.id)).size
+  const note = [`新しく ${added} 件の動画を保存しました。`]
+  if (knowledge.backfillToken) note.push('動画が多いため、残りの古い動画は次の `/youtube sync` で続きから取得します（自動の取得でも続きを読みます）。')
+  return { knowledge: await youtubeDB.getKnowledge(guildID), note: note.join(''), added }
+}
+
+// The video IDs in the channel's public feed (its newest uploads), which costs no API quota.
+async function feedVideoIds (channelID) {
+  const res = await fetch(`https://www.youtube.com/feeds/videos.xml?channel_id=${encodeURIComponent(channelID)}`, { signal: AbortSignal.timeout(FEED_TIMEOUT_MS) })
+  if (!res.ok) throw new Error(`YouTube feed for ${channelID} failed: HTTP ${res.status}`)
+  return [...(await res.text()).matchAll(/<yt:videoId>([\w-]{11})<\/yt:videoId>/g)].map(m => m[1])
+}
+
+// Syncs one server if there is anything to pick up: a video not stored yet (seen in the free feed),
+// a live or upcoming stream whose state may have changed, or older videos left from a first read.
+// Resolves to the number of videos added, or null when nothing needed doing.
+async function syncIfChanged (guildID) {
+  const stored = await youtubeDB.getOverview(guildID)
+  if (!stored?.channel_id) return null
+  let reason = stored.backfill_token ? 'backfill' : stored.live_count ? 'live' : null
+  if (!reason) {
+    const known = await youtubeDB.getVideoIds(guildID)
+    if ((await feedVideoIds(stored.channel_id)).some(id => !known.has(id))) reason = 'new video'
+  }
+  if (!reason) return null
+  const { added } = await sync(guildID)
+  global.logger.info(`[YOUTUBE]: Synced ${guildID} automatically (${reason}), ${added} new video(s)`)
+  return added
+}
+
+function autoSyncMinutes () {
+  const raw = process.env.YOUTUBE_AUTO_SYNC_MINUTES
+  const minutes = Number(raw)
+  return raw && Number.isFinite(minutes) && minutes >= 0 ? minutes : DEFAULT_AUTO_SYNC_MINUTES
+}
+
+let running = false
+// One pass over the servers this worker hosts; each worker handles its own, so none is done twice.
+async function autoSyncAll () {
+  if (running) return
+  running = true
+  try {
+    const channels = await youtubeDB.listChannels()
+    for (const { guild_id: guildID } of channels.filter(c => global.bot.guilds.has(c.guild_id))) {
+      await syncIfChanged(guildID).catch(e => global.logger.warn(`[YOUTUBE]: Automatic sync of ${guildID} failed: ${e.message}`))
+    }
+  } catch (e) {
+    global.logger.warn(`[YOUTUBE]: Automatic sync failed: ${e.message}`)
+  } finally {
+    running = false
+  }
+}
+
+function startAutoSync () {
+  const minutes = autoSyncMinutes()
+  if (!process.env.YOUTUBE_API_KEY || minutes === 0) return null
+  global.logger.startup(`[YOUTUBE]: Checking channels for new videos every ${minutes} minutes.`)
+  return setInterval(autoSyncAll, minutes * 60 * 1000)
+}
+
+// The newest `count` stored videos that have no summary yet (with force, whether or not they have
+// one), skipping streams that are not over.
+async function videosToSummarize (guildID, count, { force = false } = {}) {
+  const knowledge = await youtubeDB.getKnowledge(guildID)
+  return (knowledge?.videos || [])
+    .filter(v => (force || !v.summary) && !['live', 'upcoming'].includes(v.live_status))
+    .slice(0, Math.min(Math.max(count, 1), MAX_SUMMARIES))
+}
+
+// Summarizes them one at a time (each is a long Gemini call). onProgress(done, total, video) is
+// called before each; force replaces stored summaries. Resolves to [{ video, error }] in order.
+async function summarizeLatest (guildID, videos, { onProgress = () => {}, force = false } = {}) {
+  const results = []
+  for (const [i, video] of videos.entries()) {
+    await onProgress(i, videos.length, video)
+    try {
+      await summarizeVideo(guildID, video.url, { force })
+      results.push({ video, error: null })
+    } catch (e) {
+      results.push({ video, error: e.hint || e.message })
+    }
+  }
+  return results
+}
+
+module.exports = { sync, syncIfChanged, autoSyncAll, startAutoSync, feedVideoIds, videosToSummarize, summarizeLatest, MAX_SUMMARIES }

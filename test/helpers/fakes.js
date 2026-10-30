@@ -106,8 +106,12 @@ function installYouTubeStore (knowledge = {}, summaries = {}) {
   store.getOverview = async guildID => knowledge[guildID] && {
     ...knowledge[guildID].channel,
     video_count: knowledge[guildID].videos.length,
-    summary_count: Object.keys(summaries[guildID] || {}).length
+    summary_count: Object.keys(summaries[guildID] || {}).length,
+    live_count: knowledge[guildID].videos.filter(v => ['live', 'upcoming'].includes(v.live_status)).length
   }
+  store.listChannels = async () => Object.entries(knowledge)
+    .filter(([, k]) => k.channel.channel_id)
+    .map(([guildID, k]) => ({ guild_id: guildID, channel_id: k.channel.channel_id }))
   store.saveSync = async (guildID, { channel, videos, backfillToken = null }) => {
     writes.push({ saveSync: guildID, videos: videos.map(v => v.id), backfillToken })
     const byID = new Map(knowledge[guildID].videos.map(v => [v.video_id, v]))
