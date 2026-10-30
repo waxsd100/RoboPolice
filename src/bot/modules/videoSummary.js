@@ -2,19 +2,14 @@
 // keeps the summary so the same video is never summarized twice for a server. Only run when the
 // model decides it needs a video's contents (a video was linked, or a question is about what a
 // video says): it is far costlier than reading titles and descriptions.
-const { callGemini, GeminiError } = require('./eventDrafter')
+const { callGemini, DEFAULT_GEMINI_MODEL, GeminiError } = require('./eventDrafter')
 const youtubeDB = require('../../db/interfaces/postgres/youtube')
 const { parseVideoId } = require('../utils/youtube')
 
 const MAX_SUMMARY = 3000
-// A summary is about what is said, so the cheapest model and one frame every 10 seconds do: an hour
-// of video is then about 140k tokens (audio 32 a second, frames 66 each), mostly audio.
-const DEFAULT_SUMMARY_MODEL = 'gemini-2.5-flash-lite'
+// A summary is about what is said, so one frame every 10 seconds does: an hour of video is then
+// about 140k tokens (audio 32 a second, frames 66 each), mostly audio.
 const DEFAULT_FPS = 0.1
-
-function summaryModel () {
-  return process.env.VIDEO_SUMMARY_MODEL || DEFAULT_SUMMARY_MODEL
-}
 
 function framesPerSecond () {
   const fps = Number(process.env.VIDEO_SUMMARY_FPS)
@@ -46,7 +41,7 @@ async function summarizeVideo (guildID, url, { onStart = () => {}, force = false
   if (cached) return { videoID, summary: cached, cached: true }
   await onStart(summaryTimeoutMs())
 
-  const content = await callGemini(summaryModel(), {
+  const content = await callGemini(process.env.GEMINI_MODEL || DEFAULT_GEMINI_MODEL, {
     contents: [{
       role: 'user',
       parts: [
@@ -63,4 +58,4 @@ async function summarizeVideo (guildID, url, { onStart = () => {}, force = false
   return { videoID, summary, cached: false }
 }
 
-module.exports = { summarizeVideo, summaryModel, framesPerSecond }
+module.exports = { summarizeVideo, framesPerSecond }

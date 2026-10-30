@@ -133,9 +133,8 @@ accumulates:
   any public channel and without a channel set, and shows the summary), one at a time, showing progress. A long
   run can outlast the 15 minutes an interaction can be edited; the result is then posted in the
   channel.
-- Summaries use `VIDEO_SUMMARY_MODEL` (default `gemini-2.5-flash-lite`, the cheapest) and one frame
-  every 10 seconds (`VIDEO_SUMMARY_FPS`, default 0.1): what a video says is mostly in its audio, and
-  an hour costs about 140k tokens (32 a second of audio, 66 a frame), about $0.04 at paid prices.
+- Summaries read one frame every 10 seconds (`VIDEO_SUMMARY_FPS`, default 0.1): what a video says is
+  mostly in its audio, and an hour is about 140k tokens (32 a second of audio, 66 a frame).
 - The backlog of videos without a summary is worked through in the background
   (`src/bot/modules/summaryBacklog.js`), newest first, a few every 10 minutes, within a budget
   counted in hours of video: first on a free-tier project's key stored in AI Gateway
@@ -351,7 +350,7 @@ the secrets if it leaks, so keep it only on the platform and delete it in the co
 | `YOUTUBE_API_KEY` | Optional. YouTube Data API v3 key for `/youtube`. Unset disables the command |
 | `VIDEO_SUMMARY_TIMEOUT_MINUTES` | Optional. How long a video summary may take. Defaults to 10 |
 | `YOUTUBE_AUTO_SYNC_MINUTES` | Optional. How often to check each server's YouTube channel for new videos. Defaults to 15; 0 turns it off |
-| `VIDEO_SUMMARY_MODEL`, `VIDEO_SUMMARY_FPS` | Optional. Model and frames per second for video summaries. Default `gemini-2.5-flash-lite` and 0.1 |
+| `VIDEO_SUMMARY_FPS` | Optional. Frames per second read for video summaries. Default 0.1 |
 | `VIDEO_SUMMARY_FREE_BYOK_ALIAS` | Optional. Name of a free-tier project's Gemini key stored in AI Gateway, used first for the summary backlog |
 | `YOUTUBE_SUMMARY_FREE_HOURS_PER_DAY`, `YOUTUBE_SUMMARY_PAID_HOURS_PER_MONTH` | Optional. Hours of video the backlog summarizes on the free key a day (default 8 with the alias) and on the usual key a month (default 0) |
 | `YOUTUBE_LIVE_POLL_SECONDS` | Optional. How often to check for streams on servers with stream events on. Defaults to 60; 0 turns it off |
