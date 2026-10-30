@@ -357,7 +357,8 @@ async function handle (message) {
     return message.channel.createMessage({ content: `メンション機能が設定されていないため使えません（未設定: ${missing.join(', ')}）。`, ...reference }).catch(() => {})
   }
 
-  const request = extractRequest(message)
+  let request = extractRequest(message)
+  const attached = attachedImages(message)
   const repliedTo = message.messageReference?.messageID
   if (!request && !repliedTo) {
     return message.channel.createMessage({ content: '話したいことか、イベントやフォーラム投稿にしたい内容（文章・URL・メッセージリンク）を添えるか、元のメッセージに返信する形でメンションしてください。', ...reference }).catch(() => {})
@@ -386,7 +387,9 @@ async function handle (message) {
       const editTarget = repliedTo
         ? await postedEdit.findTarget(guild, message.messageReference.channelID || message.channel.id, repliedTo)
         : null
-      if (editTarget && !request) throw new StopDrafting('直したいこと（例: 開始を20時に、題名に日付を入れて）を書いてメンションしてください。')
+      if (editTarget && !request && !attached.length) throw new StopDrafting('直したいこと（例: 開始を20時に、題名に日付を入れて）を書くか、差し替える画像を添付してメンションしてください。')
+      // An image attached to the reply is what the image is to be replaced with.
+      if (editTarget && !request) request = '画像を添付の画像に差し替えて'
       if (editTarget?.kind === 'event' && !canManageEvents(message.member, guild)) throw new StopDrafting(failure(NO_EVENT_PERMISSION))
       const edit = editTarget && await postedEdit.load(guild, editTarget)
       // A mention sent as a reply ("@bot これをイベントにして") is about the replied-to message.
@@ -406,7 +409,7 @@ async function handle (message) {
         channelID: message.channel.id,
         server,
         forum: namedForum(message),
-        images: attachedImages(message),
+        images: attached,
         edit,
         guild,
         member,
@@ -417,6 +420,7 @@ async function handle (message) {
       let needsCover = true
       let imageInstructions = 0
       let lastInstruction = null
+      let replacedWithAttachment = false
       let previous = null // the draft shown before the latest correction
       let note = ''
       for (;;) {
@@ -451,6 +455,13 @@ async function handle (message) {
         }
         // An instruction about the image in the request or a correction ("背景を夜空に"). The model
         // may repeat it when revising, so only a new one is applied.
+        if (!replacedWithAttachment && edit && attached.length) {
+          // Changing something already posted: the attached image replaces its image, whatever the
+          // model made of the request. Its instruction for this draft is then already carried out.
+          replacedWithAttachment = true
+          lastInstruction = result.imageInstruction
+          await cover.instruct({ images: attached.slice(0, 1) })
+        }
         if (needsCover && result.imageInstruction && result.imageInstruction !== lastInstruction && imageInstructions < MAX_IMAGE_INSTRUCTIONS) {
           lastInstruction = result.imageInstruction
           imageInstructions++

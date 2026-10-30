@@ -204,6 +204,13 @@ describe('CoverImage', () => {
     assert.equal(cover.candidates[cover.selected].url, 'https://e.com/wide.png')
   })
 
+  test('an image that is already a candidate is selected rather than read again', async () => {
+    const cover = new CoverImage(SIZES.eventCover)
+    await cover.useDraft({ imageUrls: ['https://e.com/wide.png', 'https://e.com/tall.png'], title: 't', summary: 's' })
+    assert.equal(await cover.instruct({ images: ['https://e.com/tall.png'] }), true)
+    assert.deepEqual([cover.selected, cover.mode, cover.candidates.length], [1, 'fit', 2])
+  })
+
   test('an edited image is cropped, not redrawn, when the size changes', async () => {
     edits.length = 0
     const cover = new CoverImage(SIZES.eventCover)

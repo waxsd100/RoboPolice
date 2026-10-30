@@ -184,7 +184,8 @@ an attached image replaces it (as a new candidate, selected), anything else ("�
 Further instructions edit the edited image, and "画像: AIで編集" switches back to it after trying
 another mode. The model also passes on an instruction about the image found in the request or a
 correction (`image_instruction`), so `@RoboPolice 画像を夕焼けにして` replying to a post the bot made
-edits that post's image. Up to 5 image instructions per draft.
+edits that post's image, and an image attached to such a reply (with or without text) replaces it.
+Up to 5 image instructions per draft.
 
 One mention usually takes 2-4 Gemini requests (one per tool step, up to 10), plus one per
 correction, AI-made image or video summary; each mention logs how many it used. HTTP 429 is retried

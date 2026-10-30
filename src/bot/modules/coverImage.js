@@ -65,6 +65,12 @@ class CoverImage {
   async instruct ({ text = '', images = [] }) {
     this.touched = true
     const urls = [...images, ...(text.match(/https?:\/\/\S+/g) || [])]
+    // Already a candidate (the model also listed it): just select it.
+    const known = this.candidates.findIndex(c => urls.includes(c.url))
+    if (known !== -1) {
+      await this.choose(known)
+      return true
+    }
     if (urls.length) {
       const before = this.candidates.length
       // A replacement makes room: the oldest candidates go first.
