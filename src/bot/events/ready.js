@@ -4,6 +4,7 @@ const prune = require('../../miscellaneous/prune')
 const youtubeSync = require('../modules/youtubeSync')
 const embeddingIndexer = require('../modules/embeddingIndexer')
 const liveWatcher = require('../modules/liveWatcher')
+const summaryBacklog = require('../modules/summaryBacklog')
 
 let failedHealthCheckCount = 0
 
@@ -18,6 +19,7 @@ module.exports = {
       await checkForMissingSettings()
       prune.startScheduler() // one worker owns the sweep so shards don't duplicate the delete
       embeddingIndexer.startIndexer() // the same worker embeds videos and messages for every server
+      summaryBacklog.startBacklog() // ...and works through the videos not summarized yet
     }
     // Every worker checks the servers it hosts for new YouTube videos.
     youtubeSync.startAutoSync()

@@ -698,7 +698,7 @@ describe('mention → event / forum post (integration)', () => {
 
     const first = createChannel()
     const requests = installGemini(turns(body => {
-      assert.deepEqual(body.contents[0].parts[0], { fileData: { fileUri: 'https://www.youtube.com/watch?v=dQw4w9WgXcQ' } })
+      assert.deepEqual(body.contents[0].parts[0], { fileData: { fileUri: 'https://www.youtube.com/watch?v=dQw4w9WgXcQ' }, videoMetadata: { fps: 0.1 } })
       return [{ text: '・11/15 19時から 1 周年オフ会を新宿で開催と告知' }]
     }))
     const done = mentionEvent.handle(mention(first.channel, '<@BOT> この動画で告知してたオフ会をイベントにして https://youtu.be/dQw4w9WgXcQ'))

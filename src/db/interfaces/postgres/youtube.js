@@ -53,6 +53,21 @@ const SCHEMA = [
     scheduled_end TIMESTAMPTZ,
     PRIMARY KEY (guild_id, video_id)
   )`,
+  // Seconds of video the summary backlog sent to Gemini, per day and key (free / paid).
+  `CREATE TABLE IF NOT EXISTS youtube_summary_usage (
+    day DATE NOT NULL,
+    tier TEXT NOT NULL,
+    seconds INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (day, tier)
+  )`,
+  // Videos the backlog could not summarize, so it moves on instead of trying them forever.
+  `CREATE TABLE IF NOT EXISTS youtube_summary_failures (
+    guild_id TEXT NOT NULL,
+    video_id TEXT NOT NULL,
+    attempts INTEGER NOT NULL DEFAULT 0,
+    reason TEXT,
+    PRIMARY KEY (guild_id, video_id)
+  )`,
   // When each channel's push subscription (WebSub) runs out.
   `CREATE TABLE IF NOT EXISTS youtube_websub (
     channel_id TEXT PRIMARY KEY,
@@ -228,6 +243,44 @@ async function isKnownChannel (channelID) {
   return rows.rows.length !== 0
 }
 
+// The newest videos, across servers, that have no summary yet and can be summarized: not live or
+// upcoming, with a known length, and not given up on. [{ guild_id, video_id, title, url, duration }].
+async function videosForSummaryBacklog (limit, maxAttempts) {
+  await ensureTables()
+  const rows = await pool.query(
+    `SELECT v.guild_id, v.video_id, v.title, v.url, v.duration FROM youtube_videos v
+     LEFT JOIN youtube_summaries s ON s.guild_id = v.guild_id AND s.video_id = v.video_id
+     LEFT JOIN youtube_summary_failures f ON f.guild_id = v.guild_id AND f.video_id = v.video_id
+     WHERE s.video_id IS NULL AND v.live_status = 'none' AND v.duration IS NOT NULL
+       AND COALESCE(f.attempts, 0) < $2
+     ORDER BY v.published_at DESC NULLS LAST LIMIT $1`,
+    [limit, maxAttempts])
+  return rows.rows
+}
+
+// Seconds used by `tier` from `since` to `until` (inclusive dates, YYYY-MM-DD).
+async function summaryUsage (tier, since, until = since) {
+  await ensureTables()
+  const rows = await pool.query('SELECT COALESCE(SUM(seconds), 0)::int AS seconds FROM youtube_summary_usage WHERE tier = $1 AND day BETWEEN $2 AND $3', [tier, since, until])
+  return rows.rows[0].seconds
+}
+
+async function addSummaryUsage (tier, day, seconds) {
+  await ensureTables()
+  await pool.query(
+    `INSERT INTO youtube_summary_usage (day, tier, seconds) VALUES ($1, $2, $3)
+     ON CONFLICT (day, tier) DO UPDATE SET seconds = youtube_summary_usage.seconds + $3`,
+    [day, tier, seconds])
+}
+
+async function recordSummaryFailure (guildID, videoID, reason) {
+  await ensureTables()
+  await pool.query(
+    `INSERT INTO youtube_summary_failures (guild_id, video_id, attempts, reason) VALUES ($1, $2, 1, $3)
+     ON CONFLICT (guild_id, video_id) DO UPDATE SET attempts = youtube_summary_failures.attempts + 1, reason = $3`,
+    [guildID, videoID, String(reason).slice(0, 500)])
+}
+
 async function getSummary (guildID, videoID) {
   await ensureTables()
   const rows = await pool.query('SELECT summary FROM youtube_summaries WHERE guild_id = $1 AND video_id = $2', [guildID, videoID])
@@ -258,7 +311,8 @@ async function deleteGuildYouTube (guildID) {
   await pool.query('DELETE FROM youtube_summaries WHERE guild_id = $1', [guildID])
   await pool.query('DELETE FROM youtube_videos WHERE guild_id = $1', [guildID])
   await pool.query('DELETE FROM youtube_live_events WHERE guild_id = $1', [guildID])
+  await pool.query('DELETE FROM youtube_summary_failures WHERE guild_id = $1', [guildID])
   await pool.query('DELETE FROM youtube_channels WHERE guild_id = $1', [guildID])
 }
 
-module.exports = { SCHEMA, ensureTables, setChannel, getVideoIds, saveSync, getKnowledge, getOverview, listChannels, setLiveEvents, upsertVideos, getLiveVideoIds, getLiveEvents, saveLiveEvent, websubDue, saveWebsub, isKnownChannel, getSummary, saveSummary, getOtherSummaries, deleteGuildYouTube }
+module.exports = { SCHEMA, ensureTables, setChannel, getVideoIds, saveSync, getKnowledge, getOverview, listChannels, setLiveEvents, upsertVideos, videosForSummaryBacklog, summaryUsage, addSummaryUsage, recordSummaryFailure, getLiveVideoIds, getLiveEvents, saveLiveEvent, websubDue, saveWebsub, isKnownChannel, getSummary, saveSummary, getOtherSummaries, deleteGuildYouTube }

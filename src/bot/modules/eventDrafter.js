@@ -174,14 +174,16 @@ function rateLimitHint (body) {
 }
 
 // One Gemini API call through the gateway (`method` such as "generateContent"), retrying HTTP 429.
-// Returns the response body.
-async function geminiRequest (model, method, body, { timeoutMs = GEMINI_TIMEOUT_MS } = {}) {
+// Returns the response body. byokAlias picks another key stored in the gateway for this call (for
+// example a free-tier project's key for video summaries).
+async function geminiRequest (model, method, body, { timeoutMs = GEMINI_TIMEOUT_MS, byokAlias = null } = {}) {
   const url = gatewayURL(`google-ai-studio/v1beta/models/${encodeURIComponent(model)}:${method}`)
   const headers = { 'Content-Type': 'application/json', ...gatewayAuthHeaders() }
   // Optional: the Gemini key can be stored in the gateway (BYOK) instead.
-  if (process.env.GEMINI_API_KEY) headers['x-goog-api-key'] = process.env.GEMINI_API_KEY
+  if (process.env.GEMINI_API_KEY && !byokAlias) headers['x-goog-api-key'] = process.env.GEMINI_API_KEY
   // Which stored (BYOK) key to use. Without it the gateway looks for one named "default".
-  if (process.env.CLOUDFLARE_AI_GATEWAY_BYOK_ALIAS) headers['cf-aig-byok-alias'] = process.env.CLOUDFLARE_AI_GATEWAY_BYOK_ALIAS
+  const alias = byokAlias || process.env.CLOUDFLARE_AI_GATEWAY_BYOK_ALIAS
+  if (alias) headers['cf-aig-byok-alias'] = alias
 
   const usage = currentUsage()
   let res

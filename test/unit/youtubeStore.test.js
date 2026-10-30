@@ -38,11 +38,11 @@ describe('youtube store', () => {
   test('creates its tables once, on first use', async () => {
     const creates = () => queries.filter(q => q.sql.startsWith('CREATE TABLE IF NOT EXISTS')).map(q => q.sql.split(' ')[5])
     await store.getKnowledge('1')
-    assert.deepEqual(creates(), ['youtube_channels', 'youtube_videos', 'youtube_summaries', 'youtube_live_events', 'youtube_websub'])
+    assert.deepEqual(creates(), ['youtube_channels', 'youtube_videos', 'youtube_summaries', 'youtube_live_events', 'youtube_summary_usage', 'youtube_summary_failures', 'youtube_websub'])
     assert.ok(queries.some(q => q.sql === 'ALTER TABLE youtube_channels ADD COLUMN IF NOT EXISTS backfill_token TEXT'), 'tables made before the column existed get it')
     await store.getKnowledge('1')
     await store.getVideoIds('1')
-    assert.equal(creates().length, 5)
+    assert.equal(creates().length, 7)
   })
 
   test('setting a different channel starts over', async () => {
@@ -114,6 +114,7 @@ describe('youtube store', () => {
       'DELETE FROM youtube_summaries WHERE guild_id = $1',
       'DELETE FROM youtube_videos WHERE guild_id = $1',
       'DELETE FROM youtube_live_events WHERE guild_id = $1',
+      'DELETE FROM youtube_summary_failures WHERE guild_id = $1',
       'DELETE FROM youtube_channels WHERE guild_id = $1'
     ])
   })

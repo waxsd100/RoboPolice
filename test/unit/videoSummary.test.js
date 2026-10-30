@@ -31,8 +31,8 @@ describe('summarizeVideo', () => {
     const result = await summarizeVideo('100', 'https://www.youtube.com/watch?v=dQw4w9WgXcQ&t=30')
     assert.deepEqual(result, { videoID: 'dQw4w9WgXcQ', summary: '・11/3 に記念配信\n・場所は渋谷', cached: false })
     const [{ url, body }] = requests
-    assert.match(url, /models\/gemini-flash-latest:generateContent$/)
-    assert.deepEqual(body.contents[0].parts[0], { fileData: { fileUri: 'https://www.youtube.com/watch?v=dQw4w9WgXcQ' } })
+    assert.match(url, /models\/gemini-2\.5-flash-lite:generateContent$/, 'the cheapest model, unless VIDEO_SUMMARY_MODEL says otherwise')
+    assert.deepEqual(body.contents[0].parts[0], { fileData: { fileUri: 'https://www.youtube.com/watch?v=dQw4w9WgXcQ' }, videoMetadata: { fps: 0.1 } })
     assert.match(body.contents[0].parts[1].text, /要約してください/)
     assert.equal(body.generationConfig.mediaResolution, 'MEDIA_RESOLUTION_LOW')
     assert.deepEqual(store.writes, [{ saveSummary: ['100', 'dQw4w9WgXcQ'] }])

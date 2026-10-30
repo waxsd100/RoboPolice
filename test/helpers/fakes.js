@@ -153,6 +153,19 @@ function installYouTubeStore (knowledge = {}, summaries = {}) {
     for (const v of videos) byID.set(v.id, { ...byID.get(v.id), video_id: v.id, title: v.title, live_status: v.liveStatus, scheduled_start: v.scheduledStart, url: v.url })
     if (knowledge[guildID]) knowledge[guildID].videos = [...byID.values()]
   }
+  const usage = []
+  const failures = {}
+  store.videosForSummaryBacklog = async (limit, maxAttempts) => Object.entries(knowledge)
+    .flatMap(([guildID, k]) => k.videos.map(v => ({ ...v, guild_id: guildID })))
+    .filter(v => !summaries[v.guild_id]?.[v.video_id] && v.live_status === 'none' && v.duration && (failures[`${v.guild_id}/${v.video_id}`] || 0) < maxAttempts)
+    .sort((a, b) => new Date(b.published_at) - new Date(a.published_at))
+    .slice(0, limit)
+  store.summaryUsage = async (tier, since, until = since) => usage.filter(u => u.tier === tier && u.day >= since && u.day <= until).reduce((sum, u) => sum + u.seconds, 0)
+  store.addSummaryUsage = async (tier, day, seconds) => usage.push({ tier, day, seconds })
+  store.recordSummaryFailure = async (guildID, videoID, reason) => {
+    failures[`${guildID}/${videoID}`] = (failures[`${guildID}/${videoID}`] || 0) + 1
+    writes.push({ summaryFailure: [guildID, videoID, reason] })
+  }
   store.getLiveVideoIds = async guildID => (knowledge[guildID]?.videos || []).filter(v => ['live', 'upcoming'].includes(v.live_status)).map(v => v.video_id)
   store.getLiveEvents = async guildID => ({ ...(liveEvents[guildID] || {}) })
   store.saveLiveEvent = async (guildID, videoID, { eventID, status, scheduledStart, scheduledEnd }) => {
@@ -183,7 +196,7 @@ function installYouTubeStore (knowledge = {}, summaries = {}) {
     delete knowledge[guildID]
     delete summaries[guildID]
   }
-  return { knowledge, summaries, writes, liveEvents }
+  return { knowledge, summaries, writes, liveEvents, usage }
 }
 
 function configureGateway () {

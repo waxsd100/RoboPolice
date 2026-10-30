@@ -177,6 +177,16 @@ describe('draft', () => {
     assert.equal(requests[0].headers['x-goog-api-key'], undefined)
   })
 
+  test('a call can pick another stored key, and then sends no key of its own', async () => {
+    process.env.GEMINI_API_KEY = 'paid-key-value'
+    process.env.CLOUDFLARE_AI_GATEWAY_BYOK_ALIAS = 'Gemini_API_Key'
+    const requests = installGemini([[{ text: 'ok' }]])
+    await require('../../src/bot/modules/eventDrafter').callGemini('m', { contents: [] }, { byokAlias: 'free-key' })
+    assert.equal(requests[0].headers['cf-aig-byok-alias'], 'free-key')
+    assert.equal(requests[0].headers['x-goog-api-key'], undefined)
+    delete process.env.CLOUDFLARE_AI_GATEWAY_BYOK_ALIAS
+  })
+
   test('omits optional headers and uses the default model', async () => {
     delete process.env.GEMINI_API_KEY
     const requests = installGemini([[submit({ name: 'A', start: '2026-11-03T19:00:00+09:00' })]])

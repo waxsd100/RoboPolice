@@ -133,7 +133,18 @@ accumulates:
   any public channel and without a channel set, and shows the summary), one at a time, showing progress. A long
   run can outlast the 15 minutes an interaction can be edited; the result is then posted in the
   channel.
-- New videos are picked up automatically (`src/bot/modules/youtubeSync.js`). With YouTube pushes
+- Summaries use `VIDEO_SUMMARY_MODEL` (default `gemini-2.5-flash-lite`, the cheapest) and one frame
+  every 10 seconds (`VIDEO_SUMMARY_FPS`, default 0.1): what a video says is mostly in its audio, and
+  an hour costs about 140k tokens (32 a second of audio, 66 a frame), about $0.04 at paid prices.
+- The backlog of videos without a summary is worked through in the background
+  (`src/bot/modules/summaryBacklog.js`), newest first, a few every 10 minutes, within a budget
+  counted in hours of video: first on a free-tier project's key stored in AI Gateway
+  (`VIDEO_SUMMARY_FREE_BYOK_ALIAS`; the Gemini free tier takes 8 hours of YouTube video a day per
+  project, `YOUTUBE_SUMMARY_FREE_HOURS_PER_DAY`, counted by the Pacific day it resets on), then on
+  the usual key up to `YOUTUBE_SUMMARY_PAID_HOURS_PER_MONTH` (default 0). A key that is rate limited
+  is set aside until the next pass; a video that fails twice is skipped. Free-tier input may be used
+  by Google to improve its products, which is why only public video links go to that key.
+ (`src/bot/modules/youtubeSync.js`). With YouTube pushes
   set up (`YOUTUBE_WEBSUB_URL`, see "Streams as server events"), a channel is synced when YouTube
   pushes an upload, a new stream or an edit, and there is no timed sync. Without them, every
   `YOUTUBE_AUTO_SYNC_MINUTES` (default 15, 0 turns it off) each worker checks the servers it hosts:
@@ -340,6 +351,9 @@ the secrets if it leaks, so keep it only on the platform and delete it in the co
 | `YOUTUBE_API_KEY` | Optional. YouTube Data API v3 key for `/youtube`. Unset disables the command |
 | `VIDEO_SUMMARY_TIMEOUT_MINUTES` | Optional. How long a video summary may take. Defaults to 10 |
 | `YOUTUBE_AUTO_SYNC_MINUTES` | Optional. How often to check each server's YouTube channel for new videos. Defaults to 15; 0 turns it off |
+| `VIDEO_SUMMARY_MODEL`, `VIDEO_SUMMARY_FPS` | Optional. Model and frames per second for video summaries. Default `gemini-2.5-flash-lite` and 0.1 |
+| `VIDEO_SUMMARY_FREE_BYOK_ALIAS` | Optional. Name of a free-tier project's Gemini key stored in AI Gateway, used first for the summary backlog |
+| `YOUTUBE_SUMMARY_FREE_HOURS_PER_DAY`, `YOUTUBE_SUMMARY_PAID_HOURS_PER_MONTH` | Optional. Hours of video the backlog summarizes on the free key a day (default 8 with the alias) and on the usual key a month (default 0) |
 | `YOUTUBE_LIVE_POLL_SECONDS` | Optional. How often to check for streams on servers with stream events on. Defaults to 60; 0 turns it off |
 | `YOUTUBE_WEBSUB_URL`, `YOUTUBE_WEBSUB_SECRET` | Optional. The service's public HTTPS address and a secret, to receive YouTube pushes (see above). `PORT` sets the port listened on (Railway sets it) |
 | `MESSAGE_EMBEDDINGS` | Optional. `true` embeds every stored message for search by meaning (sends them to Gemini; see above). Off by default |
