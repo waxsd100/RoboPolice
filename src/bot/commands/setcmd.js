@@ -29,6 +29,19 @@ module.exports = {
           },
           {
             type: ERIS_CONSTANTS.ApplicationCommandOptionTypes.SUB_COMMAND,
+            name: 'summarize',
+            description: 'Summarize what the newest videos say, for the ones not summarized yet',
+            options: [{
+              type: ERIS_CONSTANTS.ApplicationCommandOptionTypes.INTEGER,
+              name: 'count',
+              description: 'How many of the newest videos (1-10, default 3)',
+              min_value: 1,
+              max_value: 10,
+              required: false
+            }]
+          },
+          {
+            type: ERIS_CONSTANTS.ApplicationCommandOptionTypes.SUB_COMMAND,
             name: 'show',
             description: 'Show what is stored'
           }

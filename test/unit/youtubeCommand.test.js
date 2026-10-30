@@ -122,7 +122,7 @@ describe('/youtube', () => {
     }
     const it = interaction('sync')
     await command.func(it)
-    assert.match(it.replies[0].content, /新しく 100 件の動画を保存しました。動画が多いため、残りの古い動画は次の `\/youtube sync` で続きから取得します。/)
+    assert.match(it.replies[0].content, /新しく 100 件の動画を保存しました。動画が多いため、残りの古い動画は次の `\/youtube sync` で続きから取得します（自動の取得でも続きを読みます）。/)
     assert.equal(store.writes[0].backfillToken, 'p100')
   })
 
@@ -147,5 +147,45 @@ describe('/youtube', () => {
     const it = interaction('set', [{ name: 'channel', value: '@nobaman' }])
     await command.func(it)
     assert.equal(it.replies[0].content, 'YouTube の情報を取得できませんでした: YouTube API の呼び出しに失敗しました（HTTP 403）')
+  })
+
+  test('summarize: summarizes the newest unsummarized videos and lists the result', async () => {
+    require('../helpers/fakes').configureGateway()
+    store.knowledge[100] = {
+      channel: { channel_ref: '@x', channel_id: UC },
+      videos: [
+        { video_id: 'newVideo001', title: '最新', url: 'https://www.youtube.com/watch?v=newVideo001', live_status: 'none' },
+        { video_id: 'oldVideo001', title: '前回', url: 'https://www.youtube.com/watch?v=oldVideo001', live_status: 'none' }
+      ]
+    }
+    require('../helpers/fakes').installGemini([[{ text: '要約' }]])
+    const it = interaction('summarize', [{ name: 'count', value: 1 }])
+    await command.func(it)
+    assert.equal(it.replies[0].content, '動画の内容を要約しています（1/1）: 最新\n長い動画は1本で数分かかります。')
+    assert.equal(it.replies[1].content, '1/1 本の動画を要約しました。メンションで依頼したときに AI が参照します。\n✅ [最新](https://www.youtube.com/watch?v=newVideo001)')
+    assert.equal(store.summaries[100].newVideo001, '要約')
+    assert.equal(it.replies.length, 2)
+
+    const again = interaction('summarize', [{ name: 'count', value: 5 }])
+    require('../helpers/fakes').installGemini([[{ text: '要約2' }]])
+    await command.func(again)
+    assert.match(again.replies.at(-1).content, /^1\/1 本の動画を要約しました。[\s\S]*前回/)
+    const none = interaction('summarize')
+    await command.func(none)
+    assert.equal(none.replies[0].content, '要約していない動画はありません（配信中・配信予定のものは除きます）。')
+  })
+
+  test('summarize: posts the result in the channel when the interaction can no longer be edited', async () => {
+    require('../helpers/fakes').configureGateway()
+    store.knowledge[100] = { channel: { channel_ref: '@x', channel_id: UC }, videos: [{ video_id: 'newVideo001', title: '最新', url: 'https://www.youtube.com/watch?v=newVideo001', live_status: 'none' }] }
+    require('../helpers/fakes').installGemini([[{ text: '要約' }]])
+    const posted = []
+    global.bot = { createMessage: async (channelID, m) => posted.push([channelID, m.content]) }
+    const it = interaction('summarize')
+    it.channel = { id: '201' }
+    it.editOriginalMessage = async () => { throw new Error('Unknown Webhook') }
+    await command.func(it)
+    assert.deepEqual(posted, [['201', '1/1 本の動画を要約しました。メンションで依頼したときに AI が参照します。\n✅ [最新](https://www.youtube.com/watch?v=newVideo001)']])
+    delete global.bot
   })
 })

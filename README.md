@@ -126,6 +126,15 @@ accumulates:
   10) and the reply shows that a video is being read. Past 5 minutes that needs its own undici
   dispatcher, since `fetch` otherwise gives up on a response that has not started by then. The same video is never
   summarized twice for a server; summaries of videos from other channels are kept as well.
+- `/youtube summarize count:<1-10>` summarizes the newest stored videos that have no summary yet
+  (default 3, streams that are live or upcoming skipped), one at a time, showing progress. A long
+  run can outlast the 15 minutes an interaction can be edited; the result is then posted in the
+  channel.
+- New videos are picked up automatically (`src/bot/modules/youtubeSync.js`). Every
+  `YOUTUBE_AUTO_SYNC_MINUTES` (default 15, 0 turns it off) each worker checks the servers it hosts:
+  the channel's public feed (`/feeds/videos.xml`, no API quota) shows whether there is a video not
+  stored yet, and only then is the channel synced. A server with a live or upcoming stream, or with
+  older videos left from a first read, is synced on every check, so stream states stay current.
 
 Every Gemini call goes through Cloudflare AI Gateway. YouTube Data API calls can too: in the
 dashboard, add a custom provider (AI Gateway → Custom Providers) with base URL
@@ -276,6 +285,7 @@ the secrets if it leaks, so keep it only on the platform and delete it in the co
 | `GEMINI_MODEL` | Optional. Defaults to `gemini-flash-latest` |
 | `YOUTUBE_API_KEY` | Optional. YouTube Data API v3 key for `/youtube`. Unset disables the command |
 | `VIDEO_SUMMARY_TIMEOUT_MINUTES` | Optional. How long a video summary may take. Defaults to 10 |
+| `YOUTUBE_AUTO_SYNC_MINUTES` | Optional. How often to check each server's YouTube channel for new videos. Defaults to 15; 0 turns it off |
 | `YOUTUBE_GATEWAY_PROVIDER` | Optional. Slug of an AI Gateway custom provider (see below). Set, YouTube API calls go through Cloudflare AI Gateway; unset, straight to Google |
 | `GEMINI_IMAGE_MODEL` | Optional. Image model for AI-made covers. Defaults to `gemini-3.1-flash-image` |
 | `CHAT_PERSONA` | Optional. Character notes added to chat replies (tone, catchphrases, how to address members) |

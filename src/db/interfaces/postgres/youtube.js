@@ -127,15 +127,24 @@ async function getKnowledge (guildID) {
 }
 
 // The channel row and how many videos and summaries are stored, without reading the videos.
+// live_count: videos that are live or upcoming, whose state a later sync may change.
 async function getOverview (guildID) {
   await ensureTables()
   const rows = await pool.query(
     `SELECT c.*,
        (SELECT count(*) FROM youtube_videos v WHERE v.guild_id = c.guild_id)::int AS video_count,
-       (SELECT count(*) FROM youtube_summaries s WHERE s.guild_id = c.guild_id)::int AS summary_count
+       (SELECT count(*) FROM youtube_summaries s WHERE s.guild_id = c.guild_id)::int AS summary_count,
+       (SELECT count(*) FROM youtube_videos v WHERE v.guild_id = c.guild_id AND v.live_status IN ('live', 'upcoming'))::int AS live_count
      FROM youtube_channels c WHERE c.guild_id = $1`,
     [guildID])
   return rows.rows[0] || null
+}
+
+// Every server with a channel set, for the automatic sync.
+async function listChannels () {
+  await ensureTables()
+  const rows = await pool.query('SELECT guild_id, channel_id FROM youtube_channels WHERE channel_id IS NOT NULL')
+  return rows.rows
 }
 
 async function getSummary (guildID, videoID) {
@@ -170,4 +179,4 @@ async function deleteGuildYouTube (guildID) {
   await pool.query('DELETE FROM youtube_channels WHERE guild_id = $1', [guildID])
 }
 
-module.exports = { SCHEMA, ensureTables, setChannel, getVideoIds, saveSync, getKnowledge, getOverview, getSummary, saveSummary, getOtherSummaries, deleteGuildYouTube }
+module.exports = { SCHEMA, ensureTables, setChannel, getVideoIds, saveSync, getKnowledge, getOverview, listChannels, getSummary, saveSummary, getOtherSummaries, deleteGuildYouTube }

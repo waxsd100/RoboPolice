@@ -1,6 +1,7 @@
 const cluster = require('cluster')
 const checkForMissingSettings = require('../utils/recoverSettings')
 const prune = require('../../miscellaneous/prune')
+const youtubeSync = require('../modules/youtubeSync')
 
 let failedHealthCheckCount = 0
 
@@ -15,6 +16,8 @@ module.exports = {
       await checkForMissingSettings()
       prune.startScheduler() // one worker owns the sweep so shards don't duplicate the delete
     }
+    // Every worker checks the servers it hosts for new YouTube videos.
+    youtubeSync.startAutoSync()
     setInterval(() => {
       if (bot.shards.filter(shard => shard.latency == Infinity && shard.status === 'disconnected').length !== 0) {
         failedHealthCheckCount++
