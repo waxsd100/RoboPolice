@@ -773,7 +773,7 @@ describe('mention → event / forum post (integration)', () => {
     await mentionEvent.handle(mention(channel, '<@BOT> 交流会'))
     const content = replies[0].state.content
     assert.match(content, /^⚠️ エラーが発生しました（AI の呼び出しに失敗しました（HTTP 500））。時間をおいてもう一度お試しください。\n```\nError: Gemini request failed: HTTP 500 bad auth/)
-    assert.match(content, /at callGemini \(.*eventDrafter\.js/)
+    assert.match(content, /at (async )?callGemini \(.*eventDrafter\.js/)
     assert.match(content, /```$/)
     assert.ok(content.length <= 2000)
     for (const secret of ['cf-gateway-secret-token', 'AIzaSyA1234567890abcdefghijklmnopqrstuv']) {

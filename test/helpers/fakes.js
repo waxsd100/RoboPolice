@@ -72,6 +72,34 @@ function installBot ({ guilds = [], messages = {}, scheduledEvents = [], forums 
   return calls
 }
 
+// Replaces the embedding store with an in-memory one. videos: { guildID: { videoID: base64 } };
+// messages: [{ message_id, guild_id, channel_id, ts, embedding (base64), author_id, content }]
+// where content is the stored (escaped, unencrypted here) text.
+function installEmbeddingStore ({ videos = {}, messages = [], pending = [] } = {}) {
+  const store = require('../../src/db/interfaces/postgres/embeddings')
+  const saved = { videos: [], messages: [], handled: [], invalidated: [] }
+  store.ensureTables = async () => {}
+  store.videoEmbeddings = async guildID => videos[guildID] || {}
+  store.resetStaleMessageEmbeddings = async (model) => {
+    saved.resetFor = model
+    return 0
+  }
+  store.videosForEmbedding = async () => []
+  store.saveVideoEmbedding = async (guildID, videoID, embedding, hash, model) => saved.videos.push({ guildID, videoID, embedding, hash, model })
+  store.pendingMessages = async limit => pending.slice(0, limit)
+  store.saveMessageEmbeddings = async (rows, handled) => {
+    saved.messages.push(...rows)
+    saved.handled.push(...handled)
+  }
+  store.invalidateMessage = async id => saved.invalidated.push(id)
+  store.messageEmbeddingPages = async function * (guildID, channelIDs) {
+    yield messages.filter(m => m.guild_id === guildID && channelIDs.includes(m.channel_id))
+  }
+  store.getMessages = async ids => messages.filter(m => ids.includes(m.message_id))
+    .map(m => ({ id: m.message_id, author_id: m.author_id, channel_id: m.channel_id, ts: m.ts, content: m.content }))
+  return saved
+}
+
 // Replaces the Redis counter behind the daily mention limit with an in-memory one.
 function installQuotaStore () {
   const counts = new Map()
@@ -86,6 +114,8 @@ function installQuotaStore () {
 // knowledge: { guildID: { channel, videos } } as getKnowledge() returns it; summaries:
 // { guildID: { videoID: summary } }.
 function installYouTubeStore (knowledge = {}, summaries = {}) {
+  // No embeddings unless a test installs some: YouTube search falls back to keywords.
+  installEmbeddingStore()
   const store = require('../../src/db/interfaces/postgres/youtube')
   const writes = []
   const withSummaries = guildID => knowledge[guildID] && {
@@ -183,5 +213,33 @@ async function startServer (handler) {
 }
 
 module.exports = {
-  perms, createGuild, createMember, installBot, installYouTubeStore, installQuotaStore, configureGateway, installGemini, call, submit, lastToolResponses, startServer
+  perms, createGuild, createMember, installBot, installYouTubeStore, installQuotaStore, installEmbeddingStore, configureGateway, installGemini, call, submit, lastToolResponses, startServer
 }
+
+// A fake embedding model: each text points along the axis of the first topic it mentions, so
+// texts about the same topic are close whatever their wording. Records every batch.
+const TOPICS = [['ホラー', '怖い', 'こわい'], ['マイクラ', 'minecraft', '建築'], ['歌', 'カラオケ', 'singing']]
+function installEmbeddingModel () {
+  const batches = []
+  global.fetch = async (url, init) => {
+    if (!String(url).endsWith(':batchEmbedContents')) throw new Error(`unexpected request ${url}`)
+    const body = JSON.parse(init.body)
+    batches.push(body)
+    return {
+      ok: true,
+      json: async () => ({
+        embeddings: body.requests.map(r => {
+          const text = r.content.parts[0].text.toLowerCase()
+          const topic = TOPICS.findIndex(words => words.some(w => text.includes(w)))
+          const values = new Array(r.outputDimensionality).fill(0)
+          values[topic === -1 ? TOPICS.length : topic] = 1
+          values[TOPICS.length + 1] = 0.1 // so no vector is all zeros
+          return { values }
+        })
+      })
+    }
+  }
+  return batches
+}
+
+module.exports.installEmbeddingModel = installEmbeddingModel
