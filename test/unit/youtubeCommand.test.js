@@ -204,7 +204,13 @@ describe('/youtube', () => {
     assert.match(again.replies.at(-1).content, /^1\/1 本の動画を要約しました。[\s\S]*前回/)
     const none = interaction('summarize')
     await command.func(none)
-    assert.equal(none.replies[0].content, '要約していない動画はありません（配信中・配信予定のものは除きます）。')
+    assert.equal(none.replies[0].content, '要約していない動画はありません（配信中・配信予定のものは除きます）。`force:True` で要約し直せます。')
+
+    require('../helpers/fakes').installGemini([[{ text: '作り直し' }]])
+    const forced = interaction('summarize', [{ name: 'count', value: 1 }, { name: 'force', value: true }])
+    await command.func(forced)
+    assert.match(forced.replies.at(-1).content, /^1\/1 本の動画を要約し直しました。[\s\S]*最新/)
+    assert.equal(store.summaries[100].newVideo001, '作り直し')
   })
 
   test('summarize: posts the result in the channel when the interaction can no longer be edited', async () => {

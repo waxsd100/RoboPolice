@@ -19,6 +19,13 @@ describe('summarizeVideo', () => {
     assert.equal(requests.length, 0)
   })
 
+  test('with force, summarizes again and replaces the stored summary', async () => {
+    const requests = installGemini([[{ text: '作り直した要約' }]])
+    assert.deepEqual(await summarizeVideo('100', 'https://youtu.be/cachedVid01', { force: true }), { videoID: 'cachedVid01', summary: '作り直した要約', cached: false })
+    assert.equal(requests.length, 1)
+    assert.equal(store.summaries[100].cachedVid01, '作り直した要約')
+  })
+
   test('hands the video URL to Gemini at low media resolution, and stores the summary', async () => {
     const requests = installGemini([[{ text: '  ・11/3 に記念配信\n・場所は渋谷  ' }]])
     const result = await summarizeVideo('100', 'https://www.youtube.com/watch?v=dQw4w9WgXcQ&t=30')

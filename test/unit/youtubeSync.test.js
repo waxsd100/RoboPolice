@@ -137,6 +137,16 @@ describe('summarizing the newest videos', () => {
     assert.equal((await youtubeSync.videosToSummarize('100', 50)).length, 3, 'at most what there is (and never more than 10)')
   })
 
+  test('with force, picks the newest videos whether or not they were summarized, and replaces the summary', async () => {
+    const picked = await youtubeSync.videosToSummarize('100', 2, { force: true })
+    assert.deepEqual(picked.map(v => v.video_id), [id(4), id(3)])
+    const requests = installGemini([[{ text: '新しい要約' }]])
+    const store = require('../../src/db/interfaces/postgres/youtube')
+    await youtubeSync.summarizeLatest('100', [picked[1]], { force: true })
+    assert.equal(requests.length, 1, 'the stored summary is not reused')
+    assert.equal(await store.getSummary('100', id(3)), '新しい要約')
+  })
+
   test('summarizes them one by one, reporting progress and failures without stopping', async () => {
     installGemini([[{ text: '要約A' }], new Error('boom')])
     const progress = []

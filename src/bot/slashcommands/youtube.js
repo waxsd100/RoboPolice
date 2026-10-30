@@ -76,17 +76,22 @@ const summarizing = new Set()
 // can be edited (15 minutes), so the result also goes to the channel if the edit fails.
 async function summarize (interaction, sub) {
   const count = sub.options?.find(o => o.name === 'count')?.value || DEFAULT_SUMMARIES
+  // force: the newest videos whether or not they were summarized, replacing what is stored.
+  const force = sub.options?.find(o => o.name === 'force')?.value === true
   const guildID = interaction.guildID
   if (summarizing.has(guildID)) return { content: '別の要約を実行中です。終わってからもう一度お試しください。' }
-  const videos = await videosToSummarize(guildID, count)
-  if (videos.length === 0) return { content: '要約していない動画はありません（配信中・配信予定のものは除きます）。' }
+  const videos = await videosToSummarize(guildID, count, { force })
+  if (videos.length === 0) {
+    return { content: force ? '要約できる動画がありません（配信中・配信予定のものは除きます）。' : '要約していない動画はありません（配信中・配信予定のものは除きます）。`force:True` で要約し直せます。' }
+  }
   summarizing.add(guildID)
   try {
     const results = await summarizeLatest(guildID, videos, {
+      force,
       onProgress: (done, total, video) => interaction.editOriginalMessage({ content: `動画の内容を要約しています（${done + 1}/${total}）: ${video.title}\n長い動画は1本で数分かかります。` }).catch(() => {})
     })
     const lines = results.map(({ video, error }) => error ? `⚠️ ${video.title}: ${error}` : `✅ [${video.title}](${video.url})`)
-    const content = `${results.filter(r => !r.error).length}/${results.length} 本の動画を要約しました。メンションで依頼したときに AI が参照します。\n${lines.join('\n')}`.slice(0, 2000)
+    const content = `${results.filter(r => !r.error).length}/${results.length} 本の動画を${force ? '要約し直しました' : '要約しました'}。メンションで依頼したときに AI が参照します。\n${lines.join('\n')}`.slice(0, 2000)
     const edited = await interaction.editOriginalMessage({ content }).then(() => true, () => false)
     if (!edited && interaction.channel?.id) await global.bot.createMessage(interaction.channel.id, { content }).catch(() => {})
     return null

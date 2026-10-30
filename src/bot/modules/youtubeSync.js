@@ -77,22 +77,23 @@ function startAutoSync () {
   return setInterval(autoSyncAll, minutes * 60 * 1000)
 }
 
-// The newest `count` stored videos that have no summary yet, skipping streams that are not over.
-async function videosToSummarize (guildID, count) {
+// The newest `count` stored videos that have no summary yet (with force, whether or not they have
+// one), skipping streams that are not over.
+async function videosToSummarize (guildID, count, { force = false } = {}) {
   const knowledge = await youtubeDB.getKnowledge(guildID)
   return (knowledge?.videos || [])
-    .filter(v => !v.summary && !['live', 'upcoming'].includes(v.live_status))
+    .filter(v => (force || !v.summary) && !['live', 'upcoming'].includes(v.live_status))
     .slice(0, Math.min(Math.max(count, 1), MAX_SUMMARIES))
 }
 
 // Summarizes them one at a time (each is a long Gemini call). onProgress(done, total, video) is
-// called before each. Resolves to [{ video, error }] in order.
-async function summarizeLatest (guildID, videos, { onProgress = () => {} } = {}) {
+// called before each; force replaces stored summaries. Resolves to [{ video, error }] in order.
+async function summarizeLatest (guildID, videos, { onProgress = () => {}, force = false } = {}) {
   const results = []
   for (const [i, video] of videos.entries()) {
     await onProgress(i, videos.length, video)
     try {
-      await summarizeVideo(guildID, video.url)
+      await summarizeVideo(guildID, video.url, { force })
       results.push({ video, error: null })
     } catch (e) {
       results.push({ video, error: e.hint || e.message })

@@ -36,6 +36,11 @@ exports.commands = [
           min_value: 1,
           max_value: 10,
           required: false
+        }, {
+          type: ERIS_CONSTANTS.ApplicationCommandOptionTypes.BOOLEAN,
+          name: 'force',
+          description: 'Summarize again even if already summarized, replacing the stored summary',
+          required: false
         }]
       },
       {
