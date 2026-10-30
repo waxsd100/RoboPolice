@@ -2,11 +2,12 @@
 // turned into the cover (cropped, shown whole, made by AI, kept as it is, or none), and every
 // rendering already made, so switching back and forth in the preview does not redo work.
 //
-// Only the image buttons change the image. A correction of the text keeps it as it is: new
-// candidates the model proposes are added to the list, but nothing is selected or redrawn for them.
+// Only the image buttons, and instructions about the image ("背景を夜空に", a new image to use), change
+// the image. A correction of the text keeps it as it is: new candidates the model proposes are added
+// to the list, but nothing is selected or redrawn for them.
 const urlFetcher = require('../utils/urlFetcher')
 const { cropTo, fitWithBlur, defaultMode, forReference, contactSheet } = require('../utils/imageCrop')
-const { generateCover } = require('./imageGen')
+const { generateCover, editCover } = require('./imageGen')
 const { MAX_IMAGE_CANDIDATES } = require('./forumPost')
 
 const MODES = {
@@ -14,6 +15,7 @@ const MODES = {
   crop: '切り抜き',
   fit: '全体表示',
   ai: 'AIで作成',
+  edited: 'AIで編集',
   none: 'なし'
 }
 
@@ -33,6 +35,7 @@ class CoverImage {
     this.readNote = null // candidates that could not be read
     this.modeNote = null // the last mode that failed to render
     this.aiText = null // the text the current AI image was made from
+    this.instructions = [] // what the edited image was asked to be, in order
   }
 
   // The first draft: reads every candidate and selects the best one, unless an existing image is
@@ -54,6 +57,53 @@ class CoverImage {
     await this.addCandidates(imageUrls)
     if (hadNone && this.candidates.length) await this.choose(0)
     else await this.updateSheet()
+  }
+
+  // An image the requester gave in words: an image URL or attachment replaces the image (it becomes
+  // a candidate and is selected), anything else is an edit of the image shown now. Resolves to
+  // false if the image could not be changed (modeNote says why).
+  async instruct ({ text = '', images = [] }) {
+    this.touched = true
+    const urls = [...images, ...(text.match(/https?:\/\/\S+/g) || [])]
+    if (urls.length) {
+      const before = this.candidates.length
+      // A replacement makes room: the oldest candidates go first.
+      if (before + urls.length > MAX_IMAGE_CANDIDATES) this.dropCandidates(before + urls.length - MAX_IMAGE_CANDIDATES)
+      const kept = this.candidates.length
+      await this.addCandidates(urls)
+      if (this.candidates.length === kept) {
+        this.modeNote = `指定された画像を使えませんでした${this.readNote ? `（${this.readNote}）` : ''}`
+        return false
+      }
+      await this.choose(kept)
+      return true
+    }
+    return this.edit(text)
+  }
+
+  dropCandidates (count) {
+    const selected = this.candidates[this.selected]
+    this.candidates.splice(0, count)
+    const index = this.candidates.indexOf(selected)
+    this.selected = index === -1 ? null : index
+    for (const key of [...this.rendered.keys()]) if (/^\d+:/.test(key)) this.rendered.delete(key)
+    if ((this.mode === 'crop' || this.mode === 'fit') && this.selected === null) this.mode = 'none'
+  }
+
+  // Edits the image shown now as told; without one, makes a new image to match.
+  async edit (instruction) {
+    try {
+      const edited = await editCover({ title: this.title, summary: this.summary, instruction, source: this.buffer, size: this.size })
+      this.rendered.set('edited', edited)
+      this.instructions = this.mode === 'edited' ? [...this.instructions, instruction] : [instruction]
+      this.mode = 'edited'
+      this.modeNote = null
+    } catch (e) {
+      this.modeNote = `画像の編集に失敗しました: ${e.hint || e.message}`
+      return false
+    }
+    await this.updateSheet()
+    return true
   }
 
   async addCandidates (imageUrls) {
@@ -95,12 +145,13 @@ class CoverImage {
       ...(this.current ? ['keep'] : []),
       ...(this.selected !== null ? ['crop', 'fit'] : []),
       'ai',
+      ...(this.rendered.has('edited') ? ['edited'] : []),
       'none'
     ]
   }
 
   key (mode) {
-    if (mode === 'ai' || mode === 'keep') return mode
+    if (mode === 'ai' || mode === 'keep' || mode === 'edited') return mode
     return `${this.selected}:${mode}`
   }
 
@@ -139,11 +190,11 @@ class CoverImage {
   // The draft became the other kind (event <-> forum post), which has another size. Everything is
   // redone at the new size from the same choices; an AI image is cropped rather than redrawn.
   async resize (size) {
-    const ai = this.rendered.get('ai')
+    const made = ['ai', 'edited'].filter(key => this.rendered.has(key)).map(key => [key, this.rendered.get(key)])
     this.size = size
     this.rendered.clear()
     for (const c of this.candidates) c.defaultMode = await defaultMode(c.source, size)
-    if (ai) this.rendered.set('ai', await cropTo(ai, size))
+    for (const [key, image] of made) this.rendered.set(key, await cropTo(image, size))
     if (this.mode === 'crop' || this.mode === 'fit') await this.select(this.mode)
   }
 
@@ -166,11 +217,12 @@ class CoverImage {
     if (this.mode === 'keep') {
       lines.push(MODES.keep)
     } else if (this.buffer) {
-      const which = this.candidates.length > 1 && this.mode !== 'ai' ? `画像${this.selected + 1}・` : ''
+      const which = this.candidates.length > 1 && this.usesCandidate() ? `画像${this.selected + 1}・` : ''
       lines.push(`${which}${MODES[this.mode]}（${this.size.width}×${this.size.height}）`)
     } else {
       lines.push('なし')
     }
+    if (this.mode === 'edited') lines.push(`指示: ${this.instructions.join(' → ').slice(0, 300)}`)
     if (this.mode === 'ai' && this.aiText !== `${this.title}\n${this.summary}`) {
       lines.push('内容を修正する前に作った画像です。作り直すときは「画像: AIで作り直す」を押してください')
     }

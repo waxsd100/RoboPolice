@@ -10,6 +10,13 @@ const MAX_TAGS = 5
 const MAX_TITLE = 100
 const MAX_CONTENT = 2000
 const MAX_IMAGE_CANDIDATES = 4
+const MAX_IMAGE_INSTRUCTION = 500
+
+// Shared by both submit tools: what the requester said about the image itself.
+const IMAGE_INSTRUCTION_PROPERTY = {
+  type: 'STRING',
+  description: '依頼者が画像について指示したときだけ、その指示を依頼者の言葉どおりに入れる（例:「背景を夜空にして」「もっと明るく」「この画像に差し替えて https://…」）。差し替える画像の URL があれば含める。指示がなければ空'
+}
 
 const SUBMIT_FORUM_DECLARATION = {
   name: 'submit_forum_post_draft',
@@ -23,7 +30,8 @@ const SUBMIT_FORUM_DECLARATION = {
       title: { type: 'STRING', description: `投稿の題名（${MAX_TITLE}文字以内）` },
       content: { type: 'STRING', description: `投稿の本文（${MAX_CONTENT}文字以内、Discord の Markdown 可）。参照元のリンクがあれば末尾に含める` },
       tags: { type: 'ARRAY', items: { type: 'STRING' }, description: `付けるタグの名前（list_forums に出たものから最大${MAX_TAGS}個）` },
-      image_urls: { type: 'ARRAY', items: { type: 'STRING' }, description: `投稿に添える画像の候補 URL（良い順、最大${MAX_IMAGE_CANDIDATES}つ）。参照したページの og:image / twitter:image、メッセージの添付画像・埋め込み画像から内容に合うものを選ぶ。ロゴやアイコンなど小さい画像は選ばない。なければ空` }
+      image_urls: { type: 'ARRAY', items: { type: 'STRING' }, description: `投稿に添える画像の候補 URL（良い順、最大${MAX_IMAGE_CANDIDATES}つ）。参照したページの og:image / twitter:image、メッセージの添付画像・埋め込み画像から内容に合うものを選ぶ。ロゴやアイコンなど小さい画像は選ばない。なければ空` },
+      image_instruction: IMAGE_INSTRUCTION_PROPERTY
     },
     required: ['found']
   }
@@ -37,6 +45,10 @@ function imageUrlsOf (draft) {
     .map(u => String(u || '').trim())
     .filter(u => /^https?:\/\/\S+$/i.test(u))
   return [...new Set(urls)].slice(0, MAX_IMAGE_CANDIDATES)
+}
+
+function imageInstructionOf (draft) {
+  return String(draft.image_instruction || '').trim().slice(0, MAX_IMAGE_INSTRUCTION) || null
 }
 
 function canPost (channel, userID) {
@@ -106,8 +118,9 @@ async function toForumPost (draft, guild, member) {
     },
     tagNames: tags.map(t => t.name),
     imageUrls: imageUrlsOf(draft),
+    imageInstruction: imageInstructionOf(draft),
     truncated: content.length > MAX_CONTENT
   }
 }
 
-module.exports = { SUBMIT_FORUM_DECLARATION, toForumPost, describeForums, postableForums, imageUrlsOf, MAX_IMAGE_CANDIDATES, FORUM_TYPES, REQUIRE_TAG }
+module.exports = { SUBMIT_FORUM_DECLARATION, IMAGE_INSTRUCTION_PROPERTY, toForumPost, describeForums, postableForums, imageUrlsOf, imageInstructionOf, MAX_IMAGE_CANDIDATES, FORUM_TYPES, REQUIRE_TAG }
