@@ -27,7 +27,7 @@ describe('backfillChannels', { skip: !database.available && 'needs PGHOST' }, ()
     for (const [id, ts] of [[general[3], '2026-01-01'], [general[140], '2026-01-01'], [inThread, '2026-02-01'], [gone, '2026-03-01']]) {
       await q('INSERT INTO messages (id, author_id, content, ts, embedded) VALUES ($1, $2, $3, $4, true)', [id, 'u', 'x', ts])
     }
-    await q("INSERT INTO messages (id, author_id, content, ts, channel_id, guild_id) VALUES ($1, 'u', 'x', '2026-04-01', 'c9', 'g1')", [known])
+    await q("INSERT INTO messages (id, author_id, content, ts, channel_id, guild_id, embedded) VALUES ($1, 'u', 'x', '2026-04-01', 'c9', 'g1', true)", [known])
 
     // Newest first, 100 a page, as Discord answers.
     const history = { c1: [...general].reverse(), t1: [inThread], v1: [] }
