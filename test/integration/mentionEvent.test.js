@@ -1019,6 +1019,30 @@ describe('mention → event / forum post (integration)', () => {
       assert.ok(message.files[0].file.equals(reply.state.files[0].file))
     })
 
+    test('an image attached to the reply replaces the posted image, even without any text', async () => {
+      const { channel, replies } = createChannel()
+      const requests = installGemini([body => {
+        assert.match(body.contents[0].parts[0].text, /## 依頼メッセージ\n画像を添付の画像に差し替えて/)
+        // The model may well list the attachment and describe the change; the image is replaced once, without AI.
+        return [call('submit_forum_post_draft', { found: true, channel_id: '206', title: '11/3 交流会', content: '参加したい人は書き込んでください', tags: ['募集中'], image_urls: [`${site.url}/poster.png`], image_instruction: '添付の画像に差し替える' })]
+      }])
+      const done = mentionEvent.handle(mention(channel, '<@BOT>', {
+        messageReference: { messageID: '700', channelID: '700' },
+        attachments: [{ url: `${site.url}/poster.png`, filename: 'poster.png', content_type: 'image/png' }]
+      }))
+      const [reply] = replies
+      await waitForButtons(reply, '更新する')
+      assert.equal(requests.length, 1, 'no image model call')
+      const fields = reply.state.embeds[0].fields
+      assert.equal(fields.find(f => f.name === '変更する項目').value, '（文章の変更なし）')
+      assert.equal(fields.find(f => f.name === '画像').value, '切り抜き（1280×720）')
+      await press(reply, '更新する')
+      await done
+      const message = discord.find(c => c.method === 'PATCH' && c.url.endsWith('/messages/700'))
+      assert.deepEqual(message.body.attachments, [{ id: 0, filename: 'image.jpg' }])
+      assert.ok(message.files[0].file.equals(reply.state.files[0].file))
+    })
+
     test('keeping the image leaves the attachments untouched', async () => {
       const { channel, replies } = createChannel()
       installGemini([[call('submit_forum_post_draft', { found: true, channel_id: '206', title: '11/3 交流会', content: '本文を直しました', tags: ['募集中'] })]])
