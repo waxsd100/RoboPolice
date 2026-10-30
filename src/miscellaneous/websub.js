@@ -136,4 +136,4 @@ function start () {
   return server
 }
 
-module.exports = { start, handle, subscribe, renew, validSignature, parseNotification, topicOf, PATH }
+module.exports = { start, enabled, handle, subscribe, renew, validSignature, parseNotification, topicOf, PATH }

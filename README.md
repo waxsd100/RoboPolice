@@ -133,7 +133,9 @@ accumulates:
   any public channel and without a channel set, and shows the summary), one at a time, showing progress. A long
   run can outlast the 15 minutes an interaction can be edited; the result is then posted in the
   channel.
-- New videos are picked up automatically (`src/bot/modules/youtubeSync.js`). Every
+- New videos are picked up automatically (`src/bot/modules/youtubeSync.js`). With YouTube pushes
+  set up (`YOUTUBE_WEBSUB_URL`, see "Streams as server events"), a channel is synced when YouTube
+  pushes an upload, a new stream or an edit, and there is no timed sync. Without them, every
   `YOUTUBE_AUTO_SYNC_MINUTES` (default 15, 0 turns it off) each worker checks the servers it hosts:
   the channel's public feed (`/feeds/videos.xml`, no API quota) shows whether there is a video not
   stored yet, and only then is the channel synced. A server with a live or upcoming stream, or with
@@ -158,7 +160,7 @@ With `YOUTUBE_WEBSUB_URL` and `YOUTUBE_WEBSUB_SECRET` set, YouTube also pushes n
 streams (`src/miscellaneous/websub.js`, WebSub): the master process listens on `PORT` at
 `/youtube/websub`, subscribes every configured channel at Google's hub (renewing before the 5-day
 lease ends, checked hourly), verifies the hub's HMAC signature, and has the workers check that
-channel at once. On Railway, generate a public domain for the service and set
+channel at once; every server with that channel is synced too. On Railway, generate a public domain for the service and set
 `YOUTUBE_WEBSUB_URL=https://<domain>`. A stream going live is not always pushed, which the poll
 covers.
 

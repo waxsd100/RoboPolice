@@ -120,6 +120,40 @@ describe('startAutoSync', () => {
   })
 })
 
+describe('syncing on YouTube pushes', () => {
+  afterEach(() => {
+    delete global.bot
+    delete process.env.YOUTUBE_WEBSUB_URL
+    delete process.env.YOUTUBE_WEBSUB_SECRET
+  })
+
+  test('a push syncs every hosted server that set that channel, and only those', async (t) => {
+    t.mock.method(global.logger, 'info', () => {})
+    process.env.YOUTUBE_API_KEY = 'k'
+    const store = installYouTubeStore({
+      100: { channel: { channel_id: UC }, videos: [] },
+      200: { channel: { channel_id: UC }, videos: [] },
+      300: { channel: { channel_id: 'UC' + 'q'.repeat(22) }, videos: [] }
+    })
+    global.bot = { guilds: new Map([['100', {}], ['300', {}]]) }
+    fakeYouTube({ newVideos: [id(9)] })
+    await youtubeSync.syncOnPush(UC)
+    assert.deepEqual(store.writes.map(w => w.saveSync), ['100'], 'server 200 is on another worker, 300 has another channel')
+  })
+
+  test('with pushes set up, there is no timed sync; without, there is', (t) => {
+    t.mock.method(global.logger, 'startup', () => {})
+    const timers = t.mock.method(global, 'setInterval', () => 'timer')
+    process.env.YOUTUBE_API_KEY = 'k'
+    process.env.YOUTUBE_WEBSUB_URL = 'https://robo.example'
+    process.env.YOUTUBE_WEBSUB_SECRET = 's'
+    assert.equal(youtubeSync.startAutoSync(), null)
+    assert.equal(timers.mock.callCount(), 0)
+    delete process.env.YOUTUBE_WEBSUB_URL
+    assert.equal(youtubeSync.startAutoSync(), 'timer')
+  })
+})
+
 describe('summarizing the newest videos', () => {
   beforeEach(() => {
     configureGateway()

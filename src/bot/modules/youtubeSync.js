@@ -70,9 +70,30 @@ async function autoSyncAll () {
   }
 }
 
+// A push from YouTube (an upload, a new stream, or a title or description changed): sync every
+// server this worker hosts that set that channel.
+async function syncOnPush (channelID) {
+  const channels = (await youtubeDB.listChannels()).filter(c => c.channel_id === channelID && global.bot.guilds.has(c.guild_id))
+  for (const { guild_id: guildID } of channels) {
+    await sync(guildID)
+      .then(({ added }) => global.logger.info(`[YOUTUBE]: Synced ${guildID} on a YouTube push, ${added} new video(s)`))
+      .catch(e => global.logger.warn(`[YOUTUBE]: Sync of ${guildID} on a push failed: ${e.message}`))
+  }
+}
+
+// With YouTube pushes set up (websub.js), a channel is synced when YouTube says something changed;
+// without them, every YOUTUBE_AUTO_SYNC_MINUTES.
 function startAutoSync () {
+  if (!process.env.YOUTUBE_API_KEY) return null
+  if (require('../../miscellaneous/websub').enabled()) {
+    global.logger.startup('[YOUTUBE]: Syncing channels when YouTube pushes an upload.')
+    require('cluster').worker?.on('message', message => {
+      if (message?.type === 'youtubePush' && message.channelID) syncOnPush(message.channelID).catch(e => global.logger.warn(`[YOUTUBE]: ${e.message}`))
+    })
+    return null
+  }
   const minutes = autoSyncMinutes()
-  if (!process.env.YOUTUBE_API_KEY || minutes === 0) return null
+  if (minutes === 0) return null
   global.logger.startup(`[YOUTUBE]: Checking channels for new videos every ${minutes} minutes.`)
   return setInterval(autoSyncAll, minutes * 60 * 1000)
 }
@@ -102,4 +123,4 @@ async function summarizeLatest (guildID, videos, { onProgress = () => {}, force 
   return results
 }
 
-module.exports = { sync, syncIfChanged, autoSyncAll, startAutoSync, feedVideoIds, videosToSummarize, summarizeLatest, MAX_SUMMARIES }
+module.exports = { sync, syncIfChanged, syncOnPush, autoSyncAll, startAutoSync, feedVideoIds, videosToSummarize, summarizeLatest, MAX_SUMMARIES }
