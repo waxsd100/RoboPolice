@@ -315,7 +315,10 @@ async function describeServer (guild, member, requestChannelID) {
 
   const youtube = await youtubeDB.getOverview(guild.id).catch(() => null)
   lines.push('', '### YouTube', youtube?.synced_at
-    ? `${youtube.title}（動画 ${youtube.video_count} 件を保存、取得 ${new Date(youtube.synced_at).toISOString()}）。詳しくは search_youtube で調べる`
+    ? [
+        `${youtube.title}（動画 ${youtube.video_count} 件を保存、取得 ${new Date(youtube.synced_at).toISOString()}）。詳しくは search_youtube で調べる`,
+        ...(youtube.description ? [`チャンネルの説明: ${youtube.description.replace(/\s+/g, ' ').slice(0, 300)}`] : [])
+      ].join('\n')
     : '設定なし')
   return lines.join('\n')
 }

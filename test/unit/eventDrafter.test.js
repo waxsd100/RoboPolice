@@ -141,7 +141,30 @@ describe('draft', () => {
     assert.equal(headers['cf-aig-authorization'], 'Bearer gw-token')
     assert.equal(body.toolConfig.functionCallingConfig.mode, 'ANY')
     assert.equal(requests[0].dispatcher, undefined, 'ordinary calls keep fetch\'s default limits')
-    assert.deepEqual(body.tools[0].functionDeclarations.map(d => d.name), ['lookup', 'submit_event_draft', 'submit_forum_post_draft'])
+    assert.deepEqual(body.tools[0].functionDeclarations.map(d => d.name), ['lookup', 'submit_event_draft', 'submit_forum_post_draft', 'submit_chat_reply'])
+  })
+
+  test('answers talk that is not a request with a chat reply, in the community\'s character', async () => {
+    const requests = installGemini([[call('submit_chat_reply', { text: '  こんにちは！  ' })]])
+    const result = await draft({ request: 'こんにちは', channelName: 'general', guild, tools, now: NOW })
+    assert.equal(result.kind, 'chat')
+    assert.equal(result.text, 'こんにちは！')
+    const instruction = requests[0].body.systemInstruction.parts[0].text
+    assert.match(instruction, /頼んでいないとき（あいさつ・雑談・質問・相談など）は[\s\S]*submit_chat_reply/)
+    assert.match(instruction, /頼んでいるのに[\s\S]*found: false と理由つきで提出/)
+    assert.match(instruction, /## 返事をするときのキャラクター[\s\S]*配信者本人ではありません/)
+    assert.doesNotMatch(instruction, /運営者が設定したキャラクター/)
+  })
+
+  test('adds the operator\'s character notes from CHAT_PERSONA', async () => {
+    process.env.CHAT_PERSONA = '語尾は「〜だぜ」'
+    try {
+      const requests = installGemini([[call('submit_chat_reply', { text: 'よろしくだぜ' })]])
+      await draft({ request: 'よろしく', channelName: 'general', guild, tools, now: NOW })
+      assert.match(requests[0].body.systemInstruction.parts[0].text, /## 運営者が設定したキャラクター\n語尾は「〜だぜ」$/)
+    } finally {
+      delete process.env.CHAT_PERSONA
+    }
   })
 
   test('selects the stored key by alias when one is configured', async () => {

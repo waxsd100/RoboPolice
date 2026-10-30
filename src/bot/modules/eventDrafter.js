@@ -37,10 +37,27 @@ const SUBMIT_EVENT_DECLARATION = {
   }
 }
 
-const SUBMIT_DECLARATIONS = [SUBMIT_EVENT_DECLARATION, SUBMIT_FORUM_DECLARATION]
+const MAX_CHAT_REPLY = 2000
+
+const SUBMIT_CHAT_DECLARATION = {
+  name: 'submit_chat_reply',
+  description: 'イベントやフォーラム投稿の作成・修正を頼まれていない話しかけ（あいさつ・雑談・質問・相談など）に返事をするとき、調べ終わったら必ず最後に1回だけ呼ぶ。',
+  parameters: {
+    type: 'OBJECT',
+    properties: {
+      text: { type: 'STRING', description: '返事の本文（日本語、Discord の Markdown 可、長くても500文字程度）' }
+    },
+    required: ['text']
+  }
+}
+
+const SUBMIT_DECLARATIONS = [SUBMIT_EVENT_DECLARATION, SUBMIT_FORUM_DECLARATION, SUBMIT_CHAT_DECLARATION]
 
 const SYSTEM_INSTRUCTION = [
-  'あなたは Discord サーバーの運営を手伝うアシスタントです。依頼に応じて、スケジュールイベントの登録か、フォーラムへの投稿の下書きを作ります。',
+  'あなたは Discord サーバーの BOT です。依頼に応じて、スケジュールイベントの登録か、フォーラムへの投稿の下書きを作ります。それ以外の話しかけには、会話の相手として返事をします。',
+  'まず、依頼メッセージがイベントの登録・フォーラムへの投稿（またはその修正）を頼んでいるのかを判断してください。',
+  '頼んでいないとき（あいさつ・雑談・質問・相談など）は、必要ならツールで調べてから submit_chat_reply で返事をしてください。',
+  '頼んでいるのに、日時が分からない・参照先が関係のない内容だったなどで作れないときは、雑談として答えず、submit_event_draft か submit_forum_post_draft を found: false と理由つきで提出してください。',
   '依頼メッセージを読み、必要ならツールで Web ページや Discord のメッセージ・チャンネル・既存イベントを調べてから、下書きを1件だけ提出してください。',
   'イベントの登録なら submit_event_draft、フォーラムへの投稿（告知・募集・まとめなどをフォーラムに立てる）なら submit_forum_post_draft で提出してください。どちらか分からなければ ask_user で依頼者に選んでもらってください。',
   'フォーラムに投稿するときは list_forums で投稿先とタグを確認し、投稿ガイドラインに沿った題名と本文にしてください。投稿先が指定されていればそこに投稿し、分からなければ ask_user で選んでもらってください。',
@@ -56,8 +73,21 @@ const SYSTEM_INSTRUCTION = [
   '依頼メッセージに場所や名前の指定があれば、参照先の内容より依頼メッセージを優先してください。',
   'ボイス/ステージチャンネルで行う場合は list_channels でチャンネル ID を確認してください。',
   '同じイベントがすでに登録されていそうなら list_scheduled_events で確認し、重複なら found を false にして理由を書いてください。',
-  '候補のイベントが複数ある、日時・場所・チャンネルが曖昧などで決められないときは、推測せず ask_user で選択肢を示して依頼者に選んでもらってください。調べれば分かることは質問しないでください。'
+  '候補のイベントが複数ある、日時・場所・チャンネルが曖昧などで決められないときは、推測せず ask_user で選択肢を示して依頼者に選んでもらってください。調べれば分かることは質問しないでください。',
+  '',
+  '## 返事をするときのキャラクター',
+  'このサーバーは、サーバーの情報の「YouTube」にあるチャンネルのコミュニティです。そのチャンネルの動画や配信の雰囲気・話題・ノリに合わせて、コミュニティの仲間として明るく親しみやすい口調で話してください。',
+  'チャンネルや動画・配信の話題は、search_youtube で保存済みの情報を調べてから答えてください。調べても分からないことは、分からないと言ってください。',
+  'あなたはサーバーの BOT で、配信者本人ではありません。本人になりきったり、本人が言っていないことを本人の発言として作ったりしないでください。',
+  '返事は Discord のメッセージとして読みやすく、長くても500文字程度にしてください。'
 ].join('\n')
+
+// Extra character notes from the operator (CHAT_PERSONA), e.g. a catchphrase or how to address
+// members.
+function systemInstruction () {
+  const persona = (process.env.CHAT_PERSONA || '').trim()
+  return persona ? `${SYSTEM_INSTRUCTION}\n\n## 運営者が設定したキャラクター\n${persona}` : SYSTEM_INSTRUCTION
+}
 
 function isConfigured () {
   return isGatewayConfigured()
@@ -178,7 +208,7 @@ async function callGemini (model, body, { timeoutMs = GEMINI_TIMEOUT_MS } = {}) 
 
 function generate (contents, declarations) {
   return callGemini(process.env.GEMINI_MODEL || DEFAULT_GEMINI_MODEL, {
-    systemInstruction: { parts: [{ text: SYSTEM_INSTRUCTION }] },
+    systemInstruction: { parts: [{ text: systemInstruction() }] },
     contents,
     tools: [{ functionDeclarations: declarations }],
     // ANY: every turn must be a tool call, so the loop always ends in a submit_* call.
@@ -196,7 +226,7 @@ async function runAgent (contents, tools, submits = SUBMIT_DECLARATIONS) {
     // Echo the model turn back unchanged: newer models attach thought signatures to it.
     contents.push(content)
     const calls = content.parts.filter(p => p.functionCall).map(p => p.functionCall)
-    const submitted = calls.find(c => SUBMIT_DECLARATIONS.some(d => d.name === c.name))
+    const submitted = calls.find(c => submits.some(d => d.name === c.name))
     // `calls` is kept: a correction must answer every call of this turn, not just the submit.
     if (submitted) return { name: submitted.name, args: submitted.args || {}, calls }
     if (calls.length === 0) throw new GeminiError(`Gemini answered without a tool call: ${JSON.stringify(content).slice(0, 1000)}`, 'AI の応答の形式が想定と違いました')
@@ -248,12 +278,16 @@ function toScheduledEvent (draft, guild, now, { keepStart = null } = {}) {
   return { event, endGuessed, imageUrls: imageUrlsOf(draft) }
 }
 
-// Returns { kind: 'event', event, endGuessed }, { kind: 'forum', post, tagNames, truncated }, or
-// { error } with a reason to show the requester.
+// Returns { kind: 'event', event, endGuessed }, { kind: 'forum', post, tagNames, truncated },
+// { kind: 'chat', text } for a reply to someone who was just talking, or { error } with a reason to
+// show the requester.
 // Every result carries `conversation`, which revise() continues.
 async function check (conversation, { name, args, calls = [] }) {
   const { guild, member, now, forum, edit } = conversation
   conversation.lastCalls = calls
+  if (name === SUBMIT_CHAT_DECLARATION.name) {
+    return { kind: 'chat', text: String(args.text || '').trim().slice(0, MAX_CHAT_REPLY) || '……', conversation }
+  }
   if (name === SUBMIT_FORUM_DECLARATION.name) {
     // A forum named in the request wins over whatever the model picked.
     const result = await toForumPost(forum ? { ...args, channel_id: forum.id } : args, guild, member)
@@ -276,7 +310,9 @@ async function draft ({ request, referenced, channelName, channelID, server, for
     tools,
     forum: edit?.kind === 'forum' ? { id: edit.current.channel_id } : forum,
     edit,
-    submits: edit ? [edit.kind === 'event' ? SUBMIT_EVENT_DECLARATION : SUBMIT_FORUM_DECLARATION] : SUBMIT_DECLARATIONS,
+    submits: edit
+      ? [edit.kind === 'event' ? SUBMIT_EVENT_DECLARATION : SUBMIT_FORUM_DECLARATION, SUBMIT_CHAT_DECLARATION]
+      : SUBMIT_DECLARATIONS,
     now
   }
   return check(conversation, await runAgent(conversation.contents, tools, conversation.submits))

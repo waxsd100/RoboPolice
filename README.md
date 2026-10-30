@@ -61,6 +61,18 @@ who can manage events (or the owner, or `STAFF_ROLE_ID` staff) can use it. Event
 have **Manage Events**; a forum post needs both the requester and the app to be able to post in that
 forum, and is sent with mentions disabled so drafted text can't ping anyone.
 
+A mention that does not ask for an event or a forum post (a greeting, a question, small talk) gets a
+plain chat reply (`submit_chat_reply`), with pings disabled. The model is told to talk like a member
+of the community of the server's YouTube channel (set with `/youtube`), in the mood of its videos and
+streams, looking them up with `search_youtube`, and never to pose as the creator. `CHAT_PERSONA`
+adds the operator's own character notes. A request that is for an event or a post but can't be
+made (no date, or the linked message is about something else) is an error, not a chat reply, and is
+shown as `⚠️ 作成できませんでした`.
+
+Each user can have 30 mentions answered per day (Japan time), across servers, counted in Redis
+(`src/bot/utils/mentionQuota.js`, `MENTION_DAILY_LIMIT`). If Redis is unreachable the mention goes
+through.
+
 Drafting is a Gemini function-calling loop (`src/bot/modules/eventDrafter.js`) over read-only tools
 (`src/bot/modules/eventTools.js`): fetch a web page, read a Discord message by link, read a channel's
 recent messages, list channels, list forums with their tags and guidelines, and list existing
@@ -200,6 +212,8 @@ credentials in URLs. The same masked text goes to the error webhook.
 | `VIDEO_SUMMARY_TIMEOUT_MINUTES` | Optional. How long a video summary may take. Defaults to 10 |
 | `YOUTUBE_GATEWAY_PROVIDER` | Optional. Slug of an AI Gateway custom provider (see below). Set, YouTube API calls go through Cloudflare AI Gateway; unset, straight to Google |
 | `GEMINI_IMAGE_MODEL` | Optional. Image model for AI-made covers. Defaults to `gemini-3.1-flash-image` |
+| `CHAT_PERSONA` | Optional. Character notes added to chat replies (tone, catchphrases, how to address members) |
+| `MENTION_DAILY_LIMIT` | Optional. Mentions each user can have answered per day (Japan time). Defaults to 30; 0 turns the limit off |
 
 Values that never differ between deployments are constants in code rather than environment
 variables: the support server and legal URLs (`src/bot/utils/constants.js`) and the message batch

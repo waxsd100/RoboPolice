@@ -6,6 +6,7 @@ const { EMBED_COLORS } = require('../utils/constants')
 const { hasStaffAccess } = require('../utils/staffAccess')
 const { redact } = require('../utils/redact')
 const { trackUsage } = require('../utils/geminiUsage')
+const mentionQuota = require('../utils/mentionQuota')
 const { SIZES } = require('../utils/imageCrop')
 const { CoverImage, MODES } = require('./coverImage')
 const { FORUM_TYPES } = require('./forumPost')
@@ -104,6 +105,14 @@ function extractRequest (message) {
   return message.content
     .replace(mentionPattern(), (whole, roleID) => !roleID || isOwnRole(guild, roleID) ? '' : whole)
     .trim()
+}
+
+// What the bot says in a chat reply comes from the model; it must never ping anyone.
+const NO_MENTIONS = { everyone: false, roles: false, users: false }
+
+// A draft that could not be made: marked so it is not mistaken for a chat reply.
+function failure (reason) {
+  return `⚠️ **作成できませんでした**\n${reason}`
 }
 
 // The error log for the reply: message and the top of the stack, with secrets masked, since the
@@ -243,8 +252,11 @@ const KINDS = {
 async function editReply (reply, payload, files) {
   if (files === undefined) return reply.edit(payload)
   const list = files || []
+  const { allowedMentions, ...body } = payload
   return global.bot.requestHandler.request('PATCH', `/channels/${reply.channel.id}/messages/${reply.id}`, true, {
-    ...payload,
+    ...body,
+    // The REST API's own name for it; nothing the bot edits in should ping anyone.
+    allowed_mentions: { parse: [] },
     attachments: list.map((f, id) => ({ id, filename: f.filename }))
   }, list.length ? list.map((f, i) => ({ name: `files[${i}]`, file: f.file })) : undefined)
 }
@@ -334,7 +346,7 @@ async function handle (message) {
   const request = extractRequest(message)
   const repliedTo = message.messageReference?.messageID
   if (!request && !repliedTo) {
-    return message.channel.createMessage({ content: 'イベントやフォーラム投稿にしたい内容（文章・URL・メッセージリンク）を添えるか、元のメッセージに返信する形でメンションしてください。', ...reference }).catch(() => {})
+    return message.channel.createMessage({ content: '話したいことか、イベントやフォーラム投稿にしたい内容（文章・URL・メッセージリンク）を添えるか、元のメッセージに返信する形でメンションしてください。', ...reference }).catch(() => {})
   }
   if (inProgress.has(message.author.id)) {
     return message.channel.createMessage({ content: '前の依頼を処理中です。終わってからもう一度お試しください。', ...reference }).catch(() => {})
@@ -346,6 +358,8 @@ async function handle (message) {
     let reply
     try {
       reply = await message.channel.createMessage({ content: '内容を読み取っています…', ...reference })
+      const quota = await mentionQuota.take(message.author.id)
+      if (!quota.allowed) throw new StopDrafting(`今日の利用回数の上限（1日${quota.limit}回）に達しました。明日（日本時間の0時以降）またお試しください。`)
       usage.onWait = ms => reply.edit({ content: `AI が混み合っているため、${Math.ceil(ms / 1000)} 秒待ってから再試行します…` }).catch(() => {})
       const member = message.member
       const tools = createTools({
@@ -385,9 +399,22 @@ async function handle (message) {
       let revisions = 0
       let cover = null
       let needsCover = true
+      let previous = null // the draft shown before the latest correction
+      let note = ''
       for (;;) {
+        if (result.kind === 'chat') {
+          if (!previous) {
+            await reply.edit({ content: result.text, embeds: [], components: [], allowedMentions: NO_MENTIONS })
+            return
+          }
+          // The requester asked something about the draft instead of correcting it: answer, and
+          // show the draft again.
+          note = result.text
+          result = { ...previous, conversation: result.conversation }
+          continue
+        }
         if (result.error) {
-          await editReply(reply, { content: `作成できませんでした: ${result.error}`, embeds: [], components: [] }, null)
+          await editReply(reply, { content: failure(result.error), embeds: [], components: [] }, null)
           return
         }
 
@@ -430,7 +457,8 @@ async function handle (message) {
           }))
         ]
         const picked = await choose(reply, message.author.id, {
-          content: canRevise ? '' : `内容の修正は${MAX_REVISIONS}回までです。`,
+          content: [note.slice(0, 1500), canRevise ? '' : `内容の修正は${MAX_REVISIONS}回までです。`].filter(Boolean).join('\n\n'),
+          allowedMentions: NO_MENTIONS,
           embeds: [embed, ...candidatesEmbed(cover)]
         }, buttons, previewFiles(cover))
         if (!picked) {
@@ -457,6 +485,8 @@ async function handle (message) {
         }
         const correction = await typedAnswer(reply, message.channel.id, message.author.id, kind.revisePrompt)
         await reply.edit({ content: '修正を反映しています…' })
+        previous = result
+        note = ''
         result = await revise(result.conversation, correction)
         revisions++
         needsCover = true
@@ -470,7 +500,7 @@ async function handle (message) {
       // The console log alone is easy to miss; also send it to the error webhook the operators watch.
       global.webhook.error(redact(`Drafting from a mention in ${guild.id} failed: ${e.message}`).slice(0, 2000))
       const cause = e.hint || (e.name === 'TimeoutError' ? 'AI の応答が時間内に返りませんでした' : null)
-      const content = `作成中にエラーが発生しました${cause ? `（${cause}）` : ''}。時間をおいてもう一度お試しください。\n${errorLog(e)}`
+      const content = `⚠️ エラーが発生しました${cause ? `（${cause}）` : ''}。時間をおいてもう一度お試しください。\n${errorLog(e)}`
       if (reply) {
         await editReply(reply, { content, embeds: [], components: [] }, null).catch(() => {})
       } else {

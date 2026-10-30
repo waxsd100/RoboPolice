@@ -72,6 +72,16 @@ function installBot ({ guilds = [], messages = {}, scheduledEvents = [], forums 
   return calls
 }
 
+// Replaces the Redis counter behind the daily mention limit with an in-memory one.
+function installQuotaStore () {
+  const counts = new Map()
+  require('../../src/bot/utils/mentionQuota').store.increment = async key => {
+    counts.set(key, (counts.get(key) || 0) + 1)
+    return counts.get(key)
+  }
+  return counts
+}
+
 // Replaces the YouTube store with an in-memory one, so no test reaches a real database.
 // knowledge: { guildID: { channel, videos } } as getKnowledge() returns it; summaries:
 // { guildID: { videoID: summary } }.
@@ -169,5 +179,5 @@ async function startServer (handler) {
 }
 
 module.exports = {
-  perms, createGuild, createMember, installBot, installYouTubeStore, configureGateway, installGemini, call, submit, lastToolResponses, startServer
+  perms, createGuild, createMember, installBot, installYouTubeStore, installQuotaStore, configureGateway, installGemini, call, submit, lastToolResponses, startServer
 }
