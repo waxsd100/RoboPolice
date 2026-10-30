@@ -2,7 +2,6 @@ global.logger = require('../miscellaneous/logger');
 const format = require('pg-format')
 const pool = require('./clients/postgres')
 const aes = require('./aes')
-const { ensureChannelColumns } = require('./messageColumns')
 const batch = []
 global.timesSubmitted = 0
 global.totalMessagesSubmitted = 0
@@ -18,27 +17,22 @@ async function addItem (messageAsArray) {
   }
 }
 
-// Whether messages can be stored with their channel. If adding the columns failed (no ALTER
-// privilege, a lock timeout), messages are still stored as before rather than lost.
-async function channelColumnsReady () {
-  try {
-    await ensureChannelColumns()
-    return true
-  } catch (e) {
-    global.logger.warn(`Storing messages without their channel: ${e.message}`)
-    return false
-  }
-}
-
-// A batch row: [id, author_id, encrypted content, encrypted attachments, ts, channel_id, guild_id]
+// A batch row: [id, author_id, encrypted content, [encrypted image URLs], ts, channel_id, guild_id]
 async function submitBatch (batchSize) {
-  const withChannel = await channelColumnsReady()
   const toSubmit = batch.splice(0, batchSize)
+  const attachments = toSubmit.flatMap(row => row[3].map((url, position) => [row[0], position, url]))
   const poolClient = await pool.getPostgresClient()
-  await poolClient.query(withChannel
-    ? format('INSERT INTO messages (id, author_id, content, attachment_b64, ts, channel_id, guild_id) VALUES %L ON CONFLICT DO NOTHING', toSubmit)
-    : format('INSERT INTO messages (id, author_id, content, attachment_b64, ts) VALUES %L ON CONFLICT DO NOTHING', toSubmit.map(row => row.slice(0, 5))))
-  poolClient.release()
+  try {
+    await poolClient.query('BEGIN')
+    await poolClient.query(format('INSERT INTO messages (id, author_id, content, ts, channel_id, guild_id) VALUES %L ON CONFLICT DO NOTHING', toSubmit.map(([id, author, content, , ts, channel, guild]) => [id, author, content, ts, channel, guild])))
+    if (attachments.length) await poolClient.query(format('INSERT INTO message_attachments (message_id, position, url) VALUES %L ON CONFLICT DO NOTHING', attachments))
+    await poolClient.query('COMMIT')
+  } catch (e) {
+    await poolClient.query('ROLLBACK').catch(() => {})
+    throw e
+  } finally {
+    poolClient.release()
+  }
   global.timesSubmitted += 1
   global.totalMessagesSubmitted += batchSize
 
@@ -56,8 +50,7 @@ function getMessage (messageID) {
     id: message[0],
     author_id: message[1],
     content: aes.decrypt(message[2]),
-    // Note that we can use '|' as a separator since base64url encoded strings (the output of aes.decrypt) cannot contain the '|' character.
-    attachment_b64: message[3] ? message[3].split("|").map(encrypted_img_url => aes.decrypt(encrypted_img_url)).join("|") : '',
+    attachment_urls: message[3].map(url => aes.decrypt(url)),
     ts: Date.parse(message[4])
   }
 }
@@ -74,7 +67,7 @@ function updateMessage (messageID, changedAttrs) {
         handled = true
       }
       if ('imageUrls' in changedAttrs) {
-        batch[i][3] = changedAttrs.imageUrls.map(url => aes.encrypt(Buffer.from(url).toString("base64url"))).join("|")
+        batch[i][3] = changedAttrs.imageUrls.map(url => aes.encrypt(url))
         handled = true
       }
       if (!handled) {

@@ -4,40 +4,14 @@ const cacheGuild = require('../../../bot/utils/cacheGuild')
 const batchHandler = require('../../messageBatcher')
 const escape = require('markdown-escape')
 
-const eventLogs = {
-  channelCreate: '',
-  channelUpdate: '',
-  channelDelete: '',
-  guildBanAdd: '',
-  guildBanRemove: '',
-  guildRoleCreate: '',
-  guildRoleDelete: '',
-  guildRoleUpdate: '',
-  guildUpdate: '',
-  messageDelete: '',
-  messageDeleteBulk: '',
-  messageUpdate: '',
-  guildMemberAdd: '',
-  guildMemberKick: '',
-  guildMemberRemove: '',
-  guildMemberUpdate: '',
-  guildMemberVerify: '',
-  voiceChannelLeave: '',
-  voiceChannelJoin: '',
-  voiceStateUpdate: '',
-  voiceChannelSwitch: '',
-  guildEmojisUpdate: '',
-  guildStickersUpdate: '',
-  guildMemberNickUpdate: '',
-  guildMemberBoostUpdate: '',
-  presenceUpdate: ''
-}
-
 async function createGuild (guild) {
   try {
-    await pool.query('INSERT INTO guilds (id, owner_id, ignored_channels, disabled_events, event_logs, log_bots, custom_settings) VALUES ($1, $2, $3, $4, $5, $6, $7)', [guild.id, guild.ownerID, [], [], eventLogs, false, { }]) // Regenerate the document if a user kicks and reinvites the bot.
+    // Settings start empty: no event is logged, no channel ignored (see migrations/002_guild_settings.sql).
+    await pool.query('INSERT INTO guilds (id, owner_id) VALUES ($1, $2) ON CONFLICT (id) DO NOTHING', [guild.id, guild.ownerID])
     await cacheGuild(guild.id)
-  } catch (e) { }
+  } catch (e) {
+    global.logger.warn(`Could not create the settings of ${guild.id}: ${e.message}`)
+  }
 }
 
 // The form message content is stored in (before encryption). messageUpdate compares against and
@@ -47,23 +21,14 @@ function toStoredContent (content) {
   return escape(content.replace(/~/g, '\\~'), ['angle brackets'])
 }
 
-async function cacheMessage (message) {
-  // Encrypt Content
-  message.content = aes.encrypt(toStoredContent(message.content))
-  // Encrypt Images (max 10)
-  let images = message.attachments.filter(attachment => attachment.content_type.startsWith("image"))
-  if (images.length === 0)
-    message.attachment_b64 = ""
-  else if (images.length > 10) {
-    // Discord only allows 10 embeds per message, and since we send 1 image per embed we can't have more than 10 images.
-    // Rather than just sending the first 10, we check to see if there's any duplicates, and if so, remove them.
-    const uniqueImages = Array.from(new Set(images.map(image => image.url))).map(url => images.find(image => image.url === url))
-    images = uniqueImages.slice(0, 10);
-  }
-  // Note that we can use '|' as a separator since base64 encoded strings (the output of aes.encrypt) cannot contain the '|' character.
-  message.attachment_b64 = images.map(attachment => aes.encrypt(Buffer.from(attachment.url).toString("base64url"))).join("|")
+// Discord allows 10 embeds per message, and the logs show one image per embed.
+const MAX_IMAGES = 10
 
-  await batchHandler.addItem([message.id, message.author.id, message.content, message.attachment_b64, new Date().toISOString(), message.channel.id, message.channel.guild?.id || null])
+async function cacheMessage (message) {
+  const content = aes.encrypt(toStoredContent(message.content))
+  // Image URLs in order, without repeats, each encrypted.
+  const imageUrls = [...new Set(message.attachments.filter(a => a.content_type?.startsWith('image')).map(a => a.url))].slice(0, MAX_IMAGES)
+  await batchHandler.addItem([message.id, message.author.id, content, imageUrls.map(url => aes.encrypt(url)), new Date().toISOString(), message.channel.id, message.channel.guild?.id || null])
 }
 
 // The text as the user wrote it, from toStoredContent's form: markdown-escape put a backslash before

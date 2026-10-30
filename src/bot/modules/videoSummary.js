@@ -1,5 +1,5 @@
 // Summarizes what is said and shown in a public YouTube video, by handing its URL to Gemini, and
-// keeps the summary so the same video is never summarized twice for a server. Only run when the
+// keeps the summary so the same video is never summarized twice. Only run when the
 // model decides it needs a video's contents (a video was linked, or a question is about what a
 // video says): it is far costlier than reading titles and descriptions.
 const { callGemini, DEFAULT_GEMINI_MODEL, GeminiError } = require('./eventDrafter')
@@ -28,8 +28,11 @@ const PROMPT = [
 async function summarizeVideo (guildID, url, { onStart = () => {}, force = false } = {}) {
   const videoID = parseVideoId(url)
   if (!videoID) throw new Error('YouTube の動画リンクではありません')
-  const cached = !force && await youtubeDB.getSummary(guildID, videoID)
-  if (cached) return { videoID, summary: cached, cached: true }
+  const cached = !force && await youtubeDB.getSummary(videoID)
+  if (cached) {
+    await youtubeDB.saveSummary(guildID, videoID)
+    return { videoID, summary: cached, cached: true }
+  }
   await onStart(summaryTimeoutMs())
 
   const content = await callGemini(process.env.GEMINI_MODEL || DEFAULT_GEMINI_MODEL, {
