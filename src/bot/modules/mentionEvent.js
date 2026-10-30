@@ -375,8 +375,9 @@ async function handle (message) {
       if (editTarget && !request) throw new StopDrafting('直したいこと（例: 開始を20時に、題名に日付を入れて）を書いてメンションしてください。')
       const edit = editTarget && await postedEdit.load(guild, editTarget)
       // A mention sent as a reply ("@bot これをイベントにして") is about the replied-to message.
+      // Following the replies back makes a reply to the bot's answer continue that conversation.
       const referenced = repliedTo && !edit
-        ? await tools.readMessage(message.messageReference.channelID || message.channel.id, repliedTo).catch(e => `（読めませんでした: ${e.message}）`)
+        ? await tools.readThread(message.messageReference.channelID || message.channel.id, repliedTo).catch(e => ({ text: `（読めませんでした: ${e.message}）`, count: 1 }))
         : null
       // Fetched fresh for every request. Without it the draft still works, just with less context.
       const server = await describeServer(guild, member, message.channel.id).catch(e => {

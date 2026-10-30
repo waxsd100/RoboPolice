@@ -779,6 +779,24 @@ describe('mention → event / forum post (integration)', () => {
     assert.doesNotMatch(replies[0].state.content, /⚠️/)
   })
 
+  test('chat: replying to the bot\'s answer continues the conversation', async () => {
+    MESSAGES['201/610'] = { content: '<@BOT> おすすめの動画ある？', author: { id: REQUESTER, username: `user${REQUESTER}` } }
+    MESSAGES['201/611'] = { content: 'マイクラ実況の最新回がおすすめ！', author: { id: 'BOT', username: 'bot' }, messageReference: { messageID: '610', channelID: '201' } }
+    try {
+      const { channel, replies } = createChannel()
+      const requests = installGemini([body => {
+        assert.match(body.contents[0].parts[0].text, /## 依頼メッセージの返信先（返信をたどった会話[^\n]*\n.*user1 \(1\)（依頼者）: <@BOT> おすすめの動画ある？\n.*あなた（BOT）: マイクラ実況の最新回がおすすめ！\n\n## /)
+        return [call('submit_chat_reply', { text: '続きは来週の配信でやる予定はまだ決まってないよ！' })]
+      }])
+      await mentionEvent.handle(mention(channel, '<@BOT> それの続きは？', { messageReference: { messageID: '611', channelID: '201' } }))
+      assert.equal(requests.length, 1)
+      assert.equal(replies[0].state.content, '続きは来週の配信でやる予定はまだ決まってないよ！')
+    } finally {
+      delete MESSAGES['201/610']
+      delete MESSAGES['201/611']
+    }
+  })
+
   test('chat: a question asked in place of a correction is answered above the same draft', async () => {
     const { channel, replies } = createChannel()
     installGemini([

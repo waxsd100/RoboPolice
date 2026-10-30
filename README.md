@@ -70,6 +70,11 @@ creator's. `CHAT_PERSONA` adds the operator's own character notes. A request tha
 made (no date, or the linked message is about something else) is an error, not a chat reply, and is
 shown as `⚠️ 作成できませんでした`.
 
+Replying to the bot's answer (with a mention) continues the conversation: the reply chain is
+followed back up to 10 messages and given to the model oldest first, with the bot's own messages
+labeled as its own (`あなた（BOT）`) and the requester's marked; the model is told to answer as the
+continuation of it. Nothing is stored for this.
+
 Each user can have 30 mentions answered per day (Japan time), across servers, counted in Redis
 (`src/bot/utils/mentionQuota.js`, `MENTION_DAILY_LIMIT`). If Redis is unreachable the mention goes
 through.

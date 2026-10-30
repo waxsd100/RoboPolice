@@ -106,8 +106,18 @@ function canRead (channel, userID) {
   return !!perms && perms.has('viewChannel') && perms.has('readMessageHistory')
 }
 
-function formatMessage (m) {
-  const lines = [`[${new Date(m.timestamp).toISOString()}] ${m.author.username} (${m.author.id}): ${m.content || ''}`]
+// How many messages a reply chain is followed back, for a conversation with the bot.
+const MAX_THREAD = 10
+
+// Who wrote a message. In a conversation (a reply chain, given `requesterID`) the bot's own earlier
+// replies read "あなた（BOT）" and the requester is marked, so the model can follow who said what.
+function authorLabel (author, requesterID) {
+  if (requesterID && author.id === global.bot.user.id) return 'あなた（BOT）'
+  return `${author.username} (${author.id})${requesterID && author.id === requesterID ? '（依頼者）' : ''}`
+}
+
+function formatMessage (m, requesterID = null) {
+  const lines = [`[${new Date(m.timestamp).toISOString()}] ${authorLabel(m.author, requesterID)}: ${m.content || ''}`]
   for (const e of m.embeds || []) {
     const text = [e.title, e.description, ...(e.fields || []).map(f => `${f.name}: ${f.value}`), e.url].filter(Boolean).join('\n')
     if (text) lines.push(`  埋め込み: ${text}`)
@@ -139,6 +149,24 @@ function createTools ({ guild, member, ask, progress = () => {} }) {
     return formatMessage(await global.bot.getMessage(channelID, messageID))
   }
 
+  // The replied-to message and the replies it continues, oldest first: the conversation the
+  // mention is part of. Stops at the start of the chain, a deleted message, or MAX_THREAD.
+  async function readThread (channelID, messageID) {
+    const messages = []
+    let next = { channelID, messageID }
+    while (next?.messageID && messages.length < MAX_THREAD) {
+      readableChannel(next.channelID)
+      const m = await global.bot.getMessage(next.channelID, next.messageID).catch(e => {
+        if (messages.length === 0) throw e
+        return null
+      })
+      if (!m) break
+      messages.unshift(m)
+      next = m.messageReference && { channelID: m.messageReference.channelID || next.channelID, messageID: m.messageReference.messageID }
+    }
+    return { text: messages.map(m => formatMessage(m, member.id)).join('\n'), count: messages.length }
+  }
+
   const executors = {
     async fetch_url ({ url }) {
       if (MESSAGE_LINK.test(url)) return executors.get_discord_message({ link: url })
@@ -159,7 +187,7 @@ function createTools ({ guild, member, ask, progress = () => {} }) {
       const count = Math.min(Math.max(parseInt(limit, 10) || 20, 1), MAX_RECENT_MESSAGES)
       const messages = await global.bot.getMessages(channelID, { limit: count })
       sources.push(`<#${channel.id}>`)
-      return messages.map(formatMessage).join('\n')
+      return messages.map(m => formatMessage(m)).join('\n')
     },
     async search_channel_history ({ channel_id: channelID, query }) {
       const channel = readableChannel(channelID)
@@ -228,7 +256,7 @@ function createTools ({ guild, member, ask, progress = () => {} }) {
     }
   }
 
-  return { declarations: DECLARATIONS, call, sources, readMessage }
+  return { declarations: DECLARATIONS, call, sources, readMessage, readThread }
 }
 
 async function scheduledEvents (guild) {
