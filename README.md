@@ -75,6 +75,10 @@ followed back up to 10 messages and given to the model oldest first, with the bo
 labeled as its own (`あなた（BOT）`) and the requester's marked; the model is told to answer as the
 continuation of it. Nothing is stored for this.
 
+The server profile lists the server's custom emojis (those not limited to roles), and chat replies
+use one now and then where it fits. An emoji the model writes as `:name:` is turned into the
+server emoji of that name.
+
 Each user can have 30 mentions answered per day (Japan time), across servers, counted in Redis
 (`src/bot/utils/mentionQuota.js`, `MENTION_DAILY_LIMIT`). If Redis is unreachable the mention goes
 through.

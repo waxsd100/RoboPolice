@@ -779,6 +779,22 @@ describe('mention → event / forum post (integration)', () => {
     assert.doesNotMatch(replies[0].state.content, /⚠️/)
   })
 
+  test('chat: server emojis are offered to the model, and :name: becomes the emoji', async () => {
+    guild.emojis = [{ id: '950', name: 'nobaman_wave' }]
+    try {
+      const { channel, replies } = createChannel()
+      installGemini([body => {
+        assert.match(body.contents[0].parts[0].text, /### サーバー絵文字（返事で使うときは、この書き方のまま書く）\n<:nobaman_wave:950>/)
+        assert.match(body.systemInstruction.parts[0].text, /サーバー絵文字」があれば、話の流れに合うときにたまに使って/)
+        return [call('submit_chat_reply', { text: 'こんばんは :nobaman_wave:' })]
+      }])
+      await mentionEvent.handle(mention(channel, '<@BOT> こんばんは'))
+      assert.equal(replies[0].state.content, 'こんばんは <:nobaman_wave:950>')
+    } finally {
+      delete guild.emojis
+    }
+  })
+
   test('chat: replying to the bot\'s answer continues the conversation', async () => {
     MESSAGES['201/610'] = { content: '<@BOT> おすすめの動画ある？', author: { id: REQUESTER, username: `user${REQUESTER}` } }
     MESSAGES['201/611'] = { content: 'マイクラ実況の最新回がおすすめ！', author: { id: 'BOT', username: 'bot' }, messageReference: { messageID: '610', channelID: '201' } }
