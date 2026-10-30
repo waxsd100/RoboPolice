@@ -96,6 +96,7 @@ const MAX_HISTORY_TEXT = 500
 const MAX_PROFILE_CHANNELS = 80
 const MAX_PROFILE_ROLES = 40
 const MAX_TOPIC = 100
+const MAX_PROFILE_EMOJIS = 60
 const MAX_YOUTUBE_RESULTS = 15
 const LIVE_LABELS = { live: '配信中', upcoming: '配信予定' }
 
@@ -310,6 +311,26 @@ function channelLine (c, requestChannelID) {
   return `- ${c.id}: #${c.name}（${CHANNEL_TYPES[c.type] || c.type}）${c.id === requestChannelID ? ' ← 依頼されたチャンネル' : ''}${topic}`
 }
 
+// Custom emojis the bot can post: available ones not limited to certain roles.
+function usableEmojis (guild) {
+  return (guild.emojis || []).filter(e => e.id && e.name && e.available !== false && !(e.roles || []).length)
+}
+
+function emojiCode (e) {
+  return `<${e.animated ? 'a' : ''}:${e.name}:${e.id}>`
+}
+
+// The model sometimes writes a server emoji as :name: rather than its code; Discord shows that as
+// plain text, so it is turned into the code when the server has such an emoji.
+function withServerEmojis (text, guild) {
+  const byName = new Map(usableEmojis(guild).map(e => [e.name, e]))
+  return text.replace(/(<a?)?:(\w{2,32}):(\d+>)?/g, (whole, open, name, close) => {
+    if (open || close) return whole
+    const emoji = byName.get(name)
+    return emoji ? emojiCode(emoji) : whole
+  })
+}
+
 // The server as the requester can see it. Sent with every request, fresh each time, so questions
 // about "this server" need no lookups.
 async function describeServer (guild, member, requestChannelID) {
@@ -339,6 +360,9 @@ async function describeServer (guild, member, requestChannelID) {
     .map(r => r.name)
   if (roles.length) lines.push('', '### ロール', roles.slice(0, MAX_PROFILE_ROLES).join(', '))
 
+  const emojis = usableEmojis(guild)
+  if (emojis.length) lines.push('', '### サーバー絵文字（返事で使うときは、この書き方のまま書く）', emojis.slice(0, MAX_PROFILE_EMOJIS).map(emojiCode).join(' '))
+
   lines.push('', '### 登録済みのイベント', await scheduledEvents(guild).catch(e => `（取得できませんでした: ${e.message}）`))
 
   const youtube = await youtubeDB.getOverview(guild.id).catch(() => null)
@@ -351,4 +375,4 @@ async function describeServer (guild, member, requestChannelID) {
   return lines.join('\n')
 }
 
-module.exports = { createTools, formatMessage, describeServer, searchYouTube, MESSAGE_LINK, StopDrafting }
+module.exports = { createTools, formatMessage, describeServer, withServerEmojis, searchYouTube, MESSAGE_LINK, StopDrafting }

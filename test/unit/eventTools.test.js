@@ -3,7 +3,7 @@ const assert = require('node:assert/strict')
 // Load first: it sets the environment the bot modules read when they are required.
 const { createGuild, createMember, installBot } = require('../helpers/fakes')
 const urlFetcher = require('../../src/bot/utils/urlFetcher')
-const { createTools, formatMessage, StopDrafting } = require('../../src/bot/modules/eventTools')
+const { createTools, formatMessage, withServerEmojis, StopDrafting } = require('../../src/bot/modules/eventTools')
 
 const REQUESTER = '1'
 const guild = createGuild({
@@ -262,6 +262,17 @@ describe('readThread', () => {
   })
 })
 
+describe('withServerEmojis', () => {
+  const g = { emojis: [{ id: '11', name: 'nobaman_wave' }, { id: '12', name: 'party', animated: true }, { id: '13', name: 'staffonly', roles: ['801'] }] }
+
+  test('turns :name: of a server emoji into its code and leaves everything else alone', () => {
+    assert.equal(
+      withServerEmojis('やっほー :nobaman_wave: 今日も :party: <:nobaman_wave:11> :unknown: :staffonly: 10:30:00 https://e.com', g),
+      'やっほー <:nobaman_wave:11> 今日も <a:party:12> <:nobaman_wave:11> :unknown: :staffonly: 10:30:00 https://e.com'
+    )
+  })
+})
+
 describe('describeServer', () => {
   const { describeServer } = require('../../src/bot/modules/eventTools')
   const { installYouTubeStore } = require('../helpers/fakes')
@@ -285,6 +296,12 @@ describe('describeServer', () => {
     g.roles.set('r1', { id: 'r1', name: 'メンバー', position: 1 })
     g.roles.set('r2', { id: 'r2', name: '運営', position: 3 })
     g.roles.set('r3', { id: 'r3', name: 'ロボポリス', position: 2, managed: true })
+    g.emojis = [
+      { id: '31', name: 'nobaman_wave' },
+      { id: '32', name: 'party', animated: true },
+      { id: '33', name: 'subonly', roles: ['r1'] },
+      { id: '34', name: 'broken', available: false }
+    ]
     return g
   }
 
@@ -308,6 +325,9 @@ describe('describeServer', () => {
       '',
       '### ロール',
       '運営, メンバー',
+      '',
+      '### サーバー絵文字（返事で使うときは、この書き方のまま書く）',
+      '<:nobaman_wave:31> <a:party:32>',
       '',
       '### 登録済みのイベント',
       '定例会: 2026-11-03T10:00:00Z〜 渋谷',
