@@ -40,7 +40,24 @@ const SCHEMA = [
     PRIMARY KEY (guild_id, video_id)
   )`,
   // Where an interrupted read of a large channel continues (a playlistItems page token).
-  'ALTER TABLE youtube_channels ADD COLUMN IF NOT EXISTS backfill_token TEXT'
+  'ALTER TABLE youtube_channels ADD COLUMN IF NOT EXISTS backfill_token TEXT',
+  // Whether the server's streams become Discord scheduled events (/youtube liveevents).
+  'ALTER TABLE youtube_channels ADD COLUMN IF NOT EXISTS live_events BOOLEAN NOT NULL DEFAULT false',
+  // The scheduled event made for each stream, and how far it has been taken.
+  `CREATE TABLE IF NOT EXISTS youtube_live_events (
+    guild_id TEXT NOT NULL,
+    video_id TEXT NOT NULL,
+    event_id TEXT NOT NULL,
+    status TEXT NOT NULL,
+    scheduled_start TIMESTAMPTZ,
+    scheduled_end TIMESTAMPTZ,
+    PRIMARY KEY (guild_id, video_id)
+  )`,
+  // When each channel's push subscription (WebSub) runs out.
+  `CREATE TABLE IF NOT EXISTS youtube_websub (
+    channel_id TEXT PRIMARY KEY,
+    expires_at TIMESTAMPTZ NOT NULL
+  )`
 ]
 
 // Deployments made before these tables existed get them on first use, without a manual migration.
@@ -72,6 +89,7 @@ async function setChannel (guildID, channelRef, channelID) {
        handle = NULL, url = NULL, synced_at = NULL, backfill_token = NULL`,
     [guildID, channelRef, channelID])
   await pool.query('DELETE FROM youtube_videos WHERE guild_id = $1', [guildID])
+  await pool.query('DELETE FROM youtube_live_events WHERE guild_id = $1', [guildID])
 }
 
 async function getVideoIds (guildID) {
@@ -140,11 +158,74 @@ async function getOverview (guildID) {
   return rows.rows[0] || null
 }
 
-// Every server with a channel set, for the automatic sync.
+// Every server with a channel set, for the automatic sync: [{ guild_id, channel_id, live_events }].
 async function listChannels () {
   await ensureTables()
-  const rows = await pool.query('SELECT guild_id, channel_id FROM youtube_channels WHERE channel_id IS NOT NULL')
+  const rows = await pool.query('SELECT guild_id, channel_id, live_events FROM youtube_channels WHERE channel_id IS NOT NULL')
   return rows.rows
+}
+
+async function setLiveEvents (guildID, enabled) {
+  await ensureTables()
+  await pool.query('UPDATE youtube_channels SET live_events = $2 WHERE guild_id = $1', [guildID, enabled])
+}
+
+// Adds or refreshes videos read outside a full sync (by the stream watcher).
+async function upsertVideos (guildID, videos) {
+  await ensureTables()
+  for (const v of videos) {
+    await pool.query(
+      `INSERT INTO youtube_videos (guild_id, video_id, title, description, published_at, live_status, scheduled_start, duration, url)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+       ON CONFLICT (guild_id, video_id) DO UPDATE SET title = EXCLUDED.title, description = EXCLUDED.description,
+         live_status = EXCLUDED.live_status, scheduled_start = EXCLUDED.scheduled_start, duration = EXCLUDED.duration`,
+      [guildID, v.id, v.title, v.description, v.publishedAt, v.liveStatus, v.scheduledStart, v.duration, v.url])
+  }
+}
+
+// IDs of a server's videos that are live or upcoming, whose state the watcher follows.
+async function getLiveVideoIds (guildID) {
+  await ensureTables()
+  const rows = await pool.query("SELECT video_id FROM youtube_videos WHERE guild_id = $1 AND live_status IN ('live', 'upcoming')", [guildID])
+  return rows.rows.map(r => r.video_id)
+}
+
+// { video_id: { event_id, status, scheduled_start, scheduled_end } } for a server's streams that have an event.
+async function getLiveEvents (guildID) {
+  await ensureTables()
+  const rows = await pool.query('SELECT video_id, event_id, status, scheduled_start, scheduled_end FROM youtube_live_events WHERE guild_id = $1', [guildID])
+  return Object.fromEntries(rows.rows.map(r => [r.video_id, r]))
+}
+
+async function saveLiveEvent (guildID, videoID, { eventID, status, scheduledStart, scheduledEnd }) {
+  await ensureTables()
+  await pool.query(
+    `INSERT INTO youtube_live_events (guild_id, video_id, event_id, status, scheduled_start, scheduled_end) VALUES ($1, $2, $3, $4, $5, $6)
+     ON CONFLICT (guild_id, video_id) DO UPDATE SET event_id = $3, status = $4, scheduled_start = $5, scheduled_end = $6`,
+    [guildID, videoID, eventID, status, scheduledStart, scheduledEnd])
+}
+
+// Channels whose push subscription runs out before `before` (or that have none).
+async function websubDue (before) {
+  await ensureTables()
+  const rows = await pool.query(
+    `SELECT DISTINCT c.channel_id FROM youtube_channels c LEFT JOIN youtube_websub w ON w.channel_id = c.channel_id
+     WHERE c.channel_id IS NOT NULL AND (w.expires_at IS NULL OR w.expires_at < $1)`,
+    [before])
+  return rows.rows.map(r => r.channel_id)
+}
+
+async function saveWebsub (channelID, expiresAt) {
+  await ensureTables()
+  await pool.query(
+    'INSERT INTO youtube_websub (channel_id, expires_at) VALUES ($1, $2) ON CONFLICT (channel_id) DO UPDATE SET expires_at = $2',
+    [channelID, expiresAt])
+}
+
+async function isKnownChannel (channelID) {
+  await ensureTables()
+  const rows = await pool.query('SELECT 1 FROM youtube_channels WHERE channel_id = $1 LIMIT 1', [channelID])
+  return rows.rows.length !== 0
 }
 
 async function getSummary (guildID, videoID) {
@@ -176,7 +257,8 @@ async function deleteGuildYouTube (guildID) {
   await ensureTables()
   await pool.query('DELETE FROM youtube_summaries WHERE guild_id = $1', [guildID])
   await pool.query('DELETE FROM youtube_videos WHERE guild_id = $1', [guildID])
+  await pool.query('DELETE FROM youtube_live_events WHERE guild_id = $1', [guildID])
   await pool.query('DELETE FROM youtube_channels WHERE guild_id = $1', [guildID])
 }
 
-module.exports = { SCHEMA, ensureTables, setChannel, getVideoIds, saveSync, getKnowledge, getOverview, listChannels, getSummary, saveSummary, getOtherSummaries, deleteGuildYouTube }
+module.exports = { SCHEMA, ensureTables, setChannel, getVideoIds, saveSync, getKnowledge, getOverview, listChannels, setLiveEvents, upsertVideos, getLiveVideoIds, getLiveEvents, saveLiveEvent, websubDue, saveWebsub, isKnownChannel, getSummary, saveSummary, getOtherSummaries, deleteGuildYouTube }

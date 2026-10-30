@@ -275,4 +275,28 @@ describe('/youtube', () => {
     await command.func(it)
     assert.match(it.replies[0].content, /YouTube の動画リンク/)
   })
+
+  test('liveevents: turns stream events on and off, and needs Manage Events to turn them on', async () => {
+    store.knowledge[100] = { channel: { channel_ref: '@x', channel_id: UC }, videos: [] }
+    const perms = { ok: false }
+    global.bot = { user: { id: 'BOT' }, guilds: new Map([['100', { members: new Map([['BOT', { permissions: { has: p => p === 'manageEvents' && perms.ok } }]]) }]]) }
+    const refused = interaction('liveevents', [{ name: 'enabled', value: true }])
+    await command.func(refused)
+    assert.match(refused.replies[0].content, /「イベントの管理」権限がない/)
+    assert.deepEqual(store.writes, [])
+
+    perms.ok = true
+    const on = interaction('liveevents', [{ name: 'enabled', value: true }])
+    await command.func(on)
+    assert.match(on.replies[0].content, /サーバーのイベントとして自動で登録します/)
+    assert.deepEqual(store.writes, [{ setLiveEvents: ['100', true] }])
+
+    const shown = interaction('show')
+    await command.func(shown)
+    assert.equal(shown.replies[0].embeds[0].fields.find(f => f.name === '配信のイベント登録').value, '有効')
+
+    const off = interaction('liveevents', [{ name: 'enabled', value: false }])
+    await command.func(off)
+    assert.match(off.replies[0].content, /やめました/)
+  })
 })

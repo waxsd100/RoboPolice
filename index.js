@@ -10,6 +10,8 @@ if (global.cluster.isMaster) {
   loadSecrets().then(() => {
     global.logger.startup('Master node init')
     require('./primary')
+    // YouTube pushes arrive here and are passed to the workers.
+    require('./src/miscellaneous/websub').start()
   }).catch(e => {
     console.error(`[SECRETS]: ${e.message}`)
     process.exit(1)

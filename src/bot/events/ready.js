@@ -3,6 +3,7 @@ const checkForMissingSettings = require('../utils/recoverSettings')
 const prune = require('../../miscellaneous/prune')
 const youtubeSync = require('../modules/youtubeSync')
 const embeddingIndexer = require('../modules/embeddingIndexer')
+const liveWatcher = require('../modules/liveWatcher')
 
 let failedHealthCheckCount = 0
 
@@ -20,6 +21,8 @@ module.exports = {
     }
     // Every worker checks the servers it hosts for new YouTube videos.
     youtubeSync.startAutoSync()
+    // ...and follows their streams, for those that turned stream events on.
+    liveWatcher.startWatcher()
     setInterval(() => {
       if (bot.shards.filter(shard => shard.latency == Infinity && shard.status === 'disconnected').length !== 0) {
         failedHealthCheckCount++
