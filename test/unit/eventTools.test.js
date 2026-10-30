@@ -214,6 +214,53 @@ describe('formatMessage', () => {
   })
 })
 
+describe('formatMessage labels', () => {
+  test('marks the bot\'s own messages and the requester\'s', () => {
+    const at = { timestamp: 0, content: 'x' }
+    assert.match(formatMessage({ ...at, author: { id: 'BOT', username: 'ロボポリス' } }, REQUESTER), /\] あなた（BOT）: x$/)
+    assert.match(formatMessage({ ...at, author: { id: REQUESTER, username: 'me' } }, REQUESTER), /\] me \(1\)（依頼者）: x$/)
+    assert.match(formatMessage({ ...at, author: { id: '2', username: 'alice' } }, REQUESTER), /\] alice \(2\): x$/)
+  })
+})
+
+describe('readThread', () => {
+  const chain = {
+    '201/601': { content: 'おすすめの動画は？', author: { id: REQUESTER, username: 'me' } },
+    '201/602': { content: '〇〇がおすすめ！', author: { id: 'BOT', username: 'bot' }, messageReference: { messageID: '601', channelID: '201' } },
+    '201/603': { content: 'それの続編は？', author: { id: REQUESTER, username: 'me' }, messageReference: { messageID: '602' } },
+    '201/604': { content: '続編は△△だよ', author: { id: 'BOT', username: 'bot' }, messageReference: { messageID: '603', channelID: '201' } }
+  }
+
+  test('follows the replies back, oldest first, with the bot\'s replies as its own', async () => {
+    installBot({ guilds: [guild], messages: chain })
+    const thread = await tools().readThread('201', '604')
+    assert.equal(thread.count, 4)
+    assert.deepEqual(thread.text.split('\n').map(l => l.replace(/^\[[^\]]+\] /, '')), [
+      'me (1)（依頼者）: おすすめの動画は？',
+      'あなた（BOT）: 〇〇がおすすめ！',
+      'me (1)（依頼者）: それの続編は？',
+      'あなた（BOT）: 続編は△△だよ'
+    ])
+  })
+
+  test('stops at 10 messages and at a deleted one', async () => {
+    const long = {}
+    for (let i = 1; i <= 15; i++) long[`201/${700 + i}`] = { content: `m${i}`, author: { id: '2', username: 'a' }, ...(i > 1 ? { messageReference: { messageID: String(699 + i) } } : {}) }
+    installBot({ guilds: [guild], messages: long })
+    const thread = await tools().readThread('201', '715')
+    assert.equal(thread.count, 10)
+    assert.match(thread.text, /^\[[^\]]+\] a \(2\): m6\n/)
+
+    installBot({ guilds: [guild], messages: { '201/604': chain['201/604'] } })
+    assert.equal((await tools().readThread('201', '604')).count, 1)
+  })
+
+  test('refuses a channel the requester cannot read, and a missing first message', async () => {
+    await assert.rejects(tools().readThread('202', '403'), /依頼者がこのチャンネル/)
+    await assert.rejects(tools().readThread('201', '999'), /Unknown Message/)
+  })
+})
+
 describe('describeServer', () => {
   const { describeServer } = require('../../src/bot/modules/eventTools')
   const { installYouTubeStore } = require('../helpers/fakes')
