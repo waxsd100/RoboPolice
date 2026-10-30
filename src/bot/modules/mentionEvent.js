@@ -9,6 +9,8 @@ const { trackUsage } = require('../utils/geminiUsage')
 const { SIZES } = require('../utils/imageCrop')
 const { CoverImage, MODES } = require('./coverImage')
 const { FORUM_TYPES } = require('./forumPost')
+const postedEdit = require('./postedEdit')
+const { EDIT_HINT } = postedEdit
 
 const ANSWER_TIMEOUT_MS = 5 * 60 * 1000
 // How much of the error log to show in the reply; Discord messages are capped at 2000 characters.
@@ -146,7 +148,13 @@ function previewFiles (cover) {
   ]
 }
 
-function eventPreview ({ event, endGuessed }, sources, requester, cover) {
+// Where an edit says which fields it changes, so the requester can see nothing else is touched.
+function changesField (changed) {
+  if (!changed) return []
+  return [{ name: '変更する項目', value: changed.length ? changed.join('、') : '（文章の変更なし）' }]
+}
+
+function eventPreview ({ event, endGuessed }, sources, requester, cover, { confirmLabel, changed }) {
   const start = Math.floor(Date.parse(event.scheduled_start_time) / 1000)
   const end = Math.floor(Date.parse(event.scheduled_end_time) / 1000)
   const where = event.entity_type === ENTITY_TYPES.external
@@ -161,15 +169,16 @@ function eventPreview ({ event, endGuessed }, sources, requester, cover) {
       { name: '開始', value: `<t:${start}:F>（<t:${start}:R>）`, inline: true },
       { name: '終了', value: `<t:${end}:F>${endGuessed ? '\n（不明のため開始から1時間後）' : ''}`, inline: true },
       { name: '場所', value: where },
+      ...changesField(changed),
       ...image.fields,
       ...sourcesField(sources)
     ],
     image: image.image,
-    footer: { text: `${requester.username} さんの依頼 ・ この内容でよければ「登録する」を押してください` }
+    footer: { text: `${requester.username} さんの依頼 ・ この内容でよければ「${confirmLabel}」を押してください` }
   }
 }
 
-function forumPreview ({ post, tagNames, truncated }, sources, requester, cover) {
+function forumPreview ({ post, tagNames, truncated }, sources, requester, cover, { confirmLabel, changed }) {
   const image = coverParts(cover)
   return {
     title: post.name,
@@ -179,11 +188,12 @@ function forumPreview ({ post, tagNames, truncated }, sources, requester, cover)
       { name: '投稿先', value: `<#${post.channelID}>`, inline: true },
       { name: 'タグ', value: tagNames.join(', ') || 'なし', inline: true },
       ...(truncated ? [{ name: '注意', value: '本文が2000文字を超えたため、超えた分は切り捨てます。' }] : []),
+      ...changesField(changed),
       ...image.fields,
       ...sourcesField(sources)
     ],
     image: image.image,
-    footer: { text: `${requester.username} さんの依頼 ・ この内容でよければ「投稿する」を押してください` }
+    footer: { text: `${requester.username} さんの依頼 ・ この内容でよければ「${confirmLabel}」を押してください` }
   }
 }
 
@@ -204,7 +214,7 @@ const KINDS = {
         ...(cover.buffer ? { image: `data:image/jpeg;base64,${cover.buffer.toString('base64')}` } : {}),
         reason: `Requested by ${author.username} (${author.id})`
       })
-      return `イベントを登録しました: https://discord.com/events/${guild.id}/${created.id}`
+      return `イベントを登録しました: https://discord.com/events/${guild.id}/${created.id}\n${EDIT_HINT}`
     }
   },
   forum: {
@@ -223,13 +233,11 @@ const KINDS = {
         ...body,
         reason: `Requested by ${author.username} (${author.id})`
       }, files)
-      return `フォーラムに投稿しました: https://discord.com/channels/${guild.id}/${thread.id}`
+      return `フォーラムに投稿しました: https://discord.com/channels/${guild.id}/${thread.id}\n${EDIT_HINT}`
     }
   }
 }
 
-// Edits the reply. With `image` (a Buffer, or null to remove it) the edit goes through the REST
-// API directly: the pinned Eris cannot attach files when editing a message.
 // Edits the reply. With `files` ([{ filename, file }], or null to remove all) the edit goes through
 // the REST API directly: the pinned Eris cannot attach files when editing a message.
 async function editReply (reply, payload, files) {
@@ -346,8 +354,14 @@ async function handle (message) {
         ask: asker(reply, message.channel.id, message.author.id),
         progress: text => reply.edit({ content: text }).catch(() => {})
       })
+      // Replying to something the bot made (or to the message saying it did) is a request to change it.
+      const editTarget = repliedTo
+        ? await postedEdit.findTarget(guild, message.messageReference.channelID || message.channel.id, repliedTo)
+        : null
+      if (editTarget && !request) throw new StopDrafting('直したいこと（例: 開始を20時に、題名に日付を入れて）を書いてメンションしてください。')
+      const edit = editTarget && await postedEdit.load(guild, editTarget)
       // A mention sent as a reply ("@bot これをイベントにして") is about the replied-to message.
-      const referenced = repliedTo
+      const referenced = repliedTo && !edit
         ? await tools.readMessage(message.messageReference.channelID || message.channel.id, repliedTo).catch(e => `（読めませんでした: ${e.message}）`)
         : null
       // Fetched fresh for every request. Without it the draft still works, just with less context.
@@ -363,6 +377,7 @@ async function handle (message) {
         server,
         forum: namedForum(message),
         images: attachedImages(message),
+        edit,
         guild,
         member,
         tools
@@ -377,17 +392,24 @@ async function handle (message) {
         }
 
         const kind = KINDS[result.kind]
-        if (needsCover) {
-          // A correction can switch between event and forum post, which use different sizes.
-          if (!cover || cover.size !== kind.size) cover = new CoverImage(kind.size)
+        if (!cover) {
+          cover = new CoverImage(kind.size, { current: edit?.image })
           await cover.useDraft({ imageUrls: result.imageUrls, ...kind.text(result) })
-          needsCover = false
+        } else if (needsCover) {
+          // Corrections are about the text: the image stays as it was. Switching between event and
+          // forum post changes only its size.
+          if (cover.size !== kind.size) await cover.resize(kind.size)
+          await cover.revise({ imageUrls: result.imageUrls, ...kind.text(result) })
         }
-        const embed = kind.preview(result, [...new Set(tools.sources)], message.author, cover)
+        needsCover = false
+        const confirmLabel = edit ? '更新する' : kind.confirmLabel
+        const embed = kind.preview(result, [...new Set(tools.sources)], message.author, cover, {
+          confirmLabel,
+          changed: edit ? postedEdit.changes(edit, result) : null
+        })
         const canRevise = revisions < MAX_REVISIONS
-        const usingCandidate = cover.mode === 'crop' || cover.mode === 'fit'
         const buttons = [
-          { label: kind.confirmLabel, style: SUCCESS, action: 'create' },
+          { label: confirmLabel, style: SUCCESS, action: 'create' },
           ...(canRevise ? [{ label: '内容を修正', style: PRIMARY, action: 'revise' }] : []),
           { label: 'キャンセル', style: DANGER, action: 'cancel' },
           // Which candidate, then how it becomes the image: separate rows, so it is clear these
@@ -395,13 +417,13 @@ async function handle (message) {
           ...(cover.candidates.length > 1
             ? cover.candidates.map((_, i) => ({
               label: `画像${i + 1}`,
-              style: usingCandidate && i === cover.selected ? SUCCESS : SECONDARY,
+              style: cover.usesCandidate() && i === cover.selected ? SUCCESS : SECONDARY,
               action: `candidate:${i}`,
               row: 1
             }))
             : []),
           ...cover.modes().map(mode => ({
-            label: `画像: ${MODES[mode]}`,
+            label: `画像: ${mode === 'ai' && cover.mode === 'ai' ? 'AIで作り直す' : MODES[mode]}`,
             style: mode === cover.mode ? SUCCESS : SECONDARY,
             action: `image:${mode}`,
             row: 2
@@ -422,17 +444,15 @@ async function handle (message) {
           return
         }
         if (action === 'create') {
-          await interaction.editOriginalMessage({ content: await kind.create(result, guild, message.author, cover), components: [] })
+          const done = edit
+            ? await postedEdit.update(guild, edit, result, cover, message.author)
+            : await kind.create(result, guild, message.author, cover)
+          await interaction.editOriginalMessage({ content: done, components: [] })
           return
         }
-        if (action.startsWith('candidate:')) {
-          await cover.choose(Number(action.slice('candidate:'.length)))
-          continue
-        }
-        if (action.startsWith('image:')) {
-          const mode = action.slice('image:'.length)
-          if (mode === 'ai' && !cover.rendered.has(cover.key('ai'))) await reply.edit({ content: 'AI で画像を作成しています…', components: [] })
-          await cover.select(mode)
+        if (action.startsWith('candidate:') || action.startsWith('image:')) {
+          if (action === 'image:ai' && cover.needsAiRender()) await reply.edit({ content: 'AI で画像を作成しています…', components: [] })
+          await cover.pick(action)
           continue
         }
         const correction = await typedAnswer(reply, message.channel.id, message.author.id, kind.revisePrompt)
@@ -442,7 +462,7 @@ async function handle (message) {
         needsCover = true
       }
     } catch (e) {
-      if (e instanceof StopDrafting) {
+      if (e instanceof StopDrafting || e instanceof postedEdit.EditRefused) {
         await editReply(reply, { content: e.message, embeds: [], components: [] }, null).catch(() => {})
         return
       }

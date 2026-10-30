@@ -1,7 +1,7 @@
 // Integration: a mention runs through the real mentionEvent -> eventDrafter -> eventTools ->
 // urlFetcher chain and the real interactionCreate button handling. Only Discord's API and Gemini
 // are faked; web pages come from a local HTTP server.
-const { test, describe, before, after, beforeEach } = require('node:test')
+const { test, describe, before, after, beforeEach, afterEach } = require('node:test')
 const assert = require('node:assert/strict')
 // Load first: it sets the environment the bot modules read when they are required.
 const {
@@ -12,6 +12,7 @@ const sharp = require('sharp')
 const urlFetcher = require('../../src/bot/utils/urlFetcher')
 const interactionCreate = require('../../src/bot/events/interactionCreate')
 const mentionEvent = require('../../src/bot/modules/mentionEvent')
+const { EDIT_HINT } = require('../../src/bot/modules/postedEdit')
 
 const REQUESTER = '1'
 const OTHER_USER = '2'
@@ -138,7 +139,7 @@ describe('mention → event / forum post (integration)', () => {
     const request = global.bot.requestHandler.request
     global.bot.requestHandler.request = async (method, url, auth, body, files) => {
       const edit = method === 'PATCH' && url.match(/^\/channels\/\d+\/messages\/(\w+)$/)
-      if (!edit) return request(method, url, auth, body, files)
+      if (!edit || !repliesByID.has(edit[1])) return request(method, url, auth, body, files)
       const { attachments, ...update } = body
       repliesByID.get(edit[1]).apply({ ...update, files: (files || []).map((f, i) => ({ ...f, filename: attachments[i].filename })) })
       return {}
@@ -181,7 +182,7 @@ describe('mention → event / forum post (integration)', () => {
       reason: undefined
     })
     assert.equal(post.body.reason, `Requested by user${REQUESTER} (${REQUESTER})`)
-    assert.equal(reply.state.content, 'イベントを登録しました: https://discord.com/events/100/EVENT1')
+    assert.equal(reply.state.content, `イベントを登録しました: https://discord.com/events/100/EVENT1\n${EDIT_HINT}`)
     assert.deepEqual(reply.state.components, [])
   })
 
@@ -301,7 +302,7 @@ describe('mention → event / forum post (integration)', () => {
       applied_tags: ['tag-open'],
       reason: undefined
     })
-    assert.equal(reply.state.content, 'フォーラムに投稿しました: https://discord.com/channels/100/THREAD1')
+    assert.equal(reply.state.content, `フォーラムに投稿しました: https://discord.com/channels/100/THREAD1\n${EDIT_HINT}`)
   })
 
   test('forum: the requester picks the kind, and a forum they cannot post in is refused', async () => {
@@ -529,7 +530,7 @@ describe('mention → event / forum post (integration)', () => {
     await press(reply, '登録する')
     await done
     assert.equal(discord.find(c => c.method === 'POST').body.image, undefined)
-    assert.equal(reply.state.content, 'イベントを登録しました: https://discord.com/events/100/EVENT1')
+    assert.equal(reply.state.content, `イベントを登録しました: https://discord.com/events/100/EVENT1\n${EDIT_HINT}`)
   })
 
   test('forum: a forum named in the request wins, and an attached image is uploaded cropped to 16:9', async () => {
@@ -738,6 +739,164 @@ describe('mention → event / forum post (integration)', () => {
     const content = replies[0].state.content
     assert.ok(content.length <= 2000, `length ${content.length}`)
     assert.match(content, /…（以下省略）\n```$/)
+  })
+
+  test('内容を修正 changes the text only: the chosen image stays, and new candidates are only offered', async () => {
+    const { channel, replies } = createChannel()
+    installGemini([
+      [submit({ name: 'A', start: '2026-11-03T19:00:00+09:00', image_urls: [`${site.url}/photo.png`, `${site.url}/poster.png`] })],
+      [submit({ name: 'B', start: '2026-11-03T19:00:00+09:00', image_urls: [`${site.url}/photo.png`, `${site.url}/missing.png`] })]
+    ])
+    const done = mentionEvent.handle(mention(channel, '<@BOT> A'))
+    const [reply] = replies
+    await waitForButtons(reply, '画像2')
+    await press(reply, '画像2')
+    await waitFor(() => /^画像2・全体表示/.test(reply.state.embeds[0]?.fields.find(f => f.name === '画像')?.value), 'the second candidate')
+    const chosen = reply.state.files[0].file
+
+    await press(reply, '内容を修正')
+    await waitFor(() => /で直したいことを/.test(reply.state.content), 'the correction prompt')
+    await mentionEvent.handle(mention(channel, '名前はB'))
+    await waitFor(() => reply.state.embeds[0]?.title === 'B', 'the corrected preview')
+    assert.match(reply.state.embeds[0].fields.find(f => f.name === '画像').value, /^画像2・全体表示（800×320）\n/)
+    assert.ok(reply.state.files[0].file.equals(chosen))
+
+    await press(reply, '登録する')
+    await done
+    const { image } = discord.find(c => c.method === 'POST').body
+    assert.ok(Buffer.from(image.split(',')[1], 'base64').equals(chosen))
+  })
+
+  describe('changing what the bot made', () => {
+    const EVENT = {
+      id: '901',
+      creator_id: 'BOT',
+      status: 1,
+      name: '交流会',
+      description: '誰でも参加できます',
+      scheduled_start_time: '2026-11-03T10:00:00.000Z',
+      scheduled_end_time: '2026-11-03T11:00:00.000Z',
+      entity_type: 3,
+      entity_metadata: { location: '渋谷' },
+      image: null
+    }
+    let saved
+    let eventChanges // fields of EVENT a test overrides
+    beforeEach(() => {
+      saved = { ...MESSAGES }
+      eventChanges = {}
+      MESSAGES['201/600'] = { content: `イベントを登録しました: https://discord.com/events/100/901\n${EDIT_HINT}`, author: { id: 'BOT', username: 'bot' } }
+      MESSAGES['700/700'] = {
+        content: '参加したい人は書き込んでください',
+        author: { id: 'BOT', username: 'bot' },
+        attachments: [{ url: `${site.url}/photo.png`, filename: 'image.jpg', content_type: 'image/jpeg' }]
+      }
+      FORUMS['700'] = { type: 11, guild_id: '100', parent_id: '206', name: '11/3 交流会', applied_tags: ['tag-open'] }
+      const request = global.bot.requestHandler.request
+      global.bot.requestHandler.request = async (method, url, auth, body, files) => {
+        if (method === 'GET' && url === '/guilds/100/scheduled-events/901') {
+          discord.push({ method, url })
+          return { ...EVENT, ...eventChanges }
+        }
+        return request(method, url, auth, body, files)
+      }
+    })
+    afterEach(() => {
+      for (const key of Object.keys(MESSAGES)) if (!(key in saved)) delete MESSAGES[key]
+      delete FORUMS['700']
+    })
+
+    test('replying to "イベントを登録しました" changes only what is asked, and the image is left alone', async () => {
+      const { channel, replies } = createChannel()
+      const requests = installGemini([body => {
+        const prompt = body.contents[0].parts[0].text
+        assert.match(prompt, /## 修正するイベント（BOT が作成済み）/)
+        assert.match(prompt, /"name": "交流会"[\s\S]*"start": "2026-11-03T10:00:00.000Z"[\s\S]*"location": "渋谷"/)
+        assert.doesNotMatch(prompt, /## 依頼メッセージの返信先/)
+        return [submit({ name: '交流会', description: '誰でも参加できます', start: '2026-11-03T20:00:00+09:00', end: '2026-11-03T21:00:00+09:00', location: '渋谷' })]
+      }])
+      const done = mentionEvent.handle(mention(channel, '<@BOT> 開始を20時にして', { messageReference: { messageID: '600', channelID: '201' } }))
+      const [reply] = replies
+      assert.deepEqual((await waitForButtons(reply, '更新する')).map(b => b.label), ['更新する', '内容を修正', 'キャンセル', '画像: AIで作成', '画像: なし'])
+      const declared = requests[0].body.tools[0].functionDeclarations.map(d => d.name)
+      assert.ok(declared.includes('submit_event_draft') && !declared.includes('submit_forum_post_draft'), 'only the same kind can be submitted')
+      assert.equal(reply.state.embeds[0].fields.find(f => f.name === '変更する項目').value, '開始、終了')
+      assert.match(reply.state.embeds[0].footer.text, /「更新する」を押してください/)
+
+      await press(reply, '更新する')
+      await done
+      assert.equal(discord.filter(c => c.method === 'POST').length, 0, 'nothing new is created')
+      const patch = discord.find(c => c.method === 'PATCH')
+      assert.equal(patch.url, '/guilds/100/scheduled-events/901')
+      assert.deepEqual(patch.body, {
+        name: '交流会',
+        description: '誰でも参加できます',
+        scheduled_start_time: '2026-11-03T11:00:00.000Z',
+        scheduled_end_time: '2026-11-03T12:00:00.000Z',
+        entity_type: 3,
+        channel_id: null,
+        entity_metadata: { location: '渋谷' },
+        reason: `Requested by user${REQUESTER} (${REQUESTER})`
+      })
+      assert.equal(reply.state.content, `イベントを更新しました: https://discord.com/events/100/901\n${EDIT_HINT}`)
+    })
+
+    test('replying to a forum post changes it in place; its forum stays and its image can be removed', async () => {
+      const { channel, replies } = createChannel()
+      installGemini([body => {
+        assert.match(body.contents[0].parts[0].text, /## 修正するフォーラム投稿[\s\S]*"title": "11\/3 交流会"[\s\S]*"tags": \[\n\s+"募集中"/)
+        // The model names another forum; a post can't move, so its own forum is kept.
+        return [call('submit_forum_post_draft', { found: true, channel_id: '207', title: '11/3 交流会【締切】', content: '参加したい人は書き込んでください', tags: ['募集中'] })]
+      }])
+      const done = mentionEvent.handle(mention(channel, '<@BOT> 題名に締切って入れて', { messageReference: { messageID: '700', channelID: '700' } }))
+      const [reply] = replies
+      await waitForButtons(reply, '更新する')
+      assert.deepEqual(buttons(reply).map(b => b.label).slice(3), ['画像: 今の画像のまま', '画像: AIで作成', '画像: なし'])
+      const fields = reply.state.embeds[0].fields
+      assert.equal(fields.find(f => f.name === '投稿先').value, '<#206>')
+      assert.equal(fields.find(f => f.name === '変更する項目').value, '題名')
+      assert.equal(fields.find(f => f.name === '画像').value, '今の画像のまま')
+      assert.ok(reply.state.files[0].file.length > 0, 'the present image is shown')
+
+      await press(reply, '画像: なし')
+      await waitFor(() => reply.state.embeds[0]?.fields.find(f => f.name === '画像')?.value === 'なし', 'no image')
+      await press(reply, '更新する')
+      await done
+      const patches = discord.filter(c => c.method === 'PATCH')
+      assert.deepEqual(patches.map(c => c.url), ['/channels/700', '/channels/700/messages/700'])
+      assert.deepEqual(patches[0].body, { name: '11/3 交流会【締切】', applied_tags: ['tag-open'], reason: `Requested by user${REQUESTER} (${REQUESTER})` })
+      assert.deepEqual(patches[1].body, { content: '参加したい人は書き込んでください', allowed_mentions: { parse: [] }, attachments: [] })
+      assert.equal(reply.state.content, `フォーラムの投稿を更新しました: https://discord.com/channels/100/700\n${EDIT_HINT}`)
+    })
+
+    test('keeping the image leaves the attachments untouched', async () => {
+      const { channel, replies } = createChannel()
+      installGemini([[call('submit_forum_post_draft', { found: true, channel_id: '206', title: '11/3 交流会', content: '本文を直しました', tags: ['募集中'] })]])
+      const done = mentionEvent.handle(mention(channel, '<@BOT> 本文を直して', { messageReference: { messageID: '700', channelID: '700' } }))
+      const [reply] = replies
+      await waitForButtons(reply, '更新する')
+      await press(reply, '更新する')
+      await done
+      const message = discord.find(c => c.method === 'PATCH' && c.url.endsWith('/messages/700'))
+      assert.equal('attachments' in message.body, false)
+      assert.equal(message.files, undefined)
+    })
+
+    test('only what the bot made can be changed, and the request must say what to change', async () => {
+      const { channel, replies } = createChannel()
+      installGemini([])
+      eventChanges = { creator_id: '3' }
+      await mentionEvent.handle(mention(channel, '<@BOT> 開始を20時にして', { messageReference: { messageID: '600', channelID: '201' } }))
+      assert.equal(replies[0].state.content, 'BOT が登録したイベントではないため、直せません。')
+
+      eventChanges = { status: 3 }
+      await mentionEvent.handle(mention(channel, '<@BOT> 開始を20時にして', { messageReference: { messageID: '600', channelID: '201' } }))
+      assert.equal(replies[1].state.content, '終了または中止したイベントは直せません。')
+
+      await mentionEvent.handle(mention(channel, '<@BOT>', { messageReference: { messageID: '600', channelID: '201' } }))
+      assert.match(replies[2].state.content, /^直したいこと/)
+      assert.equal(discord.filter(c => c.method === 'PATCH').length, 0)
+    })
   })
 
   test('a second mention while the first is still running is turned away', async () => {

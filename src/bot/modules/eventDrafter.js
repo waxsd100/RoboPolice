@@ -69,7 +69,9 @@ function formatNow (now) {
   }).format(now)
 }
 
-function buildPrompt ({ request, referenced, channelName, channelID, server, forum, images, now }) {
+const EDIT_LABELS = { event: 'イベント', forum: 'フォーラム投稿' }
+
+function buildPrompt ({ request, referenced, channelName, channelID, server, forum, images, edit, now }) {
   const lines = [
     `現在日時: ${formatNow(now)}（${TIMEZONE}）`,
     `依頼されたチャンネル: #${channelName}${channelID ? `（ID: ${channelID}）` : ''}`,
@@ -79,7 +81,15 @@ function buildPrompt ({ request, referenced, channelName, channelID, server, for
   ]
   if (images.length !== 0) lines.push('', '## 依頼メッセージの添付画像', ...images.map(url => `- ${url}`))
   if (forum) lines.push('', `## 投稿先に指定されたフォーラム\n${forum.id}: ${forum.name}（フォーラムに投稿する場合はここに投稿する）`)
-  if (referenced) lines.push('', '## 依頼メッセージの返信先', referenced)
+  if (edit) {
+    const submit = edit.kind === 'event' ? SUBMIT_EVENT_DECLARATION.name : SUBMIT_FORUM_DECLARATION.name
+    lines.push('', `## 修正する${EDIT_LABELS[edit.kind]}（BOT が作成済み）`,
+      `依頼は、すでに作成したこの${EDIT_LABELS[edit.kind]}の修正です。依頼された点だけを変え、それ以外の項目は下の現在の値のまま ${submit} で提出してください。`,
+      '画像は依頼者がボタンで選ぶので、image_urls は依頼メッセージで新しい画像を指定されたときだけ入れてください。',
+      '```json', JSON.stringify(edit.current, null, 2), '```')
+  } else if (referenced) {
+    lines.push('', '## 依頼メッセージの返信先', referenced)
+  }
   if (server) lines.push('', '## このサーバーの情報（最新）', server)
   return lines.join('\n')
 }
@@ -179,8 +189,8 @@ function generate (contents, declarations) {
 
 // Runs the model with the read-only tools until it submits a draft, appending every turn to
 // `contents` so the conversation can be continued with a correction. Returns the submit call.
-async function runAgent (contents, tools) {
-  const declarations = [...tools.declarations, ...SUBMIT_DECLARATIONS]
+async function runAgent (contents, tools, submits = SUBMIT_DECLARATIONS) {
+  const declarations = [...tools.declarations, ...submits]
   for (let step = 0; step < MAX_STEPS; step++) {
     const content = await generate(contents, declarations)
     // Echo the model turn back unchanged: newer models attach thought signatures to it.
@@ -202,13 +212,15 @@ async function runAgent (contents, tools) {
 
 // Turns the model's answer into a Discord scheduled event body, or a reason it can't be one. The
 // model is not trusted to get Discord's constraints right, so every field is checked here.
-function toScheduledEvent (draft, guild, now) {
+// keepStart: the start time of an event being edited, which may already have passed (a running
+// event) and is fine as long as it is not changed.
+function toScheduledEvent (draft, guild, now, { keepStart = null } = {}) {
   if (!draft.found) return { error: draft.reason || 'イベントの情報を読み取れませんでした。' }
   const name = (draft.name || '').trim().slice(0, 100)
   if (!name) return { error: 'イベント名を読み取れませんでした。' }
   const start = new Date(draft.start)
   if (isNaN(start)) return { error: '開始日時を読み取れませんでした。' }
-  if (start <= now) return { error: `開始日時（<t:${Math.floor(start / 1000)}:F>）が過去のため登録できません。` }
+  if (start <= now && start.getTime() !== keepStart?.getTime()) return { error: `開始日時（<t:${Math.floor(start / 1000)}:F>）が過去のため登録できません。` }
 
   let end = draft.end ? new Date(draft.end) : null
   let endGuessed = false
@@ -240,7 +252,7 @@ function toScheduledEvent (draft, guild, now) {
 // { error } with a reason to show the requester.
 // Every result carries `conversation`, which revise() continues.
 async function check (conversation, { name, args, calls = [] }) {
-  const { guild, member, now, forum } = conversation
+  const { guild, member, now, forum, edit } = conversation
   conversation.lastCalls = calls
   if (name === SUBMIT_FORUM_DECLARATION.name) {
     // A forum named in the request wins over whatever the model picked.
@@ -248,21 +260,26 @@ async function check (conversation, { name, args, calls = [] }) {
     return { ...(result.error ? result : { kind: 'forum', ...result }), conversation }
   }
   if (name === null && !args.found) return { error: args.reason, conversation }
-  const result = toScheduledEvent(args, guild, now)
+  const result = toScheduledEvent(args, guild, now, { keepStart: edit ? new Date(edit.current.start) : null })
   return { ...(result.error ? result : { kind: 'event', ...result }), conversation }
 }
 
 // forum: a forum channel named in the request ({ id, name }), images: URLs of attached images.
-async function draft ({ request, referenced, channelName, channelID, server, forum = null, images = [], guild, member, tools, now = new Date() }) {
+// edit: something the bot made earlier that the request changes, as { kind, current } where
+// current is its content in the submit tool's terms. Only that kind can be submitted, and a forum
+// post stays in its forum.
+async function draft ({ request, referenced, channelName, channelID, server, forum = null, images = [], edit = null, guild, member, tools, now = new Date() }) {
   const conversation = {
-    contents: [{ role: 'user', parts: [{ text: buildPrompt({ request, referenced, channelName, channelID, server, forum, images, now }) }] }],
+    contents: [{ role: 'user', parts: [{ text: buildPrompt({ request, referenced, channelName, channelID, server, forum, images, edit, now }) }] }],
     guild,
     member,
     tools,
-    forum,
+    forum: edit?.kind === 'forum' ? { id: edit.current.channel_id } : forum,
+    edit,
+    submits: edit ? [edit.kind === 'event' ? SUBMIT_EVENT_DECLARATION : SUBMIT_FORUM_DECLARATION] : SUBMIT_DECLARATIONS,
     now
   }
-  return check(conversation, await runAgent(conversation.contents, tools))
+  return check(conversation, await runAgent(conversation.contents, tools, conversation.submits))
 }
 
 // The requester read the preview and wrote what to change. It goes back as the answer to the
@@ -281,7 +298,7 @@ async function revise (conversation, correction) {
       }
     }))
   })
-  return check(conversation, await runAgent(conversation.contents, conversation.tools))
+  return check(conversation, await runAgent(conversation.contents, conversation.tools, conversation.submits))
 }
 
 module.exports = { draft, revise, isConfigured, toScheduledEvent, callGemini, retryTimer, DEFAULT_GEMINI_MODEL, ENTITY_TYPES, GeminiError }

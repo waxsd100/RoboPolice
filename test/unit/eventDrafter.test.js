@@ -75,6 +75,12 @@ describe('toScheduledEvent', () => {
     assert.deepEqual(toScheduledEvent({ found: false, reason: '日時がありません' }, guild, NOW), { error: '日時がありません' })
   })
 
+  test('an edited event may keep a start time that has passed, but not move to one', () => {
+    const past = '2026-01-01T10:00:00.000Z'
+    assert.ok(toScheduledEvent({ ...base, start: past }, guild, NOW, { keepStart: new Date(past) }).event)
+    assert.match(toScheduledEvent({ ...base, start: '2026-01-01T11:00:00.000Z' }, guild, NOW, { keepStart: new Date(past) }).error, /過去/)
+  })
+
   test('carries valid image candidates and drops anything else', () => {
     assert.deepEqual(toScheduledEvent({ ...base, image_urls: ['https://e.com/cover.jpg', 'javascript:x', 'https://e.com/b.png'] }, guild, NOW).imageUrls, ['https://e.com/cover.jpg', 'https://e.com/b.png'])
     assert.deepEqual(toScheduledEvent(base, guild, NOW).imageUrls, [])

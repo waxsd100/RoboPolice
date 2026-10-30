@@ -125,6 +125,18 @@ its own draft (up to 3 times). Questions the model asks can likewise be answered
 "その他（文字で入力）". A forum mentioned in the request (`@RoboPolice #募集 に立てて`) is always the
 one posted to.
 
+A correction changes the text only. The image stays as the requester left it: new candidates the
+correction brings are added to the list without being selected, and an AI image is not redrawn
+(the preview says so; "画像: AIで作り直す" makes a new one).
+
+What the bot made can be changed later (`src/bot/modules/postedEdit.js`): reply with a mention to the
+"イベントを登録しました / フォーラムに投稿しました" message, or to the forum post itself, and say what to
+change (`@RoboPolice 開始を20時に`). The model gets the present content and changes only what was
+asked; the preview lists the changed fields and an **更新する** button updates the event or post in
+place (a forum post stays in its forum). The image is kept unless another is picked. Only events
+and posts the bot made can be changed, with the same permissions it takes to make them, and
+finished or cancelled events can't.
+
 The model can also propose images for the event cover or the forum post, up to 4 best first: the
 `og:image` / `twitter:image` of pages it read, images attached to the mention or the replied-to
 message, or embed images. The app downloads them (same address checks as pages, images only, 10MB at
