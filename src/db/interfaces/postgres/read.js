@@ -1,6 +1,8 @@
 const pool = require('../../clients/postgres')
 const createGuild = require('./create').createGuild
 const aes = require('../../aes')
+const { ensureChannelColumns } = require('../../messageColumns')
+const { getChannelMessages } = require('../../messageBatcher')
 
 async function getAllGuilds () {
   const doc = await pool.query('SELECT * FROM guilds;')
@@ -31,6 +33,18 @@ async function decryptMessageDoc (message) {
   return message
 }
 
+// A channel's stored messages, newest first: the ones still in the in-memory batch, then Postgres.
+// Only text is returned; attachments stay encrypted where they are.
+async function getChannelHistory (channelID, limit) {
+  await ensureChannelColumns()
+  const pending = getChannelMessages(channelID)
+  const stored = await pool.query(
+    'SELECT id, author_id, content, ts FROM messages WHERE channel_id = $1 ORDER BY ts DESC LIMIT $2',
+    [channelID, Math.max(limit - pending.length, 0)])
+  return [...pending, ...stored.rows.map(row => ({ ...row, content: aes.decrypt(row.content) }))].slice(0, limit)
+}
+
 exports.getMessageById = getMessageById
+exports.getChannelHistory = getChannelHistory
 exports.getAllGuilds = getAllGuilds
 exports.getGuild = getGuild

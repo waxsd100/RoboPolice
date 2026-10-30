@@ -134,6 +134,7 @@ describe('draft', () => {
     assert.equal(headers['x-goog-api-key'], 'gemini-key')
     assert.equal(headers['cf-aig-authorization'], 'Bearer gw-token')
     assert.equal(body.toolConfig.functionCallingConfig.mode, 'ANY')
+    assert.equal(requests[0].dispatcher, undefined, 'ordinary calls keep fetch\'s default limits')
     assert.deepEqual(body.tools[0].functionDeclarations.map(d => d.name), ['lookup', 'submit_event_draft', 'submit_forum_post_draft'])
   })
 
@@ -191,6 +192,19 @@ describe('draft', () => {
     assert.equal(second.conversation, first.conversation)
     // The whole history goes back: prompt, first submit, correction.
     assert.equal(requests[1].body.contents.length, 3)
+  })
+
+  test('revise answers every call of the submitting turn, not just the submit', async () => {
+    const requests = installGemini([
+      [call('lookup', { n: 1 }), submit({ name: 'A', start: '2026-11-03T19:00:00+09:00' })],
+      [submit({ name: 'A', start: '2026-11-03T20:00:00+09:00' })]
+    ])
+    const first = await draft({ request: 'A', channelName: 'general', guild, tools, now: NOW })
+    await revise(first.conversation, '20時に')
+    const answers = requests[1].body.contents.at(-1).parts.map(p => p.functionResponse)
+    assert.deepEqual(answers.map(a => a.name), ['lookup', 'submit_event_draft'])
+    assert.match(answers[0].response.error, /提出と同時に呼ばれたため実行していません/)
+    assert.match(answers[1].response.result, /20時に/)
   })
 
   test('runs tool calls in order and returns their results to the model', async () => {

@@ -5,7 +5,7 @@ const { test, describe, before, after, beforeEach } = require('node:test')
 const assert = require('node:assert/strict')
 // Load first: it sets the environment the bot modules read when they are required.
 const {
-  createGuild, createMember, installBot, configureGateway, installGemini, call, submit, lastToolResponses, startServer
+  createGuild, createMember, installBot, installYouTubeStore, configureGateway, installGemini, call, submit, lastToolResponses, startServer
 } = require('../helpers/fakes')
 const Eris = require('eris')
 const sharp = require('sharp')
@@ -132,6 +132,7 @@ describe('mention → event / forum post (integration)', () => {
   after(() => site.close())
   beforeEach(() => {
     configureGateway()
+    installYouTubeStore()
     discord = installBot({ guilds: [guild], messages: MESSAGES, forums: FORUMS })
     // A message edit with files goes over REST; apply it to the reply like Discord would.
     const request = global.bot.requestHandler.request
@@ -529,6 +530,131 @@ describe('mention → event / forum post (integration)', () => {
     assert.equal(post.files[0].name, 'files[0]')
     const meta = await sharp(post.files[0].file).metadata()
     assert.deepEqual([meta.width, meta.height], [1280, 720])
+  })
+
+  test('every request carries a fresh server profile and the request channel ID', async () => {
+    const { channel, replies } = createChannel()
+    const requests = installGemini([[submit({ found: false, reason: 'x' })]])
+    await mentionEvent.handle(mention(channel, '<@BOT> このチャンネルの内容でイベントを作って'))
+    const prompt = requests[0].body.contents[0].parts[0].text
+    assert.match(prompt, /依頼されたチャンネル: #general（ID: 201）/)
+    assert.match(prompt, /## このサーバーの情報（最新）\nサーバー名: テストサーバー/)
+    assert.match(prompt, /- 201: #general（text） ← 依頼されたチャンネル/)
+    assert.doesNotMatch(prompt, /#staff/, 'channels the requester cannot see are left out')
+    assert.match(prompt, /### YouTube\n設定なし/)
+    assert.equal(replies[0].state.content, '作成できませんでした: x')
+  })
+
+  test('YouTube: the stored channel is searchable and an upcoming stream becomes an event', async () => {
+    installYouTubeStore({
+      100: {
+        channel: { channel_ref: '@nobaman', title: 'のばまんch', url: 'https://www.youtube.com/channel/UCx', synced_at: new Date('2026-10-29T12:00:00Z') },
+        videos: [
+          { title: '1周年記念配信', description: 'みんなでお祝い', live_status: 'upcoming', scheduled_start: new Date('2026-11-03T11:00:00Z'), published_at: new Date('2026-10-28T00:00:00Z'), url: 'https://www.youtube.com/watch?v=v2' },
+          { title: '雑談', description: '', live_status: 'none', published_at: new Date('2026-10-20T00:00:00Z'), url: 'https://www.youtube.com/watch?v=v1' }
+        ]
+      }
+    })
+    const { channel, replies } = createChannel()
+    const requests = installGemini([
+      [call('search_youtube', { query: '記念' })],
+      body => {
+        const result = lastToolResponses(body)[0].response.result
+        assert.match(result, /\[配信予定 2026-11-03T11:00:00\.000Z\] 1周年記念配信/)
+        assert.doesNotMatch(result, /雑談/)
+        return [submit({ name: '1周年記念配信', start: '2026-11-03T20:00:00+09:00', location: 'https://www.youtube.com/watch?v=v2' })]
+      }
+    ])
+    const done = mentionEvent.handle(mention(channel, '<@BOT> 次の記念配信をイベントにして'))
+    const [reply] = replies
+    await waitForButtons(reply, '登録する')
+    assert.match(requests[0].body.contents[0].parts[0].text, /### YouTube\nのばまんch（動画 2 件を保存/)
+    await press(reply, '登録する')
+    await done
+    const post = discord.find(c => c.method === 'POST')
+    assert.equal(post.body.entity_metadata.location, 'https://www.youtube.com/watch?v=v2')
+  })
+
+  test('channel history: "このチャンネルの内容で" reads the stored messages of the request channel', async (t) => {
+    const read = require('../../src/db/interfaces/postgres/read')
+    t.mock.method(read, 'getChannelHistory', async channelID => channelID === '201'
+      ? [
+          { author_id: '3', content: '決定！ 11/8(土) 14時から渋谷で勉強会やります', ts: new Date('2026-10-28T10:00:00Z') },
+          { author_id: '2', content: '勉強会いつにする？', ts: new Date('2026-10-25T10:00:00Z') }
+        ]
+      : [])
+    const { channel, replies } = createChannel()
+    const requests = installGemini([
+      body => {
+        assert.match(body.contents[0].parts[0].text, /依頼されたチャンネル: #general（ID: 201）/)
+        return [call('search_channel_history', { channel_id: '201', query: '勉強会' })]
+      },
+      body => {
+        const result = lastToolResponses(body)[0].response.result
+        assert.match(result, /保存済みメッセージ 2 件.*のうち「勉強会」を含む 2 件、古い順:\n\[2026-10-25T10:00:00\.000Z\] .*勉強会いつにする？\n\[2026-10-28T10:00:00\.000Z\] .*11\/8\(土\) 14時から渋谷/)
+        return [submit({ name: '勉強会', start: '2026-11-08T14:00:00+09:00', location: '渋谷' })]
+      }
+    ])
+    const done = mentionEvent.handle(mention(channel, '<@BOT> このチャンネルの内容でイベントを作って'))
+    const [reply] = replies
+    await waitForButtons(reply, '登録する')
+    assert.match(requests[0].body.systemInstruction.parts[0].text, /search_channel_history/)
+    assert.equal(reply.state.embeds[0].fields.find(f => f.name === '参照元').value, '<#201>')
+    await press(reply, '登録する')
+    await done
+    assert.equal(discord.find(c => c.method === 'POST').body.scheduled_start_time, '2026-11-08T05:00:00.000Z')
+  })
+
+  test('YouTube: a linked video is summarized once, then the stored summary is reused', async () => {
+    const youtube = installYouTubeStore()
+    const turns = (summaryCall) => [
+      [call('summarize_youtube_video', { url: 'https://youtu.be/dQw4w9WgXcQ' })],
+      ...(summaryCall ? [summaryCall] : []),
+      body => {
+        assert.match(lastToolResponses(body)[0].response.result, /11\/15 19時から 1 周年オフ会/)
+        return [submit({ name: '1周年オフ会', start: '2026-11-15T19:00:00+09:00', location: '新宿' })]
+      }
+    ]
+
+    const first = createChannel()
+    const requests = installGemini(turns(body => {
+      assert.deepEqual(body.contents[0].parts[0], { fileData: { fileUri: 'https://www.youtube.com/watch?v=dQw4w9WgXcQ' } })
+      return [{ text: '・11/15 19時から 1 周年オフ会を新宿で開催と告知' }]
+    }))
+    const done = mentionEvent.handle(mention(first.channel, '<@BOT> この動画で告知してたオフ会をイベントにして https://youtu.be/dQw4w9WgXcQ'))
+    await waitForButtons(first.replies[0], '登録する')
+    assert.equal(requests.length, 3, 'drafting turn, video summary, drafting turn')
+    assert.match(first.replies[0].state.embeds[0].fields.find(f => f.name === '参照元').value, /https:\/\/www\.youtube\.com\/watch\?v=dQw4w9WgXcQ/)
+    await press(first.replies[0], 'キャンセル')
+    await done
+    assert.deepEqual(youtube.writes, [{ saveSummary: ['100', 'dQw4w9WgXcQ'] }])
+
+    // Second time: no video call, the stored summary answers.
+    const second = createChannel()
+    const again = installGemini(turns(null))
+    const done2 = mentionEvent.handle(mention(second.channel, '<@BOT> https://youtu.be/dQw4w9WgXcQ のオフ会'))
+    await waitForButtons(second.replies[0], '登録する')
+    assert.equal(again.length, 2)
+    assert.ok(again.every(r => !JSON.stringify(r.body).includes('fileData')))
+    await press(second.replies[0], 'キャンセル')
+    await done2
+  })
+
+  test('the draft still works when the server profile cannot be built', async (t) => {
+    const warned = t.mock.method(global.logger, 'warn', () => {})
+    require('../../src/db/interfaces/postgres/youtube').getKnowledge = async () => { throw new Error('db down') }
+    const original = guild.channels.values
+    guild.channels.values = () => { throw new Error('cache broken') }
+    try {
+      const { channel, replies } = createChannel()
+      const requests = installGemini([[submit({ found: false, reason: 'x' })]])
+      await mentionEvent.handle(mention(channel, '<@BOT> 交流会'))
+      assert.doesNotMatch(requests[0].body.contents[0].parts[0].text, /このサーバーの情報/)
+      assert.equal(replies[0].state.content, '作成できませんでした: x')
+      assert.match(warned.mock.calls[0].arguments[0], /Could not describe server 100: cache broken/)
+    } finally {
+      guild.channels.values = original
+    }
   })
 
   test('a Gemini failure is reported to the requester with its cause and a masked log, and sent to the error webhook', async (t) => {

@@ -43,9 +43,10 @@ Short version; the Privacy Policy is authoritative.
 
 | Data | Where | Retention |
 |---|---|---|
-| Message ID, author ID, timestamp, AES-256 encrypted content and attachment URLs | PostgreSQL `messages` | `MESSAGE_HISTORY_DAYS` days, or forever if unset |
+| Message ID, author ID, channel ID, server ID, timestamp, AES-256 encrypted content and attachment URLs | PostgreSQL `messages` | `MESSAGE_HISTORY_DAYS` days, or forever if unset |
 | Per-server settings (log channels, ignored channels, disabled events) | PostgreSQL `guilds` | Until the app leaves the server |
 | Invite counters, webhook handles, guild settings | Redis | 3 hours |
+| The YouTube channel set with `/youtube`, its description and every video read from it, plus summaries of linked videos' contents (public YouTube data) | PostgreSQL `youtube_channels`, `youtube_videos`, `youtube_summaries` | Until a different channel is set (videos only), or the app leaves the server |
 
 Message rows are written **only for servers that have a message deletion or edit log channel
 configured** — a server with none never has message content stored, since nothing could read it back.
@@ -71,9 +72,50 @@ server and to channels both the requester and the app can read, so a mention can
 the requester couldn't open. Web pages are fetched by the app itself; private and loopback addresses
 are refused.
 
-What the tools read (the mention, the replied-to message, linked pages and Discord messages, channel
-names) is sent to Google Gemini through Cloudflare AI Gateway. Nothing from this flow is stored by
-the app. Use a paid Gemini API tier: on the free tier Google may use the input to improve its models,
+Every request also carries a profile of the server, fetched fresh each time: its name and
+description, the channels the requester can see (with their topics, grouped by category, the request
+channel marked with its ID), role names, scheduled events, and whether a YouTube channel is stored.
+Questions about "this channel" are answered from the stored message history: the
+`search_channel_history` tool reads a channel's stored messages (up to the newest 1000, optionally
+narrowed by words) for channels both the requester and the app can read, and sends the matching text
+to Gemini. This is the same `messages` table the deletion and edit logs use, so it covers only servers
+with such a log channel, only messages stored since the channel/server columns were added (older rows
+have no channel), and only within `MESSAGE_HISTORY_DAYS`. `get_recent_messages` still reads the latest
+messages straight from Discord when nothing is stored.
+
+### YouTube knowledge
+
+`/youtube set channel:<URL or @handle>` (Manage Server) sets the server's YouTube channel and reads it
+right away; `/youtube sync` reads it again and `/youtube show` shows what is stored. Knowledge
+accumulates:
+
+- The first read walks the channel's whole upload list (up to 5000 videos, 2 quota units per 50).
+  Later reads stop at the first page of already-stored videos, so they cost 3 units unless much is
+  new, while the newest page is always re-read to catch streams that went live or ended.
+- Videos are added or refreshed, never dropped. Setting the same channel again keeps them; setting a
+  different one starts over.
+- Each video keeps its title, description, publish date, length and stream state and time
+  (`YOUTUBE_API_KEY`, YouTube Data API).
+- What a video actually says is summarized only when needed: when a video link is given or the
+  question is about a video's contents, the model calls `summarize_youtube_video`, which hands the
+  public video's URL to Gemini (low media resolution) and stores the summary. Gemini answers only
+  when it has watched the whole video, so this waits up to `VIDEO_SUMMARY_TIMEOUT_MINUTES` (default
+  10) and the reply shows that a video is being read. Past 5 minutes that needs its own undici
+  dispatcher, since `fetch` otherwise gives up on a response that has not started by then. The same video is never
+  summarized twice for a server; summaries of videos from other channels are kept as well.
+
+Every Gemini call goes through Cloudflare AI Gateway. YouTube Data API calls can too: in the
+dashboard, add a custom provider (AI Gateway → Custom Providers) with base URL
+`https://www.googleapis.com` and a slug such as `youtube`, then set `YOUTUBE_GATEWAY_PROVIDER=youtube`.
+Requests then go to `…/custom-youtube/youtube/v3/…` with the gateway token. Either way the API key is
+sent in the `x-goog-api-key` header, never in the URL.
+
+The model searches all of it (titles, descriptions and summaries) with the `search_youtube` tool. The
+tables are created on first use, so existing deployments need no migration.
+
+What the tools read (the mention, the replied-to message, linked pages and Discord messages, the
+server profile, stored YouTube data) is sent to Google Gemini through Cloudflare AI Gateway. Nothing
+from this flow is stored by the app. Use a paid Gemini API tier: on the free tier Google may use the input to improve its models,
 which the intent review answers rule out.
 
 The preview has Register / Post, **Fix** and Cancel buttons. Fix asks the requester to type what to
@@ -133,6 +175,9 @@ credentials in URLs. The same masked text goes to the error webhook.
 | `CLOUDFLARE_AI_GATEWAY_BYOK_ALIAS` | Optional. Name of the Gemini key stored in the gateway (BYOK), sent as `cf-aig-byok-alias`. Unset uses the key named `default` |
 | `GEMINI_API_KEY` | Optional when the key is stored in the gateway (BYOK); otherwise required for drafting from mentions |
 | `GEMINI_MODEL` | Optional. Defaults to `gemini-flash-latest` |
+| `YOUTUBE_API_KEY` | Optional. YouTube Data API v3 key for `/youtube`. Unset disables the command |
+| `VIDEO_SUMMARY_TIMEOUT_MINUTES` | Optional. How long a video summary may take. Defaults to 10 |
+| `YOUTUBE_GATEWAY_PROVIDER` | Optional. Slug of an AI Gateway custom provider (see below). Set, YouTube API calls go through Cloudflare AI Gateway; unset, straight to Google |
 | `GEMINI_IMAGE_MODEL` | Optional. Image model for AI-made covers. Defaults to `gemini-3.1-flash-image` |
 
 Values that never differ between deployments are constants in code rather than environment

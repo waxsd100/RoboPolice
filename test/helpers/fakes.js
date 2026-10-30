@@ -14,7 +14,7 @@ function perms (names) {
 
 // channels: [{ id, name, type, readers: [userID], posters: [userID], moderators: [userID] }]
 function createGuild ({ id = '100', ownerID = '900', channels = [], botPerms = ['manageEvents'] } = {}) {
-  const guild = { id, ownerID, roles: new Map(), members: new Map(), channels: new Map() }
+  const guild = { id, name: 'テストサーバー', memberCount: 42, ownerID, roles: new Map(), members: new Map(), channels: new Map() }
   guild.members.set('BOT', { id: 'BOT', permissions: perms(botPerms) })
   for (const c of channels) {
     guild.channels.set(c.id, {
@@ -72,6 +72,59 @@ function installBot ({ guilds = [], messages = {}, scheduledEvents = [], forums 
   return calls
 }
 
+// Replaces the YouTube store with an in-memory one, so no test reaches a real database.
+// knowledge: { guildID: { channel, videos } } as getKnowledge() returns it; summaries:
+// { guildID: { videoID: summary } }.
+function installYouTubeStore (knowledge = {}, summaries = {}) {
+  const store = require('../../src/db/interfaces/postgres/youtube')
+  const writes = []
+  const withSummaries = guildID => knowledge[guildID] && {
+    ...knowledge[guildID],
+    videos: knowledge[guildID].videos.map(v => ({ ...v, summary: summaries[guildID]?.[v.video_id] || v.summary || null }))
+  }
+  store.ensureTables = async () => {}
+  store.getKnowledge = async guildID => withSummaries(guildID) || null
+  store.getVideoIds = async guildID => new Set((knowledge[guildID]?.videos || []).map(v => v.video_id))
+  store.setChannel = async (guildID, ref, channelID) => {
+    writes.push({ setChannel: [guildID, ref, channelID] })
+    if (knowledge[guildID] && knowledge[guildID].channel.channel_id === channelID) {
+      knowledge[guildID].channel.channel_ref = ref
+      return
+    }
+    knowledge[guildID] = { channel: { guild_id: guildID, channel_ref: ref, channel_id: channelID, synced_at: null, backfill_token: null }, videos: [] }
+  }
+  store.getOverview = async guildID => knowledge[guildID] && {
+    ...knowledge[guildID].channel,
+    video_count: knowledge[guildID].videos.length,
+    summary_count: Object.keys(summaries[guildID] || {}).length
+  }
+  store.saveSync = async (guildID, { channel, videos, backfillToken = null }) => {
+    writes.push({ saveSync: guildID, videos: videos.map(v => v.id), backfillToken })
+    const byID = new Map(knowledge[guildID].videos.map(v => [v.video_id, v]))
+    for (const v of videos) {
+      byID.set(v.id, { video_id: v.id, title: v.title, description: v.description, published_at: v.publishedAt, live_status: v.liveStatus, scheduled_start: v.scheduledStart, duration: v.duration, url: v.url })
+    }
+    knowledge[guildID] = {
+      channel: { ...knowledge[guildID].channel, channel_id: channel.id, title: channel.title, description: channel.description, handle: channel.handle, url: channel.url, backfill_token: backfillToken, synced_at: new Date('2026-10-29T12:00:00Z') },
+      videos: [...byID.values()].sort((a, b) => new Date(b.published_at) - new Date(a.published_at))
+    }
+  }
+  store.getSummary = async (guildID, videoID) => summaries[guildID]?.[videoID] || null
+  store.saveSummary = async (guildID, videoID, summary) => {
+    writes.push({ saveSummary: [guildID, videoID] })
+    summaries[guildID] = { ...summaries[guildID], [videoID]: summary }
+  }
+  store.getOtherSummaries = async guildID => {
+    const own = new Set((knowledge[guildID]?.videos || []).map(v => v.video_id))
+    return Object.entries(summaries[guildID] || {}).filter(([id]) => !own.has(id)).map(([videoID, summary]) => ({ video_id: videoID, summary }))
+  }
+  store.deleteGuildYouTube = async guildID => {
+    delete knowledge[guildID]
+    delete summaries[guildID]
+  }
+  return { knowledge, summaries, writes }
+}
+
 function configureGateway () {
   process.env.CLOUDFLARE_ACCOUNT_ID = 'acct'
   process.env.CLOUDFLARE_AI_GATEWAY_ID = 'gw'
@@ -88,7 +141,7 @@ function installGemini (turns) {
   let i = 0
   global.fetch = async (url, init) => {
     const body = JSON.parse(init.body)
-    requests.push({ url, headers: init.headers, body })
+    requests.push({ url, headers: init.headers, body, dispatcher: init.dispatcher })
     const turn = turns[i++]
     if (turn === undefined) throw new Error(`fake Gemini: no scripted turn ${i}`)
     if (turn instanceof Error) {
@@ -116,5 +169,5 @@ async function startServer (handler) {
 }
 
 module.exports = {
-  perms, createGuild, createMember, installBot, configureGateway, installGemini, call, submit, lastToolResponses, startServer
+  perms, createGuild, createMember, installBot, installYouTubeStore, configureGateway, installGemini, call, submit, lastToolResponses, startServer
 }
