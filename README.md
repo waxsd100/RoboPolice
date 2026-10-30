@@ -349,6 +349,12 @@ Take a backup before the first start with migrations (`pg_dump`). Migration 002 
 layout: settings, image URLs and YouTube data move to their own tables and the old columns are
 dropped, so going back to an older version needs the backup.
 
+Messages stored before channels were recorded have no `channel_id` and `guild_id`, so channel
+history and message search never find them. `npm run backfill-channels` fills them in once: it
+reads every channel and thread of each server back to the oldest such message (100 messages a
+request, waiting out rate limits) and matches IDs. Messages no longer on Discord stay unknown. It
+needs `BOT_TOKEN` and the `PG*` settings, and can be stopped and run again.
+
 A change to the schema is a new file (`NNN_name.sql`, or `NNN_name.js` exporting
 `async client => {}` for data SQL alone can't change); a file already applied is never edited.
 `npm run test:db` runs the migrations and the stores against a scratch database on the Postgres
