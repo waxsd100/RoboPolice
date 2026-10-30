@@ -5,12 +5,36 @@ const command = require('../../src/bot/slashcommands/youtube')
 
 const UC = 'UC' + 'b'.repeat(22)
 
+const Eris = require('eris')
+const interactionCreate = require('../../src/bot/events/interactionCreate')
+
 // A slash command interaction as Eris hands it over, recording what the command answers.
 function interaction (sub, options = []) {
-  const it = { guildID: '100', data: { options: [{ name: sub, options }] }, deferred: false, replies: [] }
+  const it = { guildID: '100', member: { user: { id: '1' } }, data: { options: [{ name: sub, options }] }, deferred: false, replies: [] }
   it.defer = async () => { it.deferred = true }
   it.editOriginalMessage = async m => { it.replies.push(m) }
   return it
+}
+
+// Waits for the confirmation buttons, then presses one as `userID` through the real handler.
+async function press (it, label, userID = '1') {
+  let button
+  for (let i = 0; i < 200 && !button; i++) {
+    button = it.replies.at(-1)?.components?.[0]?.components.find(b => b.label === label)
+    if (!button) await new Promise(resolve => setTimeout(resolve, 5))
+  }
+  assert.ok(button, `no ${label} button`)
+  const click = Object.assign(Object.create(Eris.ComponentInteraction.prototype), {
+    applicationID: 'BOT', data: { custom_id: button.custom_id }, member: { user: { id: userID } }, acknowledge: async () => {}
+  })
+  interactionCreate.handle(click)
+}
+
+// Runs /youtube set and answers its confirmation.
+async function setChannel (it, answer = 'はい') {
+  const done = command.func(it)
+  await press(it, answer)
+  await done
 }
 
 function fakeYouTubeApi () {
@@ -33,6 +57,7 @@ describe('/youtube', () => {
   beforeEach(() => {
     process.env.YOUTUBE_API_KEY = 'yt-key'
     store = installYouTubeStore()
+    global.bot = { user: { id: 'BOT' } }
   })
 
   test('is limited to members who can manage the server', () => {
@@ -42,12 +67,17 @@ describe('/youtube', () => {
   test('set: stores the channel, reads it at once, and shows what was stored', async () => {
     const calls = fakeYouTubeApi()
     const it = interaction('set', [{ name: 'channel', value: ' https://www.youtube.com/@nobaman ' }])
-    await command.func(it)
+    await setChannel(it)
     assert.equal(it.deferred, true, 'deferred before calling YouTube')
+    const question = it.replies[0]
+    assert.equal(question.content, 'このチャンネルを設定しますか？')
+    assert.equal(question.embeds[0].title, 'のばまんch')
+    assert.deepEqual(question.components[0].components.map(b => b.label), ['はい', 'いいえ'])
     assert.deepEqual(store.writes, [{ setChannel: ['100', 'https://www.youtube.com/@nobaman', UC] }, { saveSync: '100', videos: ['v1'], backfillToken: null }])
     assert.deepEqual(calls, ['channels', 'channels', 'playlistItems', 'videos'], 'the channel is resolved before anything is stored')
-    const [reply] = it.replies
+    const reply = it.replies.at(-1)
     assert.match(reply.content, /設定し、情報を取得しました/)
+    assert.deepEqual(reply.components, [], 'the buttons are gone')
     const fields = Object.fromEntries(reply.embeds[0].fields.map(f => [f.name, f.value]))
     assert.equal(reply.embeds[0].title, 'のばまんch')
     assert.equal(fields['保存している動画'], '1 件（内容の要約あり 0 件）')
@@ -90,7 +120,9 @@ describe('/youtube', () => {
     store.knowledge[100] = { channel: { channel_ref: '@nobaman', channel_id: UC, synced_at: new Date() }, videos: [{ video_id: 'old1', title: 'x', published_at: new Date('2025-01-01T00:00:00Z') }] }
     fakeYouTubeApi()
     // Another way of writing the same channel still keeps what was accumulated.
-    await command.func(interaction('set', [{ name: 'channel', value: `https://www.youtube.com/channel/${UC}` }]))
+    const it = interaction('set', [{ name: 'channel', value: `https://www.youtube.com/channel/${UC}` }])
+    await setChannel(it)
+    assert.equal(it.replies[0].content, 'このチャンネルを設定しますか？', 'nothing is said about deleting')
     assert.deepEqual(store.knowledge[100].videos.map(v => v.video_id), ['v1', 'old1'])
     assert.equal(store.knowledge[100].channel.channel_ref, `https://www.youtube.com/channel/${UC}`)
   })
@@ -187,5 +219,27 @@ describe('/youtube', () => {
     await command.func(it)
     assert.deepEqual(posted, [['201', '1/1 本の動画を要約しました。メンションで依頼したときに AI が参照します。\n✅ [最新](https://www.youtube.com/watch?v=newVideo001)']])
     delete global.bot
+  })
+
+  test('set: いいえ, or no answer, changes nothing; a different channel warns that the stored videos go', async () => {
+    store.knowledge[100] = { channel: { channel_ref: '@old', title: '前のch', channel_id: 'UC' + 'z'.repeat(22) }, videos: [{ video_id: 'old1', title: 'x' }] }
+    fakeYouTubeApi()
+    const it = interaction('set', [{ name: 'channel', value: '@nobaman' }])
+    await setChannel(it, 'いいえ')
+    assert.equal(it.replies[0].content, 'このチャンネルを設定しますか？\n⚠️ 今の「前のch」から変わり、保存している動画 1 件と情報は削除されます。')
+    assert.equal(it.replies.at(-1).content, 'YouTube チャンネルの設定をやめました。')
+    assert.deepEqual(store.writes, [])
+  })
+
+  test('set: only the member who ran it can answer', async () => {
+    fakeYouTubeApi()
+    const it = interaction('set', [{ name: 'channel', value: '@nobaman' }])
+    const done = command.func(it)
+    await press(it, 'はい', '2')
+    await new Promise(resolve => setTimeout(resolve, 20))
+    assert.deepEqual(store.writes, [], 'someone else pressing does nothing')
+    await press(it, 'はい')
+    await done
+    assert.equal(store.writes.length, 2)
   })
 })

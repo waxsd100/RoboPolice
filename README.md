@@ -108,8 +108,9 @@ messages straight from Discord when nothing is stored.
 
 ### YouTube knowledge
 
-`/youtube set channel:<URL or @handle>` (Manage Server) sets the server's YouTube channel and reads it
-right away; `/youtube sync` reads it again and `/youtube show` shows what is stored. Knowledge
+`/youtube set channel:<URL or @handle>` (Manage Server) shows the channel it found and, once the
+member who ran it presses はい, sets it as the server's YouTube channel and reads it right away
+(replacing another channel says that its stored videos will go); `/youtube sync` reads it again and `/youtube show` shows what is stored. Knowledge
 accumulates:
 
 - The first read walks the channel's whole upload list (up to 5000 videos, 2 quota units per 50).
