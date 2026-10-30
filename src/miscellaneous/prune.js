@@ -88,6 +88,13 @@ async function main () {
   }
 }
 
-if (require.main === module) main()
+if (require.main === module) {
+  // Run as its own cron service, it reads Secret Manager itself. The pool reads PG* when it first
+  // connects, so loading them after it was created is in time.
+  require('./secrets').loadSecrets().then(main).catch(e => {
+    console.error(`[PRUNE]: ${e.message}`)
+    process.exit(1)
+  })
+}
 
 module.exports = { prune, startScheduler, getRetentionDays }

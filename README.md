@@ -207,6 +207,46 @@ credentials in URLs. The same masked text goes to the error webhook.
 7. Register slash commands with the text prefix: `%setcmd global` for global commands, or
    `%setcmd guild` for faster server-scoped registration (substitute your `GLOBAL_BOT_PREFIX`)
 
+## Secrets in Google Cloud Secret Manager
+
+Secrets can live in Secret Manager instead of on the hosting platform, which then holds only a key
+for a service account that can read nothing but those secrets. At startup the app reads them into
+the environment (`src/miscellaneous/secrets.js`) before anything else starts; without
+`GCP_SECRETS` it uses the environment as it is. The Terraform in `infra/terraform` creates the
+secrets, the service account and its access. Secret values are added with `gcloud`, so they never
+reach Terraform state.
+
+```bash
+cd infra/terraform
+cp terraform.tfvars.example terraform.tfvars   # set project_id, and secret_names to the variables you use
+terraform init
+terraform apply
+```
+
+Then store the values (each command reads the value from a shell variable of the same name; load
+your current `.env` first with `set -a; . ../../.env; set +a`):
+
+```bash
+terraform output -json add_value_commands | jq -r '.[]' | sh
+```
+
+Create the key and set the two variables on the hosting platform:
+
+```bash
+gcloud iam service-accounts keys create robopolice-key.json --iam-account "$(terraform output -raw service_account_email)"
+base64 -w0 robopolice-key.json   # -> GCP_SERVICE_ACCOUNT_KEY
+terraform output -raw gcp_secrets # -> GCP_SECRETS
+rm robopolice-key.json
+```
+
+Every listed secret needs a value: one without a version stops the app at startup, saying which.
+Finally remove the moved variables from the platform. One that is still set there wins over Secret
+Manager, and the app logs a warning naming it. Changing a secret is `gcloud secrets versions add`
+and a restart. If the organization blocks service account keys
+(`iam.disableServiceAccountKeyCreation`), allow them for this project first. The key can still read
+the secrets if it leaks, so keep it only on the platform and delete it in the console
+(or `gcloud iam service-accounts keys delete`) to cut access at once.
+
 ## Configuration worth knowing
 
 | Variable | Effect |
@@ -225,6 +265,7 @@ credentials in URLs. The same masked text goes to the error webhook.
 | `GEMINI_IMAGE_MODEL` | Optional. Image model for AI-made covers. Defaults to `gemini-3.1-flash-image` |
 | `CHAT_PERSONA` | Optional. Character notes added to chat replies (tone, catchphrases, how to address members) |
 | `MENTION_DAILY_LIMIT` | Optional. Mentions each user can have answered per day (Japan time). Defaults to 30; 0 turns the limit off |
+| `GCP_SECRETS`, `GCP_SERVICE_ACCOUNT_KEY` | Optional. Load secrets from Google Cloud Secret Manager at startup (see above). `GCP_PROJECT_ID` overrides the key's project |
 
 Values that never differ between deployments are constants in code rather than environment
 variables: the support server and legal URLs (`src/bot/utils/constants.js`) and the message batch
