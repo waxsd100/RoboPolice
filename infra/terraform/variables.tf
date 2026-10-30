@@ -3,21 +3,21 @@ variable "project_id" {
   type        = string
 }
 
-# Database and Redis credentials are left out: when Railway runs Postgres and Redis it creates and
-# injects those itself, and keeping a copy here would only go stale. Add them if they come from
-# elsewhere.
+# Only what would do real damage if it leaked: the bot token (full control of the bot) and the
+# AI Gateway token (spends on Gemini). Everything else stays on the hosting platform, including the
+# database and Redis passwords Railway creates and injects for its own Postgres and Redis. Add more
+# here if needed.
 variable "secret_names" {
   description = "Environment variables to keep in Secret Manager instead of on the hosting platform"
   type        = list(string)
   default = [
     "BOT_TOKEN",
-    "DISCORD_WEBHOOK_URL",
-    "AES_KEY",
     "CLOUDFLARE_AI_GATEWAY_TOKEN",
-    "YOUTUBE_API_KEY",
   ]
 }
 
+# Secret Manager has no folders or groups: this app's secrets are told apart by this prefix in their
+# IDs and by the app=robopolice label.
 variable "secret_id_prefix" {
   description = "Prefix of the secret IDs (BOT_TOKEN becomes <prefix>bot-token)"
   type        = string

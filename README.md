@@ -232,9 +232,11 @@ terraform init
 terraform apply
 ```
 
-By default this moves `BOT_TOKEN`, `DISCORD_WEBHOOK_URL`, `AES_KEY`, `CLOUDFLARE_AI_GATEWAY_TOKEN` and
-`YOUTUBE_API_KEY`. Database and Redis passwords stay on Railway, which creates and injects them for
-its own Postgres and Redis; add them to `secret_names` only if they come from elsewhere.
+By default this moves only what would do real damage if it leaked: `BOT_TOKEN` and
+`CLOUDFLARE_AI_GATEWAY_TOKEN`. Everything else stays on Railway, including the database and Redis
+passwords it creates for its own Postgres and Redis; add more to `secret_names` as needed. Secret
+Manager has no folders, so the secrets are named `robopolice-…` (`secret_id_prefix`) and labeled
+`app=robopolice`: `gcloud secrets list --filter="labels.app=robopolice"` lists them.
 
 Then store the values (each command reads the value from a shell variable of the same name; load
 your current `.env` first with `set -a; . ../../.env; set +a`):
