@@ -3,6 +3,9 @@ const assert = require('node:assert/strict')
 const { configureGateway, installGemini, installYouTubeStore } = require('../helpers/fakes')
 const { summarizeVideo } = require('../../src/bot/modules/videoSummary')
 
+// Node's own fetch, before tests replace global.fetch with fakes.
+const realFetch = globalThis.fetch
+
 describe('summarizeVideo', () => {
   let store
   beforeEach(() => {
@@ -42,5 +45,61 @@ describe('summarizeVideo', () => {
     installGemini([[{ text: '   ' }]])
     await assert.rejects(summarizeVideo('100', 'https://youtu.be/dQw4w9WgXcQ'), { hint: 'AI が動画を要約できませんでした' })
     assert.deepEqual(store.writes, [])
+  })
+})
+
+describe('waiting for long videos', () => {
+  const { Agent } = require('undici')
+  beforeEach(() => {
+    configureGateway()
+    installYouTubeStore()
+    delete process.env.VIDEO_SUMMARY_TIMEOUT_MINUTES
+  })
+
+  test('waits up to 10 minutes by default, with a dispatcher that lifts fetch\'s 5-minute limit', async () => {
+    const seen = []
+    global.fetch = async (url, init) => {
+      seen.push(init)
+      return { ok: true, json: async () => ({ candidates: [{ content: { parts: [{ text: '要約' }] } }] }) }
+    }
+    let announced
+    await summarizeVideo('100', 'https://youtu.be/dQw4w9WgXcQ', { onStart: ms => { announced = ms } })
+    assert.equal(announced, 10 * 60 * 1000)
+    assert.ok(seen[0].dispatcher instanceof Agent)
+  })
+
+  test('VIDEO_SUMMARY_TIMEOUT_MINUTES changes the limit', async () => {
+    process.env.VIDEO_SUMMARY_TIMEOUT_MINUTES = '20'
+    installGemini([[{ text: '要約' }]])
+    let announced
+    await summarizeVideo('100', 'https://youtu.be/dQw4w9WgXcQ', { onStart: ms => { announced = ms } })
+    assert.equal(announced, 20 * 60 * 1000)
+  })
+
+  test('onStart is not called for a stored summary', async () => {
+    installYouTubeStore({}, { 100: { dQw4w9WgXcQ: '保存済み' } })
+    let called = false
+    await summarizeVideo('100', 'https://youtu.be/dQw4w9WgXcQ', { onStart: () => { called = true } })
+    assert.equal(called, false)
+  })
+})
+
+describe('the assumption the long wait relies on', () => {
+  // fetch must apply a dispatcher's timeouts; otherwise its own 5-minute headersTimeout would end
+  // every long summary early, whatever VIDEO_SUMMARY_TIMEOUT_MINUTES says.
+  test('Node\'s fetch applies the headersTimeout of the dispatcher it is given', async () => {
+    const http = require('http')
+    const { Agent } = require('undici')
+    const server = http.createServer((req, res) => setTimeout(() => res.end('late'), 3000))
+    await new Promise(resolve => server.listen(0, '127.0.0.1', resolve))
+    try {
+      await assert.rejects(
+        realFetch(`http://127.0.0.1:${server.address().port}`, { dispatcher: new Agent({ headersTimeout: 1000 }) }),
+        e => e.cause?.code === 'UND_ERR_HEADERS_TIMEOUT'
+      )
+    } finally {
+      server.closeAllConnections()
+      server.close()
+    }
   })
 })

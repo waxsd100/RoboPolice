@@ -98,7 +98,10 @@ accumulates:
   (`YOUTUBE_API_KEY`, YouTube Data API).
 - What a video actually says is summarized only when needed: when a video link is given or the
   question is about a video's contents, the model calls `summarize_youtube_video`, which hands the
-  public video's URL to Gemini (low media resolution) and stores the summary. The same video is never
+  public video's URL to Gemini (low media resolution) and stores the summary. Gemini answers only
+  when it has watched the whole video, so this waits up to `VIDEO_SUMMARY_TIMEOUT_MINUTES` (default
+  10) and the reply shows that a video is being read. Past 5 minutes that needs its own undici
+  dispatcher, since `fetch` otherwise gives up on a response that has not started by then. The same video is never
   summarized twice for a server; summaries of videos from other channels are kept as well.
 
 Every Gemini call goes through Cloudflare AI Gateway. YouTube Data API calls can too: in the
@@ -173,6 +176,7 @@ credentials in URLs. The same masked text goes to the error webhook.
 | `GEMINI_API_KEY` | Optional when the key is stored in the gateway (BYOK); otherwise required for drafting from mentions |
 | `GEMINI_MODEL` | Optional. Defaults to `gemini-flash-latest` |
 | `YOUTUBE_API_KEY` | Optional. YouTube Data API v3 key for `/youtube`. Unset disables the command |
+| `VIDEO_SUMMARY_TIMEOUT_MINUTES` | Optional. How long a video summary may take. Defaults to 10 |
 | `YOUTUBE_GATEWAY_PROVIDER` | Optional. Slug of an AI Gateway custom provider (see below). Set, YouTube API calls go through Cloudflare AI Gateway; unset, straight to Google |
 | `GEMINI_IMAGE_MODEL` | Optional. Image model for AI-made covers. Defaults to `gemini-3.1-flash-image` |
 

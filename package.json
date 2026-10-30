@@ -30,6 +30,7 @@
     "redlock": "^4.2.0",
     "sharp": "^0.34.5",
     "superagent": "^8.1.2",
+    "undici": "^6.23.0",
     "uuid": "^9.0.1"
   },
   "devDependencies": {

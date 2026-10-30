@@ -134,6 +134,7 @@ describe('draft', () => {
     assert.equal(headers['x-goog-api-key'], 'gemini-key')
     assert.equal(headers['cf-aig-authorization'], 'Bearer gw-token')
     assert.equal(body.toolConfig.functionCallingConfig.mode, 'ANY')
+    assert.equal(requests[0].dispatcher, undefined, 'ordinary calls keep fetch\'s default limits')
     assert.deepEqual(body.tools[0].functionDeclarations.map(d => d.name), ['lookup', 'submit_event_draft', 'submit_forum_post_draft'])
   })
 

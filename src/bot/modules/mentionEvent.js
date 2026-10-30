@@ -311,7 +311,12 @@ async function handle (message) {
   try {
     reply = await message.channel.createMessage({ content: '内容を読み取っています…', ...reference })
     const member = message.member
-    const tools = createTools({ guild, member, ask: asker(reply, message.channel.id, message.author.id) })
+    const tools = createTools({
+      guild,
+      member,
+      ask: asker(reply, message.channel.id, message.author.id),
+      progress: text => reply.edit({ content: text }).catch(() => {})
+    })
     // A mention sent as a reply ("@bot これをイベントにして") is about the replied-to message.
     const referenced = repliedTo
       ? await tools.readMessage(message.messageReference.channelID || message.channel.id, repliedTo).catch(e => `（読めませんでした: ${e.message}）`)

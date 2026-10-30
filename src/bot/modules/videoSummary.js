@@ -7,8 +7,14 @@ const youtubeDB = require('../../db/interfaces/postgres/youtube')
 const { parseVideoId } = require('../utils/youtube')
 
 const MAX_SUMMARY = 3000
-// Gemini watches the whole video before answering; long videos take a while.
-const SUMMARY_TIMEOUT_MS = 3 * 60 * 1000
+// Gemini watches the whole video before answering, so an hour-long stream archive can take
+// several minutes. VIDEO_SUMMARY_TIMEOUT_MINUTES overrides the default.
+const DEFAULT_TIMEOUT_MINUTES = 10
+
+function summaryTimeoutMs () {
+  const minutes = Number(process.env.VIDEO_SUMMARY_TIMEOUT_MINUTES)
+  return (minutes > 0 ? minutes : DEFAULT_TIMEOUT_MINUTES) * 60 * 1000
+}
 
 const PROMPT = [
   'この YouTube 動画の内容を、日本語で要約してください（1500文字以内）。',
@@ -17,11 +23,13 @@ const PROMPT = [
   '分からないことは推測で書かないでください。'
 ].join('\n')
 
-async function summarizeVideo (guildID, url) {
+// onStart is called just before Gemini is asked, i.e. only when the requester will have to wait.
+async function summarizeVideo (guildID, url, { onStart = () => {} } = {}) {
   const videoID = parseVideoId(url)
   if (!videoID) throw new Error('YouTube の動画リンクではありません')
   const cached = await youtubeDB.getSummary(guildID, videoID)
   if (cached) return { videoID, summary: cached, cached: true }
+  await onStart(summaryTimeoutMs())
 
   const content = await callGemini(process.env.GEMINI_MODEL || DEFAULT_GEMINI_MODEL, {
     contents: [{
@@ -33,7 +41,7 @@ async function summarizeVideo (guildID, url) {
     }],
     // Fewer tokens per frame: the summary is about what is said and roughly shown, not fine detail.
     generationConfig: { temperature: 0.2, mediaResolution: 'MEDIA_RESOLUTION_LOW' }
-  }, { timeoutMs: SUMMARY_TIMEOUT_MS })
+  }, { timeoutMs: summaryTimeoutMs() })
   const summary = content.parts.map(p => p.text || '').join('').trim().slice(0, MAX_SUMMARY)
   if (!summary) throw new GeminiError(`Gemini returned no summary for ${videoID}`, 'AI が動画を要約できませんでした')
   await youtubeDB.saveSummary(guildID, videoID, summary)

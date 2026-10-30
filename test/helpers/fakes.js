@@ -141,7 +141,7 @@ function installGemini (turns) {
   let i = 0
   global.fetch = async (url, init) => {
     const body = JSON.parse(init.body)
-    requests.push({ url, headers: init.headers, body })
+    requests.push({ url, headers: init.headers, body, dispatcher: init.dispatcher })
     const turn = turns[i++]
     if (turn === undefined) throw new Error(`fake Gemini: no scripted turn ${i}`)
     if (turn instanceof Error) {

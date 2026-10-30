@@ -355,8 +355,10 @@ describe('YouTube summaries in the tools', () => {
     configureGateway()
     installYouTubeStore()
     installGemini([[{ text: '要点: 11/3 記念配信' }]])
-    const t = tools()
+    const shown = []
+    const t = createTools({ guild, member, ask: async () => '', progress: text => shown.push(text) })
     const res = await t.call('summarize_youtube_video', { url: 'https://youtu.be/abcdefghijk' })
+    assert.deepEqual(shown, ['動画の内容を読み取っています…（長い動画は数分かかります。最大 10 分）'])
     assert.equal(res.result, 'https://www.youtube.com/watch?v=abcdefghijk の内容の要約:\n要点: 11/3 記念配信')
     assert.deepEqual(t.sources, ['https://www.youtube.com/watch?v=abcdefghijk'])
     const again = await t.call('summarize_youtube_video', { url: 'https://www.youtube.com/watch?v=abcdefghijk' })

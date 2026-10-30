@@ -1,4 +1,5 @@
 const { SUBMIT_FORUM_DECLARATION, toForumPost, imageUrlOf } = require('./forumPost')
+const { Agent } = require('undici')
 const { gatewayURL, gatewayAuthHeaders, isGatewayConfigured } = require('../utils/aiGateway')
 
 const DEFAULT_GEMINI_MODEL = 'gemini-flash-latest'
@@ -91,6 +92,19 @@ class GeminiError extends Error {
   }
 }
 
+// fetch gives up on a response that has not started after 5 minutes (undici's headersTimeout and
+// bodyTimeout), whatever the AbortSignal says. Gemini answers only once it is done, so a call
+// allowed longer than that needs its own dispatcher with matching limits.
+const FETCH_DEFAULT_TIMEOUT_MS = 5 * 60 * 1000
+const longCallAgents = new Map()
+function dispatcherFor (timeoutMs) {
+  if (timeoutMs <= FETCH_DEFAULT_TIMEOUT_MS) return undefined
+  if (!longCallAgents.has(timeoutMs)) {
+    longCallAgents.set(timeoutMs, new Agent({ headersTimeout: timeoutMs, bodyTimeout: timeoutMs }))
+  }
+  return longCallAgents.get(timeoutMs)
+}
+
 // One generateContent call through the gateway. Returns the first candidate's content.
 async function callGemini (model, body, { timeoutMs = GEMINI_TIMEOUT_MS } = {}) {
   const url = gatewayURL(`google-ai-studio/v1beta/models/${encodeURIComponent(model)}:generateContent`)
@@ -104,6 +118,7 @@ async function callGemini (model, body, { timeoutMs = GEMINI_TIMEOUT_MS } = {}) 
     method: 'POST',
     headers,
     signal: AbortSignal.timeout(timeoutMs),
+    dispatcher: dispatcherFor(timeoutMs),
     body: JSON.stringify(body)
   })
   if (!res.ok) {

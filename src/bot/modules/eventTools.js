@@ -121,7 +121,8 @@ function formatMessage (m) {
 // it is not handed back to the model.
 class StopDrafting extends Error {}
 
-function createTools ({ guild, member, ask }) {
+// progress(text): shows the requester what a slow tool is doing. Optional.
+function createTools ({ guild, member, ask, progress = () => {} }) {
   const sources = []
   let questions = 0
 
@@ -205,7 +206,9 @@ function createTools ({ guild, member, ask }) {
       return searchYouTube(guild.id, query)
     },
     async summarize_youtube_video ({ url }) {
-      const { videoID, summary, cached } = await videoSummary.summarizeVideo(guild.id, url)
+      const { videoID, summary, cached } = await videoSummary.summarizeVideo(guild.id, url, {
+        onStart: timeoutMs => progress(`動画の内容を読み取っています…（長い動画は数分かかります。最大 ${Math.round(timeoutMs / 60000)} 分）`)
+      })
       const link = `https://www.youtube.com/watch?v=${videoID}`
       sources.push(link)
       return `${link} の内容の要約${cached ? '（保存済み）' : ''}:\n${summary}`
