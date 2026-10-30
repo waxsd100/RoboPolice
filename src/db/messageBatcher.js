@@ -23,8 +23,21 @@ async function submitBatch (batchSize) {
   const poolClient = await pool.getPostgresClient()
   try {
     await poolClient.query('BEGIN')
-    await poolClient.query(format('INSERT INTO messages (id, author_id, content, ts, channel_id, guild_id) VALUES %L ON CONFLICT DO NOTHING', toSubmit.map(([id, author, content, , ts, channel, guild]) => [id, author, content, ts, channel, guild])))
-    if (attachments.length) await poolClient.query(format('INSERT INTO message_attachments (message_id, position, url) VALUES %L ON CONFLICT DO NOTHING', attachments))
+    // A message of a server whose settings are gone (the bot just left it) is not stored, nor its images.
+    await poolClient.query(format(
+      `INSERT INTO messages (id, author_id, content, ts, channel_id, guild_id)
+       SELECT v.id, v.author_id, v.content, v.ts::timestamptz, v.channel_id, v.guild_id FROM (VALUES %L) v(id, author_id, content, ts, channel_id, guild_id)
+       WHERE v.guild_id IS NULL OR EXISTS (SELECT 1 FROM guilds g WHERE g.id = v.guild_id)
+       ON CONFLICT DO NOTHING`,
+      toSubmit.map(([id, author, content, , ts, channel, guild]) => [id, author, content, ts, channel, guild])))
+    if (attachments.length) {
+      await poolClient.query(format(
+        `INSERT INTO message_attachments (message_id, position, url)
+         SELECT v.message_id, v.position::smallint, v.url FROM (VALUES %L) v(message_id, position, url)
+         WHERE EXISTS (SELECT 1 FROM messages m WHERE m.id = v.message_id)
+         ON CONFLICT DO NOTHING`,
+        attachments))
+    }
     await poolClient.query('COMMIT')
   } catch (e) {
     await poolClient.query('ROLLBACK').catch(() => {})

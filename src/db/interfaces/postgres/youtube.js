@@ -19,6 +19,11 @@ const SERVER_CHANNEL = `SELECT g.guild_id, g.channel_ref, g.channel_id, g.live_e
   c.title, c.description, c.handle, c.url, c.synced_at, c.backfill_token
   FROM guild_youtube g LEFT JOIN youtube_channels c ON c.channel_id = g.channel_id`
 
+// What a server stores refers to its guilds row, made here if it has none yet.
+async function ensureGuild (guildID) {
+  await require('./read').getGuild(guildID)
+}
+
 // Deletes channels no server has set (their videos, embeddings and stream events go with them) and
 // summaries no server asked for.
 async function collectGarbage (db = pool) {
@@ -30,6 +35,7 @@ async function collectGarbage (db = pool) {
 // keeps everything accumulated; a different one drops the server's stream events and, if no other
 // server has the old channel, its videos.
 async function setChannel (guildID, channelRef, channelID) {
+  await ensureGuild(guildID)
   const current = await pool.query('SELECT channel_id FROM guild_youtube WHERE guild_id = $1', [guildID])
   await pool.query('INSERT INTO youtube_channels (channel_id) VALUES ($1) ON CONFLICT DO NOTHING', [channelID])
   await pool.query(
@@ -190,6 +196,7 @@ async function saveSummary (guildID, videoID, summary = null) {
        ON CONFLICT (video_id) DO UPDATE SET summary = $2, created_at = now()`,
       [videoID, summary])
   }
+  await ensureGuild(guildID)
   await pool.query(
     'INSERT INTO guild_youtube_summaries (guild_id, video_id) VALUES ($1, $2) ON CONFLICT DO NOTHING',
     [guildID, videoID])
@@ -209,6 +216,7 @@ async function getOtherSummaries (guildID) {
   return rows.rows
 }
 
+// Deleting the server's guilds row deletes all of this too; this also deletes what only it used.
 async function deleteGuildYouTube (guildID) {
   await pool.query('DELETE FROM guild_youtube_summaries WHERE guild_id = $1', [guildID])
   // Its stream events go with it.

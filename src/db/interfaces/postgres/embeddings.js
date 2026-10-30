@@ -6,6 +6,19 @@
 // Videos have one vector each.
 const pool = require('../../clients/postgres')
 
+// Embedding models by name -> ID in embedding_models. A model is added the first time it is used.
+const modelIds = new Map()
+async function modelId (name) {
+  if (!modelIds.has(name)) {
+    const rows = await pool.query(
+      `WITH added AS (INSERT INTO embedding_models (name) VALUES ($1) ON CONFLICT (name) DO NOTHING RETURNING id)
+       SELECT id FROM added UNION ALL SELECT id FROM embedding_models WHERE name = $1`,
+      [name])
+    modelIds.set(name, rows.rows[0].id)
+  }
+  return modelIds.get(name)
+}
+
 // Newest messages not handled yet: [{ id, guild_id, channel_id, ts, content }].
 async function pendingMessages (limit) {
   const rows = await pool.query(
@@ -20,10 +33,10 @@ async function saveMessageEmbeddings (rows, handledIds) {
   for (const r of rows) {
     // The message may have been deleted meanwhile; its embedding is then not wanted either.
     await pool.query(
-      `INSERT INTO message_embeddings (message_id, embedding, model)
+      `INSERT INTO message_embeddings (message_id, embedding, model_id)
        SELECT $1, $2, $3 WHERE EXISTS (SELECT 1 FROM messages WHERE id = $1)
-       ON CONFLICT (message_id) DO UPDATE SET embedding = EXCLUDED.embedding, model = EXCLUDED.model`,
-      [r.id, r.embedding, r.model])
+       ON CONFLICT (message_id) DO UPDATE SET embedding = EXCLUDED.embedding, model_id = EXCLUDED.model_id`,
+      [r.id, r.embedding, await modelId(r.model)])
   }
   if (handledIds.length) await pool.query('UPDATE messages SET embedded = true WHERE id = ANY($1)', [handledIds])
 }
@@ -33,11 +46,11 @@ async function saveMessageEmbeddings (rows, handledIds) {
 async function resetStaleMessageEmbeddings (model, limit) {
   const result = await pool.query(
     `WITH stale AS (
-       DELETE FROM message_embeddings WHERE message_id IN (SELECT message_id FROM message_embeddings WHERE model <> $1 LIMIT $2)
+       DELETE FROM message_embeddings WHERE message_id IN (SELECT message_id FROM message_embeddings WHERE model_id <> $1 LIMIT $2)
        RETURNING message_id
      )
      UPDATE messages SET embedded = false WHERE id IN (SELECT message_id FROM stale)`,
-    [model, limit])
+    [await modelId(model), limit])
   return result.rowCount || 0
 }
 
@@ -57,9 +70,9 @@ async function * messageEmbeddingPages (guildID, channelIDs, { model, pageSize =
     const rows = (await pool.query(
       `SELECT e.message_id, m.channel_id, m.ts, e.embedding FROM message_embeddings e
        JOIN messages m ON m.id = e.message_id
-       WHERE m.guild_id = $1 AND m.channel_id = ANY($2) AND e.model = $5 AND ($3::timestamptz IS NULL OR m.ts < $3)
+       WHERE m.guild_id = $1 AND m.channel_id = ANY($2) AND e.model_id = $5 AND ($3::timestamptz IS NULL OR m.ts < $3)
        ORDER BY m.ts DESC LIMIT $4`,
-      [guildID, channelIDs, before, Math.min(pageSize, max - read), model])).rows
+      [guildID, channelIDs, before, Math.min(pageSize, max - read), await modelId(model)])).rows
     if (rows.length === 0) return
     read += rows.length
     before = rows[rows.length - 1].ts
@@ -87,10 +100,10 @@ async function videosForEmbedding () {
 async function saveVideoEmbedding (videoID, embedding, hash, model) {
   // The video may have gone meanwhile (its channel was unset).
   await pool.query(
-    `INSERT INTO youtube_video_embeddings (video_id, embedding, text_hash, model)
+    `INSERT INTO youtube_video_embeddings (video_id, embedding, text_hash, model_id)
      SELECT $1, $2, $3, $4 WHERE EXISTS (SELECT 1 FROM youtube_videos WHERE video_id = $1)
-     ON CONFLICT (video_id) DO UPDATE SET embedding = $2, text_hash = $3, model = $4`,
-    [videoID, embedding, hash, model])
+     ON CONFLICT (video_id) DO UPDATE SET embedding = $2, text_hash = $3, model_id = $4`,
+    [videoID, embedding, hash, await modelId(model)])
 }
 
 // { video_id: embedding } for the videos of a server's channel that have one made by `model`.
@@ -99,8 +112,8 @@ async function videoEmbeddings (guildID, model) {
     `SELECT e.video_id, e.embedding FROM youtube_video_embeddings e
      JOIN youtube_videos v ON v.video_id = e.video_id
      JOIN guild_youtube g ON g.channel_id = v.channel_id
-     WHERE g.guild_id = $1 AND e.model = $2`,
-    [guildID, model])
+     WHERE g.guild_id = $1 AND e.model_id = $2`,
+    [guildID, await modelId(model)])
   return Object.fromEntries(rows.rows.map(r => [r.video_id, r.embedding]))
 }
 

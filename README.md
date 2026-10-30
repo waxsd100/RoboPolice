@@ -43,7 +43,7 @@ Short version; the Privacy Policy is authoritative.
 
 | Data | Where | Retention |
 |---|---|---|
-| Message ID, author ID, channel ID, server ID, timestamp, content and image URLs (not encrypted by the app; see below) | PostgreSQL `messages`, `message_attachments` | `MESSAGE_HISTORY_DAYS` days, or forever if unset |
+| Message ID, author ID, channel ID, server ID, timestamp, content and image URLs (not encrypted by the app; see below) | PostgreSQL `messages`, `message_attachments` | `MESSAGE_HISTORY_DAYS` days, or forever if unset; all of a server's go when the app leaves it |
 | Per-server settings (log channels, ignored channels, disabled events) | PostgreSQL `guilds`, `guild_event_logs`, `guild_ignored_channels`, `guild_disabled_events` | Until the app leaves the server |
 | Invite counters, webhook handles, guild settings | Redis | 3 hours |
 | The YouTube channel set with `/youtube`, its description and every video read from it, plus summaries of linked videos' contents (public YouTube data) | PostgreSQL `guild_youtube`, `youtube_channels`, `youtube_videos`, `youtube_summaries`, `guild_youtube_summaries` | Channels and videos until no server has the channel set; summaries until no server that asked for them remains |
@@ -295,6 +295,9 @@ only creates what is missing.
 Take a backup before the first start with migrations (`pg_dump`). Migration 002 to 005 change the
 layout: settings, image URLs and YouTube data move to their own tables and the old columns are
 dropped, so going back to an older version needs the backup.
+
+Everything stored for a server refers to its `guilds` row with a foreign key, so it is all
+deleted when the app leaves the server. `%reset` clears only the settings.
 
 A change to the schema is a new file (`NNN_name.sql`, or `NNN_name.js` exporting
 `async client => {}` for data SQL alone can't change); a file already applied is never edited.
