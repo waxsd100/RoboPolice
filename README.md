@@ -232,6 +232,10 @@ terraform init
 terraform apply
 ```
 
+By default this moves `BOT_TOKEN`, `DISCORD_WEBHOOK_URL`, `AES_KEY`, `CLOUDFLARE_AI_GATEWAY_TOKEN` and
+`YOUTUBE_API_KEY`. Database and Redis passwords stay on Railway, which creates and injects them for
+its own Postgres and Redis; add them to `secret_names` only if they come from elsewhere.
+
 Then store the values (each command reads the value from a shell variable of the same name; load
 your current `.env` first with `set -a; . ../../.env; set +a`):
 
