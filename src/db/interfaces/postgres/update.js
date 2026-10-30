@@ -3,7 +3,6 @@ const getDoc = require('./read').getGuild
 const cacheGuild = require('../../../bot/utils/cacheGuild')
 const getMessageFromBatch = require('../../messageBatcher').getMessage
 const updateBatchMessage = require('../../messageBatcher').updateMessage
-const aes = require('../../aes')
 const { ALL_EVENTS } = require('../../../bot/utils/constants')
 
 // Settings rows refer to the server's row, which getDoc makes if it is missing.
@@ -86,13 +85,13 @@ async function updateMessageRow (id, changedAttrs) {
   const client = await pool.getPostgresClient()
   try {
     await client.query('BEGIN')
-    if ('content' in changedAttrs) await client.query('UPDATE messages SET content = $1 WHERE id = $2', [aes.encrypt(changedAttrs.content || 'None'), id])
+    if ('content' in changedAttrs) await client.query('UPDATE messages SET content = $1 WHERE id = $2', [changedAttrs.content || 'None', id])
     if ('imageUrls' in changedAttrs) {
       await client.query('DELETE FROM message_attachments WHERE message_id = $1', [id])
       for (const [position, url] of changedAttrs.imageUrls.entries()) {
         await client.query(
           'INSERT INTO message_attachments (message_id, position, url) SELECT $1, $2, $3 WHERE EXISTS (SELECT 1 FROM messages WHERE id = $1)',
-          [id, position, aes.encrypt(url)])
+          [id, position, url])
       }
     }
     await client.query('COMMIT')

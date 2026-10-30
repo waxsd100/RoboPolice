@@ -1,6 +1,5 @@
 const pool = require('../../clients/postgres')
 const createGuild = require('./create').createGuild
-const aes = require('../../aes')
 const { getChannelMessages } = require('../../messageBatcher')
 const { ALL_EVENTS } = require('../../../bot/utils/constants')
 
@@ -33,26 +32,22 @@ async function getGuild (guildID) {
   return toSettings(doc.rows[0])
 }
 
-// A stored message, decrypted, with its image URLs in order (attachment_urls), or null.
+// A stored message, with its image URLs in order (attachment_urls), or null.
 async function getMessageById (messageID) {
   const message = await pool.query('SELECT * FROM messages WHERE id=$1', [messageID])
   if (message.rows.length === 0) return null
   const attachments = await pool.query('SELECT url FROM message_attachments WHERE message_id = $1 ORDER BY position', [messageID])
-  return {
-    ...message.rows[0],
-    content: aes.decrypt(message.rows[0].content),
-    attachment_urls: attachments.rows.map(r => aes.decrypt(r.url))
-  }
+  return { ...message.rows[0], attachment_urls: attachments.rows.map(r => r.url) }
 }
 
 // A channel's stored messages, newest first: the ones still in the in-memory batch, then Postgres.
-// Only text is returned; attachments stay encrypted where they are.
+// Only text is returned.
 async function getChannelHistory (channelID, limit) {
   const pending = getChannelMessages(channelID)
   const stored = await pool.query(
     'SELECT id, author_id, content, ts FROM messages WHERE channel_id = $1 ORDER BY ts DESC LIMIT $2',
     [channelID, Math.max(limit - pending.length, 0)])
-  return [...pending, ...stored.rows.map(row => ({ ...row, content: aes.decrypt(row.content) }))].slice(0, limit)
+  return [...pending, ...stored.rows].slice(0, limit)
 }
 
 exports.getMessageById = getMessageById

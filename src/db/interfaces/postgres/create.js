@@ -1,5 +1,4 @@
 const pool = require('../../clients/postgres')
-const aes = require('../../aes')
 const cacheGuild = require('../../../bot/utils/cacheGuild')
 const batchHandler = require('../../messageBatcher')
 const escape = require('markdown-escape')
@@ -14,7 +13,7 @@ async function createGuild (guild) {
   }
 }
 
-// The form message content is stored in (before encryption). messageUpdate compares against and
+// The form message content is stored in. messageUpdate compares against and
 // writes back this exact form, so a stored row never mixes escaped and raw text.
 function toStoredContent (content) {
   if (!content) return 'None'
@@ -25,10 +24,10 @@ function toStoredContent (content) {
 const MAX_IMAGES = 10
 
 async function cacheMessage (message) {
-  const content = aes.encrypt(toStoredContent(message.content))
-  // Image URLs in order, without repeats, each encrypted.
+  const content = toStoredContent(message.content)
+  // Image URLs in order, without repeats.
   const imageUrls = [...new Set(message.attachments.filter(a => a.content_type?.startsWith('image')).map(a => a.url))].slice(0, MAX_IMAGES)
-  await batchHandler.addItem([message.id, message.author.id, content, imageUrls.map(url => aes.encrypt(url)), new Date().toISOString(), message.channel.id, message.channel.guild?.id || null])
+  await batchHandler.addItem([message.id, message.author.id, content, imageUrls, new Date().toISOString(), message.channel.id, message.channel.guild?.id || null])
 }
 
 // The text as the user wrote it, from toStoredContent's form: markdown-escape put a backslash before

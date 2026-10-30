@@ -2,7 +2,6 @@ const { test, describe, beforeEach } = require('node:test')
 const assert = require('node:assert/strict')
 const { createGuild, createMember, installBot } = require('../helpers/fakes')
 const pool = require('../../src/db/clients/postgres')
-const aes = require('../../src/db/aes')
 const batcher = require('../../src/db/messageBatcher')
 const read = require('../../src/db/interfaces/postgres/read')
 const { createTools } = require('../../src/bot/modules/eventTools')
@@ -15,7 +14,7 @@ beforeEach((t) => {
   t.mock.method(pool, 'query', async (sql, args) => {
     queries.push({ sql: sql.replace(/\s+/g, ' ').trim(), args })
     if (/FROM messages WHERE channel_id/.test(sql)) {
-      return { rows: [{ id: 'db2', author_id: '2', content: aes.encrypt('DBの新しい方'), ts: new Date('2026-10-28T00:00:00Z') }, { id: 'db1', author_id: '3', content: aes.encrypt('DBの古い方'), ts: new Date('2026-10-20T00:00:00Z') }].slice(0, args[1]) }
+      return { rows: [{ id: 'db2', author_id: '2', content: 'DBの新しい方', ts: new Date('2026-10-28T00:00:00Z') }, { id: 'db1', author_id: '3', content: 'DBの古い方', ts: new Date('2026-10-20T00:00:00Z') }].slice(0, args[1]) }
     }
     return { rows: [] }
   })
@@ -30,10 +29,10 @@ describe('stored messages carry their channel and server', () => {
     })
     const row = added.mock.calls[0].arguments[0]
     assert.deepEqual(row.slice(5), ['201', '100'])
-    assert.equal(aes.decrypt(row[2]), 'hello')
+    assert.equal(row[2], 'hello')
   })
 
-  test('cacheMessage keeps each image URL once, in order, encrypted', async (t) => {
+  test('cacheMessage keeps each image URL once, in order', async (t) => {
     const added = t.mock.method(batcher, 'addItem', async () => {})
     const image = url => ({ url, content_type: 'image/png' })
     await require('../../src/db/interfaces/postgres/create').cacheMessage({
@@ -43,14 +42,14 @@ describe('stored messages carry their channel and server', () => {
       author: { id: '1' },
       channel: { id: '201', guild: { id: '100' } }
     })
-    assert.deepEqual(added.mock.calls[0].arguments[0][3].map(u => aes.decrypt(u)), ['https://cdn/a.png', 'https://cdn/b.png'])
+    assert.deepEqual(added.mock.calls[0].arguments[0][3], ['https://cdn/a.png', 'https://cdn/b.png'])
   })
 })
 
 describe('getChannelHistory', () => {
   test('returns messages still in memory first, then Postgres, decrypted and capped', async () => {
-    await batcher.addItem(['pending1', '4', aes.encrypt('まだメモリ'), [], '2026-10-29T01:00:00.000Z', '301', '100'])
-    await batcher.addItem(['other', '4', aes.encrypt('別チャンネル'), [], '2026-10-29T01:00:00.000Z', '999', '100'])
+    await batcher.addItem(['pending1', '4', 'まだメモリ', [], '2026-10-29T01:00:00.000Z', '301', '100'])
+    await batcher.addItem(['other', '4', '別チャンネル', [], '2026-10-29T01:00:00.000Z', '999', '100'])
     const rows = await read.getChannelHistory('301', 2)
     assert.deepEqual(rows.map(r => [r.id, r.content]), [['pending1', 'まだメモリ'], ['db2', 'DBの新しい方']])
     const select = queries.find(q => q.sql.startsWith('SELECT'))
