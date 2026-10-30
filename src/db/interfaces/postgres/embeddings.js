@@ -17,12 +17,14 @@ const SCHEMA = [
     guild_id TEXT NOT NULL,
     channel_id TEXT NOT NULL,
     ts TIMESTAMPTZ,
-    embedding TEXT NOT NULL
+    embedding TEXT NOT NULL,
+    model TEXT NOT NULL
   )`,
   'CREATE INDEX IF NOT EXISTS message_embeddings_guild_ts ON message_embeddings (guild_id, ts DESC)',
   // Videos are public data: their vectors are stored as they are.
   'ALTER TABLE youtube_videos ADD COLUMN IF NOT EXISTS embedding TEXT',
-  'ALTER TABLE youtube_videos ADD COLUMN IF NOT EXISTS embedding_hash TEXT'
+  'ALTER TABLE youtube_videos ADD COLUMN IF NOT EXISTS embedding_hash TEXT',
+  'ALTER TABLE youtube_videos ADD COLUMN IF NOT EXISTS embedding_model TEXT'
 ]
 
 let ready = null
@@ -49,19 +51,33 @@ async function pendingMessages (limit) {
   return rows.rows.map(r => ({ ...r, content: aes.decrypt(r.content) }))
 }
 
-// Stores [{ id, guild_id, channel_id, ts, embedding }] and marks `handledIds` (which also covers
+// Stores [{ id, guild_id, channel_id, ts, embedding, model }] and marks `handledIds` (which also covers
 // messages that get no embedding, such as empty ones or ones from before channels were recorded).
 async function saveMessageEmbeddings (rows, handledIds) {
   await ensureTables()
   for (const r of rows) {
     // The message may have been deleted meanwhile; its embedding is then not wanted either.
     await pool.query(
-      `INSERT INTO message_embeddings (message_id, guild_id, channel_id, ts, embedding)
-       SELECT $1, $2, $3, $4, $5 WHERE EXISTS (SELECT 1 FROM messages WHERE id = $1)
-       ON CONFLICT (message_id) DO UPDATE SET embedding = EXCLUDED.embedding`,
-      [r.id, r.guild_id, r.channel_id, r.ts, aes.encrypt(r.embedding)])
+      `INSERT INTO message_embeddings (message_id, guild_id, channel_id, ts, embedding, model)
+       SELECT $1, $2, $3, $4, $5, $6 WHERE EXISTS (SELECT 1 FROM messages WHERE id = $1)
+       ON CONFLICT (message_id) DO UPDATE SET embedding = EXCLUDED.embedding, model = EXCLUDED.model`,
+      [r.id, r.guild_id, r.channel_id, r.ts, aes.encrypt(r.embedding), r.model])
   }
   if (handledIds.length) await pool.query('UPDATE messages SET embedded = true WHERE id = ANY($1)', [handledIds])
+}
+
+// Drops up to `limit` message embeddings made by another model and marks their messages to be
+// embedded again. Resolves to how many were dropped.
+async function resetStaleMessageEmbeddings (model, limit) {
+  await ensureTables()
+  const result = await pool.query(
+    `WITH stale AS (
+       DELETE FROM message_embeddings WHERE message_id IN (SELECT message_id FROM message_embeddings WHERE model <> $1 LIMIT $2)
+       RETURNING message_id
+     )
+     UPDATE messages SET embedded = false WHERE id IN (SELECT message_id FROM stale)`,
+    [model, limit])
+  return result.rowCount || 0
 }
 
 // An edited message is embedded again.
@@ -71,19 +87,19 @@ async function invalidateMessage (messageID) {
   await pool.query('UPDATE messages SET embedded = false WHERE id = $1', [messageID])
 }
 
-// The stored message embeddings of a server in `channelIDs`, newest first, `pageSize` at a time:
+// The stored message embeddings of a server in `channelIDs` made by `model`, newest first, `pageSize` at a time:
 // an async iterator of [{ message_id, channel_id, ts, embedding }] pages (embedding decrypted),
 // stopping after `max` rows.
-async function * messageEmbeddingPages (guildID, channelIDs, { pageSize = 5000, max = 50000 } = {}) {
+async function * messageEmbeddingPages (guildID, channelIDs, { model, pageSize = 5000, max = 50000 } = {}) {
   await ensureTables()
   let before = null
   let read = 0
   while (read < max) {
     const rows = (await pool.query(
       `SELECT message_id, channel_id, ts, embedding FROM message_embeddings
-       WHERE guild_id = $1 AND channel_id = ANY($2) AND ($3::timestamptz IS NULL OR ts < $3)
+       WHERE guild_id = $1 AND channel_id = ANY($2) AND model = $5 AND ($3::timestamptz IS NULL OR ts < $3)
        ORDER BY ts DESC LIMIT $4`,
-      [guildID, channelIDs, before, Math.min(pageSize, max - read)])).rows
+      [guildID, channelIDs, before, Math.min(pageSize, max - read), model])).rows
     if (rows.length === 0) return
     read += rows.length
     before = rows[rows.length - 1].ts
@@ -108,16 +124,16 @@ async function videosForEmbedding () {
   return rows.rows
 }
 
-async function saveVideoEmbedding (guildID, videoID, embedding, hash) {
+async function saveVideoEmbedding (guildID, videoID, embedding, hash, model) {
   await ensureTables()
-  await pool.query('UPDATE youtube_videos SET embedding = $3, embedding_hash = $4 WHERE guild_id = $1 AND video_id = $2', [guildID, videoID, embedding, hash])
+  await pool.query('UPDATE youtube_videos SET embedding = $3, embedding_hash = $4, embedding_model = $5 WHERE guild_id = $1 AND video_id = $2', [guildID, videoID, embedding, hash, model])
 }
 
-// { video_id: embedding } for a server's videos that have one.
-async function videoEmbeddings (guildID) {
+// { video_id: embedding } for a server's videos that have one made by `model`.
+async function videoEmbeddings (guildID, model) {
   await ensureTables()
-  const rows = await pool.query('SELECT video_id, embedding FROM youtube_videos WHERE guild_id = $1 AND embedding IS NOT NULL', [guildID])
+  const rows = await pool.query('SELECT video_id, embedding FROM youtube_videos WHERE guild_id = $1 AND embedding IS NOT NULL AND embedding_model = $2', [guildID, model])
   return Object.fromEntries(rows.rows.map(r => [r.video_id, r.embedding]))
 }
 
-module.exports = { SCHEMA, ensureTables, pendingMessages, saveMessageEmbeddings, invalidateMessage, messageEmbeddingPages, getMessages, videosForEmbedding, saveVideoEmbedding, videoEmbeddings }
+module.exports = { SCHEMA, ensureTables, pendingMessages, saveMessageEmbeddings, resetStaleMessageEmbeddings, invalidateMessage, messageEmbeddingPages, getMessages, videosForEmbedding, saveVideoEmbedding, videoEmbeddings }

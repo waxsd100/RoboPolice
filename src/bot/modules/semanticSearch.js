@@ -1,7 +1,7 @@
 // Searching stored messages and YouTube videos by meaning, with the embeddings embeddingIndexer
 // keeps. Keyword matches still count: a result that contains every word of the query ranks above
 // one that is only close in meaning.
-const { embedQuery, similarity, fromBase64 } = require('../utils/embeddings')
+const { embedQuery, similarity, fromBase64, model } = require('../utils/embeddings')
 const store = require('../../db/interfaces/postgres/embeddings')
 const { fromStoredContent } = require('../../db/interfaces/postgres/create')
 
@@ -29,7 +29,7 @@ function topK (limit) {
 async function searchMessages (guildID, channelIDs, query, { limit = 30 } = {}) {
   const q = await embedQuery(query)
   const best = topK(limit * 2) // keyword matches are only known once the text is read
-  for await (const page of store.messageEmbeddingPages(guildID, channelIDs)) {
+  for await (const page of store.messageEmbeddingPages(guildID, channelIDs, { model: model() })) {
     for (const row of page) best.offer({ id: row.message_id, score: similarity(q, fromBase64(row.embedding)) })
   }
   const scores = new Map(best.items.map(i => [i.id, i.score]))
@@ -46,7 +46,8 @@ async function searchMessages (guildID, channelIDs, query, { limit = 30 } = {}) 
 // `videos` ordered by closeness to `query`, or null when the server's videos have no embeddings
 // yet (the caller then falls back to keywords).
 async function rankVideos (guildID, videos, query) {
-  const embeddings = await store.videoEmbeddings(guildID)
+  // Only vectors from the current model: while a model change is being worked through, the rest wait.
+  const embeddings = await store.videoEmbeddings(guildID, model())
   if (Object.keys(embeddings).length === 0) return null
   const q = await embedQuery(query)
   const words = wordsOf(query)

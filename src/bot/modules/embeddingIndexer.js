@@ -2,7 +2,7 @@
 // and summary, redone when any of them changes) and, when MESSAGE_EMBEDDINGS=true, every stored
 // message. One worker runs it for all servers, like the retention sweep.
 const crypto = require('crypto')
-const { embed, toBase64 } = require('../utils/embeddings')
+const { embed, toBase64, model } = require('../utils/embeddings')
 const store = require('../../db/interfaces/postgres/embeddings')
 const { isGatewayConfigured } = require('../utils/aiGateway')
 
@@ -29,15 +29,17 @@ function hashOf (text) {
   return crypto.createHash('sha256').update(text).digest('hex').slice(0, 32)
 }
 
-// Embeds videos that have no embedding or whose text changed. Resolves to how many were embedded.
+// Embeds videos that have no embedding, whose text changed, or that were embedded by another
+// model (the hash covers the model too). Resolves to how many were embedded.
 async function indexVideos () {
+  const current = model()
   const changed = (await store.videosForEmbedding())
-    .map(v => ({ ...v, text: videoText(v) }))
-    .filter(v => v.embedding_hash !== hashOf(v.text))
+    .map(v => ({ ...v, text: videoText(v), hash: hashOf(`${current}\n${videoText(v)}`) }))
+    .filter(v => v.embedding_hash !== v.hash)
     .slice(0, VIDEOS_PER_RUN)
   if (changed.length === 0) return 0
   const vectors = await embed(changed.map(v => v.text))
-  for (const [i, v] of changed.entries()) await store.saveVideoEmbedding(v.guild_id, v.video_id, toBase64(vectors[i]), hashOf(v.text))
+  for (const [i, v] of changed.entries()) await store.saveVideoEmbedding(v.guild_id, v.video_id, toBase64(vectors[i]), v.hash, current)
   return changed.length
 }
 
@@ -47,8 +49,11 @@ function plainText (stored) {
   return fromStoredContent(stored).trim()
 }
 
-// Embeds the newest messages not handled yet. Resolves to how many were embedded.
+// Embeds the newest messages not handled yet, after sending those embedded by another model back
+// to be done again. Resolves to how many were embedded.
 async function indexMessages () {
+  const reset = await store.resetStaleMessageEmbeddings(model(), MESSAGES_PER_RUN)
+  if (reset) global.logger.info(`[EMBEDDINGS]: ${reset} message(s) were embedded by another model and will be embedded again`)
   const pending = await store.pendingMessages(MESSAGES_PER_RUN)
   if (pending.length === 0) return 0
   // Messages from before channels were recorded can't be searched by channel; empty ones say
@@ -56,7 +61,7 @@ async function indexMessages () {
   const wanted = pending.map(m => ({ ...m, text: plainText(m.content) })).filter(m => m.text && m.channel_id && m.guild_id)
   const vectors = wanted.length ? await embed(wanted.map(m => m.text)) : []
   await store.saveMessageEmbeddings(
-    wanted.map((m, i) => ({ id: m.id, guild_id: m.guild_id, channel_id: m.channel_id, ts: m.ts, embedding: toBase64(vectors[i]) })),
+    wanted.map((m, i) => ({ id: m.id, guild_id: m.guild_id, channel_id: m.channel_id, ts: m.ts, embedding: toBase64(vectors[i]), model: model() })),
     pending.map(m => m.id))
   return wanted.length
 }

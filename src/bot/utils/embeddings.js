@@ -11,6 +11,8 @@ const DIMENSIONS = 512
 const BATCH_SIZE = 100 // the most batchEmbedContents takes
 const MAX_TEXT = 2000
 
+// Vectors from different models can't be compared, so each stored one records the model that made
+// it; changing GEMINI_EMBEDDING_MODEL makes everything again (see embeddingIndexer.js).
 function model () {
   return process.env.GEMINI_EMBEDDING_MODEL || DEFAULT_EMBEDDING_MODEL
 }
@@ -61,4 +63,4 @@ function fromBase64 (text) {
   return new Int8Array(buffer.buffer, buffer.byteOffset, buffer.byteLength)
 }
 
-module.exports = { embed, embedQuery, similarity, quantize, toBase64, fromBase64, DIMENSIONS, BATCH_SIZE }
+module.exports = { embed, embedQuery, model, similarity, quantize, toBase64, fromBase64, DIMENSIONS, BATCH_SIZE }

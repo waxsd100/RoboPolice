@@ -37,13 +37,22 @@ describe('embeddingIndexer', () => {
     installEmbeddingModel()
     const saved = installEmbeddingStore()
     const same = { guild_id: '100', video_id: 'v1', title: 'ホラーゲーム実況', description: '', summary: null }
-    same.embedding_hash = indexer.hashOf(indexer.videoText(same))
+    same.embedding_hash = indexer.hashOf(`gemini-embedding-001\n${indexer.videoText(same)}`)
     require('../../src/db/interfaces/postgres/embeddings').videosForEmbedding = async () => [
       same,
       { guild_id: '100', video_id: 'v2', title: 'マイクラ建築', description: '城', summary: '大きな城を建てる', embedding_hash: 'old' }
     ]
     assert.equal(await indexer.indexVideos(), 1)
-    assert.deepEqual(saved.videos.map(v => v.videoID), ['v2'])
+    assert.deepEqual(saved.videos.map(v => [v.videoID, v.model]), [['v2', 'gemini-embedding-001']])
+
+    // Another model: every video is embedded again, since vectors of different models don't compare.
+    process.env.GEMINI_EMBEDDING_MODEL = 'gemini-embedding-002'
+    try {
+      assert.equal(await indexer.indexVideos(), 2)
+      assert.deepEqual(saved.videos.slice(1).map(v => [v.videoID, v.model]), [['v1', 'gemini-embedding-002'], ['v2', 'gemini-embedding-002']])
+    } finally {
+      delete process.env.GEMINI_EMBEDDING_MODEL
+    }
     assert.equal(indexer.videoText({ title: 'a', description: 'b', summary: 'c' }), 'a\nb\n内容の要約: c')
   })
 
@@ -60,6 +69,8 @@ describe('embeddingIndexer', () => {
     assert.equal(batches[0].requests[0].content.parts[0].text, '怖い話して_ね')
     assert.deepEqual(saved.messages.map(m => m.id), ['1'])
     assert.deepEqual(saved.handled, ['1', '2', '3'])
+    assert.equal(saved.resetFor, 'gemini-embedding-001', 'messages embedded by another model are sent back first')
+    assert.equal(saved.messages[0].model, 'gemini-embedding-001')
   })
 
   test('embeds messages only when MESSAGE_EMBEDDINGS=true', async (t) => {

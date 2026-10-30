@@ -80,8 +80,12 @@ function installEmbeddingStore ({ videos = {}, messages = [], pending = [] } = {
   const saved = { videos: [], messages: [], handled: [], invalidated: [] }
   store.ensureTables = async () => {}
   store.videoEmbeddings = async guildID => videos[guildID] || {}
+  store.resetStaleMessageEmbeddings = async (model) => {
+    saved.resetFor = model
+    return 0
+  }
   store.videosForEmbedding = async () => []
-  store.saveVideoEmbedding = async (guildID, videoID, embedding, hash) => saved.videos.push({ guildID, videoID, embedding, hash })
+  store.saveVideoEmbedding = async (guildID, videoID, embedding, hash, model) => saved.videos.push({ guildID, videoID, embedding, hash, model })
   store.pendingMessages = async limit => pending.slice(0, limit)
   store.saveMessageEmbeddings = async (rows, handled) => {
     saved.messages.push(...rows)
