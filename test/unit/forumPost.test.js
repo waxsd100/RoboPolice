@@ -44,6 +44,11 @@ describe('imageUrlsOf', () => {
     assert.deepEqual(imageUrlsOf({ image_url: 'https://e.com/a.png' }), ['https://e.com/a.png'])
   })
 
+  test('carries what the requester said about the image', async () => {
+    assert.equal((await toForumPost({ ...base, image_instruction: '  背景を夜空に  ' }, guild, member)).imageInstruction, '背景を夜空に')
+    assert.equal((await toForumPost({ ...base, image_instruction: '' }, guild, member)).imageInstruction, null)
+  })
+
   test('is carried on a forum post', async () => {
     assert.deepEqual((await toForumPost({ ...base, image_urls: ['https://e.com/a.png'] }, guild, member)).imageUrls, ['https://e.com/a.png'])
   })
@@ -82,6 +87,7 @@ describe('toForumPost', () => {
       },
       tagNames: ['募集中'],
       imageUrls: [],
+      imageInstruction: null,
       truncated: false
     })
     assert.deepEqual(calls.map(c => `${c.method} ${c.url}`), ['GET /channels/301'])

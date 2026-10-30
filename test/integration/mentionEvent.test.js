@@ -337,7 +337,7 @@ describe('mention → event / forum post (integration)', () => {
     ])
     const done = mentionEvent.handle(mention(channel, '<@BOT> 交流会'))
     const [reply] = replies
-    assert.deepEqual((await waitForButtons(reply, '内容を修正')).map(b => b.label), ['登録する', '内容を修正', 'キャンセル', '画像: AIで作成', '画像: なし'])
+    assert.deepEqual((await waitForButtons(reply, '内容を修正')).map(b => b.label), ['登録する', '内容を修正', '画像を指示で変更', 'キャンセル', '画像: AIで作成', '画像: なし'])
     await press(reply, '内容を修正')
     await waitFor(() => /で直したいことを入力してください/.test(reply.state.content), 'the correction prompt')
 
@@ -366,7 +366,7 @@ describe('mention → event / forum post (integration)', () => {
       await waitFor(() => /で直したいことを/.test(reply.state.content), 'the correction prompt')
       await mentionEvent.handle(mention(channel, `修正${i}`))
     }
-    assert.deepEqual((await waitForButtons(reply, 'キャンセル')).map(b => b.label), ['登録する', 'キャンセル', '画像: AIで作成', '画像: なし'])
+    assert.deepEqual((await waitForButtons(reply, 'キャンセル')).map(b => b.label), ['登録する', '画像を指示で変更', 'キャンセル', '画像: AIで作成', '画像: なし'])
     assert.equal(reply.state.content, '内容の修正は3回までです。')
     await press(reply, 'キャンセル')
     await done
@@ -416,7 +416,7 @@ describe('mention → event / forum post (integration)', () => {
     const done = mentionEvent.handle(mention(channel, `<@BOT> ${site.url}/event`))
     const [reply] = replies
     const labels = (await waitForButtons(reply, '登録する')).map(b => b.label)
-    assert.deepEqual(labels, ['登録する', '内容を修正', 'キャンセル', '画像: 切り抜き', '画像: 全体表示', '画像: AIで作成', '画像: なし'])
+    assert.deepEqual(labels, ['登録する', '内容を修正', '画像を指示で変更', 'キャンセル', '画像: 切り抜き', '画像: 全体表示', '画像: AIで作成', '画像: なし'])
     assert.equal(reply.state.components.length, 2, 'image modes get their own row')
     assert.equal(reply.state.embeds[0].image.url, 'attachment://cover.jpg')
     assert.equal(reply.state.embeds[0].fields.find(f => f.name === '画像').value, '全体表示（800×320）')
@@ -460,7 +460,7 @@ describe('mention → event / forum post (integration)', () => {
     const done = mentionEvent.handle(mention(channel, '<@BOT> A'))
     const [reply] = replies
     const labels = (await waitForButtons(reply, '画像2')).map(b => b.label)
-    assert.deepEqual(labels, ['登録する', '内容を修正', 'キャンセル', '画像1', '画像2', '画像: 切り抜き', '画像: 全体表示', '画像: AIで作成', '画像: なし'])
+    assert.deepEqual(labels, ['登録する', '内容を修正', '画像を指示で変更', 'キャンセル', '画像1', '画像2', '画像: 切り抜き', '画像: 全体表示', '画像: AIで作成', '画像: なし'])
     assert.equal(reply.state.components.length, 3, 'candidates and modes get rows of their own')
     assert.equal(reply.state.embeds[1].title, '画像の候補')
     assert.equal(reply.state.embeds[1].image.url, 'attachment://candidates.jpg')
@@ -506,6 +506,58 @@ describe('mention → event / forum post (integration)', () => {
     await done
   })
 
+  test('image: 画像を指示で変更 edits the image shown with the requester\'s words, and an attached image replaces it', async () => {
+    const { channel, replies } = createChannel()
+    const edited = await sharp({ create: { width: 1344, height: 576, channels: 3, background: '#112244' } }).png().toBuffer()
+    const requests = installGemini([
+      [submit({ name: '秋の勉強会', start: '2026-11-07T13:00:00+09:00', image_urls: [`${site.url}/photo.png`] })],
+      [{ inlineData: { mimeType: 'image/png', data: edited.toString('base64') } }]
+    ])
+    const done = mentionEvent.handle(mention(channel, '<@BOT> 勉強会'))
+    const [reply] = replies
+    await waitForButtons(reply, '画像を指示で変更')
+    const cropped = reply.state.files[0].file
+    await press(reply, '画像を指示で変更')
+    await waitFor(() => /画像をどう変えるか入力してください/.test(reply.state.content), 'the image prompt')
+    await mentionEvent.handle(mention(channel, '背景を夜空にして'))
+    await waitFor(() => /^AIで編集/.test(reply.state.embeds[0]?.fields.find(f => f.name === '画像')?.value), 'the edited preview')
+    assert.equal(reply.state.embeds[0].fields.find(f => f.name === '画像').value, 'AIで編集（800×320）\n指示: 背景を夜空にして')
+    assert.ok(reply.history.some(h => h.content === '画像を変更しています…'))
+
+    const [prompt, reference] = requests[1].body.contents[0].parts
+    assert.match(prompt.text, /^Edit the attached image[\s\S]*Instruction \(from the requester, may be in Japanese\): 背景を夜空にして/)
+    assert.ok(Buffer.from(reference.inlineData.data, 'base64').equals(cropped), 'the image shown is what gets edited')
+    assert.ok(buttons(reply).some(b => b.label === '画像: AIで編集'))
+
+    // A reply with an image attached and no text replaces the image.
+    await press(reply, '画像を指示で変更')
+    await waitFor(() => /画像をどう変えるか/.test(reply.state.content), 'the image prompt again')
+    await mentionEvent.handle(mention(channel, '', { attachments: [{ url: `${site.url}/poster.png`, filename: 'poster.png', content_type: 'image/png' }] }))
+    await waitFor(() => /^画像2・全体表示/.test(reply.state.embeds[0]?.fields.find(f => f.name === '画像')?.value), 'the replaced image')
+    assert.equal(requests.length, 2, 'replacing needs no AI')
+
+    await press(reply, '登録する')
+    await done
+    const { image } = discord.find(c => c.method === 'POST').body
+    assert.ok(Buffer.from(image.split(',')[1], 'base64').equals(reply.state.files[0].file))
+  })
+
+  test('image: an instruction about the image in the request itself is applied to the first preview', async () => {
+    const { channel, replies } = createChannel()
+    const edited = await sharp({ create: { width: 1344, height: 576, channels: 3, background: '#331100' } }).png().toBuffer()
+    const requests = installGemini([
+      [submit({ name: 'A', start: '2026-11-03T19:00:00+09:00', image_urls: [`${site.url}/photo.png`], image_instruction: 'もっと明るく' })],
+      [{ inlineData: { mimeType: 'image/png', data: edited.toString('base64') } }]
+    ])
+    const done = mentionEvent.handle(mention(channel, '<@BOT> A 画像はもっと明るくして'))
+    const [reply] = replies
+    await waitForButtons(reply, '登録する')
+    assert.equal(reply.state.embeds[0].fields.find(f => f.name === '画像').value, 'AIで編集（800×320）\n指示: もっと明るく')
+    assert.match(requests[1].body.contents[0].parts[0].text, /Instruction[^\n]*: もっと明るく/)
+    await press(reply, 'キャンセル')
+    await done
+  })
+
   test('image: when AI fails, the previous image stays and the preview says why', async () => {
     const { channel, replies } = createChannel()
     installGemini([
@@ -527,7 +579,7 @@ describe('mention → event / forum post (integration)', () => {
     installGemini([[submit({ name: 'A', start: '2026-11-03T19:00:00+09:00', image_urls: [`${site.url}/missing.png`] })]])
     const done = mentionEvent.handle(mention(channel, '<@BOT> A'))
     const [reply] = replies
-    assert.deepEqual((await waitForButtons(reply, '登録する')).map(b => b.label).slice(3), ['画像: AIで作成', '画像: なし'])
+    assert.deepEqual((await waitForButtons(reply, '登録する')).map(b => b.label).slice(4), ['画像: AIで作成', '画像: なし'])
     assert.equal(reply.state.embeds[0].fields.find(f => f.name === '画像').value, 'なし\n使えなかった画像: HTTP 404')
     await press(reply, '登録する')
     await done
@@ -894,7 +946,7 @@ describe('mention → event / forum post (integration)', () => {
       }])
       const done = mentionEvent.handle(mention(channel, '<@BOT> 開始を20時にして', { messageReference: { messageID: '600', channelID: '201' } }))
       const [reply] = replies
-      assert.deepEqual((await waitForButtons(reply, '更新する')).map(b => b.label), ['更新する', '内容を修正', 'キャンセル', '画像: AIで作成', '画像: なし'])
+      assert.deepEqual((await waitForButtons(reply, '更新する')).map(b => b.label), ['更新する', '内容を修正', '画像を指示で変更', 'キャンセル', '画像: AIで作成', '画像: なし'])
       const declared = requests[0].body.tools[0].functionDeclarations.map(d => d.name)
       assert.ok(declared.includes('submit_event_draft') && !declared.includes('submit_forum_post_draft'), 'only the same kind can be submitted')
       assert.equal(reply.state.embeds[0].fields.find(f => f.name === '変更する項目').value, '開始、終了')
@@ -928,7 +980,7 @@ describe('mention → event / forum post (integration)', () => {
       const done = mentionEvent.handle(mention(channel, '<@BOT> 題名に締切って入れて', { messageReference: { messageID: '700', channelID: '700' } }))
       const [reply] = replies
       await waitForButtons(reply, '更新する')
-      assert.deepEqual(buttons(reply).map(b => b.label).slice(3), ['画像: 今の画像のまま', '画像: AIで作成', '画像: なし'])
+      assert.deepEqual(buttons(reply).map(b => b.label).slice(4), ['画像: 今の画像のまま', '画像: AIで作成', '画像: なし'])
       const fields = reply.state.embeds[0].fields
       assert.equal(fields.find(f => f.name === '投稿先').value, '<#206>')
       assert.equal(fields.find(f => f.name === '変更する項目').value, '題名')
@@ -944,6 +996,27 @@ describe('mention → event / forum post (integration)', () => {
       assert.deepEqual(patches[0].body, { name: '11/3 交流会【締切】', applied_tags: ['tag-open'], reason: `Requested by user${REQUESTER} (${REQUESTER})` })
       assert.deepEqual(patches[1].body, { content: '参加したい人は書き込んでください', allowed_mentions: { parse: [] }, attachments: [] })
       assert.equal(reply.state.content, `フォーラムの投稿を更新しました: https://discord.com/channels/100/700\n${EDIT_HINT}`)
+    })
+
+    test('an instruction about the image edits the posted image, and the update uploads it', async () => {
+      const { channel, replies } = createChannel()
+      const edited = await sharp({ create: { width: 1344, height: 756, channels: 3, background: '#224411' } }).png().toBuffer()
+      const requests = installGemini([
+        [call('submit_forum_post_draft', { found: true, channel_id: '206', title: '11/3 交流会', content: '参加したい人は書き込んでください', tags: ['募集中'], image_instruction: '画像を夕焼けにして' })],
+        [{ inlineData: { mimeType: 'image/png', data: edited.toString('base64') } }]
+      ])
+      const done = mentionEvent.handle(mention(channel, '<@BOT> 画像を夕焼けにして', { messageReference: { messageID: '700', channelID: '700' } }))
+      const [reply] = replies
+      await waitForButtons(reply, '更新する')
+      const fields = reply.state.embeds[0].fields
+      assert.equal(fields.find(f => f.name === '変更する項目').value, '（文章の変更なし）')
+      assert.equal(fields.find(f => f.name === '画像').value, 'AIで編集（1280×720）\n指示: 画像を夕焼けにして')
+      assert.match(requests[1].body.contents[0].parts[0].text, /^Edit the attached image/)
+      await press(reply, '更新する')
+      await done
+      const message = discord.find(c => c.method === 'PATCH' && c.url.endsWith('/messages/700'))
+      assert.deepEqual(message.body.attachments, [{ id: 0, filename: 'image.jpg' }])
+      assert.ok(message.files[0].file.equals(reply.state.files[0].file))
     })
 
     test('keeping the image leaves the attachments untouched', async () => {

@@ -27,20 +27,26 @@ const BUTTONS_PER_ROW = 5
 const inProgress = new Set()
 
 // Typed answers we are waiting for, by "channelID:userID": the requester's next message in the
-// channel is the answer (a correction, or a free-text reply to a question).
+// channel is the answer (a correction, a free-text reply to a question, or what to do with the
+// image, which may be an attached image alone).
 const waitingReplies = new Map()
 
-function awaitReply (channelID, userID) {
+// Resolves to { text, images } (images: URLs of attached images, only when `withImages`), or null
+// after the timeout.
+function awaitReply (channelID, userID, { withImages = false } = {}) {
   const key = `${channelID}:${userID}`
   return new Promise(resolve => {
     const timer = setTimeout(() => {
       waitingReplies.delete(key)
       resolve(null)
     }, ANSWER_TIMEOUT_MS)
-    waitingReplies.set(key, text => {
-      clearTimeout(timer)
-      waitingReplies.delete(key)
-      resolve(text)
+    waitingReplies.set(key, {
+      withImages,
+      resolve: answer => {
+        clearTimeout(timer)
+        waitingReplies.delete(key)
+        resolve(answer)
+      }
     })
   })
 }
@@ -48,8 +54,11 @@ function awaitReply (channelID, userID) {
 // Hands `message` to a waiting awaitReply(), if it is the answer one is waiting for.
 function takeReply (message) {
   const waiting = waitingReplies.get(`${message.channel.id}:${message.author.id}`)
-  if (!waiting || !message.content.trim() || isMentioned(message)) return false
-  waiting(message.content.trim())
+  if (!waiting || isMentioned(message)) return false
+  const text = message.content.trim()
+  const images = waiting.withImages ? attachedImages(message) : []
+  if (!text && !images.length) return false
+  waiting.resolve({ text, images })
   return true
 }
 
@@ -297,13 +306,18 @@ async function choose (reply, requesterID, message, buttons, files) {
   }
 }
 
-// Asks the requester to type their answer as their next message in the channel.
-async function typedAnswer (reply, channelID, requesterID, prompt) {
+// Asks the requester to type their answer as their next message in the channel. Resolves to the
+// text, or with `withImages` to { text, images }.
+async function typedAnswer (reply, channelID, requesterID, prompt, { withImages = false } = {}) {
   await reply.edit({ content: `${prompt}（5分以内にこのチャンネルへ書き込んでください）`, embeds: [], components: [] })
-  const text = await awaitReply(channelID, requesterID)
-  if (text === null) throw new StopDrafting('時間内に入力がなかったため、作成を取りやめました。')
-  return text
+  const answer = await awaitReply(channelID, requesterID, { withImages })
+  if (answer === null) throw new StopDrafting('時間内に入力がなかったため、作成を取りやめました。')
+  return withImages ? answer : answer.text
 }
+
+const IMAGE_PROMPT = '画像をどう変えるか入力してください。画像の URL を書くか画像を添付すると、その画像に差し替えます（例: 背景を夜空にして、もっと明るく、人物を消して）'
+// AI image edits per draft: each is an image model call.
+const MAX_IMAGE_INSTRUCTIONS = 5
 
 // The ask_user tool: the model's question as buttons, a way to answer in words, and a way out.
 function asker (reply, channelID, requesterID) {
@@ -401,6 +415,8 @@ async function handle (message) {
       let revisions = 0
       let cover = null
       let needsCover = true
+      let imageInstructions = 0
+      let lastInstruction = null
       let previous = null // the draft shown before the latest correction
       let note = ''
       for (;;) {
@@ -433,6 +449,14 @@ async function handle (message) {
           if (cover.size !== kind.size) await cover.resize(kind.size)
           await cover.revise({ imageUrls: result.imageUrls, ...kind.text(result) })
         }
+        // An instruction about the image in the request or a correction ("背景を夜空に"). The model
+        // may repeat it when revising, so only a new one is applied.
+        if (needsCover && result.imageInstruction && result.imageInstruction !== lastInstruction && imageInstructions < MAX_IMAGE_INSTRUCTIONS) {
+          lastInstruction = result.imageInstruction
+          imageInstructions++
+          await reply.edit({ content: '画像を変更しています…', embeds: [], components: [] })
+          await cover.instruct({ text: result.imageInstruction })
+        }
         needsCover = false
         const confirmLabel = edit ? '更新する' : kind.confirmLabel
         const embed = kind.preview(result, [...new Set(tools.sources)], message.author, cover, {
@@ -443,6 +467,7 @@ async function handle (message) {
         const buttons = [
           { label: confirmLabel, style: SUCCESS, action: 'create' },
           ...(canRevise ? [{ label: '内容を修正', style: PRIMARY, action: 'revise' }] : []),
+          ...(imageInstructions < MAX_IMAGE_INSTRUCTIONS ? [{ label: '画像を指示で変更', style: PRIMARY, action: 'instruct' }] : []),
           { label: 'キャンセル', style: DANGER, action: 'cancel' },
           // Which candidate, then how it becomes the image: separate rows, so it is clear these
           // buttons are about the image and 内容を修正 is about the text.
@@ -486,6 +511,13 @@ async function handle (message) {
         if (action.startsWith('candidate:') || action.startsWith('image:')) {
           if (action === 'image:ai' && cover.needsAiRender()) await reply.edit({ content: 'AI で画像を作成しています…', components: [] })
           await cover.pick(action)
+          continue
+        }
+        if (action === 'instruct') {
+          const answer = await typedAnswer(reply, message.channel.id, message.author.id, IMAGE_PROMPT, { withImages: true })
+          imageInstructions++
+          await reply.edit({ content: '画像を変更しています…' })
+          await cover.instruct(answer)
           continue
         }
         const correction = await typedAnswer(reply, message.channel.id, message.author.id, kind.revisePrompt)

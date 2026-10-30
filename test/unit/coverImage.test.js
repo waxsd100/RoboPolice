@@ -10,6 +10,12 @@ imageGen.generateCover = async ({ size }) => {
   generated++
   return sharp({ create: { ...size, channels: 3, background: `#0000${String(generated).padStart(2, '0')}` } }).jpeg().toBuffer()
 }
+const edits = []
+imageGen.editCover = async ({ instruction, source, size }) => {
+  if (instruction === 'fail') throw Object.assign(new Error('x'), { hint: 'AI が画像を作れませんでした' })
+  edits.push({ instruction, source })
+  return sharp({ create: { ...size, channels: 3, background: `#00${String(edits.length).padStart(2, '0')}00` } }).jpeg().toBuffer()
+}
 const { CoverImage } = require('../../src/bot/modules/coverImage')
 const { SIZES } = require('../../src/bot/utils/imageCrop')
 
@@ -143,5 +149,68 @@ describe('CoverImage', () => {
     await cover.resize(SIZES.eventCover)
     assert.equal(generated, count)
     assert.equal((await sharp(cover.buffer).metadata()).width, 800)
+  })
+
+  test('an instruction edits the image shown now, and further ones edit the edited image', async () => {
+    edits.length = 0
+    const cover = new CoverImage(SIZES.eventCover)
+    await cover.useDraft({ imageUrls: ['https://e.com/wide.png'], title: 't', summary: 's' })
+    const cropped = cover.buffer
+    assert.equal(await cover.instruct({ text: '背景を夜空にして' }), true)
+    assert.equal(cover.mode, 'edited')
+    assert.equal(edits[0].source, cropped)
+    const first = cover.buffer
+    await cover.instruct({ text: 'もっと明るく' })
+    assert.equal(edits[1].source, first)
+    assert.equal(cover.describe(), 'AIで編集（800×320）\n指示: 背景を夜空にして → もっと明るく')
+    assert.deepEqual(cover.modes(), ['crop', 'fit', 'ai', 'edited', 'none'])
+    await cover.pick('image:crop')
+    assert.equal(cover.buffer, cropped, 'the edit is kept to switch back to')
+    await cover.pick('image:edited')
+    assert.notEqual(cover.buffer, cropped)
+  })
+
+  test('without an image, an instruction makes one', async () => {
+    edits.length = 0
+    const cover = new CoverImage(SIZES.eventCover)
+    await cover.useDraft({ imageUrls: [], title: 't', summary: 's' })
+    await cover.instruct({ text: '夜のお祭りの絵' })
+    assert.equal(edits[0].source, null)
+    assert.equal(cover.mode, 'edited')
+  })
+
+  test('a failed edit keeps the image and says why', async () => {
+    const cover = new CoverImage(SIZES.eventCover)
+    await cover.useDraft({ imageUrls: ['https://e.com/wide.png'], title: 't', summary: 's' })
+    assert.equal(await cover.instruct({ text: 'fail' }), false)
+    assert.equal(cover.mode, 'crop')
+    assert.match(cover.describe(), /画像の編集に失敗しました: AI が画像を作れませんでした/)
+  })
+
+  test('an image URL or attachment replaces the image, making room among the candidates', async () => {
+    const cover = new CoverImage(SIZES.eventCover)
+    for (let i = 1; i <= 4; i++) images[`https://e.com/c${i}.png`] = images['https://e.com/wide.png']
+    await cover.useDraft({ imageUrls: ['https://e.com/c1.png', 'https://e.com/c2.png', 'https://e.com/c3.png', 'https://e.com/c4.png'], title: 't', summary: 's' })
+    await cover.instruct({ text: 'これにして https://e.com/tall.png' })
+    assert.deepEqual(cover.candidates.map(c => c.url), ['https://e.com/c2.png', 'https://e.com/c3.png', 'https://e.com/c4.png', 'https://e.com/tall.png'])
+    assert.deepEqual([cover.selected, cover.mode], [3, 'fit'])
+
+    await cover.instruct({ images: ['https://e.com/wide.png'] })
+    assert.equal(cover.candidates[cover.selected].url, 'https://e.com/wide.png')
+    assert.equal(cover.mode, 'crop')
+
+    assert.equal(await cover.instruct({ text: 'https://e.com/missing.png' }), false)
+    assert.match(cover.describe(), /指定された画像を使えませんでした（使えなかった画像: HTTP 404）/)
+    assert.equal(cover.candidates[cover.selected].url, 'https://e.com/wide.png')
+  })
+
+  test('an edited image is cropped, not redrawn, when the size changes', async () => {
+    edits.length = 0
+    const cover = new CoverImage(SIZES.eventCover)
+    await cover.useDraft({ imageUrls: [], title: 't', summary: 's' })
+    await cover.instruct({ text: 'x' })
+    await cover.resize(SIZES.forumImage)
+    assert.equal(edits.length, 1)
+    assert.deepEqual([cover.mode, (await sharp(cover.buffer).metadata()).width], ['edited', 1280])
   })
 })

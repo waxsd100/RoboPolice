@@ -178,6 +178,14 @@ for an event cover or 1280×720 for a forum post, and one more row of buttons sw
 "AIで作成" sends the title, description and the selected image to Gemini, the same way drafting does.
 Images that can't be used are left out of the candidates, the draft still works, and the preview says why.
 
+The image can also be changed in words. **画像を指示で変更** asks what to do with it: an image URL or
+an attached image replaces it (as a new candidate, selected), anything else ("背景を夜空にして",
+"もっと明るく") has Gemini's image model edit the image shown now, or make one when there is none.
+Further instructions edit the edited image, and "画像: AIで編集" switches back to it after trying
+another mode. The model also passes on an instruction about the image found in the request or a
+correction (`image_instruction`), so `@RoboPolice 画像を夕焼けにして` replying to a post the bot made
+edits that post's image. Up to 5 image instructions per draft.
+
 One mention usually takes 2-4 Gemini requests (one per tool step, up to 10), plus one per
 correction, AI-made image or video summary; each mention logs how many it used. HTTP 429 is retried
 up to 3 times (Retry-After, else 2s, 4s, 8s), telling the requester it is waiting. A 429 from AI
