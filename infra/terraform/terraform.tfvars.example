@@ -1,4 +1,4 @@
 project_id = "your-gcp-project"
 
 # Optional: the variables to move (defaults to the list in variables.tf).
-# secret_names = ["BOT_TOKEN", "PGPASSWORD", "AES_KEY"]
+# secret_names = ["BOT_TOKEN", "AES_KEY"]

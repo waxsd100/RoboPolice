@@ -3,14 +3,15 @@ variable "project_id" {
   type        = string
 }
 
+# Database and Redis credentials are left out: when Railway runs Postgres and Redis it creates and
+# injects those itself, and keeping a copy here would only go stale. Add them if they come from
+# elsewhere.
 variable "secret_names" {
   description = "Environment variables to keep in Secret Manager instead of on the hosting platform"
   type        = list(string)
   default = [
     "BOT_TOKEN",
     "DISCORD_WEBHOOK_URL",
-    "PGPASSWORD",
-    "REDIS_PASSWORD",
     "AES_KEY",
     "CLOUDFLARE_AI_GATEWAY_TOKEN",
     "YOUTUBE_API_KEY",
