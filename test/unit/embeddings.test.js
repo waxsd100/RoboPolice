@@ -28,6 +28,20 @@ describe('embeddings', () => {
     await embedQuery('怖い話')
     assert.equal(batches[2].requests[0].taskType, 'RETRIEVAL_QUERY')
   })
+
+  test('gemini-embedding-2 gets the purpose as a text prefix, since it takes no taskType', async () => {
+    const batches = installEmbeddingModel()
+    process.env.GEMINI_EMBEDDING_MODEL = 'gemini-embedding-2'
+    try {
+      await embed(['ホラー実況'])
+      await embedQuery('怖いゲーム')
+      assert.deepEqual(batches[0].requests[0], { model: 'models/gemini-embedding-2', content: { parts: [{ text: 'title: none | text: ホラー実況' }] }, outputDimensionality: DIMENSIONS })
+      assert.equal(batches[1].requests[0].content.parts[0].text, 'task: search result | query: 怖いゲーム')
+      assert.equal('taskType' in batches[1].requests[0], false)
+    } finally {
+      delete process.env.GEMINI_EMBEDDING_MODEL
+    }
+  })
 })
 
 describe('embeddingIndexer', () => {

@@ -153,6 +153,9 @@ that contains every word of the query still comes first.
 - `src/bot/modules/embeddingIndexer.js` runs on the worker owning shard 0 every
   `EMBEDDING_INTERVAL_MINUTES` (default 5, 0 is off): videos whose text changed, then up to 1000
   messages not embedded yet, newest first. A large history is worked through over many runs.
+- Gemini API embedding models work: `gemini-embedding-001` (default, text, purpose given as
+  `taskType`) and `gemini-embedding-2` (newer, purpose given as a text prefix since it takes no
+  `taskType`).
 - Each vector records the model that made it, and only vectors of the current model are compared.
   Changing `GEMINI_EMBEDDING_MODEL` makes everything again on the following runs (videos at once,
   messages up to 1000 a run); meanwhile search uses what has been redone.

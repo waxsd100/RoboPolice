@@ -23,6 +23,17 @@ function quantize (values) {
   return Int8Array.from(values, v => Math.max(-127, Math.min(127, Math.round((v / norm) * 127))))
 }
 
+// gemini-embedding-001 is told what a text is for with taskType; gemini-embedding-2 rejects that
+// field and takes the purpose as a prefix of the text instead.
+function request (name, text, taskType) {
+  const body = String(text).slice(0, MAX_TEXT) || ' '
+  if (/^gemini-embedding-001$|^text-embedding-/.test(model())) {
+    return { model: name, content: { parts: [{ text: body }] }, taskType, outputDimensionality: DIMENSIONS }
+  }
+  const prefixed = taskType === 'RETRIEVAL_QUERY' ? `task: search result | query: ${body}` : `title: none | text: ${body}`
+  return { model: name, content: { parts: [{ text: prefixed }] }, outputDimensionality: DIMENSIONS }
+}
+
 // Embeds `texts` for storing (RETRIEVAL_DOCUMENT) or for searching (RETRIEVAL_QUERY), BATCH_SIZE
 // at a time. Resolves to Int8Arrays in the same order.
 async function embed (texts, taskType = 'RETRIEVAL_DOCUMENT') {
@@ -30,12 +41,7 @@ async function embed (texts, taskType = 'RETRIEVAL_DOCUMENT') {
   const vectors = []
   for (let i = 0; i < texts.length; i += BATCH_SIZE) {
     const data = await geminiRequest(model(), 'batchEmbedContents', {
-      requests: texts.slice(i, i + BATCH_SIZE).map(text => ({
-        model: name,
-        content: { parts: [{ text: String(text).slice(0, MAX_TEXT) || ' ' }] },
-        taskType,
-        outputDimensionality: DIMENSIONS
-      }))
+      requests: texts.slice(i, i + BATCH_SIZE).map(text => request(name, text, taskType))
     })
     vectors.push(...(data.embeddings || []).map(e => quantize(e.values)))
   }
