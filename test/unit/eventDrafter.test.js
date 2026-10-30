@@ -201,7 +201,7 @@ describe('draft', () => {
     const requests = installGemini([[call('submit_chat_reply', { text: 'x' })]])
     await draft({ request: 'それの続編は？', referenced: { text: 'me: おすすめは？\nあなた（BOT）: 〇〇！', count: 2 }, channelName: 'general', guild, tools, now: NOW })
     assert.match(requests[0].body.contents[0].parts[0].text, /## 依頼メッセージの返信先（返信をたどった会話。古い順で、最後が直接の返信先。依頼メッセージはこの続き）\nme: おすすめは？\nあなた（BOT）: 〇〇！/)
-    assert.match(requests[0].body.systemInstruction.parts[0].text, /「あなた（BOT）」は、あなた自身がこれまでに送ったメッセージです[\s\S]*get_recent_messages で依頼されたチャンネルを読み/)
+    assert.match(requests[0].body.systemInstruction.parts[0].text, /「あなた（BOT）」は、あなた自身がこれまでに送ったメッセージです。必ずその会話の続きとして/)
   })
 
   test('lists attached images and the named forum in the prompt', async () => {

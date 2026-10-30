@@ -215,8 +215,9 @@ describe('formatMessage', () => {
 })
 
 describe('formatMessage labels', () => {
-  test('marks the bot\'s own messages and the requester\'s', () => {
+  test('in a conversation, marks the bot\'s own messages and the requester\'s', () => {
     const at = { timestamp: 0, content: 'x' }
+    assert.match(formatMessage({ ...at, author: { id: 'BOT', username: 'ロボポリス' } }), /\] ロボポリス \(BOT\): x$/, 'plain outside a conversation')
     assert.match(formatMessage({ ...at, author: { id: 'BOT', username: 'ロボポリス' } }, REQUESTER), /\] あなた（BOT）: x$/)
     assert.match(formatMessage({ ...at, author: { id: REQUESTER, username: 'me' } }, REQUESTER), /\] me \(1\)（依頼者）: x$/)
     assert.match(formatMessage({ ...at, author: { id: '2', username: 'alice' } }, REQUESTER), /\] alice \(2\): x$/)

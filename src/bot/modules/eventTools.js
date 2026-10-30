@@ -109,14 +109,14 @@ function canRead (channel, userID) {
 // How many messages a reply chain is followed back, for a conversation with the bot.
 const MAX_THREAD = 10
 
-// Who wrote a message, as the model should read it: its own earlier replies as "あなた（BOT）",
-// so a conversation read back from Discord is recognizably its own.
+// Who wrote a message. In a conversation (a reply chain, given `requesterID`) the bot's own earlier
+// replies read "あなた（BOT）" and the requester is marked, so the model can follow who said what.
 function authorLabel (author, requesterID) {
-  if (author.id === global.bot.user.id) return 'あなた（BOT）'
-  return `${author.username} (${author.id})${author.id === requesterID ? '（依頼者）' : ''}`
+  if (requesterID && author.id === global.bot.user.id) return 'あなた（BOT）'
+  return `${author.username} (${author.id})${requesterID && author.id === requesterID ? '（依頼者）' : ''}`
 }
 
-function formatMessage (m, requesterID) {
+function formatMessage (m, requesterID = null) {
   const lines = [`[${new Date(m.timestamp).toISOString()}] ${authorLabel(m.author, requesterID)}: ${m.content || ''}`]
   for (const e of m.embeds || []) {
     const text = [e.title, e.description, ...(e.fields || []).map(f => `${f.name}: ${f.value}`), e.url].filter(Boolean).join('\n')
@@ -146,7 +146,7 @@ function createTools ({ guild, member, ask, progress = () => {} }) {
 
   async function readMessage (channelID, messageID) {
     readableChannel(channelID)
-    return formatMessage(await global.bot.getMessage(channelID, messageID), member.id)
+    return formatMessage(await global.bot.getMessage(channelID, messageID))
   }
 
   // The replied-to message and the replies it continues, oldest first: the conversation the
@@ -187,7 +187,7 @@ function createTools ({ guild, member, ask, progress = () => {} }) {
       const count = Math.min(Math.max(parseInt(limit, 10) || 20, 1), MAX_RECENT_MESSAGES)
       const messages = await global.bot.getMessages(channelID, { limit: count })
       sources.push(`<#${channel.id}>`)
-      return messages.map(m => formatMessage(m, member.id)).join('\n')
+      return messages.map(m => formatMessage(m)).join('\n')
     },
     async search_channel_history ({ channel_id: channelID, query }) {
       const channel = readableChannel(channelID)
@@ -199,7 +199,7 @@ function createTools ({ guild, member, ask, progress = () => {} }) {
       const matches = rows.filter(r => words.every(w => (r.content || '').toLowerCase().includes(w)))
       sources.push(`<#${channel.id}>`)
       if (rows.length === 0) return `<#${channel.id}> の保存済みメッセージはありません（保存しているのは削除・編集ログを設定したサーバーの、保持期間内のメッセージのみ）`
-      const name = id => `${guild.members.get(id)?.username || id}${id === member.id ? '（依頼者）' : ''}`
+      const name = id => guild.members.get(id)?.username || id
       // Oldest first, like reading the channel.
       const lines = matches.slice(0, MAX_HISTORY_RESULTS).reverse()
         .map(r => `[${new Date(r.ts).toISOString()}] ${name(r.author_id)}: ${(r.content || '').replace(/\s+/g, ' ').slice(0, MAX_HISTORY_TEXT)}`)

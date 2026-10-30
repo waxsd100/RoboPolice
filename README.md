@@ -72,9 +72,8 @@ shown as `⚠️ 作成できませんでした`.
 
 Replying to the bot's answer (with a mention) continues the conversation: the reply chain is
 followed back up to 10 messages and given to the model oldest first, with the bot's own messages
-labeled as its own (`あなた（BOT）`) and the requester's marked. Messages the model reads from a
-channel with its tools are labeled the same way, and it is told to read the request channel when a
-message without a reply refers back to an earlier exchange ("さっきの…"). Nothing is stored for this.
+labeled as its own (`あなた（BOT）`) and the requester's marked; the model is told to answer as the
+continuation of it. Nothing is stored for this.
 
 Each user can have 30 mentions answered per day (Japan time), across servers, counted in Redis
 (`src/bot/utils/mentionQuota.js`, `MENTION_DAILY_LIMIT`). If Redis is unreachable the mention goes
