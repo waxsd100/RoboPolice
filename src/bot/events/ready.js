@@ -2,6 +2,7 @@ const cluster = require('cluster')
 const checkForMissingSettings = require('../utils/recoverSettings')
 const prune = require('../../miscellaneous/prune')
 const youtubeSync = require('../modules/youtubeSync')
+const embeddingIndexer = require('../modules/embeddingIndexer')
 
 let failedHealthCheckCount = 0
 
@@ -15,6 +16,7 @@ module.exports = {
     if (global.bot.shards.find(s => s.id === 0)) { // only check for missing settings once
       await checkForMissingSettings()
       prune.startScheduler() // one worker owns the sweep so shards don't duplicate the delete
+      embeddingIndexer.startIndexer() // the same worker embeds videos and messages for every server
     }
     // Every worker checks the servers it hosts for new YouTube videos.
     youtubeSync.startAutoSync()

@@ -4,6 +4,8 @@ const youtubeDB = require('../../db/interfaces/postgres/youtube')
 const messageDB = require('../../db/interfaces/postgres/read')
 const videoSummary = require('./videoSummary')
 const { fromStoredContent } = require('../../db/interfaces/postgres/create')
+const semanticSearch = require('./semanticSearch')
+const { messageEmbeddingsEnabled } = require('./embeddingIndexer')
 
 const MAX_RECENT_MESSAGES = 50
 const MAX_QUESTIONS = 3
@@ -15,6 +17,13 @@ const MESSAGE_LINK = /^https?:\/\/(?:(?:ptb|canary)\.)?discord(?:app)?\.com\/cha
 // Gemini rejects an OBJECT schema whose `properties` is empty, which failed every request.
 // All are read-only and scoped to what the requesting
 // member could see themselves, so a mention can't be used to read channels they have no access to.
+// Offered only when every stored message is embedded (MESSAGE_EMBEDDINGS=true).
+const SEARCH_SERVER_MESSAGES = {
+  name: 'search_server_messages',
+  description: 'このサーバーで依頼者が読めるすべてのチャンネルの保存済みメッセージから、query と意味が近いものを探す（言い回しが違っても見つかる）。どのチャンネルの話か分からないときや、サーバー全体の話題を調べるときに使う。',
+  parameters: { type: 'OBJECT', properties: { query: { type: 'STRING', description: '探したい内容（文章でよい）' } }, required: ['query'] }
+}
+
 const DECLARATIONS = [
   {
     name: 'fetch_url',
@@ -45,7 +54,7 @@ const DECLARATIONS = [
   },
   {
     name: 'search_channel_history',
-    description: 'このサーバーのチャンネルについて、BOT が保存しているこれまでのメッセージを新しい順に読む（get_recent_messages より長い期間を見られる）。「このチャンネルの内容をもとに」「これまでの話をまとめて」のような依頼で使う。query を指定するとその語をすべて含むものに絞る。',
+    description: 'このサーバーのチャンネルについて、BOT が保存しているこれまでのメッセージを新しい順に読む（get_recent_messages より長い期間を見られる）。「このチャンネルの内容をもとに」「これまでの話をまとめて」のような依頼で使う。query を指定するとその語をすべて含むもの（メッセージの意味検索が有効なら、意味が近いもの）に絞る。',
     parameters: {
       type: 'OBJECT',
       properties: {
@@ -201,6 +210,22 @@ function createTools ({ guild, member, ask, progress = () => {} }) {
       sources.push(`<#${channel.id}>`)
       if (rows.length === 0) return `<#${channel.id}> の保存済みメッセージはありません（保存しているのは削除・編集ログを設定したサーバーの、保持期間内のメッセージのみ）`
       const name = id => guild.members.get(id)?.username || id
+      if (words.length && messageEmbeddingsEnabled()) {
+        const close = await semanticSearch.searchMessages(guild.id, [channel.id], query, { limit: MAX_HISTORY_RESULTS }).catch(e => {
+          global.logger.warn(`Semantic message search failed, using keywords: ${e.message}`)
+          return null
+        })
+        if (close) {
+          // Messages too new to be embedded yet are found by their words.
+          const found = new Set(close.map(m => m.id))
+          const recent = matches.filter(r => !found.has(r.id)).slice(0, 10)
+          return [
+            `<#${channel.id}> の保存済みメッセージから「${query}」に意味が近いもの（近い順）:`,
+            ...close.map(r => `[${new Date(r.ts).toISOString()}] ${name(r.author_id)}: ${(r.content || '').replace(/\s+/g, ' ').slice(0, MAX_HISTORY_TEXT)}`),
+            ...(recent.length ? ['', '語を含む最近のメッセージ:', ...recent.map(r => `[${new Date(r.ts).toISOString()}] ${name(r.author_id)}: ${(r.content || '').replace(/\s+/g, ' ').slice(0, MAX_HISTORY_TEXT)}`)] : [])
+          ].join('\n')
+        }
+      }
       // Oldest first, like reading the channel.
       const lines = matches.slice(0, MAX_HISTORY_RESULTS).reverse()
         .map(r => `[${new Date(r.ts).toISOString()}] ${name(r.author_id)}: ${(r.content || '').replace(/\s+/g, ' ').slice(0, MAX_HISTORY_TEXT)}`)
@@ -209,6 +234,18 @@ function createTools ({ guild, member, ask, progress = () => {} }) {
         `<#${channel.id}> の保存済みメッセージ ${rows.length} 件（${oldest} 以降）${words.length ? `のうち「${query}」を含む ${matches.length} 件` : ''}、古い順:`,
         ...lines,
         ...(matches.length > MAX_HISTORY_RESULTS ? [`…ほか ${matches.length - MAX_HISTORY_RESULTS} 件（query で絞り込めます）`] : [])
+      ].join('\n')
+    },
+    async search_server_messages ({ query }) {
+      if (!String(query || '').trim()) throw new Error('query を指定してください')
+      const channels = [...guild.channels.values()].filter(c => canRead(c, member.id) && canRead(c, global.bot.user.id))
+      const found = await semanticSearch.searchMessages(guild.id, channels.map(c => c.id), String(query), { limit: MAX_HISTORY_RESULTS })
+      const name = id => guild.members.get(id)?.username || id
+      if (found.length === 0) return '意味の近いメッセージは見つかりませんでした（メッセージの埋め込みがまだ作られていない可能性があります）'
+      for (const id of new Set(found.map(m => m.channel_id))) sources.push(`<#${id}>`)
+      return [
+        `「${query}」に意味が近いメッセージ（近い順、依頼者が読めるチャンネルのみ）:`,
+        ...found.map(r => `[${new Date(r.ts).toISOString()}] <#${r.channel_id}> ${name(r.author_id)}: ${(r.content || '').replace(/\s+/g, ' ').slice(0, MAX_HISTORY_TEXT)}`)
       ].join('\n')
     },
     async list_channels () {
@@ -257,7 +294,7 @@ function createTools ({ guild, member, ask, progress = () => {} }) {
     }
   }
 
-  return { declarations: DECLARATIONS, call, sources, readMessage, readThread }
+  return { declarations: messageEmbeddingsEnabled() ? [...DECLARATIONS, SEARCH_SERVER_MESSAGES] : DECLARATIONS, call, sources, readMessage, readThread }
 }
 
 async function scheduledEvents (guild) {
@@ -293,15 +330,24 @@ async function searchYouTube (guildID, query) {
   const { channel, videos } = knowledge
   if (!channel.synced_at) return [`YouTube チャンネル ${channel.channel_ref} は設定済みですが、まだ情報を取得していません（/youtube sync）`, ...otherLines].join('\n')
   const matches = videos.filter(v => matchesAll(words, `${v.title}\n${v.description || ''}\n${v.summary || ''}`))
-  // Lives first: "the next stream" is the usual question.
-  const ordered = [...matches.filter(v => LIVE_LABELS[v.live_status]), ...matches.filter(v => !LIVE_LABELS[v.live_status])]
+  // By meaning when embeddings exist, so different wording still finds the video.
+  const ranked = words.length
+    ? await semanticSearch.rankVideos(guildID, videos, query).catch(e => {
+      global.logger.warn(`Semantic YouTube search failed, using keywords: ${e.message}`)
+      return null
+    })
+    : null
+  // Otherwise lives first: "the next stream" is the usual question.
+  const ordered = ranked || [...matches.filter(v => LIVE_LABELS[v.live_status]), ...matches.filter(v => !LIVE_LABELS[v.live_status])]
   return [
     `チャンネル: ${channel.title}（${channel.url}）`,
     channel.description ? `概要: ${channel.description.replace(/\s+/g, ' ').slice(0, 300)}` : '',
     `情報の取得日時: ${new Date(channel.synced_at).toISOString()}（保存している動画 ${videos.length} 件、うち内容の要約あり ${videos.filter(v => v.summary).length} 件）`,
-    words.length ? `「${query}」に一致した動画: ${matches.length} 件` : '新しい順の動画:',
+    ranked
+      ? `「${query}」に意味が近い順の動画（語をすべて含むもの ${matches.length} 件を優先）:`
+      : words.length ? `「${query}」に一致した動画: ${matches.length} 件` : '新しい順の動画:',
     ...ordered.slice(0, MAX_YOUTUBE_RESULTS).map(formatVideo),
-    ...(matches.length > MAX_YOUTUBE_RESULTS ? [`…ほか ${matches.length - MAX_YOUTUBE_RESULTS} 件（query で絞り込めます）`] : []),
+    ...(!ranked && matches.length > MAX_YOUTUBE_RESULTS ? [`…ほか ${matches.length - MAX_YOUTUBE_RESULTS} 件（query で絞り込めます）`] : []),
     ...otherLines
   ].filter(Boolean).join('\n')
 }

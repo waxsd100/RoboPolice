@@ -139,6 +139,32 @@ accumulates:
   stored yet, and only then is the channel synced. A server with a live or upcoming stream, or with
   older videos left from a first read, is synced on every check, so stream states stay current.
 
+### Search by meaning
+
+YouTube videos (title, description and summary) and, with `MESSAGE_EMBEDDINGS=true`, every stored
+message get an embedding from Gemini's embedding model (`GEMINI_EMBEDDING_MODEL`, default
+`gemini-embedding-001`, through AI Gateway), so `search_youtube`, `search_channel_history` and
+`search_server_messages` (all channels the requester can read; offered only with message
+embeddings) find things worded differently ("怖いゲーム" finds a video titled "ホラー"). A result
+that contains every word of the query still comes first.
+
+- No vector database or Postgres extension: vectors are 512 signed bytes, stored in a TEXT column
+  and compared in Node (`src/bot/utils/embeddings.js`, `src/bot/modules/semanticSearch.js`).
+- `src/bot/modules/embeddingIndexer.js` runs on the worker owning shard 0 every
+  `EMBEDDING_INTERVAL_MINUTES` (default 5, 0 is off): videos whose text changed, then up to 1000
+  messages not embedded yet, newest first. A large history is worked through over many runs.
+- Gemini API embedding models work: `gemini-embedding-001` (default, text, purpose given as
+  `taskType`) and `gemini-embedding-2` (newer, purpose given as a text prefix since it takes no
+  `taskType`).
+- Each vector records the model that made it, and only vectors of the current model are compared.
+  Changing `GEMINI_EMBEDDING_MODEL` makes everything again on the following runs (videos at once,
+  messages up to 1000 a run); meanwhile search uses what has been redone.
+- A message's embedding is encrypted with `AES_KEY` like its content, and goes with it: a foreign key
+  deletes it when the message is deleted (retention, `/clearmydata`, leaving a server), and an edit
+  drops it to be made again. Messages stored before channels were recorded are not embedded.
+- With message embeddings on, **every stored message is sent to Google Gemini** to be embedded, not
+  only mentions. Update the Privacy Policy and the privileged intent answers before turning it on.
+
 Every Gemini call goes through Cloudflare AI Gateway. YouTube Data API calls can too: in the
 dashboard, add a custom provider (AI Gateway → Custom Providers) with base URL
 `https://www.googleapis.com` and a slug such as `youtube`, then set `YOUTUBE_GATEWAY_PROVIDER=youtube`.
@@ -289,6 +315,9 @@ the secrets if it leaks, so keep it only on the platform and delete it in the co
 | `YOUTUBE_API_KEY` | Optional. YouTube Data API v3 key for `/youtube`. Unset disables the command |
 | `VIDEO_SUMMARY_TIMEOUT_MINUTES` | Optional. How long a video summary may take. Defaults to 10 |
 | `YOUTUBE_AUTO_SYNC_MINUTES` | Optional. How often to check each server's YouTube channel for new videos. Defaults to 15; 0 turns it off |
+| `MESSAGE_EMBEDDINGS` | Optional. `true` embeds every stored message for search by meaning (sends them to Gemini; see above). Off by default |
+| `EMBEDDING_INTERVAL_MINUTES` | Optional. How often to embed new videos and messages. Defaults to 5; 0 turns it off |
+| `GEMINI_EMBEDDING_MODEL` | Optional. Defaults to `gemini-embedding-001` |
 | `YOUTUBE_GATEWAY_PROVIDER` | Optional. Slug of an AI Gateway custom provider (see below). Set, YouTube API calls go through Cloudflare AI Gateway; unset, straight to Google |
 | `GEMINI_IMAGE_MODEL` | Optional. Image model for AI-made covers. Defaults to `gemini-3.1-flash-image` |
 | `CHAT_PERSONA` | Optional. Character notes added to chat replies (tone, catchphrases, how to address members) |

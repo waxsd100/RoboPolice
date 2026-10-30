@@ -173,9 +173,10 @@ function rateLimitHint (body) {
     : 'Gemini の利用上限に達しました（HTTP 429）'
 }
 
-// One generateContent call through the gateway. Returns the first candidate's content.
-async function callGemini (model, body, { timeoutMs = GEMINI_TIMEOUT_MS } = {}) {
-  const url = gatewayURL(`google-ai-studio/v1beta/models/${encodeURIComponent(model)}:generateContent`)
+// One Gemini API call through the gateway (`method` such as "generateContent"), retrying HTTP 429.
+// Returns the response body.
+async function geminiRequest (model, method, body, { timeoutMs = GEMINI_TIMEOUT_MS } = {}) {
+  const url = gatewayURL(`google-ai-studio/v1beta/models/${encodeURIComponent(model)}:${method}`)
   const headers = { 'Content-Type': 'application/json', ...gatewayAuthHeaders() }
   // Optional: the Gemini key can be stored in the gateway (BYOK) instead.
   if (process.env.GEMINI_API_KEY) headers['x-goog-api-key'] = process.env.GEMINI_API_KEY
@@ -207,7 +208,12 @@ async function callGemini (model, body, { timeoutMs = GEMINI_TIMEOUT_MS } = {}) 
     const hint = res.status === 429 ? rateLimitHint(text) : `AI の呼び出しに失敗しました（HTTP ${res.status}）`
     throw new GeminiError(`Gemini request failed: HTTP ${res.status} ${text}`, hint)
   }
-  const data = await res.json()
+  return res.json()
+}
+
+// One generateContent call through the gateway. Returns the first candidate's content.
+async function callGemini (model, body, options) {
+  const data = await geminiRequest(model, 'generateContent', body, options)
   const content = data.candidates?.[0]?.content
   if (!content?.parts?.length) throw new GeminiError(`Gemini returned no content: ${JSON.stringify(data).slice(0, 1000)}`, 'AI から応答がありませんでした')
   return content
@@ -344,4 +350,4 @@ async function revise (conversation, correction) {
   return check(conversation, await runAgent(conversation.contents, conversation.tools, conversation.submits))
 }
 
-module.exports = { draft, revise, isConfigured, toScheduledEvent, callGemini, retryTimer, DEFAULT_GEMINI_MODEL, ENTITY_TYPES, GeminiError }
+module.exports = { draft, revise, isConfigured, toScheduledEvent, callGemini, geminiRequest, retryTimer, DEFAULT_GEMINI_MODEL, ENTITY_TYPES, GeminiError }
