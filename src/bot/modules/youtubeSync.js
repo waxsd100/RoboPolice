@@ -1,6 +1,6 @@
 // Keeping each server's YouTube knowledge current: the sync /youtube runs, the same sync run
 // automatically when the channel has something new, and summaries of the newest videos in bulk.
-const { parseChannelRef, fetchChannelKnowledge } = require('../utils/youtube')
+const { parseChannelRef, fetchChannelKnowledge, durationSeconds } = require('../utils/youtube')
 const youtubeDB = require('../../db/interfaces/postgres/youtube')
 const videoSummary = require('./videoSummary')
 const { ownerFirst } = require('../utils/priority')
@@ -119,18 +119,26 @@ function summaryConcurrency () {
   return n >= 1 ? Math.min(n, MAX_CONCURRENCY) : DEFAULT_CONCURRENCY
 }
 
-// Summarizes them, a few at a time. onProgress({ done, total, running }) is called whenever one
-// starts or ends (running: the videos being summarized now); force replaces stored summaries.
-// Resolves to [{ video, error }] in the order of `videos`.
+// The order the videos are summarized in: the shortest first, so the quick ones are done early
+// and a long stream archive does not hold them up. Videos of unknown length go last.
+function shortestFirst (videos) {
+  const length = v => durationSeconds(v.duration) ?? Infinity
+  return videos.map((video, i) => ({ video, i })).sort((a, b) => length(a.video) - length(b.video) || a.i - b.i).map(e => e.i)
+}
+
+// Summarizes them, a few at a time, the shortest first. onProgress({ done, total, running }) is
+// called whenever one starts or ends (running: the videos being summarized now); force replaces
+// stored summaries. Resolves to [{ video, error }] in the order of `videos`.
 async function summarizeLatest (guildID, videos, { onProgress = () => {}, force = false, concurrency = summaryConcurrency() } = {}) {
   const results = new Array(videos.length)
+  const order = shortestFirst(videos)
   const running = new Set()
   let next = 0
   let done = 0
   const report = () => Promise.resolve(onProgress({ done, total: videos.length, running: [...running] })).catch(() => {})
   async function worker () {
-    while (next < videos.length) {
-      const i = next++
+    while (next < order.length) {
+      const i = order[next++]
       const video = videos[i]
       running.add(video)
       await report()
@@ -148,4 +156,4 @@ async function summarizeLatest (guildID, videos, { onProgress = () => {}, force 
   return results
 }
 
-module.exports = { sync, syncIfChanged, syncOnPush, autoSyncAll, startAutoSync, feedVideoIds, videosToSummarize, summarizeLatest, summaryConcurrency, MAX_SUMMARIES }
+module.exports = { sync, syncIfChanged, syncOnPush, autoSyncAll, startAutoSync, feedVideoIds, videosToSummarize, summarizeLatest, shortestFirst, summaryConcurrency, MAX_SUMMARIES }

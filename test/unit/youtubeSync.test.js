@@ -215,6 +215,17 @@ describe('summarizing the newest videos', () => {
     assert.deepEqual(progress.slice(0, 3), [1, 2, 3])
   })
 
+  test('summarizes the shortest first, those of unknown length last, the results still in the given order', async (t) => {
+    const videoSummary = require('../../src/bot/modules/videoSummary')
+    const started = []
+    t.mock.method(videoSummary, 'summarizeVideo', async (guildID, url) => { started.push(url.slice(-1)) })
+    const videos = [['0', 'PT1H2M'], ['1', null], ['2', 'PT45S'], ['3', 'PT10M'], ['4', 'P1DT1S'], ['5', 'PT10M']]
+      .map(([n, duration]) => ({ title: `v${n}`, url: `https://youtu.be/x${n}`, duration }))
+    const results = await youtubeSync.summarizeLatest('100', videos, { concurrency: 1 })
+    assert.deepEqual(started, ['2', '3', '5', '0', '4', '1'])
+    assert.deepEqual(results.map(r => r.video.title), ['v0', 'v1', 'v2', 'v3', 'v4', 'v5'])
+  })
+
   test('the number at once comes from VIDEO_SUMMARY_CONCURRENCY, 1 to 10, 3 by default', () => {
     const cases = [[undefined, 3], ['5', 5], ['0', 3], ['abc', 3], ['50', 10]]
     try {

@@ -237,3 +237,15 @@ describe('linkTimestamps', () => {
     assert.equal(linkTimestamps(null, 'abcdefghijk'), '')
   })
 })
+
+describe('durationSeconds', () => {
+  const { durationSeconds } = require('../../src/bot/utils/youtube')
+  test('reads YouTube\'s ISO 8601 durations, null when there is none', () => {
+    assert.equal(durationSeconds('PT45S'), 45)
+    assert.equal(durationSeconds('PT1H2M3S'), 3723)
+    assert.equal(durationSeconds('PT10M'), 600)
+    assert.equal(durationSeconds('P1DT1S'), 86401)
+    assert.equal(durationSeconds('P0D'), 0)
+    for (const none of [null, '', 'P', 'PT', 'abc']) assert.equal(durationSeconds(none), null, String(none))
+  })
+})
