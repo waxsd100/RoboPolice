@@ -18,6 +18,8 @@ module.exports = {
       await checkForMissingSettings()
       prune.startScheduler() // one worker owns the sweep so shards don't duplicate the delete
       embeddingIndexer.startIndexer() // the same worker embeds videos and messages for every server
+      // ...and, once, finds the channel of messages stored before channels were recorded.
+      require('../../miscellaneous/backfillChannels').startBackfill()
     }
     // Every worker checks the servers it hosts for new YouTube videos.
     youtubeSync.startAutoSync()
