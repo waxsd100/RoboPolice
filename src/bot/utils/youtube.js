@@ -65,6 +65,15 @@ function linkTimestamps (text, videoID) {
   })
 }
 
+// Seconds in a YouTube duration (ISO 8601, e.g. PT1H2M3S or P1DT2H), null when there is none or
+// it can't be read.
+function durationSeconds (duration) {
+  const m = /^P(?:(\d+)D)?(?:T(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?)?$/.exec(String(duration || ''))
+  if (!m || !m.slice(1).some(Boolean)) return null
+  const [d, h, min, sec] = m.slice(1).map(n => Number(n || 0))
+  return ((d * 24 + h) * 60 + min) * 60 + sec
+}
+
 function toVideo (v) {
   return {
     id: v.id,
@@ -167,4 +176,4 @@ async function fetchVideos (ids, apiKey) {
   return videos
 }
 
-module.exports = { parseChannelRef, parseVideoId, resolveChannel, fetchChannelKnowledge, fetchVideos, toVideo, YouTubeError, MAX_PAGES, linkTimestamps }
+module.exports = { parseChannelRef, parseVideoId, resolveChannel, fetchChannelKnowledge, fetchVideos, toVideo, YouTubeError, MAX_PAGES, linkTimestamps, durationSeconds }
