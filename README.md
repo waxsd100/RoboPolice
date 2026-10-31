@@ -247,7 +247,14 @@ while it is live). For a game stream, Gemini also names the games played, and ea
 line with its page (`src/bot/modules/gameLinks.js`): its Steam store page when Steam's own search
 has a game of exactly that name (Japanese, then English), else an official page (the game's site, or
 its PlayStation, Nintendo, Xbox or app store page) Gemini finds with Google Search, kept only once
-the page has been read. `GAME_LINKS=false` leaves the game pages out. Once a stream is over, its archive is summarized like any video, so the mention
+the page has been read. `GAME_LINKS=false` leaves the game pages out.
+
+Discord game mentions (`<@$APPLICATION_ID>`, what typing "@game Palworld" makes in the app) show a
+game's Discord profile. `src/bot/modules/gameMentions.js` finds a game's ID by name in Discord's
+public list of the games it knows (`GET /applications/detectable`, read once a day), other names
+included. In chat the model looks a game up with `find_game` and writes its mention as it is,
+with its page. In a stream's event they are left out unless `EVENT_GAME_MENTIONS=true`, since an
+event's description may show the code rather than the game. Once a stream is over, its archive is summarized like any video, so the mention
 assistant knows what was said; this is tried 30 minutes after it ends, then hourly, three times at
 most, on the worker hosting the server, one at a time. Each summary is one Gemini call on the whole
 archive. `LIVE_EVENT_AI_DESCRIPTION=false` and `LIVE_ARCHIVE_SUMMARY=false` turn these off.
@@ -475,6 +482,7 @@ the secrets if it leaks, so keep it only on the platform and delete it in the co
 | `OWNER_GUILD_IDS` | Optional. The owner's servers (comma-separated), default `615170683068219393`. They get the looser mention limit and go first in all background AI work; every other server waits for them |
 | `MENTION_DAILY_LIMIT_OTHER`, `MENTION_GUILD_DAILY_LIMIT_OTHER` | Optional. Mentions a day outside the owner's servers: per user (default 5) and for the whole server (default 30). `MENTION_DAILY_LIMIT` (default 30) is per user in the owner's servers. 0 turns a limit off |
 | `AI_BACKGROUND_CONCURRENCY` | Optional. How many background AI jobs (video and archive summaries, emoji descriptions, stream blurbs) run at once on a worker (default 3) |
+| `EVENT_GAME_MENTIONS` | Optional. `true` puts each game's Discord game mention in a stream's event too (off by default: check that your server's events show it as the game) |
 | `GAME_LINKS` | Optional. `false` leaves out the pages (Steam or official) of the games a stream's event names |
 | `EMOJI_DESCRIPTIONS` | Optional. `false` stops describing the server's custom emojis (Gemini looks at each one's image and name; the descriptions are embedded so the emojis that suit a request are offered first) |
 | `LIVE_EVENT_AI_DESCRIPTION` | Optional. `false` stops the AI's line on what a stream is about (from its title, description and thumbnail) at the top of its Discord event |

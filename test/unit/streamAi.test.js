@@ -66,6 +66,24 @@ describe('the event of a stream', () => {
     delete global.bot
   })
 
+  test('with EVENT_GAME_MENTIONS=true, the games also get their Discord game mention', async (t) => {
+    configureGateway()
+    process.env.EVENT_GAME_MENTIONS = 'true'
+    try {
+      t.mock.method(gameLinks, 'linksFor', async () => [{ name: 'エーペックスレジェンズ', url: 'https://store.steampowered.com/app/1172470/' }])
+      t.mock.method(require('../../src/bot/modules/gameMentions'), 'findGame', async names => names.includes('Palworld') ? { mention: '<@$1197827812623650866>' } : { mention: '<@$542075586886107149>' })
+      installGemini([[{ text: JSON.stringify({ blurb: '対戦配信。', games: [{ name: 'エーペックスレジェンズ', name_en: 'Apex Legends' }, { name: 'パルワールド', name_en: 'Palworld' }] }) }]])
+      const described = await describeStream(video())
+      assert.deepEqual(described.games, [
+        { name: 'エーペックスレジェンズ', url: 'https://store.steampowered.com/app/1172470/', mention: '<@$542075586886107149>' },
+        { name: 'パルワールド', url: null, mention: '<@$1197827812623650866>' }
+      ])
+      assert.match(liveWatcher.eventDescription(video(), described.blurb, described.games), /🎮 <@\$542075586886107149> エーペックスレジェンズ: https:\/\/store\.steampowered\.com\/app\/1172470\/\n🎮 <@\$1197827812623650866> パルワールド\n/)
+    } finally {
+      delete process.env.EVENT_GAME_MENTIONS
+    }
+  })
+
   test('a long description is cut to fit Discord\'s 1000 characters, the URL kept', () => {
     const text = liveWatcher.eventDescription(video({ description: 'あ'.repeat(2000) }), '説明')
     assert.equal(text.length, 1000)

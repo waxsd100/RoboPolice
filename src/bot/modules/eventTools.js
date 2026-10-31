@@ -6,6 +6,8 @@ const videoSummary = require('./videoSummary')
 const { linkTimestamps } = require('../utils/youtube')
 const emojiDescriber = require('./emojiDescriber')
 const wikiKnowledge = require('./wikiKnowledge')
+const gameMentions = require('./gameMentions')
+const gameLinks = require('./gameLinks')
 const emojiStore = require('../../db/interfaces/postgres/emojis')
 const { embedQuery, model: embeddingModel } = require('../utils/embeddings')
 const { fromStoredContent } = require('../../db/interfaces/postgres/create')
@@ -27,6 +29,19 @@ const SEARCH_SERVER_MESSAGES = {
   name: 'search_server_messages',
   description: 'このサーバーで依頼者が読めるすべてのチャンネルの保存済みメッセージから、query と意味が近いものを探す（言い回しが違っても見つかる）。どのチャンネルの話か分からないときや、サーバー全体の話題を調べるときに使う。',
   parameters: { type: 'OBJECT', properties: { query: { type: 'STRING', description: '探したい内容（文章でよい）' } }, required: ['query'] }
+}
+
+const FIND_GAME = {
+  name: 'find_game',
+  description: 'ゲームの Discord のゲームメンション（返事に書くとゲームのプロフィールが表示される）と、ストアページ（Steam）または公式ページを調べる。返事やイベントの説明で特定のゲームに触れるときに使う。',
+  parameters: {
+    type: 'OBJECT',
+    properties: {
+      name: { type: 'STRING', description: 'ゲームの正式な名前' },
+      name_en: { type: 'STRING', description: '英語の正式名（分かれば）' }
+    },
+    required: ['name']
+  }
 }
 
 const SEARCH_WIKI = {
@@ -282,6 +297,18 @@ function createTools ({ guild, member, ask, progress = () => {} }) {
     async search_youtube ({ query }) {
       return searchYouTube(guild.id, query)
     },
+    async find_game ({ name, name_en: nameEn }) {
+      const names = [name, nameEn].map(n => String(n || '').trim()).filter(Boolean)
+      if (!names.length) throw new Error('name が必要です')
+      const [game, links] = await Promise.all([
+        gameMentions.findGame(names).catch(() => null),
+        gameLinks.linksFor([{ name: names[0], nameEn: names[1] || null }]).catch(() => [])
+      ])
+      const lines = []
+      if (game) lines.push(`Discord のゲームメンション: ${game.mention}（${game.name}。返事にこの書き方のまま書くと、ゲームのプロフィールが表示される）`)
+      if (links[0]) lines.push(`ページ: ${links[0].url}`)
+      return lines.length ? lines.join('\n') : `「${names[0]}」は Discord のゲーム一覧にもストアにも見つかりませんでした`
+    },
     async search_wiki ({ query }) {
       return wikiKnowledge.searchWiki(String(query || ''))
     },
@@ -308,7 +335,7 @@ function createTools ({ guild, member, ask, progress = () => {} }) {
     }
   }
 
-  const declarations = [...DECLARATIONS, ...(messageEmbeddingsEnabled() ? [SEARCH_SERVER_MESSAGES] : []), ...(wikiKnowledge.enabled() ? [SEARCH_WIKI] : [])]
+  const declarations = [...DECLARATIONS, FIND_GAME, ...(messageEmbeddingsEnabled() ? [SEARCH_SERVER_MESSAGES] : []), ...(wikiKnowledge.enabled() ? [SEARCH_WIKI] : [])]
   return { declarations, call, sources, readMessage, readThread }
 }
 
