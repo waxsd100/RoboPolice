@@ -1,7 +1,7 @@
 const { test, describe, beforeEach } = require('node:test')
 const assert = require('node:assert/strict')
 const { configureGateway, installEmbeddingModel, installEmbeddingStore } = require('../helpers/fakes')
-const { embed, embedQuery, similarity, quantize, toVectorLiteral, toBase64, fromBase64, DIMENSIONS } = require('../../src/bot/utils/embeddings')
+const { embed, embedQuery, blend, similarity, quantize, toVectorLiteral, toBase64, fromBase64, DIMENSIONS } = require('../../src/bot/utils/embeddings')
 const indexer = require('../../src/bot/modules/embeddingIndexer')
 const semanticSearch = require('../../src/bot/modules/semanticSearch')
 
@@ -139,5 +139,16 @@ describe('semanticSearch', () => {
     const videos = [{ video_id: 'v1', title: 'マイクラ建築' }, { video_id: 'v2', title: '深夜の実況' }]
     assert.deepEqual((await semanticSearch.rankVideos('100', videos, 'こわいゲーム')).map(v => v.video_id), ['v2', 'v1'])
     assert.equal(await semanticSearch.rankVideos('999', videos, 'x'), null)
+  })
+})
+
+describe('blend', () => {
+  test('one unit vector for several, each counting its weight', () => {
+    const a = quantize([1, 0, 0])
+    const b = quantize([0, 1, 0])
+    const mixed = blend([a, b], [0.6, 0.4])
+    assert.ok(Math.abs(similarity(mixed, mixed) - 1) < 0.02, 'unit length')
+    assert.ok(similarity(mixed, a) > similarity(mixed, b))
+    assert.ok(similarity(mixed, b) > 0)
   })
 })

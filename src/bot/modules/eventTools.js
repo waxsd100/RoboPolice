@@ -9,7 +9,7 @@ const wikiKnowledge = require('./wikiKnowledge')
 const gameMentions = require('./gameMentions')
 const gameLinks = require('./gameLinks')
 const emojiStore = require('../../db/interfaces/postgres/emojis')
-const { embedQuery, model: embeddingModel } = require('../utils/embeddings')
+const { embed, blend, model: embeddingModel } = require('../utils/embeddings')
 const { fromStoredContent } = require('../../db/interfaces/postgres/create')
 const semanticSearch = require('./semanticSearch')
 const { messageEmbeddingsEnabled } = require('./embeddingIndexer')
@@ -452,9 +452,13 @@ async function emojiSection (guild, vectorOf) {
   ]
 }
 
+const MAX_CONTEXT_FOR_SEARCH = 1500
+const CONTEXT_WEIGHT = 0.6
+
 // The server as the requester can see it. Sent with every request, fresh each time, so questions
-// about "this server" need no lookups. query: what was asked, to put the emojis that suit it first.
-async function describeServer (guild, member, requestChannelID, { query = '' } = {}) {
+// about "this server" need no lookups. query: what was asked; context: the conversation it replies
+// to (readThread), if any. Both choose the knowledge and the emojis put first.
+async function describeServer (guild, member, requestChannelID, { query = '', context = '' } = {}) {
   const lines = [`サーバー名: ${guild.name}`]
   if (guild.description) lines.push(`説明: ${guild.description}`)
   if (guild.memberCount) lines.push(`メンバー数: ${guild.memberCount}`)
@@ -481,19 +485,25 @@ async function describeServer (guild, member, requestChannelID, { query = '' } =
     .map(r => r.name)
   if (roles.length) lines.push('', '### ロール', roles.slice(0, MAX_PROFILE_ROLES).join(', '))
 
-  // The request embedded once, when first needed, for the knowledge and the emojis that suit it.
+  // What the knowledge and the emojis are chosen for: the request, and the conversation it replies
+  // to, which counts more (a reply such as "それの続きは？" is about what came before). The latest
+  // part of the conversation is used. Embedded once, when first needed.
+  const recent = String(context || '').slice(-MAX_CONTEXT_FOR_SEARCH)
+  const texts = [recent, query].filter(t => t.trim())
   let embedding = null
   const vectorOf = () => {
-    if (!query) return Promise.resolve(null)
+    if (!texts.length) return Promise.resolve(null)
     if (!embedding) {
-      embedding = embedQuery(query).catch(e => {
-        global.logger.warn(`Could not embed the request in ${guild.id}: ${e.message}`)
-        return null
-      })
+      embedding = embed(texts, 'RETRIEVAL_QUERY')
+        .then(vectors => vectors.length === 1 ? vectors[0] : blend(vectors, [CONTEXT_WEIGHT, 1 - CONTEXT_WEIGHT]))
+        .catch(e => {
+          global.logger.warn(`Could not embed the request in ${guild.id}: ${e.message}`)
+          return null
+        })
     }
     return embedding
   }
-  const known = wikiKnowledge.searchable() ? await wikiKnowledge.relatedKnowledge(query, await vectorOf()).catch(() => []) : []
+  const known = wikiKnowledge.searchable() ? await wikiKnowledge.relatedKnowledge(texts.join('\n'), await vectorOf()).catch(() => []) : []
   if (known.length) {
     lines.push('', '### コミュニティの知識（wiki と配信者の X より。依頼に関係しそうなもの）',
       'キャラクターが何者かはここ（と search_wiki）で確かめ、絵文字の説明（見た目）から決めつけないこと。', ...known)
