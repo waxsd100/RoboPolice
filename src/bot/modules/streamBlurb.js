@@ -6,23 +6,34 @@ const { callGemini, DEFAULT_GEMINI_MODEL } = require('./eventDrafter')
 const { isGatewayConfigured } = require('../utils/aiGateway')
 const { withoutCharCount } = require('../utils/textClean')
 const backgroundQueue = require('../utils/backgroundQueue')
+const gameLinks = require('./gameLinks')
 
 const MAX_BLURB = 200
 const TIMEOUT_MS = 30 * 1000
 const MAX_WAIT_MS = 60 * 1000
 
 const PROMPT = [
-  '次の YouTube 配信の告知文を、Discord のイベント説明として日本語2〜3文の短い文章で書いてください。',
-  '何をする配信か（ゲーム名・企画・ゲストなど）が一目で分かるように。',
-  'タイトル・概要欄・サムネイルから読み取れることだけを書き、推測で付け足さないでください。',
-  '前置き・見出し・文字数は書かず、本文だけを返してください。'
+  '次の YouTube 配信について、JSON で答えてください。',
+  '- blurb: Discord のイベント説明に使う告知文。日本語2〜3文の短い文章で、何をする配信か（ゲーム名・企画・ゲストなど）が一目で分かるように。前置き・見出し・文字数は書かない。',
+  '- games: 配信で遊ぶゲーム。name に正式な名前（日本語名があれば日本語名）、name_en に英語の正式名（あれば）。ゲーム配信でなければ空の配列。',
+  'タイトル・概要欄・サムネイルから読み取れることだけを使い、推測で付け足さないでください。'
 ].join('\n')
+
+const SCHEMA = {
+  type: 'OBJECT',
+  properties: {
+    blurb: { type: 'STRING' },
+    games: { type: 'ARRAY', items: { type: 'OBJECT', properties: { name: { type: 'STRING' }, name_en: { type: 'STRING' } }, required: ['name'] } }
+  },
+  required: ['blurb', 'games']
+}
 
 function enabled () {
   return isGatewayConfigured() && process.env.LIVE_EVENT_AI_DESCRIPTION !== 'false'
 }
 
-// The line, or null when it is turned off or Gemini fails: the event is made without it then.
+// { blurb, games: [{ name, url }] }: the line, and the pages of the games played (gameLinks.js), or
+// null when it is turned off or Gemini fails: the event is made without them then.
 // thumbnail: { buffer, mimeType } or null. guildID: the server the event is for; other servers than the owner's wait their turn, and get no
 // line if it does not come within a minute (the event is not held up for it).
 async function describeStream (video, thumbnail = null, guildID = null) {
@@ -40,10 +51,15 @@ async function askGemini (video, thumbnail) {
   if (thumbnail) parts.push({ inlineData: { mimeType: thumbnail.mimeType || 'image/jpeg', data: thumbnail.buffer.toString('base64') } })
   const content = await callGemini(process.env.GEMINI_MODEL || DEFAULT_GEMINI_MODEL, {
     contents: [{ role: 'user', parts }],
-    generationConfig: { temperature: 0.3 }
+    generationConfig: { temperature: 0.3, responseMimeType: 'application/json', responseSchema: SCHEMA }
   }, { timeoutMs: TIMEOUT_MS })
-  const text = withoutCharCount(content.parts.map(p => p.text || '').join('').trim())
-  return text ? text.slice(0, MAX_BLURB) : null
+  const answer = JSON.parse(content.parts.map(p => p.text || '').join('') || '{}')
+  const blurb = withoutCharCount(String(answer.blurb || '').trim()).slice(0, MAX_BLURB) || null
+  const named = (Array.isArray(answer.games) ? answer.games : [])
+    .filter(g => String(g?.name || '').trim())
+    .map(g => ({ name: String(g.name).trim(), nameEn: String(g.name_en || '').trim() || null }))
+  const games = await gameLinks.linksFor(named, { log: m => global.logger.warn(`[LIVE]: ${m}`) })
+  return blurb || games.length ? { blurb, games } : null
 }
 
 module.exports = { describeStream, enabled, MAX_BLURB }
