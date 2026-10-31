@@ -5,6 +5,7 @@
 const { callGemini, DEFAULT_GEMINI_MODEL, GeminiError } = require('./eventDrafter')
 const youtubeDB = require('../../db/interfaces/postgres/youtube')
 const { parseVideoId } = require('../utils/youtube')
+const { withoutCharCount } = require('../utils/textClean')
 
 const MAX_SUMMARY = 3000
 // Gemini watches the whole video before answering, so an hour-long stream archive can take
@@ -17,7 +18,7 @@ function summaryTimeoutMs () {
 }
 
 const PROMPT = [
-  'この YouTube 動画の内容を、日本語で要約してください（1500文字以内）。',
+  'この YouTube 動画の内容を、日本語で要約してください（長くても1500文字程度まで）。要約の中に文字数は書かないでください。',
   '話している主な話題を順に箇条書きにし、各項目の先頭にその話題が始まる動画内の時間を [分:秒]（1時間以上なら [時:分:秒]）で書いてください。',
   '告知・イベント・日時・場所・出演者・URL など、',
   'イベント登録や告知文作りに使える具体的な情報は漏らさず含めてください。',
@@ -47,7 +48,7 @@ async function summarizeVideo (guildID, url, { onStart = () => {}, force = false
     // Fewer tokens per frame: the summary is about what is said and roughly shown, not fine detail.
     generationConfig: { temperature: 0.2, mediaResolution: 'MEDIA_RESOLUTION_LOW' }
   }, { timeoutMs: summaryTimeoutMs() })
-  const summary = content.parts.map(p => p.text || '').join('').trim().slice(0, MAX_SUMMARY)
+  const summary = withoutCharCount(content.parts.map(p => p.text || '').join('').trim()).slice(0, MAX_SUMMARY)
   if (!summary) throw new GeminiError(`Gemini returned no summary for ${videoID}`, 'AI が動画を要約できませんでした')
   await youtubeDB.saveSummary(guildID, videoID, summary)
   return { videoID, summary, cached: false }

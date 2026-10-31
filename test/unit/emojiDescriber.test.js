@@ -55,11 +55,12 @@ describe('syncGuild', () => {
   })
 
   test('describes each usable emoji from its name and image, then embeds name and description', async () => {
-    const seen = installModels({ kusa: '草が生えている。笑ったときに使う', naki: '泣いている顔。悲しいときに使う' })
+    const seen = installModels({ kusa: '草が生えている。笑ったときに使う（16文字）', naki: '泣いている顔。悲しいときに使う' })
     const guild = { id: '100', emojis: [{ id: '1', name: 'kusa' }, { id: '2', name: 'naki', animated: true }, { id: '3', name: 'staff', roles: ['9'] }] }
     assert.deepEqual(await emojiDescriber.syncGuild(guild), { described: 2, embedded: 2 })
     assert.deepEqual(seen.described, [{ name: 'kusa', image: 'image/png' }, { name: 'naki', image: 'image/png' }])
     assert.deepEqual(seen.embedded, [':kusa: 草が生えている。笑ったときに使う', ':naki: 泣いている顔。悲しいときに使う'])
+    assert.equal(rows.get('1').description, '草が生えている。笑ったときに使う', 'no count of characters')
     assert.equal(rows.get('1').model, 'gemini-embedding-001')
     assert.ok(!rows.has('3'), 'an emoji limited to some roles is not used')
 

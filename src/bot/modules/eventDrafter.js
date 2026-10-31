@@ -1,4 +1,5 @@
 const { SUBMIT_FORUM_DECLARATION, IMAGE_INSTRUCTION_PROPERTY, toForumPost, imageUrlsOf, imageInstructionOf, MAX_IMAGE_CANDIDATES } = require('./forumPost')
+const { withoutCharCount } = require('../utils/textClean')
 const { Agent } = require('undici')
 const { gatewayURL, gatewayAuthHeaders, isGatewayConfigured } = require('../utils/aiGateway')
 const { currentUsage } = require('../utils/geminiUsage')
@@ -86,7 +87,8 @@ const SYSTEM_INSTRUCTION = [
   'search_wiki があれば、キャラクター・名言・台詞・ネタ・用語などコミュニティならではの話題はそれで調べてから答えてください。wiki の名言や口ぐせは、話の流れに合うときに配信者らしい言い回しとして使ってください（毎回ではなく）。wiki はファンが書いたものなので、本人が決めた事実として断言しないでください。',
   'なりきるのは話し方までです。配信の予定・告知・コラボ・約束など、保存済みの情報やサーバーの情報にない事実を、本人が決めたこととして作らないでください。',
   'サーバーの情報に「サーバー絵文字」があれば、話の流れに合うときにたまに使ってください（毎回ではなく、使うときも1つの返事に1〜2個まで）。書き方は一覧のとおり <:名前:ID> のままにし、一覧にない絵文字は作らないでください。',
-  '返事は Discord のメッセージとして読みやすく、長くても500文字程度にしてください。'
+  '返事は Discord のメッセージとして読みやすく、長くても500文字程度にしてください。',
+  '返事・説明・本文に、文字数（「（120文字）」など）は書かないでください。'
 ].join('\n')
 
 // Extra character notes from the operator (CHAT_PERSONA), e.g. a catchphrase or how to address
@@ -279,7 +281,7 @@ function toScheduledEvent (draft, guild, now, { keepStart = null } = {}) {
     privacy_level: 2, // GUILD_ONLY, the only value Discord accepts
     scheduled_start_time: start.toISOString(),
     scheduled_end_time: end.toISOString(),
-    description: (draft.description || '').trim().slice(0, 1000) || undefined
+    description: withoutCharCount((draft.description || '').trim()).slice(0, 1000) || undefined
   }
 
   const channel = draft.channel_id && guild.channels.get(draft.channel_id)

@@ -4,15 +4,16 @@
 // archive is up (summarizeArchives in liveWatcher.js).
 const { callGemini, DEFAULT_GEMINI_MODEL } = require('./eventDrafter')
 const { isGatewayConfigured } = require('../utils/aiGateway')
+const { withoutCharCount } = require('../utils/textClean')
 
 const MAX_BLURB = 200
 const TIMEOUT_MS = 30 * 1000
 
 const PROMPT = [
-  '次の YouTube 配信の告知文を、Discord のイベント説明として日本語2〜3文（200文字以内）で書いてください。',
+  '次の YouTube 配信の告知文を、Discord のイベント説明として日本語2〜3文の短い文章で書いてください。',
   '何をする配信か（ゲーム名・企画・ゲストなど）が一目で分かるように。',
   'タイトル・概要欄・サムネイルから読み取れることだけを書き、推測で付け足さないでください。',
-  '前置きや見出しは不要です。本文だけを返してください。'
+  '前置き・見出し・文字数は書かず、本文だけを返してください。'
 ].join('\n')
 
 function enabled () {
@@ -30,7 +31,7 @@ async function describeStream (video, thumbnail = null) {
       contents: [{ role: 'user', parts }],
       generationConfig: { temperature: 0.3 }
     }, { timeoutMs: TIMEOUT_MS })
-    const text = content.parts.map(p => p.text || '').join('').trim()
+    const text = withoutCharCount(content.parts.map(p => p.text || '').join('').trim())
     return text ? text.slice(0, MAX_BLURB) : null
   } catch (e) {
     global.logger.warn(`[LIVE]: Could not describe ${video.id}: ${e.message}`)
