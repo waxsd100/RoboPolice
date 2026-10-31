@@ -187,9 +187,15 @@ async function fetchPageText (rawUrl, { isBlocked = isBlockedAddress } = {}) {
   return { url: res.url, text: text.slice(0, MAX_TEXT_CHARS) }
 }
 
+// The page's HTML, decoded, for readers that need its structure (wikiKnowledge.js).
+async function fetchPageHtml (rawUrl, { isBlocked = isBlockedAddress } = {}) {
+  const res = await fetchChecked(rawUrl, KINDS.page, isBlocked)
+  return { url: res.url, html: decodeBody(res.body, res.contentType), contentType: res.contentType }
+}
+
 async function fetchImage (rawUrl, { isBlocked = isBlockedAddress } = {}) {
   const res = await fetchChecked(rawUrl, KINDS.image, isBlocked)
   return { url: res.url, buffer: res.body, contentType: res.contentType }
 }
 
-module.exports = { fetchPageText, fetchImage, htmlToText, decodeBody, isBlockedAddress }
+module.exports = { fetchPageText, fetchPageHtml, fetchImage, htmlToText, decodeBody, decodeEntities, isBlockedAddress }

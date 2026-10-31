@@ -25,14 +25,18 @@ function usableEmojis (guild) {
 
 const imageURL = e => `https://cdn.discordapp.com/emojis/${e.emoji_id || e.id}.png?size=96`
 
-// One short line: what the emoji shows and when it is used.
-async function describeEmoji (emoji) {
+// One short line: what the emoji shows and when it is used. characters: who the community's
+// characters are (from its wiki), so an emoji of one is named.
+async function describeEmoji (emoji, characters = '') {
   const { buffer, contentType } = await urlFetcher.fetchImage(imageURL(emoji))
+  const known = characters
+    ? `\n\nこのコミュニティの配信者のキャラクター（コミュニティの wiki より）:\n${characters}\n\n絵文字がこの中のキャラクターなら、説明にその名前を入れてください。どれにも当てはまらなければ名前は書かないでください。`
+    : ''
   const content = await callGemini(process.env.GEMINI_MODEL || DEFAULT_GEMINI_MODEL, {
     contents: [{
       role: 'user',
       parts: [
-        { text: `Discord のカスタム絵文字「:${emoji.name}:」の画像です。何が描かれているか、どんな気持ちや場面で使う絵文字かを、日本語の1文（${MAX_DESCRIPTION}文字以内）で書いてください。前置きは不要です。` },
+        { text: `Discord のカスタム絵文字「:${emoji.name}:」の画像です。何が描かれているか、どんな気持ちや場面で使う絵文字かを、日本語の1文（${MAX_DESCRIPTION}文字以内）で書いてください。前置きは不要です。${known}` },
         { inlineData: { mimeType: contentType || 'image/png', data: buffer.toString('base64') } }
       ]
     }],
@@ -49,10 +53,12 @@ const embedText = e => `:${e.name}: ${e.description}`
 // missing (up to PER_RUN each; the next run goes on). Resolves to { described, embedded }.
 async function syncGuild (guild) {
   await store.syncEmojis(guild.id, usableEmojis(guild))
+  // When what the wiki says about the characters changes, every emoji is described again.
+  const characters = await require('./wikiKnowledge').characterContext()
   let described = 0
-  for (const emoji of await store.emojisToDescribe(guild.id, PER_RUN)) {
+  for (const emoji of await store.emojisToDescribe(guild.id, PER_RUN, characters.hash)) {
     try {
-      await store.saveDescription(emoji.emoji_id, emoji.name, await describeEmoji(emoji))
+      await store.saveDescription(emoji.emoji_id, emoji.name, await describeEmoji(emoji, characters.text), characters.hash)
       described++
     } catch (e) {
       global.logger.warn(`[EMOJIS]: Could not describe :${emoji.name}: in ${guild.id}: ${e.message}`)
