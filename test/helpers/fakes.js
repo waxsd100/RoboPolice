@@ -78,7 +78,9 @@ function installBot ({ guilds = [], messages = {}, scheduledEvents = [], forums 
 function installEmbeddingStore ({ videos = {}, messages = [], pending = [] } = {}) {
   const store = require('../../src/db/interfaces/postgres/embeddings')
   const saved = { videos: [], messages: [], handled: [], invalidated: [] }
-  store.videoEmbeddings = async guildID => videos[guildID] || {}
+  const { similarity, fromBase64 } = require('../../src/bot/utils/embeddings')
+  store.hasVideoEmbeddings = async guildID => Object.keys(videos[guildID] || {}).length !== 0
+  store.videoScores = async (guildID, q) => Object.fromEntries(Object.entries(videos[guildID] || {}).map(([id, e]) => [id, similarity(q, fromBase64(e))]))
   store.resetStaleMessageEmbeddings = async (model) => {
     saved.resetFor = model
     return 0
@@ -91,9 +93,11 @@ function installEmbeddingStore ({ videos = {}, messages = [], pending = [] } = {
     saved.handled.push(...handled)
   }
   store.invalidateMessage = async id => saved.invalidated.push(id)
-  store.messageEmbeddingPages = async function * (guildID, channelIDs) {
-    yield messages.filter(m => m.guild_id === guildID && channelIDs.includes(m.channel_id))
-  }
+  store.nearestMessages = async (guildID, channelIDs, q, { limit = 60 } = {}) => messages
+    .filter(m => m.guild_id === guildID && channelIDs.includes(m.channel_id))
+    .map(m => ({ message_id: m.message_id, score: similarity(q, fromBase64(m.embedding)) }))
+    .sort((a, b) => b.score - a.score)
+    .slice(0, limit)
   store.getMessages = async ids => messages.filter(m => ids.includes(m.message_id))
     .map(m => ({ id: m.message_id, author_id: m.author_id, channel_id: m.channel_id, ts: m.ts, content: m.content }))
   return saved

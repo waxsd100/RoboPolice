@@ -1,9 +1,8 @@
-// Text embeddings for searching by meaning: Gemini's embedding model through AI Gateway, stored
-// compactly and compared in Node. No vector database or Postgres extension is needed; at this
-// scale (thousands to tens of thousands of rows) a scan is fast enough.
+// Text embeddings for searching by meaning: Gemini's embedding model through AI Gateway, stored in
+// Postgres with pgvector (halfvec), which finds the nearest ones.
 //
 // Vectors are DIMENSIONS long (the model is trained so a prefix of its output is a usable
-// embedding), normalized, and stored as signed bytes: 512 bytes a row, base64 in a TEXT column.
+// embedding), normalized, and handled in the app as signed bytes (each component times 127).
 const { geminiRequest } = require('../modules/eventDrafter')
 
 const DEFAULT_EMBEDDING_MODEL = 'gemini-embedding-001'
@@ -60,6 +59,11 @@ function similarity (a, b) {
   return dot / (127 * 127)
 }
 
+// The vector as pgvector reads it: '[0.1234,-0.5,…]'.
+function toVectorLiteral (vector) {
+  return `[${Array.from(vector, v => (v / 127).toFixed(4)).join(',')}]`
+}
+
 function toBase64 (vector) {
   return Buffer.from(vector.buffer, vector.byteOffset, vector.byteLength).toString('base64')
 }
@@ -69,4 +73,4 @@ function fromBase64 (text) {
   return new Int8Array(buffer.buffer, buffer.byteOffset, buffer.byteLength)
 }
 
-module.exports = { embed, embedQuery, model, similarity, quantize, toBase64, fromBase64, DIMENSIONS, BATCH_SIZE }
+module.exports = { embed, embedQuery, model, similarity, quantize, toVectorLiteral, toBase64, fromBase64, DIMENSIONS, BATCH_SIZE }

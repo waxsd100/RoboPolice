@@ -1,7 +1,7 @@
 const { test, describe, beforeEach } = require('node:test')
 const assert = require('node:assert/strict')
 const { configureGateway, installEmbeddingModel, installEmbeddingStore } = require('../helpers/fakes')
-const { embed, embedQuery, similarity, quantize, toBase64, fromBase64, DIMENSIONS } = require('../../src/bot/utils/embeddings')
+const { embed, embedQuery, similarity, quantize, toVectorLiteral, toBase64, fromBase64, DIMENSIONS } = require('../../src/bot/utils/embeddings')
 const indexer = require('../../src/bot/modules/embeddingIndexer')
 const semanticSearch = require('../../src/bot/modules/semanticSearch')
 
@@ -14,6 +14,7 @@ describe('embeddings', () => {
     assert.ok(Math.abs(similarity(a, a) - 1) < 0.01)
     assert.ok(Math.abs(similarity(quantize([1, 0]), quantize([0, 1]))) < 0.01)
     assert.deepEqual([...fromBase64(toBase64(Int8Array.from([-127, 0, 5])))], [-127, 0, 5])
+    assert.equal(toVectorLiteral(Int8Array.from([127, -127, 0])), '[1.0000,-1.0000,0.0000]', 'as pgvector reads it')
   })
 
   test('embeds through the gateway in batches of 100, as documents or as a query', async () => {
@@ -138,11 +139,5 @@ describe('semanticSearch', () => {
     const videos = [{ video_id: 'v1', title: 'マイクラ建築' }, { video_id: 'v2', title: '深夜の実況' }]
     assert.deepEqual((await semanticSearch.rankVideos('100', videos, 'こわいゲーム')).map(v => v.video_id), ['v2', 'v1'])
     assert.equal(await semanticSearch.rankVideos('999', videos, 'x'), null)
-  })
-
-  test('topK keeps only the best', () => {
-    const best = semanticSearch.topK(2)
-    for (const score of [0.1, 0.9, 0.5, 0.7]) best.offer({ score })
-    assert.deepEqual(best.items.map(i => i.score), [0.9, 0.7])
   })
 })

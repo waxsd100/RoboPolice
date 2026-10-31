@@ -5,6 +5,7 @@
 // what has been handled, so finding new messages uses a small partial index, not a table scan.
 // Videos have one vector each.
 const pool = require('../../clients/postgres')
+const { toVectorLiteral } = require('../../../bot/utils/embeddings')
 
 // Embedding models by name -> ID in embedding_models. A model is added the first time it is used.
 const modelIds = new Map()
@@ -27,7 +28,7 @@ async function pendingMessages (limit) {
   return rows.rows
 }
 
-// Stores [{ id, embedding, model }] and marks `handledIds` (which also covers messages that get no
+// Stores [{ id, embedding (an Int8Array from embed()), model }] and marks `handledIds` (which also covers messages that get no
 // embedding, such as empty ones or ones from before channels were recorded).
 async function saveMessageEmbeddings (rows, handledIds) {
   for (const r of rows) {
@@ -36,7 +37,7 @@ async function saveMessageEmbeddings (rows, handledIds) {
       `INSERT INTO message_embeddings (message_id, embedding, model_id)
        SELECT $1, $2, $3 WHERE EXISTS (SELECT 1 FROM messages WHERE id = $1)
        ON CONFLICT (message_id) DO UPDATE SET embedding = EXCLUDED.embedding, model_id = EXCLUDED.model_id`,
-      [r.id, r.embedding, await modelId(r.model)])
+      [r.id, toVectorLiteral(r.embedding), await modelId(r.model)])
   }
   if (handledIds.length) await pool.query('UPDATE messages SET embedded = true WHERE id = ANY($1)', [handledIds])
 }
@@ -60,23 +61,45 @@ async function invalidateMessage (messageID) {
   await pool.query('UPDATE messages SET embedded = false WHERE id = $1', [messageID])
 }
 
-// The stored message embeddings of a server in `channelIDs` made by `model`, newest first, `pageSize` at a time:
-// an async iterator of [{ message_id, channel_id, ts, embedding }] pages,
-// stopping after `max` rows.
-async function * messageEmbeddingPages (guildID, channelIDs, { model, pageSize = 5000, max = 50000 } = {}) {
-  let before = null
-  let read = 0
-  while (read < max) {
-    const rows = (await pool.query(
-      `SELECT e.message_id, m.channel_id, m.ts, e.embedding FROM message_embeddings e
+// Settings for one nearest-neighbour query, run inside its transaction. The HNSW index finds
+// neighbours first and filters (server, channels, model) after; pgvector 0.8 and later keep
+// scanning until enough rows pass the filter. Older versions would return too few, so they scan
+// exactly instead.
+let iterative = null
+async function prepareSearch (client, limit) {
+  if (iterative === null) {
+    const version = (await client.query("SELECT extversion FROM pg_extension WHERE extname = 'vector'")).rows[0]?.extversion || '0'
+    const [major, minor] = version.split('.').map(Number)
+    iterative = major > 0 || minor >= 8
+  }
+  if (iterative) {
+    await client.query("SET LOCAL hnsw.iterative_scan = 'strict_order'")
+    await client.query(`SET LOCAL hnsw.ef_search = ${Math.max(40, Math.min(1000, limit))}`)
+  } else {
+    await client.query('SET LOCAL enable_indexscan = off')
+  }
+}
+
+// The `limit` stored messages of a server in `channelIDs` closest to the vector `query`, made by
+// `model`: [{ message_id, score }] best first, score the cosine similarity.
+async function nearestMessages (guildID, channelIDs, query, { model, limit = 60 } = {}) {
+  const client = await pool.getPostgresClient()
+  try {
+    await client.query('BEGIN')
+    await prepareSearch(client, limit)
+    const rows = (await client.query(
+      `SELECT e.message_id, 1 - (e.embedding <=> $4::halfvec) AS score FROM message_embeddings e
        JOIN messages m ON m.id = e.message_id
-       WHERE m.guild_id = $1 AND m.channel_id = ANY($2) AND e.model_id = $5 AND ($3::timestamptz IS NULL OR m.ts < $3)
-       ORDER BY m.ts DESC LIMIT $4`,
-      [guildID, channelIDs, before, Math.min(pageSize, max - read), await modelId(model)])).rows
-    if (rows.length === 0) return
-    read += rows.length
-    before = rows[rows.length - 1].ts
-    yield rows
+       WHERE m.guild_id = $1 AND m.channel_id = ANY($2) AND e.model_id = $3
+       ORDER BY e.embedding <=> $4::halfvec LIMIT $5`,
+      [guildID, channelIDs, await modelId(model), toVectorLiteral(query), limit])).rows
+    await client.query('COMMIT')
+    return rows.map(r => ({ message_id: r.message_id, score: Number(r.score) }))
+  } catch (e) {
+    await client.query('ROLLBACK').catch(() => {})
+    throw e
+  } finally {
+    client.release()
   }
 }
 
@@ -103,18 +126,31 @@ async function saveVideoEmbedding (videoID, embedding, hash, model) {
     `INSERT INTO youtube_video_embeddings (video_id, embedding, text_hash, model_id)
      SELECT $1, $2, $3, $4 WHERE EXISTS (SELECT 1 FROM youtube_videos WHERE video_id = $1)
      ON CONFLICT (video_id) DO UPDATE SET embedding = $2, text_hash = $3, model_id = $4`,
-    [videoID, embedding, hash, await modelId(model)])
+    [videoID, toVectorLiteral(embedding), hash, await modelId(model)])
 }
 
-// { video_id: embedding } for the videos of a server's channel that have one made by `model`.
-async function videoEmbeddings (guildID, model) {
+// Whether any video of the server's channel has an embedding made by `model`.
+async function hasVideoEmbeddings (guildID, model) {
   const rows = await pool.query(
-    `SELECT e.video_id, e.embedding FROM youtube_video_embeddings e
+    `SELECT 1 FROM youtube_video_embeddings e
+     JOIN youtube_videos v ON v.video_id = e.video_id
+     JOIN guild_youtube g ON g.channel_id = v.channel_id
+     WHERE g.guild_id = $1 AND e.model_id = $2 LIMIT 1`,
+    [guildID, await modelId(model)])
+  return rows.rows.length !== 0
+}
+
+// { video_id: score } for the videos of the server's channel that have an embedding made by
+// `model`, score the cosine similarity to the vector `query`. A channel has at most a few thousand
+// videos, so all are scored.
+async function videoScores (guildID, query, model) {
+  const rows = await pool.query(
+    `SELECT e.video_id, 1 - (e.embedding <=> $3::halfvec) AS score FROM youtube_video_embeddings e
      JOIN youtube_videos v ON v.video_id = e.video_id
      JOIN guild_youtube g ON g.channel_id = v.channel_id
      WHERE g.guild_id = $1 AND e.model_id = $2`,
-    [guildID, await modelId(model)])
-  return Object.fromEntries(rows.rows.map(r => [r.video_id, r.embedding]))
+    [guildID, await modelId(model), toVectorLiteral(query)])
+  return Object.fromEntries(rows.rows.map(r => [r.video_id, Number(r.score)]))
 }
 
-module.exports = { pendingMessages, saveMessageEmbeddings, resetStaleMessageEmbeddings, invalidateMessage, messageEmbeddingPages, getMessages, videosForEmbedding, saveVideoEmbedding, videoEmbeddings }
+module.exports = { pendingMessages, saveMessageEmbeddings, resetStaleMessageEmbeddings, invalidateMessage, nearestMessages, getMessages, videosForEmbedding, saveVideoEmbedding, hasVideoEmbeddings, videoScores }

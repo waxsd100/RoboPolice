@@ -2,7 +2,7 @@
 // and summary, redone when any of them changes) and, when MESSAGE_EMBEDDINGS=true, every stored
 // message. One worker runs it for all servers, like the retention sweep.
 const crypto = require('crypto')
-const { embed, toBase64, model } = require('../utils/embeddings')
+const { embed, model } = require('../utils/embeddings')
 const store = require('../../db/interfaces/postgres/embeddings')
 const { isGatewayConfigured } = require('../utils/aiGateway')
 
@@ -39,7 +39,7 @@ async function indexVideos () {
     .slice(0, VIDEOS_PER_RUN)
   if (changed.length === 0) return 0
   const vectors = await embed(changed.map(v => v.text))
-  for (const [i, v] of changed.entries()) await store.saveVideoEmbedding(v.video_id, toBase64(vectors[i]), v.hash, current)
+  for (const [i, v] of changed.entries()) await store.saveVideoEmbedding(v.video_id, vectors[i], v.hash, current)
   return changed.length
 }
 
@@ -61,7 +61,7 @@ async function indexMessages () {
   const wanted = pending.map(m => ({ ...m, text: plainText(m.content) })).filter(m => m.text && m.channel_id && m.guild_id)
   const vectors = wanted.length ? await embed(wanted.map(m => m.text)) : []
   await store.saveMessageEmbeddings(
-    wanted.map((m, i) => ({ id: m.id, embedding: toBase64(vectors[i]), model: model() })),
+    wanted.map((m, i) => ({ id: m.id, embedding: vectors[i], model: model() })),
     pending.map(m => m.id))
   return wanted.length
 }

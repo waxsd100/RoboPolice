@@ -109,11 +109,21 @@ describe('stores', { skip: !database.available && 'needs PGHOST' }, () => {
       const store = require('../../src/db/interfaces/postgres/embeddings')
       const pending = await store.pendingMessages(3)
       assert.deepEqual(pending.map(m => [m.id, m.content]), [['m8', 'text 8'], ['m7', 'text 7'], ['m6', 'text 6']])
-      await store.saveMessageEmbeddings([{ id: 'm8', embedding: 'v8', model: 'A' }, { id: 'm7', embedding: 'v7', model: 'B' }, { id: 'deleted', embedding: 'x', model: 'A' }], ['m8', 'm7', 'm6'])
-      const pages = []
-      for await (const page of store.messageEmbeddingPages('g1', ['c1'], { model: 'A' })) pages.push(...page)
-      assert.deepEqual(pages.map(r => [r.message_id, r.channel_id, r.embedding]), [['m8', 'c1', 'v8']])
+      // Unit vectors along different axes: m8 matches the query exactly, m6 is orthogonal to it.
+      const axis = (i, sign = 1) => { const v = new Int8Array(512); v[i] = 127 * sign; return v }
+      await store.saveMessageEmbeddings([
+        { id: 'm8', embedding: axis(0), model: 'A' },
+        { id: 'm6', embedding: axis(1), model: 'A' },
+        { id: 'm7', embedding: axis(0), model: 'B' },
+        { id: 'deleted', embedding: axis(0), model: 'A' }
+      ], ['m8', 'm7', 'm6'])
+      const nearest = await store.nearestMessages('g1', ['c1'], axis(0), { model: 'A', limit: 5 })
+      assert.deepEqual(nearest.map(r => [r.message_id, Math.round(r.score * 100) / 100]), [['m8', 1], ['m6', 0]], 'nearest first, only model A, only stored messages')
+      assert.deepEqual(await store.nearestMessages('g1', ['c2'], axis(0), { model: 'A' }), [], 'only the asked channels')
+      assert.deepEqual((await store.nearestMessages('g1', ['c1'], axis(0), { model: 'A', limit: 1 })).map(r => r.message_id), ['m8'])
       assert.deepEqual((await q('SELECT name FROM embedding_models ORDER BY name')).map(r => r.name), ['A', 'B'], 'one row per model')
+      const indexes = (await q("SELECT indexname FROM pg_indexes WHERE tablename IN ('message_embeddings', 'youtube_video_embeddings') AND indexdef LIKE '%hnsw%' ORDER BY indexname")).map(r => r.indexname)
+      assert.deepEqual(indexes, ['message_embeddings_hnsw', 'youtube_video_embeddings_hnsw'])
       assert.equal(await store.resetStaleMessageEmbeddings('A', 10), 1)
       assert.deepEqual((await store.pendingMessages(10)).map(m => m.id).slice(0, 1), ['m7'])
     })
@@ -172,10 +182,15 @@ describe('stores', { skip: !database.available && 'needs PGHOST' }, () => {
     test('video embeddings', async () => {
       const embeddings = require('../../src/db/interfaces/postgres/embeddings')
       assert.deepEqual((await embeddings.videosForEmbedding()).map(v => [v.video_id, v.summary, v.text_hash]).sort(), [['v1', '要約1', null], ['v2', null, null]])
-      await embeddings.saveVideoEmbedding('v1', 'e1', 'h1', 'A')
-      await embeddings.saveVideoEmbedding('nope', 'e', 'h', 'A')
-      assert.deepEqual(await embeddings.videoEmbeddings('g2', 'A'), { v1: 'e1' })
-      assert.deepEqual(await embeddings.videoEmbeddings('g2', 'B'), {})
+      const axis = i => { const v = new Int8Array(512); v[i] = 127; return v }
+      assert.equal(await embeddings.hasVideoEmbeddings('g2', 'A'), false)
+      await embeddings.saveVideoEmbedding('v1', axis(0), 'h1', 'A')
+      await embeddings.saveVideoEmbedding('v2', axis(1), 'h2', 'A')
+      await embeddings.saveVideoEmbedding('nope', axis(0), 'h', 'A')
+      assert.equal(await embeddings.hasVideoEmbeddings('g2', 'A'), true)
+      const scores = await embeddings.videoScores('g2', axis(0), 'A')
+      assert.deepEqual(Object.fromEntries(Object.entries(scores).map(([id, s]) => [id, Math.round(s * 100) / 100])), { v1: 1, v2: 0 })
+      assert.deepEqual(await embeddings.videoScores('g2', axis(0), 'B'), {})
     })
 
     test('a channel goes when no server has it; summaries when no server asked for them', async () => {
