@@ -175,16 +175,30 @@ describe('stores', { skip: !database.available && 'needs PGHOST' }, () => {
     assert.deepEqual((await wiki.nearestSections(axis(3), 'A', 2)).map(s => [s.title, s.heading]), [['名言集', '名言'], ['のばまんのキャラクター', 'のばまんのキャラクター']])
     assert.deepEqual(await wiki.characters(), [{ heading: 'よつろん', text: '四葉の笑顔' }, { heading: 'クリーム', text: '謎の生物' }])
 
+    // Knowledge taken out of each part, once per version of the part.
+    const pending = await wiki.sectionsToExtract(10)
+    assert.equal(pending.length, 4)
+    const yotsu = pending.find(p => p.heading === 'よつろん')
+    await wiki.saveFacts(yotsu.url, yotsu.position, yotsu.text_hash, [{ kind: 'character', name: 'よつろん', aliases: ['yotsuron'], content: '四葉の笑顔' }])
+    for (const p of pending.filter(p => p !== yotsu)) await wiki.saveFacts(p.url, p.position, p.text_hash, [])
+    assert.deepEqual(await wiki.sectionsToExtract(10), [])
+    const [fact] = await wiki.factsToEmbed('A', 10)
+    await wiki.saveFactEmbedding(fact.id, axis(7), 'A')
+    assert.deepEqual((await wiki.nearestFacts(axis(7), 'A', 1)).map(f => [f.kind, f.name, f.aliases, f.heading]), [['character', 'よつろん', ['yotsuron'], 'よつろん']])
+    assert.deepEqual(await wiki.characterFacts(), [{ name: 'よつろん', aliases: ['yotsuron'], content: '四葉の笑顔' }])
+
     // Read again with one part changed and one gone: only the changed one is embedded again.
     await wiki.savePage(`${root}/d/chars`, 'のばまんのキャラクター', [
       { heading: 'のばまんのキャラクター', text: 'はじめに', images: [] },
       { heading: 'よつろん', text: '四葉の笑顔（更新）', images: [] }
     ])
     assert.deepEqual((await wiki.sectionsToEmbed('A', 10)).map(s => s.heading), ['よつろん'])
+    assert.deepEqual((await wiki.sectionsToExtract(10)).map(s => s.heading), ['よつろん'], 'a changed part is read again')
     assert.equal((await q('SELECT count(*)::int AS n FROM wiki_sections WHERE url = $1', [`${root}/d/chars`]))[0].n, 2)
     assert.ok(await wiki.lastRead(root))
     assert.equal(await wiki.deletePagesExcept(root, [`${root}/d/chars`]), 1)
     assert.deepEqual((await q('SELECT url FROM wiki_sections GROUP BY url')).map(r => r.url), [`${root}/d/chars`])
+    assert.deepEqual((await q('SELECT name FROM wiki_facts')).map(r => r.name), ['よつろん'], 'knowledge goes with its page')
   })
 
   describe('YouTube', () => {

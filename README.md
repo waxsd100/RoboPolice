@@ -142,8 +142,11 @@ server emoji of that name.
 With `WIKI_URLS` set, the community's wiki is knowledge too (`src/bot/modules/wikiKnowledge.js`):
 the worker owning shard 0 reads every page of it once a week (one page a second, only the `/d/`
 pages its robots.txt allows), splits each at its headings, and stores the parts with embeddings in
-`wiki_pages` and `wiki_sections`. The model searches it with `search_wiki` for characters, quotes
-and running jokes, and uses its quotes now and then as the streamer would. It is fans' writing, so
+`wiki_pages` and `wiki_sections`. Gemini then takes knowledge out of each part, as structured
+JSON, into `wiki_facts`: characters (name, other names and readings, who they are and how they
+look), quotes (the words, and who said them when) and terms (running jokes, the community's words
+and what they mean), each embedded on its own; a part is read again only when it changes. The model
+searches all of it with `search_wiki` (the knowledge first, then the pages for detail), and uses its quotes now and then as the streamer would. It is fans' writing, so
 the model does not state it as the streamer's own word.
 
 Each emoji is described once from its image and name by Gemini (what it shows, when to use it) and

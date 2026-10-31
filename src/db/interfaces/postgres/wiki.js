@@ -86,9 +86,75 @@ async function characters (limit = 80) {
   return rows.rows.filter(r => !seen.has(r.heading) && seen.add(r.heading))
 }
 
+// Parts whose knowledge has not been taken out since they last changed:
+// [{ url, position, title, heading, text, text_hash }].
+async function sectionsToExtract (limit) {
+  const rows = await pool.query(
+    `SELECT s.url, s.position, p.title, s.heading, s.text, s.text_hash FROM wiki_sections s JOIN wiki_pages p ON p.url = s.url
+     WHERE s.facts_hash IS DISTINCT FROM s.text_hash
+     ORDER BY s.url, s.position LIMIT $1`,
+    [limit])
+  return rows.rows
+}
+
+// Replaces what was taken out of a part: [{ kind, name, aliases, content }].
+async function saveFacts (url, position, textHash, facts) {
+  const client = await pool.getPostgresClient()
+  try {
+    await client.query('BEGIN')
+    await client.query('DELETE FROM wiki_facts WHERE url = $1 AND position = $2', [url, position])
+    for (const f of facts) {
+      await client.query(
+        'INSERT INTO wiki_facts (url, position, kind, name, aliases, content) VALUES ($1, $2, $3, $4, $5, $6)',
+        [url, position, f.kind, f.name, f.aliases || [], f.content])
+    }
+    await client.query('UPDATE wiki_sections SET facts_hash = $3 WHERE url = $1 AND position = $2', [url, position, textHash])
+    await client.query('COMMIT')
+  } catch (e) {
+    await client.query('ROLLBACK').catch(() => {})
+    throw e
+  } finally {
+    client.release()
+  }
+}
+
+// Knowledge with no embedding by `model`: [{ id, kind, name, aliases, content }].
+async function factsToEmbed (model, limit) {
+  const rows = await pool.query(
+    `SELECT id, kind, name, aliases, content FROM wiki_facts
+     WHERE embedding IS NULL OR model_id IS DISTINCT FROM $1 ORDER BY id LIMIT $2`,
+    [await modelId(model), limit])
+  return rows.rows
+}
+
+async function saveFactEmbedding (id, embedding, model) {
+  await pool.query('UPDATE wiki_facts SET embedding = $2, model_id = $3 WHERE id = $1', [id, toVectorLiteral(embedding), await modelId(model)])
+}
+
+// The `limit` pieces of knowledge closest in meaning to the vector `query`, with where they come
+// from: [{ kind, name, aliases, content, url, title, heading, score }].
+async function nearestFacts (query, model, limit) {
+  const rows = await pool.query(
+    `SELECT f.kind, f.name, f.aliases, f.content, f.url, p.title, s.heading, 1 - (f.embedding <=> $1::halfvec) AS score
+     FROM wiki_facts f JOIN wiki_sections s ON s.url = f.url AND s.position = f.position JOIN wiki_pages p ON p.url = f.url
+     WHERE f.model_id = $2 AND f.embedding IS NOT NULL
+     ORDER BY f.embedding <=> $1::halfvec LIMIT $3`,
+    [toVectorLiteral(query), await modelId(model), limit])
+  return rows.rows.map(r => ({ ...r, score: Number(r.score) }))
+}
+
+// The characters the wiki's knowledge names, one per name: [{ name, aliases, content }].
+async function characterFacts (limit = 100) {
+  const rows = await pool.query(
+    `SELECT DISTINCT ON (name) name, aliases, content FROM wiki_facts WHERE kind = 'character'
+     ORDER BY name, length(content) DESC LIMIT $1`,
+    [limit])
+  return rows.rows
+}
+
 async function hasSections () {
   const rows = await pool.query('SELECT 1 FROM wiki_sections LIMIT 1')
   return rows.rows.length !== 0
 }
 
-module.exports = { savePage, deletePagesExcept, lastRead, sectionsToEmbed, saveSectionEmbedding, nearestSections, characters, hasSections, hashOf }
+module.exports = { savePage, deletePagesExcept, lastRead, sectionsToEmbed, saveSectionEmbedding, nearestSections, characters, sectionsToExtract, saveFacts, factsToEmbed, saveFactEmbedding, nearestFacts, characterFacts, hasSections, hashOf }

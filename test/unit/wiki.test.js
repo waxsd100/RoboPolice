@@ -60,14 +60,18 @@ describe('crawl', () => {
 })
 
 describe('searchWiki', () => {
-  test('returns the closest parts with their page and URL', async (t) => {
+  test('returns the closest knowledge, then the closest parts with their page and URL', async (t) => {
     process.env.WIKI_URLS = ROOT
     configureGateway()
     installEmbeddingModel()
     t.mock.method(store, 'hasSections', async () => true)
-    const nearest = t.mock.method(store, 'nearestSections', async () => [{ url: `${ROOT}d/q`, title: '名言集', heading: '「〇〇」', text: '有名な台詞。', score: 0.9 }])
+    t.mock.method(store, 'nearestFacts', async () => [{ kind: 'quote', name: '〇〇だぜ', aliases: [], content: '配信の締めに言う', url: `${ROOT}d/q`, title: '名言集', heading: '締め' }])
+    const nearest = t.mock.method(store, 'nearestSections', async () => [{ url: `${ROOT}d/q`, title: '名言集', heading: '締め', text: '有名な台詞。', score: 0.9 }])
     const text = await wiki.searchWiki('名言')
-    assert.equal(text, `wiki で「名言」に意味が近い記述（近い順）:\n- 名言集 / 「〇〇」（${ROOT}d/q）\n有名な台詞。`)
+    assert.equal(text, [
+      'wiki で「名言」に意味が近いもの（近い順）:', '', '知識:', '- [名言・台詞] 〇〇だぜ: 配信の締めに言う（名言集 / 締め）',
+      '', '本文:', `- 名言集 / 締め（${ROOT}d/q）`, '有名な台詞。'
+    ].join('\n'))
     assert.equal(nearest.mock.calls[0].arguments[1], 'gemini-embedding-001')
   })
 
@@ -80,11 +84,55 @@ describe('searchWiki', () => {
 
   test('the characters for describing emojis, with a hash that changes with them', async (t) => {
     process.env.WIKI_URLS = ROOT
+    t.mock.method(store, 'characterFacts', async () => [])
     t.mock.method(store, 'characters', async () => [{ heading: 'よつろん', text: '四葉の\n笑顔。' }])
     const { text, hash } = await wiki.characterContext()
     assert.equal(text, '- よつろん: 四葉の 笑顔。')
     assert.match(hash, /^[0-9a-f]{16}$/)
     delete process.env.WIKI_URLS
     assert.deepEqual(await wiki.characterContext(), { text: '', hash: null })
+  })
+
+  test('the characters come from the knowledge, with other names and looks, when there is any', async (t) => {
+    process.env.WIKI_URLS = ROOT
+    t.mock.method(store, 'characterFacts', async () => [{ name: 'よつろん', aliases: ['yotsuron'], content: '頭に大きな四葉。白々しい笑顔' }])
+    assert.equal((await wiki.characterContext()).text, '- よつろん（yotsuron）: 頭に大きな四葉。白々しい笑顔')
+  })
+})
+
+describe('extractFacts', () => {
+  test('asks Gemini for characters, quotes and terms as JSON, and keeps only well-formed ones', async () => {
+    configureGateway()
+    const { installGemini } = require('../helpers/fakes')
+    const requests = installGemini([[{
+      text: JSON.stringify([
+        { kind: 'character', name: 'よつろん', aliases: ['yotsuron', ''], content: '頭に四葉の笑顔のキャラクター' },
+        { kind: 'quote', name: 'ご安心を', content: '' },
+        { kind: 'other', name: 'x', content: 'y' },
+        { kind: 'term', name: 'のば描き', content: 'ファンアートのこと' }
+      ])
+    }]])
+    const facts = await wiki.extractFacts({ title: 'のばまんのキャラクター', heading: 'よつろん', text: 'のばまんのアイコンのキャラクター。' })
+    assert.deepEqual(facts, [
+      { kind: 'character', name: 'よつろん', aliases: ['yotsuron'], content: '頭に四葉の笑顔のキャラクター' },
+      { kind: 'term', name: 'のば描き', aliases: [], content: 'ファンアートのこと' }
+    ])
+    const { generationConfig, contents } = requests[0].body
+    assert.equal(generationConfig.responseMimeType, 'application/json')
+    assert.deepEqual(generationConfig.responseSchema.items.properties.kind.enum, ['character', 'quote', 'term'])
+    assert.match(contents[0].parts[0].text, /ページ: のばまんのキャラクター\n見出し: よつろん\n本文:\nのばまんのアイコンのキャラクター。/)
+  })
+
+  test('a part that fails is left for next time; the others go on', async (t) => {
+    const saved = []
+    t.mock.method(store, 'sectionsToExtract', async () => [{ url: 'u', position: 0, title: 't', heading: 'a', text: 'x', text_hash: 'h0' }, { url: 'u', position: 1, title: 't', heading: 'b', text: 'y', text_hash: 'h1' }])
+    t.mock.method(store, 'saveFacts', async (url, position, hash, facts) => saved.push([position, hash, facts.length]))
+    configureGateway()
+    const { installGemini } = require('../helpers/fakes')
+    installGemini([new Error('boom'), [{ text: '[]' }]])
+    const logged = []
+    assert.equal(await wiki.extractPending({ log: m => logged.push(m) }), 1)
+    assert.deepEqual(saved, [[1, 'h1', 0]])
+    assert.match(logged[0], /Could not take knowledge out of t \/ a/)
   })
 })
