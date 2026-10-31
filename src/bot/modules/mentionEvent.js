@@ -398,7 +398,7 @@ async function handle (message) {
         ? await tools.readThread(message.messageReference.channelID || message.channel.id, repliedTo).catch(e => ({ text: `（読めませんでした: ${e.message}）`, count: 1 }))
         : null
       // Fetched fresh for every request. Without it the draft still works, just with less context.
-      const server = await describeServer(guild, member, message.channel.id).catch(e => {
+      const server = await describeServer(guild, member, message.channel.id, { query: request }).catch(e => {
         global.logger.warn(`Could not describe server ${guild.id}: ${e.message}`)
         return null
       })

@@ -27,6 +27,8 @@ module.exports = {
       .catch(e => global.logger.warn(`Could not save server details: ${e.message}`))
     saveDetails()
     setInterval(saveDetails, 60 * 60 * 1000)
+    // ...and describes their emojis, in the background.
+    require('../modules/emojiDescriber').startDescriber()
     // Every worker checks the servers it hosts for new YouTube videos.
     youtubeSync.startAutoSync()
     // ...and follows their streams, for those that turned stream events on.

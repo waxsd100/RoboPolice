@@ -153,4 +153,4 @@ async function videoScores (guildID, query, model) {
   return Object.fromEntries(rows.rows.map(r => [r.video_id, Number(r.score)]))
 }
 
-module.exports = { pendingMessages, saveMessageEmbeddings, resetStaleMessageEmbeddings, invalidateMessage, nearestMessages, getMessages, videosForEmbedding, saveVideoEmbedding, hasVideoEmbeddings, videoScores }
+module.exports = { pendingMessages, saveMessageEmbeddings, resetStaleMessageEmbeddings, invalidateMessage, nearestMessages, getMessages, videosForEmbedding, saveVideoEmbedding, hasVideoEmbeddings, videoScores, modelId }
