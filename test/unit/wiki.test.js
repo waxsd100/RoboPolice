@@ -135,4 +135,18 @@ describe('extractFacts', () => {
     assert.deepEqual(saved, [[1, 'h1', 0]])
     assert.match(logged[0], /Could not take knowledge out of t \/ a/)
   })
+
+  test('a part Gemini blocks is marked done with no knowledge, not tried again', async (t) => {
+    const saved = []
+    t.mock.method(store, 'sectionsToExtract', async () => [{ url: 'u', position: 0, title: 't', heading: 'a', text: 'x', text_hash: 'h0' }])
+    t.mock.method(store, 'saveFacts', async (url, position, hash, facts) => saved.push([position, hash, facts.length]))
+    const info = t.mock.method(global.logger, 'info', () => {})
+    configureGateway()
+    global.fetch = async () => ({ ok: true, json: async () => ({ promptFeedback: { blockReason: 'PROHIBITED_CONTENT' } }) })
+    const logged = []
+    assert.equal(await wiki.extractPending({ log: m => logged.push(m) }), 0)
+    assert.deepEqual(saved, [[0, 'h0', 0]])
+    assert.deepEqual(logged, [])
+    assert.match(info.mock.calls[0].arguments[0], /Skipped t \/ a: Gemini blocked it \(PROHIBITED_CONTENT\)/)
+  })
 })
