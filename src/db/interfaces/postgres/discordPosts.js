@@ -25,11 +25,12 @@ async function deletePost (id) {
   return rows.rows[0] || null
 }
 
-// The account's messages in the server made in `month` (YYYY-MM, in Japan time), oldest first.
+// The account's messages in the server made in `month` (YYYY-MM, in Japan time), oldest first. A
+// range on created_at, so the index on the account and created_at is used.
 async function postsOfMonth (guildID, authorID, month) {
   const rows = await pool.query(
     `SELECT id, channel_id, channel_name, author_name, content, created_at FROM discord_posts
-     WHERE guild_id = $1 AND author_id = $2 AND to_char(created_at AT TIME ZONE 'Asia/Tokyo', 'YYYY-MM') = $3
+     WHERE guild_id = $1 AND author_id = $2 AND created_at >= (($3 || '-01')::timestamp AT TIME ZONE 'Asia/Tokyo') AND created_at < ((($3 || '-01')::timestamp + interval '1 month') AT TIME ZONE 'Asia/Tokyo')
      ORDER BY created_at`,
     [guildID, authorID, month])
   return rows.rows
