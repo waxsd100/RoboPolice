@@ -149,6 +149,16 @@ and what they mean), each embedded on its own; a part is read again only when it
 searches all of it with `search_wiki` (the knowledge first, then the pages for detail), and uses its quotes now and then as the streamer would. It is fans' writing, so
 the model does not state it as the streamer's own word.
 
+With `TWITTER_ACCOUNTS` set, the streamer's own X posts are knowledge too
+(`src/bot/modules/twitterKnowledge.js`). They are read through FxTwitter's public API
+(api.fxtwitter.com), not X's: the first time up to `TWITTER_MAX_PAGES` pages back, then every
+`TWITTER_REFRESH_HOURS` until posts already stored, one request every 2 seconds, a failed request
+tried again twice. Reposts of others are left out. Posts are stored in `social_posts`, and each
+month's posts are written as one page of the knowledge tables (one line per post with its date and
+URL), so knowledge is taken out of them and they are searched with `search_wiki` like the wiki; the
+model gives a post's URL when it mentions one. FxTwitter is a third-party service and may change or
+stop; nothing stored is lost then.
+
 Each emoji is described once from its image and name by Gemini (what it shows, when to use it) and
 stored with an embedding of that description in `guild_emojis` (`src/bot/modules/emojiDescriber.js`).
 When the wiki describes characters (pages whose title has キャラクター), Gemini is given them, so an
@@ -247,17 +257,17 @@ while it is live). For a game stream, Gemini also names the games played, and ea
 line with its page (`src/bot/modules/gameLinks.js`): its Steam store page when Steam's own search
 has a game of exactly that name (Japanese, then English), else an official page (the game's site, or
 its PlayStation, Nintendo, Xbox or app store page) Gemini finds with Google Search, kept only once
-the page has been read. `GAME_LINKS=false` leaves the game pages out.
+the page has been read. `GAME_LINKS=false` leaves the game pages out. Once a stream is over, its archive is summarized like any video, so the mention
+assistant knows what was said; this is tried 30 minutes after it ends, then hourly, three times at
+most, on the worker hosting the server, one at a time. Each summary is one Gemini call on the whole
+archive. `LIVE_EVENT_AI_DESCRIPTION=false` and `LIVE_ARCHIVE_SUMMARY=false` turn these off.
 
 Discord game mentions (`<@$APPLICATION_ID>`, what typing "@game Palworld" makes in the app) show a
 game's Discord profile. `src/bot/modules/gameMentions.js` finds a game's ID by name in Discord's
 public list of the games it knows (`GET /applications/detectable`, read once a day), other names
 included. In chat the model looks a game up with `find_game` and writes its mention as it is,
 with its page. In a stream's event they are left out unless `EVENT_GAME_MENTIONS=true`, since an
-event's description may show the code rather than the game. Once a stream is over, its archive is summarized like any video, so the mention
-assistant knows what was said; this is tried 30 minutes after it ends, then hourly, three times at
-most, on the worker hosting the server, one at a time. Each summary is one Gemini call on the whole
-archive. `LIVE_EVENT_AI_DESCRIPTION=false` and `LIVE_ARCHIVE_SUMMARY=false` turn these off.
+event's description may show the code rather than the game.
 
 Each worker checks the servers it hosts every `YOUTUBE_LIVE_POLL_SECONDS` (default 60, 0 is off).
 A check reads the channel's public feed (no API quota) and asks the API only about new entries and
@@ -479,6 +489,8 @@ the secrets if it leaks, so keep it only on the platform and delete it in the co
 | `VIDEO_SUMMARY_TIMEOUT_MINUTES` | Optional. How long a video summary may take. Defaults to 10 |
 | `WIKI_URLS` | Optional. Top pages of the community's wikis (comma-separated), e.g. `https://novamanhikoushiki.memo.wiki/`. Read in full weekly, split at headings and embedded; the model searches them with `search_wiki` (characters, quotes, running jokes), and emoji descriptions name the characters they describe |
 | `WIKI_REFRESH_HOURS`, `WIKI_DELAY_MS` | Optional. How often a wiki is read again (default 168) and the wait between its pages (default 1000) |
+| `TWITTER_ACCOUNTS` | Optional. The streamer's X accounts (comma-separated, without @), e.g. `nobamangames`. Their posts are read through FxTwitter and become knowledge like the wiki (searched with `search_wiki`) |
+| `TWITTER_REFRESH_HOURS`, `TWITTER_MAX_PAGES` | Optional. How often new posts are read (default 6) and how many pages back the first read goes (default 100, about 10 posts a page) |
 | `OWNER_GUILD_IDS` | Optional. The owner's servers (comma-separated), default `615170683068219393`. They get the looser mention limit and go first in all background AI work; every other server waits for them |
 | `MENTION_DAILY_LIMIT_OTHER`, `MENTION_GUILD_DAILY_LIMIT_OTHER` | Optional. Mentions a day outside the owner's servers: per user (default 5) and for the whole server (default 30). `MENTION_DAILY_LIMIT` (default 30) is per user in the owner's servers. 0 turns a limit off |
 | `AI_BACKGROUND_CONCURRENCY` | Optional. How many background AI jobs (video and archive summaries, emoji descriptions, stream blurbs) run at once on a worker (default 3) |

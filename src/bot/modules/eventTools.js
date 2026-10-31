@@ -46,7 +46,7 @@ const FIND_GAME = {
 
 const SEARCH_WIKI = {
   name: 'search_wiki',
-  description: 'コミュニティの wiki（配信者のキャラクター・名言・台詞・ネタ・用語・基本情報など）から、query と意味が近い記述を探す。キャラクターや名言・ネタについての話題、配信者らしい言い回しを知りたいときに使う。',
+  description: 'コミュニティの wiki（配信者のキャラクター・名言・台詞・ネタ・用語・基本情報など）と配信者本人の X（Twitter）のポストから、query と意味が近い記述を探す。キャラクターや名言・ネタ、配信者の最近の発言や告知について知りたいとき、配信者らしい言い回しを知りたいときに使う。',
   parameters: { type: 'OBJECT', properties: { query: { type: 'STRING', description: '探したい内容（キャラクター名、名言の一部、話題など）' } }, required: ['query'] }
 }
 
@@ -335,7 +335,7 @@ function createTools ({ guild, member, ask, progress = () => {} }) {
     }
   }
 
-  const declarations = [...DECLARATIONS, FIND_GAME, ...(messageEmbeddingsEnabled() ? [SEARCH_SERVER_MESSAGES] : []), ...(wikiKnowledge.enabled() ? [SEARCH_WIKI] : [])]
+  const declarations = [...DECLARATIONS, FIND_GAME, ...(messageEmbeddingsEnabled() ? [SEARCH_SERVER_MESSAGES] : []), ...(wikiKnowledge.searchable() ? [SEARCH_WIKI] : [])]
   return { declarations, call, sources, readMessage, readThread }
 }
 

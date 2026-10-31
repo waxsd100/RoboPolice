@@ -201,6 +201,18 @@ describe('stores', { skip: !database.available && 'needs PGHOST' }, () => {
     assert.deepEqual((await q('SELECT name FROM wiki_facts')).map(r => r.name), ['よつろん'], 'knowledge goes with its page')
   })
 
+  test('X posts: stored once each, read back by month in Japan time', async () => {
+    const social = require('../../src/db/interfaces/postgres/social')
+    const post = (id, at) => ({ id, account: 'nobamangames', url: `https://x.com/nobamangames/status/${id}`, text: `ポスト${id}`, createdAt: new Date(at) })
+    const added = await social.savePosts([post('1', '2026-09-30T16:00:00Z'), post('2', '2026-10-15T00:00:00Z')])
+    assert.equal(added.length, 2)
+    assert.deepEqual((await social.savePosts([post('2', '2026-10-15T00:00:00Z'), post('3', '2026-10-31T14:59:00Z')])).map(p => p.id), ['3'])
+    assert.deepEqual([...await social.knownIds('nobamangames')].sort(), ['1', '2', '3'])
+    // 2026-09-30T16:00Z is already October 1st in Japan.
+    assert.deepEqual((await social.postsOfMonth('nobamangames', '2026-10')).map(p => p.id), ['1', '2', '3'])
+    assert.deepEqual(await social.postsOfMonth('nobamangames', '2026-09'), [])
+  })
+
   describe('YouTube', () => {
     const store = () => require('../../src/db/interfaces/postgres/youtube')
     const video = (id, extra = {}) => ({ id, title: `動画 ${id}`, description: '', publishedAt: `2026-10-0${id.slice(1)}T00:00:00Z`, liveStatus: 'none', scheduledStart: null, duration: 'PT1H', ...extra })
