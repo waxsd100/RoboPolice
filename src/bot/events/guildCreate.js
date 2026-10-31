@@ -7,5 +7,6 @@ module.exports = {
   handle: async guild => {
       await createGuild(guild) // Create guild document in database
       await cacheGuild(guild.id) // Create a guildsettings object and cache it
+      require('../modules/emojiDescriber').schedule(guild) // describe its emojis in the background
   }
 }

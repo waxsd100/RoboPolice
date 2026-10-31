@@ -4,6 +4,9 @@ const youtubeDB = require('../../db/interfaces/postgres/youtube')
 const messageDB = require('../../db/interfaces/postgres/read')
 const videoSummary = require('./videoSummary')
 const { linkTimestamps } = require('../utils/youtube')
+const emojiDescriber = require('./emojiDescriber')
+const emojiStore = require('../../db/interfaces/postgres/emojis')
+const { embedQuery, model: embeddingModel } = require('../utils/embeddings')
 const { fromStoredContent } = require('../../db/interfaces/postgres/create')
 const semanticSearch = require('./semanticSearch')
 const { messageEmbeddingsEnabled } = require('./embeddingIndexer')
@@ -358,10 +361,7 @@ function channelLine (c, requestChannelID) {
   return `- ${c.id}: #${c.name}（${CHANNEL_TYPES[c.type] || c.type}）${c.id === requestChannelID ? ' ← 依頼されたチャンネル' : ''}${topic}`
 }
 
-// Custom emojis the bot can post: available ones not limited to certain roles.
-function usableEmojis (guild) {
-  return (guild.emojis || []).filter(e => e.id && e.name && e.available !== false && !(e.roles || []).length)
-}
+const { usableEmojis } = emojiDescriber
 
 function emojiCode (e) {
   return `<${e.animated ? 'a' : ''}:${e.name}:${e.id}>`
@@ -378,9 +378,34 @@ function withServerEmojis (text, guild) {
   })
 }
 
+// The server's emojis for the model. With descriptions (emojiDescriber.js), one per line with what
+// it shows and when to use it, those closest in meaning to `query` first; otherwise just the codes.
+async function emojiSection (guild, query) {
+  const emojis = usableEmojis(guild)
+  if (!emojis.length) return []
+  const head = '### サーバー絵文字（返事で使うときは、この書き方のまま書く）'
+  const notes = emojiDescriber.enabled() ? await emojiStore.descriptions(guild.id).catch(() => ({})) : {}
+  if (!Object.keys(notes).length) return [head, emojis.slice(0, MAX_PROFILE_EMOJIS).map(emojiCode).join(' ')]
+  let first = []
+  if (query) {
+    first = await embedQuery(query)
+      .then(q => emojiStore.nearestEmojis(guild.id, q, embeddingModel(), MAX_PROFILE_EMOJIS))
+      .catch(e => {
+        global.logger.warn(`Could not rank the emojis of ${guild.id}: ${e.message}`)
+        return []
+      })
+  }
+  const rank = new Map(first.map((id, i) => [id, i]))
+  const ordered = [...emojis].sort((a, b) => (rank.get(a.id) ?? Infinity) - (rank.get(b.id) ?? Infinity))
+  return [
+    `${head}。話に合いそうな順:`,
+    ...ordered.slice(0, MAX_PROFILE_EMOJIS).map(e => notes[e.id] ? `- ${emojiCode(e)} ${notes[e.id]}` : `- ${emojiCode(e)}`)
+  ]
+}
+
 // The server as the requester can see it. Sent with every request, fresh each time, so questions
-// about "this server" need no lookups.
-async function describeServer (guild, member, requestChannelID) {
+// about "this server" need no lookups. query: what was asked, to put the emojis that suit it first.
+async function describeServer (guild, member, requestChannelID, { query = '' } = {}) {
   const lines = [`サーバー名: ${guild.name}`]
   if (guild.description) lines.push(`説明: ${guild.description}`)
   if (guild.memberCount) lines.push(`メンバー数: ${guild.memberCount}`)
@@ -407,8 +432,8 @@ async function describeServer (guild, member, requestChannelID) {
     .map(r => r.name)
   if (roles.length) lines.push('', '### ロール', roles.slice(0, MAX_PROFILE_ROLES).join(', '))
 
-  const emojis = usableEmojis(guild)
-  if (emojis.length) lines.push('', '### サーバー絵文字（返事で使うときは、この書き方のまま書く）', emojis.slice(0, MAX_PROFILE_EMOJIS).map(emojiCode).join(' '))
+  const emojiLines = await emojiSection(guild, query)
+  if (emojiLines.length) lines.push('', ...emojiLines)
 
   lines.push('', '### 登録済みのイベント', await scheduledEvents(guild).catch(e => `（取得できませんでした: ${e.message}）`))
 

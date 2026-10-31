@@ -137,6 +137,28 @@ describe('stores', { skip: !database.available && 'needs PGHOST' }, () => {
     assert.ok((await q("SELECT count(*)::int AS n FROM messages WHERE guild_id = 'g1'"))[0].n > 0)
   })
 
+  test('server emojis: kept in step, described once per name, embedded and searched by meaning', async () => {
+    const emojis = require('../../src/db/interfaces/postgres/emojis')
+    const axis = i => { const v = new Int8Array(512); v[i] = 127; return v }
+    await emojis.syncEmojis('g1', [{ id: 'e1', name: 'kusa' }, { id: 'e2', name: 'naki', animated: true }])
+    assert.deepEqual((await emojis.emojisToDescribe('g1', 10)).map(e => e.emoji_id), ['e1', 'e2'])
+    await emojis.saveDescription('e1', 'kusa', '笑ったとき')
+    await emojis.saveDescription('e2', 'naki', '悲しいとき')
+    assert.deepEqual(await emojis.emojisToDescribe('g1', 10), [])
+    assert.deepEqual((await emojis.emojisToEmbed('g1', 'A', 10)).map(e => e.emoji_id), ['e1', 'e2'])
+    await emojis.saveEmbedding('e1', axis(0), 'A')
+    await emojis.saveEmbedding('e2', axis(1), 'A')
+    assert.deepEqual(await emojis.emojisToEmbed('g1', 'A', 10), [])
+    assert.deepEqual((await emojis.emojisToEmbed('g1', 'B', 10)).length, 2, 'another model embeds them again')
+    assert.deepEqual(await emojis.nearestEmojis('g1', axis(1), 'A', 5), ['e2', 'e1'])
+    assert.deepEqual(await emojis.descriptions('g1'), { e1: '笑ったとき', e2: '悲しいとき' })
+
+    // Renamed: described again. Gone from Discord: deleted.
+    await emojis.syncEmojis('g1', [{ id: 'e1', name: 'www' }])
+    assert.deepEqual((await emojis.emojisToDescribe('g1', 10)).map(e => e.name), ['www'])
+    assert.deepEqual(await emojis.descriptions('g1'), { e1: '笑ったとき' })
+  })
+
   describe('YouTube', () => {
     const store = () => require('../../src/db/interfaces/postgres/youtube')
     const video = (id, extra = {}) => ({ id, title: `動画 ${id}`, description: '', publishedAt: `2026-10-0${id.slice(1)}T00:00:00Z`, liveStatus: 'none', scheduledStart: null, duration: 'PT1H', ...extra })

@@ -9,6 +9,7 @@ module.exports = {
   name: 'guildEmojisUpdate',
   type: 'on',
   handle: async (guild, emojis, oldEmojis) => {
+    require('../modules/emojiDescriber').schedule(guild)
     let type
     const guildEmojisUpdateEvent = {
       guildID: guild.id,

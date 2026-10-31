@@ -44,7 +44,7 @@ Short version; the Privacy Policy is authoritative.
 | Data | Where | Retention |
 |---|---|---|
 | Message ID, author ID, channel ID, server ID, timestamp, content and image URLs (not encrypted by the app; see below) | PostgreSQL `messages`, `message_attachments` | `MESSAGE_HISTORY_DAYS` days, or forever if unset; all of a server's go when the app leaves it |
-| Per-server settings (log channels, ignored channels, disabled events), and the server's name, icon URL, member count and when the app joined | PostgreSQL `guilds`, `guild_event_logs`, `guild_ignored_channels`, `guild_disabled_events` | Until the app leaves the server |
+| Per-server settings (log channels, ignored channels, disabled events), and the server's name, icon URL, member count and when the app joined | PostgreSQL `guilds`, `guild_emojis` (custom emojis with an AI description), `guild_event_logs`, `guild_ignored_channels`, `guild_disabled_events` | Until the app leaves the server |
 | Invite counters, webhook handles, guild settings | Redis | 3 hours |
 | The YouTube channel set with `/youtube`, its description and every video read from it, plus summaries of linked videos' contents (public YouTube data) | PostgreSQL `guild_youtube`, `youtube_channels`, `youtube_videos`, `youtube_summaries`, `guild_youtube_summaries` | Channels and videos until no server has the channel set; summaries until no server that asked for them remains |
 
@@ -138,6 +138,12 @@ continuation of it. Nothing is stored for this.
 The server profile lists the server's custom emojis (those not limited to roles), and chat replies
 use one now and then where it fits. An emoji the model writes as `:name:` is turned into the
 server emoji of that name.
+
+Each emoji is described once from its image and name by Gemini (what it shows, when to use it) and
+stored with an embedding of that description in `guild_emojis` (`src/bot/modules/emojiDescriber.js`).
+Each worker does this in the background for the servers it hosts, at startup and when a server's
+emojis change; a renamed emoji is described again. The profile then lists each emoji with its
+description, those closest in meaning to the request first. `EMOJI_DESCRIPTIONS=false` turns it off.
 
 Each user can have 30 mentions answered per day (Japan time), across servers, counted in Redis
 (`src/bot/utils/mentionQuota.js`, `MENTION_DAILY_LIMIT`). If Redis is unreachable the mention goes
@@ -439,6 +445,7 @@ the secrets if it leaks, so keep it only on the platform and delete it in the co
 | `GEMINI_MODEL` | Optional. Defaults to `gemini-flash-latest` |
 | `YOUTUBE_API_KEY` | Optional. YouTube Data API v3 key for `/youtube`. Unset disables the command |
 | `VIDEO_SUMMARY_TIMEOUT_MINUTES` | Optional. How long a video summary may take. Defaults to 10 |
+| `EMOJI_DESCRIPTIONS` | Optional. `false` stops describing the server's custom emojis (Gemini looks at each one's image and name; the descriptions are embedded so the emojis that suit a request are offered first) |
 | `LIVE_EVENT_AI_DESCRIPTION` | Optional. `false` stops the AI's line on what a stream is about (from its title, description and thumbnail) at the top of its Discord event |
 | `LIVE_ARCHIVE_SUMMARY` | Optional. `false` stops summarizing a stream's archive once it is over (tried 30 minutes after it ends, then hourly, three times at most) |
 | `VIDEO_SUMMARY_CONCURRENCY` | Optional. How many videos `/youtube summarize` summarizes at once (1-10). Defaults to 3 |
