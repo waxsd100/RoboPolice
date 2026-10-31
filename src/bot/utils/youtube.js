@@ -56,6 +56,15 @@ function parseVideoId (input) {
   return match ? match[1] : null
 }
 
+// Times in a summary ([12:34] or [1:02:03]) as links that open the video there, so they can be
+// quoted as they are.
+function linkTimestamps (text, videoID) {
+  return String(text || '').replace(/\[(?:(\d{1,2}):)?(\d{1,2}):(\d{2})\](?!\()/g, (whole, h, m, s) => {
+    const seconds = Number(h || 0) * 3600 + Number(m) * 60 + Number(s)
+    return `[${whole.slice(1, -1)}](https://www.youtube.com/watch?v=${videoID}&t=${seconds}s)`
+  })
+}
+
 function toVideo (v) {
   return {
     id: v.id,
@@ -158,4 +167,4 @@ async function fetchVideos (ids, apiKey) {
   return videos
 }
 
-module.exports = { parseChannelRef, parseVideoId, resolveChannel, fetchChannelKnowledge, fetchVideos, toVideo, YouTubeError, MAX_PAGES }
+module.exports = { parseChannelRef, parseVideoId, resolveChannel, fetchChannelKnowledge, fetchVideos, toVideo, YouTubeError, MAX_PAGES, linkTimestamps }

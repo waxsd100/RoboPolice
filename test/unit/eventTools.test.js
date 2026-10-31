@@ -420,6 +420,13 @@ describe('YouTube summaries in the tools', () => {
     assert.match(text, /「オフ会」に一致した動画: 1 件\n- 雑談.*\n {2}内容の要約: 後半で 11\/3 のオフ会を告知している/)
   })
 
+  test('search_youtube gives each video its URL, and a summary\'s times as links into the video', async () => {
+    installYouTubeStore({ 100: { channel: synced, videos } }, { 100: { abcdefghijk: '- [3:05] オフ会の告知' } })
+    const text = (await tools().call('search_youtube', { query: 'オフ会' })).result
+    assert.match(text, /- 雑談（公開 2026-10-27）https:\/\/www\.youtube\.com\/watch\?v=abcdefghijk/)
+    assert.match(text, /内容の要約: - \[3:05\]\(https:\/\/www\.youtube\.com\/watch\?v=abcdefghijk&t=185s\) オフ会の告知/)
+  })
+
   test('search_youtube lists summaries of linked videos from other channels', async () => {
     installYouTubeStore({ 100: { channel: synced, videos } }, { 100: { otherVideo1: '別チャンネルの勉強会の録画' } })
     const text = (await tools().call('search_youtube', { query: '勉強会' })).result

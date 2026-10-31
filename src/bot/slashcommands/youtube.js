@@ -1,7 +1,7 @@
 const Eris = require('eris')
 const { v4: uuidv4 } = require('uuid')
 const { EMBED_COLORS } = require('../utils/constants')
-const { parseChannelRef, parseVideoId, resolveChannel } = require('../utils/youtube')
+const { parseChannelRef, parseVideoId, resolveChannel, linkTimestamps } = require('../utils/youtube')
 const { sync, videosToSummarize, summarizeLatest } = require('../modules/youtubeSync')
 const { summarizeVideo } = require('../modules/videoSummary')
 const youtubeDB = require('../../db/interfaces/postgres/youtube')
@@ -113,7 +113,7 @@ async function summarizeOne (interaction, url, force) {
     const head = cached
       ? '保存済みの要約です（`force:True` で要約し直せます）。'
       : `${force ? '要約し直しました' : '要約しました'}。メンションで依頼したときに AI が参照します。`
-    const text = summary.length > MAX_SHOWN_SUMMARY ? `${summary.slice(0, MAX_SHOWN_SUMMARY)}…` : summary
+    const text = linkTimestamps(summary.length > MAX_SHOWN_SUMMARY ? `${summary.slice(0, MAX_SHOWN_SUMMARY)}…` : summary, videoID)
     await finish(interaction, `${head}\nhttps://www.youtube.com/watch?v=${videoID}\n${text}`.slice(0, 2000))
     return null
   } finally {
