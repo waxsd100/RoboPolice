@@ -26,6 +26,7 @@ module.exports = {
   name: 'guildUpdate',
   type: 'on',
   handle: async (newGuild, oldGuild) => {
+    require('../../db/interfaces/postgres/update').saveGuildDetails(newGuild).catch(e => global.logger.warn(`Could not save the details of ${newGuild.id}: ${e.message}`))
     const fields = []
     newGuild.getAuditLogs({ actionType: 1, limit: 1 }).then((log) => {
       if (!log || !log.entries || log.entries.length === 0 || new Date().getTime() - new Date((log.entries[0].id / 4194304) + 1420070400000).getTime() > 3000) return // this could be null coalesced but why not make it backwards compatible

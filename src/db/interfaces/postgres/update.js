@@ -64,6 +64,14 @@ async function toggleLogBots (guildID) {
   return rows.rows[0].log_bots
 }
 
+// The server's name, icon, owner, member count and when the bot joined, as Discord has them now.
+async function saveGuildDetails (guild) {
+  await pool.query(
+    `UPDATE guilds SET name = $2, icon_url = $3, owner_id = COALESCE($4, owner_id), member_count = $5,
+       joined_at = COALESCE($6, joined_at), details_updated_at = now() WHERE id = $1`,
+    [guild.id, guild.name || null, guild.iconURL || null, guild.ownerID || null, guild.memberCount ?? null, guild.joinedAt ? new Date(guild.joinedAt) : null])
+}
+
 async function updateMessageByID (id, changedAttrs) {
   const result = await updateMessageRow(id, changedAttrs)
   // Edited text is embedded again (only when message embeddings are on, see embeddings.js).
@@ -111,3 +119,4 @@ exports.setAllEventsOneId = setAllEventsOneId
 exports.setEventsLogId = setEventsLogId
 exports.clearIgnoredChannels = clearIgnoredChannels
 exports.updateMessageByID = updateMessageByID
+exports.saveGuildDetails = saveGuildDetails

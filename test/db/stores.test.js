@@ -35,6 +35,19 @@ describe('stores', { skip: !database.available && 'needs PGHOST' }, () => {
       assert.equal(global.bot.guildSettingsCache.g1.getEventByName('messageDelete'), '')
     })
 
+    test('the server\'s name, icon, member count and join time are kept with it', async () => {
+      await create().createGuild(global.bot.guilds.get('g1'))
+      const [row] = await q("SELECT name, member_count, details_updated_at IS NOT NULL AS updated FROM guilds WHERE id = 'g1'")
+      assert.deepEqual(row, { name: 'テストサーバー', member_count: 42, updated: true })
+      await update().saveGuildDetails({ id: 'g1', name: '新しい名前', iconURL: 'https://cdn/icon.png', ownerID: 'o9', memberCount: 50, joinedAt: Date.parse('2026-01-01T00:00:00Z') })
+      const [after] = await q("SELECT name, icon_url, owner_id, member_count, joined_at FROM guilds WHERE id = 'g1'")
+      assert.deepEqual(after, { name: '新しい名前', icon_url: 'https://cdn/icon.png', owner_id: 'o9', member_count: 50, joined_at: new Date('2026-01-01T00:00:00Z') })
+      // Something Discord left out does not erase what is known.
+      await update().saveGuildDetails({ id: 'g1', name: '新しい名前', memberCount: 51 })
+      const [kept] = await q("SELECT owner_id, member_count, joined_at FROM guilds WHERE id = 'g1'")
+      assert.deepEqual(kept, { owner_id: 'o9', member_count: 51, joined_at: new Date('2026-01-01T00:00:00Z') })
+    })
+
     test('event log channels are set, moved, cleared by channel and cleared all', async () => {
       await update().setEventsLogId('g1', 'c1', ['messageDelete', 'messageUpdate'])
       await update().setEventsLogId('g1', 'c2', ['messageUpdate', 'channelCreate'])
