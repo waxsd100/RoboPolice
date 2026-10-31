@@ -5,6 +5,7 @@ const getMessageFromBatch = require('../../db/messageBatcher').getMessage
 const toStoredContent = require('../../db/interfaces/postgres/create').toStoredContent
 const escape = require('markdown-escape')
 const { isBeyondRetention } = require('../utils/retention')
+const discordKnowledge = require('../modules/discordKnowledge')
 
 // markdown-escape is a single exported function, I probably don't need it as a node module lol
 
@@ -14,6 +15,7 @@ module.exports = {
   handle: async (newMessage, oldMessage) => {
     if (!newMessage.channel.guild || !newMessage.author) return
     if (newMessage.author.id === global.bot.user.id) return
+    discordKnowledge.onMessage(newMessage).catch(e => global.logger.warn(`[DISCORD]: ${e.message}`))
     if (!isFreshEdit(newMessage)) return
     const member = newMessage.channel.guild.members.get(newMessage.author.id) // this member "should" be in cache at all times
     oldMessage = await getMessageFromBatch(newMessage.id)

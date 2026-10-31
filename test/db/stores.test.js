@@ -227,6 +227,26 @@ describe('stores', { skip: !database.available && 'needs PGHOST' }, () => {
     assert.deepEqual(await xPosts.postsOfMonth('nobamangames', '2026-09'), [])
   })
 
+  test('Discord messages: stored once (an edit replaces the text), by month in Japan time, deleted; history progress kept', async () => {
+    const posts = require('../../src/db/interfaces/postgres/discordPosts')
+    const tables = require('../../src/db/interfaces/postgres/discordKnowledge')
+    const post = (id, content, at) => ({ id, guildID: 'g1', channelID: 'c1', channelName: '雑談', authorID: 'u1', authorName: 'のばまん', content, createdAt: new Date(at) })
+    assert.equal((await posts.savePosts([post('d1', '告知', '2026-09-30T16:00:00Z'), post('d2', 'やあ', '2026-10-15T00:00:00Z')])).length, 2)
+    assert.deepEqual((await posts.savePosts([post('d2', 'やあ', '2026-10-15T00:00:00Z')])), [], 'unchanged: not new')
+    assert.equal((await posts.savePosts([post('d2', 'やあ（編集）', '2026-10-15T00:00:00Z')])).length, 1, 'edited')
+    assert.deepEqual((await posts.postsOfMonth('g1', 'u1', '2026-10')).map(p => [p.id, p.content]), [['d1', '告知'], ['d2', 'やあ（編集）']])
+    assert.equal((await posts.deletePost('d1')).author_id, 'u1')
+    assert.equal(await posts.deletePost('d1'), null)
+    assert.equal(await posts.backfillState('c1'), null)
+    await posts.saveBackfill('g1', 'c1', '700', false)
+    await posts.saveBackfill('g1', 'c1', '500', true)
+    assert.deepEqual(await posts.backfillState('c1'), { before_id: '500', done: true })
+    // Their knowledge tables are their own.
+    await tables.savePage('https://discord.com/channels/g1#u1-2026-10', 'のばまん の Discord の発言（2026年10月）', [{ heading: '2026年10月 1', text: 'やあ', images: [] }])
+    assert.deepEqual((await q('SELECT url FROM discord_sections')).map(r => r.url), ['https://discord.com/channels/g1#u1-2026-10'])
+    assert.equal(await tables.deletePagesExcept('https://discord.com/channels/g1#u1-2026-10', []), 1)
+  })
+
   describe('YouTube', () => {
     const store = () => require('../../src/db/interfaces/postgres/youtube')
     const video = (id, extra = {}) => ({ id, title: `動画 ${id}`, description: '', publishedAt: `2026-10-0${id.slice(1)}T00:00:00Z`, liveStatus: 'none', scheduledStart: null, duration: 'PT1H', ...extra })

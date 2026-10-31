@@ -1,11 +1,13 @@
 const send = require('../modules/webhooksender')
 const { EMBED_COLORS } = require('../utils/constants')
+const discordKnowledge = require('../modules/discordKnowledge')
 
 module.exports = {
   name: 'messageDeleteBulk',
   type: 'on',
   handle: async messages => {
     if (messages.length === 0) return
+    for (const m of messages) discordKnowledge.onDelete(m.id).catch(e => global.logger.warn(`[DISCORD]: ${e.message}`))
 
     // Eris populates this differently depending on whether the deleted messages were cached
     // (channel.guild.id) or arrived as raw gateway stubs (guildID/guildId).

@@ -161,6 +161,18 @@ with the wiki; the
 model gives a post's URL when it mentions one. FxTwitter is a third-party service and may change or
 stop; nothing stored is lost then.
 
+With `DISCORD_KNOWLEDGE_USERS` set (comma-separated user IDs, e.g. the streamer's own account), their
+own Discord messages are knowledge too (`src/bot/modules/discordKnowledge.js`): only in the owner's
+servers (`OWNER_GUILD_IDS`), only in text and announcement channels `@everyone` can read (with their
+history), and nobody else's. The worker hosting the owner's server reads each such channel's history
+back to its start once, 100 messages a request, one request every `DISCORD_HISTORY_DELAY_MS`
+(default 1000); where it got to is kept in `discord_backfill`, so a restart goes on from there. New,
+edited and deleted messages are followed after that (a deleted one leaves the knowledge). Messages
+are stored in `discord_posts`, and each account's messages of a month become one page of
+`discord_pages` / `discord_sections` / `discord_facts` (one line per message with its date, channel
+and link), so knowledge is taken out of them and they are searched with `search_wiki` together with
+the wiki and the X posts; the model gives a message's link when it mentions one. Threads are not read.
+
 Each emoji is described once from its image and name by Gemini (what it shows, when to use it) and
 stored with an embedding of that description in `guild_emojis` (`src/bot/modules/emojiDescriber.js`).
 When the wiki describes characters (pages whose title has キャラクター), Gemini is given them, so an
@@ -493,6 +505,8 @@ the secrets if it leaks, so keep it only on the platform and delete it in the co
 | `WIKI_REFRESH_HOURS`, `WIKI_DELAY_MS` | Optional. How often a wiki is read again (default 168) and the wait between its pages (default 1000) |
 | `TWITTER_ACCOUNTS` | Optional. The streamer's X accounts (comma-separated, without @), e.g. `nobamangames`. Their posts are read through FxTwitter and become knowledge like the wiki (searched with `search_wiki`) |
 | `TWITTER_REFRESH_HOURS`, `TWITTER_MAX_PAGES` | Optional. How often new posts are read (default 6) and how many pages back the first read goes (default 100, about 10 posts a page) |
+| `DISCORD_KNOWLEDGE_USERS` | Optional. User IDs (comma-separated) whose own messages in the owner's servers' `@everyone` channels become knowledge, e.g. the streamer's account. Their past messages are read once, then new ones are followed |
+| `DISCORD_HISTORY_DELAY_MS` | Optional. Wait between history requests when reading past messages (default 1000) |
 | `OWNER_GUILD_IDS` | Optional. The owner's servers (comma-separated), default `615170683068219393`. They get the looser mention limit and go first in all background AI work; every other server waits for them |
 | `MENTION_DAILY_LIMIT_OTHER`, `MENTION_GUILD_DAILY_LIMIT_OTHER` | Optional. Mentions a day outside the owner's servers: per user (default 5) and for the whole server (default 30). `MENTION_DAILY_LIMIT` (default 30) is per user in the owner's servers. 0 turns a limit off |
 | `AI_BACKGROUND_CONCURRENCY` | Optional. How many background AI jobs (video and archive summaries, emoji descriptions, stream blurbs) run at once on a worker (default 3) |

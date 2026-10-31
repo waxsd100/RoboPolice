@@ -31,6 +31,8 @@ module.exports = {
     setInterval(saveDetails, 60 * 60 * 1000)
     // ...and describes their emojis, in the background.
     require('../modules/emojiDescriber').startDescriber()
+    // The worker hosting the owner's servers reads the streamer's past messages there.
+    require('../modules/discordKnowledge').startDiscordKnowledge()
     // Every worker checks the servers it hosts for new YouTube videos.
     youtubeSync.startAutoSync()
     // ...and follows their streams, for those that turned stream events on.
