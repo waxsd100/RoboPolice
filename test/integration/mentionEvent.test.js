@@ -885,14 +885,31 @@ describe('mention → event / forum post (integration)', () => {
     assert.equal(discord.find(c => c.method === 'POST').body.name, '交流会')
   })
 
-  test('each user gets 30 mentions a day', async () => {
+  test('outside the owner\'s server, each user gets 5 mentions a day, the server 30', async () => {
+    const { channel, replies } = createChannel()
+    const day = require('../../src/bot/utils/mentionQuota').today(new Date())
+    quota.set(`mention-quota:100:${REQUESTER}:${day}`, 5)
+    installGemini([])
+    await mentionEvent.handle(mention(channel, '<@BOT> こんにちは'))
+    assert.equal(replies[0].state.content, '今日の利用回数の上限（1日5回）に達しました。明日（日本時間の0時以降）またお試しください。')
+    quota.set(`mention-quota-guild:100:${day}`, 30)
+    await mentionEvent.handle(mention(channel, '<@BOT> こんにちは', { author: OTHER_USER, member: createMember({ id: OTHER_USER }) }))
+    assert.equal(replies[1].state.content, 'このサーバーの今日の利用回数の上限（1日30回）に達しました。明日（日本時間の0時以降）またお試しください。')
+    quota.delete(`mention-quota-guild:100:${day}`)
+  })
+
+  test('in the owner\'s server, each user gets 30 mentions a day', async () => {
+    process.env.OWNER_GUILD_IDS = '100'
     const { channel, replies } = createChannel()
     for (let i = 0; i < 30; i++) quota.set(`mention-quota:${REQUESTER}:${require('../../src/bot/utils/mentionQuota').today(new Date())}`, i + 1)
     installGemini([])
     await mentionEvent.handle(mention(channel, '<@BOT> こんにちは'))
+    delete process.env.OWNER_GUILD_IDS
     assert.equal(replies[0].state.content, '今日の利用回数の上限（1日30回）に達しました。明日（日本時間の0時以降）またお試しください。')
+    process.env.OWNER_GUILD_IDS = '100'
     installGemini([[call('submit_chat_reply', { text: 'やあ' })]])
     await mentionEvent.handle(mention(channel, '<@BOT> こんにちは', { author: OTHER_USER, member: createMember({ id: OTHER_USER }) }))
+    delete process.env.OWNER_GUILD_IDS
     assert.equal(replies[1].state.content, 'やあ')
   })
 

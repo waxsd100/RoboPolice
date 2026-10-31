@@ -6,6 +6,7 @@ const { callGemini, DEFAULT_GEMINI_MODEL, GeminiError } = require('./eventDrafte
 const youtubeDB = require('../../db/interfaces/postgres/youtube')
 const { parseVideoId } = require('../utils/youtube')
 const { withoutCharCount } = require('../utils/textClean')
+const backgroundQueue = require('../utils/backgroundQueue')
 
 const MAX_SUMMARY = 3000
 // Gemini watches the whole video before answering, so an hour-long stream archive can take
@@ -35,19 +36,21 @@ async function summarizeVideo (guildID, url, { onStart = () => {}, force = false
     await youtubeDB.saveSummary(guildID, videoID)
     return { videoID, summary: cached, cached: true }
   }
-  await onStart(summaryTimeoutMs())
-
-  const content = await callGemini(process.env.GEMINI_MODEL || DEFAULT_GEMINI_MODEL, {
-    contents: [{
-      role: 'user',
-      parts: [
-        { fileData: { fileUri: `https://www.youtube.com/watch?v=${videoID}` } },
-        { text: PROMPT }
-      ]
-    }],
-    // Fewer tokens per frame: the summary is about what is said and roughly shown, not fine detail.
-    generationConfig: { temperature: 0.2, mediaResolution: 'MEDIA_RESOLUTION_LOW' }
-  }, { timeoutMs: summaryTimeoutMs() })
+  // Waits its turn behind the owner's servers' work (backgroundQueue.js).
+  const content = await backgroundQueue.run(guildID, async () => {
+    await onStart(summaryTimeoutMs())
+    return callGemini(process.env.GEMINI_MODEL || DEFAULT_GEMINI_MODEL, {
+      contents: [{
+        role: 'user',
+        parts: [
+          { fileData: { fileUri: `https://www.youtube.com/watch?v=${videoID}` } },
+          { text: PROMPT }
+        ]
+      }],
+      // Fewer tokens per frame: the summary is about what is said and roughly shown, not fine detail.
+      generationConfig: { temperature: 0.2, mediaResolution: 'MEDIA_RESOLUTION_LOW' }
+    }, { timeoutMs: summaryTimeoutMs() })
+  })
   const summary = withoutCharCount(content.parts.map(p => p.text || '').join('').trim()).slice(0, MAX_SUMMARY)
   if (!summary) throw new GeminiError(`Gemini returned no summary for ${videoID}`, 'AI が動画を要約できませんでした')
   await youtubeDB.saveSummary(guildID, videoID, summary)

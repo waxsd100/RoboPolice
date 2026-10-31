@@ -3,6 +3,7 @@
 const { parseChannelRef, fetchChannelKnowledge } = require('../utils/youtube')
 const youtubeDB = require('../../db/interfaces/postgres/youtube')
 const videoSummary = require('./videoSummary')
+const { ownerFirst } = require('../utils/priority')
 
 const DEFAULT_AUTO_SYNC_MINUTES = 15
 const FEED_TIMEOUT_MS = 15000
@@ -60,7 +61,7 @@ async function autoSyncAll () {
   running = true
   try {
     const channels = await youtubeDB.listChannels()
-    for (const { guild_id: guildID } of channels.filter(c => global.bot.guilds.has(c.guild_id))) {
+    for (const { guild_id: guildID } of ownerFirst(channels.filter(c => global.bot.guilds.has(c.guild_id)), c => c.guild_id)) {
       await syncIfChanged(guildID).catch(e => global.logger.warn(`[YOUTUBE]: Automatic sync of ${guildID} failed: ${e.message}`))
     }
   } catch (e) {
