@@ -65,7 +65,7 @@ async function coverOf (thumbnail) {
 // [{ name, url }]), then as much of the stream's description as fits, then its URL.
 function eventDescription (video, blurb, games = []) {
   const tail = `\n\n${video.url}`
-  const gameLines = games.map(g => `🎮 ${g.name}: ${g.url}`).join('\n')
+  const gameLines = games.map(g => `🎮 ${g.mention ? `${g.mention} ` : ''}${g.name}${g.url ? `: ${g.url}` : ''}`).join('\n')
   const head = [blurb, gameLines].filter(Boolean).map(part => `${part}\n\n`).join('')
   const room = Math.max(MAX_DESCRIPTION - head.length - tail.length, 0)
   const own = (video.description || '').trim()

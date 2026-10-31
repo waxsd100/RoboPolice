@@ -7,6 +7,21 @@ const { isGatewayConfigured } = require('../utils/aiGateway')
 const { withoutCharCount } = require('../utils/textClean')
 const backgroundQueue = require('../utils/backgroundQueue')
 const gameLinks = require('./gameLinks')
+const gameMentions = require('./gameMentions')
+
+// With EVENT_GAME_MENTIONS=true, each game also gets its Discord game mention (gameMentions.js),
+// and a game Discord knows is listed even with no page. Off by default: whether an event's
+// description shows a game mention as the game, not as its code, is up to Discord.
+async function withMentions (named, links) {
+  if (process.env.EVENT_GAME_MENTIONS !== 'true') return links
+  const games = []
+  for (const game of named.slice(0, 3)) {
+    const link = links.find(l => l.name === game.name)
+    const found = await gameMentions.findGame([game.name, game.nameEn]).catch(() => null)
+    if (link || found) games.push({ name: game.name, url: link?.url || null, mention: found?.mention || null })
+  }
+  return games
+}
 
 const MAX_BLURB = 200
 const TIMEOUT_MS = 30 * 1000
@@ -58,7 +73,8 @@ async function askGemini (video, thumbnail) {
   const named = (Array.isArray(answer.games) ? answer.games : [])
     .filter(g => String(g?.name || '').trim())
     .map(g => ({ name: String(g.name).trim(), nameEn: String(g.name_en || '').trim() || null }))
-  const games = await gameLinks.linksFor(named, { log: m => global.logger.warn(`[LIVE]: ${m}`) })
+  const links = await gameLinks.linksFor(named, { log: m => global.logger.warn(`[LIVE]: ${m}`) })
+  const games = await withMentions(named, links)
   return blurb || games.length ? { blurb, games } : null
 }
 
