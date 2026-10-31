@@ -2,6 +2,7 @@ const Eris = require('eris')
 const { v4: uuidv4 } = require('uuid')
 const { draft, revise, isConfigured, ENTITY_TYPES } = require('./eventDrafter')
 const { createTools, describeServer, withServerEmojis, StopDrafting } = require('./eventTools')
+const { withLinkCards } = require('../utils/linkCards')
 const { EMBED_COLORS } = require('../utils/constants')
 const { hasStaffAccess } = require('../utils/staffAccess')
 const { redact } = require('../utils/redact')
@@ -442,7 +443,8 @@ async function handle (message) {
       for (;;) {
         if (result.kind === 'chat') {
           if (!previous) {
-            await reply.edit({ content: withServerEmojis(result.text, guild), embeds: [], components: [], allowedMentions: NO_MENTIONS })
+            const { content, embeds } = await withLinkCards(withServerEmojis(result.text, guild))
+            await reply.edit({ content, embeds, components: [], allowedMentions: NO_MENTIONS })
             return
           }
           // The requester asked something about the draft instead of correcting it: answer, and
