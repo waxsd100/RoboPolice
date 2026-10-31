@@ -186,6 +186,19 @@ describe('stores', { skip: !database.available && 'needs PGHOST' }, () => {
     await wiki.saveFactEmbedding(fact.id, axis(7), 'A')
     assert.deepEqual((await wiki.nearestFacts(axis(7), 'A', 1)).map(f => [f.kind, f.name, f.aliases, f.heading]), [['character', 'よつろん', ['yotsuron'], 'よつろん']])
     assert.deepEqual(await wiki.characterFacts(), [{ name: 'よつろん', aliases: ['yotsuron'], content: '四葉の笑顔' }])
+    // The X posts have tables of their own, of the same shape: their characters are not the wiki's.
+    const xKnowledge = require('../../src/db/interfaces/postgres/xKnowledge')
+    const xPage = 'https://x.com/someone#2026-10'
+    await xKnowledge.savePage(xPage, '@someone のポスト（2026年10月）', [{ heading: '2026年10月 1', text: '新キャラ登場', images: [] }])
+    const [xPart] = await xKnowledge.sectionsToExtract(10)
+    await xKnowledge.saveFacts(xPage, xPart.position, xPart.text_hash, [{ kind: 'character', name: '新キャラ', content: 'X に出てきた' }])
+    assert.deepEqual((await wiki.characterFacts()).map(c => c.name), ['よつろん'])
+    assert.deepEqual((await xKnowledge.characterFacts()).map(c => c.name), ['新キャラ'])
+    assert.deepEqual(await wiki.sectionsToExtract(10), [], 'the wiki does not see the X posts')
+    assert.deepEqual((await q('SELECT url FROM x_sections')).map(r => r.url), [xPage])
+    assert.deepEqual((await q("SELECT url FROM wiki_pages WHERE url LIKE 'https://x.com/%'")), [])
+    await xKnowledge.deletePagesExcept('https://x.com', [])
+    assert.deepEqual(await q('SELECT name FROM x_facts'), [], 'knowledge goes with its page')
 
     // Read again with one part changed and one gone: only the changed one is embedded again.
     await wiki.savePage(`${root}/d/chars`, 'のばまんのキャラクター', [
@@ -202,15 +215,15 @@ describe('stores', { skip: !database.available && 'needs PGHOST' }, () => {
   })
 
   test('X posts: stored once each, read back by month in Japan time', async () => {
-    const social = require('../../src/db/interfaces/postgres/social')
+    const xPosts = require('../../src/db/interfaces/postgres/xPosts')
     const post = (id, at) => ({ id, account: 'nobamangames', url: `https://x.com/nobamangames/status/${id}`, text: `ポスト${id}`, createdAt: new Date(at) })
-    const added = await social.savePosts([post('1', '2026-09-30T16:00:00Z'), post('2', '2026-10-15T00:00:00Z')])
+    const added = await xPosts.savePosts([post('1', '2026-09-30T16:00:00Z'), post('2', '2026-10-15T00:00:00Z')])
     assert.equal(added.length, 2)
-    assert.deepEqual((await social.savePosts([post('2', '2026-10-15T00:00:00Z'), post('3', '2026-10-31T14:59:00Z')])).map(p => p.id), ['3'])
-    assert.deepEqual([...await social.knownIds('nobamangames')].sort(), ['1', '2', '3'])
+    assert.deepEqual((await xPosts.savePosts([post('2', '2026-10-15T00:00:00Z'), post('3', '2026-10-31T14:59:00Z')])).map(p => p.id), ['3'])
+    assert.deepEqual([...await xPosts.knownIds('nobamangames')].sort(), ['1', '2', '3'])
     // 2026-09-30T16:00Z is already October 1st in Japan.
-    assert.deepEqual((await social.postsOfMonth('nobamangames', '2026-10')).map(p => p.id), ['1', '2', '3'])
-    assert.deepEqual(await social.postsOfMonth('nobamangames', '2026-09'), [])
+    assert.deepEqual((await xPosts.postsOfMonth('nobamangames', '2026-10')).map(p => p.id), ['1', '2', '3'])
+    assert.deepEqual(await xPosts.postsOfMonth('nobamangames', '2026-09'), [])
   })
 
   describe('YouTube', () => {

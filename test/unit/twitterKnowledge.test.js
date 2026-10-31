@@ -2,8 +2,8 @@
 const { test, describe, afterEach } = require('node:test')
 const assert = require('node:assert/strict')
 require('../helpers/fakes')
-const store = require('../../src/db/interfaces/postgres/social')
-const wikiStore = require('../../src/db/interfaces/postgres/wiki')
+const store = require('../../src/db/interfaces/postgres/xPosts')
+const knowledgeStore = require('../../src/db/interfaces/postgres/xKnowledge')
 const x = require('../../src/bot/modules/twitterKnowledge')
 
 afterEach(() => { delete process.env.TWITTER_ACCOUNTS })
@@ -64,7 +64,7 @@ describe('refresh', () => {
     t.mock.method(store, 'savePosts', async posts => posts)
     t.mock.method(store, 'postsOfMonth', async () => [{ url: 'https://x.com/nobamangames/status/2', text: '告知', created_at: new Date('2026-10-30T03:00:00Z'), reply_to: null }])
     const pages = []
-    t.mock.method(wikiStore, 'savePage', async (url, title, sections) => pages.push([url, title, sections.length]))
+    t.mock.method(knowledgeStore, 'savePage', async (url, title, sections) => pages.push([url, title, sections.length]))
     t.mock.method(global.logger, 'info', () => {})
     const added = await x.refresh({ fetchJSON: async () => ({ results: [tweet('2', '告知'), tweet('1', '古い')], cursor: {} }) })
     assert.equal(added, 1)

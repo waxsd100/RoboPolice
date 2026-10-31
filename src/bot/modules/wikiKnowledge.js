@@ -15,6 +15,10 @@ const { isGatewayConfigured } = require('../utils/aiGateway')
 const { callGemini, DEFAULT_GEMINI_MODEL } = require('./eventDrafter')
 const { withoutCharCount } = require('../utils/textClean')
 const store = require('../../db/interfaces/postgres/wiki')
+const xStore = require('../../db/interfaces/postgres/xKnowledge')
+
+// The knowledge tables: the wiki's, and the X posts' (twitterKnowledge.js), worked on alike.
+const stores = () => [store, xStore]
 
 const DEFAULT_REFRESH_HOURS = 168
 const DEFAULT_DELAY_MS = 1000
@@ -115,20 +119,22 @@ async function extractFacts (section) {
 // Resolves to how many parts were read.
 async function extractPending ({ log = () => {} } = {}) {
   let done = 0
-  // All at once, each tried once: a part that keeps failing must not hold up the rest.
-  for (const section of await store.sectionsToExtract(MAX_PAGES * 20)) {
-    try {
-      await store.saveFacts(section.url, section.position, section.text_hash, await extractFacts(section))
-      done++
-    } catch (e) {
-      if (e.blocked) {
-        // Google refuses this text (e.g. PROHIBITED_CONTENT) and would again: it is marked done with
-        // no knowledge, not sent again until it changes. Its text is still embedded and searchable.
-        await store.saveFacts(section.url, section.position, section.text_hash, [])
-          .then(() => global.logger.info(`[KNOWLEDGE]: Skipped ${section.title} / ${section.heading}: Gemini blocked it (${e.blocked})`))
-          .catch(err => log(`Could not mark ${section.title} / ${section.heading} as skipped: ${err.message}`))
-      } else {
-        log(`Could not take knowledge out of ${section.title} / ${section.heading}: ${e.message}`)
+  for (const tables of stores()) {
+    // All at once, each tried once: a part that keeps failing must not hold up the rest.
+    for (const section of await tables.sectionsToExtract(MAX_PAGES * 20)) {
+      try {
+        await tables.saveFacts(section.url, section.position, section.text_hash, await extractFacts(section))
+        done++
+      } catch (e) {
+        if (e.blocked) {
+          // Google refuses this text (e.g. PROHIBITED_CONTENT) and would again: it is marked done with
+          // no knowledge, not sent again until it changes. Its text is still embedded and searchable.
+          await tables.saveFacts(section.url, section.position, section.text_hash, [])
+            .then(() => global.logger.info(`[KNOWLEDGE]: Skipped ${section.title} / ${section.heading}: Gemini blocked it (${e.blocked})`))
+            .catch(err => log(`Could not mark ${section.title} / ${section.heading} as skipped: ${err.message}`))
+        } else {
+          log(`Could not take knowledge out of ${section.title} / ${section.heading}: ${e.message}`)
+        }
       }
     }
   }
@@ -141,24 +147,27 @@ const factText = f => `${KIND_LABELS[f.kind]}: ${f.name}${f.aliases?.length ? `�
 async function embedPending () {
   const current = model()
   let done = 0
-  for (;;) {
-    const batch = await store.sectionsToEmbed(current, EMBED_BATCH)
-    if (batch.length === 0) break
-    const vectors = await embed(batch.map(s => `${s.title} / ${s.heading}\n${s.text}`))
-    for (const [i, s] of batch.entries()) await store.saveSectionEmbedding(s.url, s.position, vectors[i], current)
-    done += batch.length
+  for (const tables of stores()) {
+    for (;;) {
+      const batch = await tables.sectionsToEmbed(current, EMBED_BATCH)
+      if (batch.length === 0) break
+      const vectors = await embed(batch.map(s => `${s.title} / ${s.heading}\n${s.text}`))
+      for (const [i, s] of batch.entries()) await tables.saveSectionEmbedding(s.url, s.position, vectors[i], current)
+      done += batch.length
+    }
+    for (;;) {
+      const batch = await tables.factsToEmbed(current, EMBED_BATCH)
+      if (batch.length === 0) break
+      const vectors = await embed(batch.map(factText))
+      for (const [i, f] of batch.entries()) await tables.saveFactEmbedding(f.id, vectors[i], current)
+      done += batch.length
+    }
   }
-  for (;;) {
-    const batch = await store.factsToEmbed(current, EMBED_BATCH)
-    if (batch.length === 0) return done
-    const vectors = await embed(batch.map(factText))
-    for (const [i, f] of batch.entries()) await store.saveFactEmbedding(f.id, vectors[i], current)
-    done += batch.length
-  }
+  return done
 }
 
-// Takes knowledge out of, and embeds, whatever is new in the knowledge tables: wiki pages and X
-// posts alike (twitterKnowledge.js stores posts as pages too). One at a time.
+// Takes knowledge out of, and embeds, whatever is new in the knowledge tables: the wiki's and the
+// X posts' alike. One at a time.
 let processing = null
 function processPending (log = m => global.logger.warn(m)) {
   if (!isGatewayConfigured()) return Promise.resolve(null)
@@ -216,9 +225,16 @@ function searchable () {
 // returns it: the knowledge taken out first, then the parts of pages and posts themselves.
 async function searchWiki (query, { facts = 8, sections = 3 } = {}) {
   if (!searchable()) return 'wiki は設定されていません'
-  if (!await store.hasSections()) return 'wiki はまだ読み込まれていません（しばらくすると読み込まれます）'
+  const filled = await Promise.all(stores().map(t => t.hasSections()))
+  if (!filled.some(Boolean)) return 'wiki はまだ読み込まれていません（しばらくすると読み込まれます）'
   const q = await embedQuery(query)
-  const [knowledge, parts] = await Promise.all([store.nearestFacts(q, model(), facts), store.nearestSections(q, model(), sections)])
+  // The closest of the wiki's and of the X posts' together.
+  const closest = async (find, limit) => (await Promise.all(stores().filter((_, i) => filled[i]).map(t => find(t, limit))))
+    .flat().sort((a, b) => (b.score ?? 0) - (a.score ?? 0)).slice(0, limit)
+  const [knowledge, parts] = await Promise.all([
+    closest((t, n) => t.nearestFacts(q, model(), n), facts),
+    closest((t, n) => t.nearestSections(q, model(), n), sections)
+  ])
   if (!knowledge.length && !parts.length) return `wiki に「${query}」に近い記述は見つかりませんでした`
   const lines = [`wiki で「${query}」に意味が近いもの（近い順）:`]
   if (knowledge.length) {
@@ -232,7 +248,8 @@ async function searchWiki (query, { facts = 8, sections = 3 } = {}) {
 
 // Who the wiki's characters are, for describing emojis: { text, hash }, text empty when unknown.
 // The characters taken out as knowledge (with other names and looks) when there are any, else the
-// parts of the pages about characters.
+// parts of the pages about characters. The wiki's only, not the X posts': those change daily, and
+// every emoji would be described again each time.
 async function characterContext () {
   if (!searchable()) return { text: '', hash: null }
   const known = await store.characterFacts().catch(() => [])
