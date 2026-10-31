@@ -174,6 +174,7 @@ describe('stores', { skip: !database.available && 'needs PGHOST' }, () => {
     assert.deepEqual(await wiki.sectionsToEmbed('A', 10), [])
     assert.deepEqual((await wiki.nearestSections(axis(3), 'A', 2)).map(s => [s.title, s.heading]), [['名言集', '名言'], ['のばまんのキャラクター', 'のばまんのキャラクター']])
     assert.deepEqual(await wiki.characters(), [{ heading: 'よつろん', text: '四葉の笑顔' }, { heading: 'クリーム', text: '謎の生物' }])
+    assert.deepEqual(await wiki.characterImages(), [{ heading: 'よつろん', image: 'https://image01.seesaawiki.jp/a.png' }])
 
     // Knowledge taken out of each part, once per version of the part.
     const pending = await wiki.sectionsToExtract(10)

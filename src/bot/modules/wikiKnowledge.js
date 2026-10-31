@@ -246,18 +246,49 @@ async function searchWiki (query, { facts = 8, sections = 3 } = {}) {
   return lines.join('\n')
 }
 
+// What the knowledge says about the request, for the server's profile sent with every request, so
+// the model knows the community's characters and words without having to search first:
+// characters named in the request (by name or other name), then the knowledge closest in meaning
+// to it (`vector`, its embedding). Lines; none when there is no knowledge or nothing near.
+const MIN_RELATED_SCORE = 0.55
+async function relatedKnowledge (query, vector, { limit = 6 } = {}) {
+  if (!searchable() || !String(query || '').trim()) return []
+  const text = String(query)
+  const named = (await store.characterFacts().catch(() => []))
+    .filter(c => [c.name, ...(c.aliases || [])].some(n => n && n.length >= 2 && text.includes(n)))
+    .map(c => ({ kind: 'character', ...c }))
+  const near = vector
+    ? (await Promise.all(stores().map(t => t.nearestFacts(vector, model(), limit).catch(() => []))))
+        .flat().filter(f => (f.score ?? 0) >= MIN_RELATED_SCORE).sort((a, b) => b.score - a.score)
+    : []
+  const seen = new Set()
+  return [...named, ...near]
+    .filter(f => !seen.has(`${f.kind}:${f.name}`) && seen.add(`${f.kind}:${f.name}`))
+    .slice(0, limit)
+    .map(f => `- [${KIND_LABELS[f.kind]}] ${f.name}${f.aliases?.length ? `（${f.aliases.join('、')}）` : ''}: ${f.content}`)
+}
+
 // Who the wiki's characters are, for describing emojis: { text, hash }, text empty when unknown.
 // The characters taken out as knowledge (with other names and looks) when there are any, else the
 // parts of the pages about characters. The wiki's only, not the X posts': those change daily, and
 // every emoji would be described again each time.
+//
+// Also: names, each character's name and other names (an emoji named after one is that one), and
+// images, a picture of each character the wiki has one of ({ name, url }), shown to Gemini so it
+// can tell which character an emoji is from how it looks. The hash covers all of it.
 async function characterContext () {
-  if (!searchable()) return { text: '', hash: null }
+  if (!searchable()) return { text: '', hash: null, names: [], images: [] }
   const known = await store.characterFacts().catch(() => [])
   const rows = known.length
     ? known.map(c => ({ heading: `${c.name}${c.aliases?.length ? `（${c.aliases.join('、')}）` : ''}`, text: c.content }))
     : await store.characters().catch(() => [])
   const text = rows.map(r => `- ${r.heading}: ${r.text.replace(/\s+/g, ' ').slice(0, 150)}`).join('\n').slice(0, 8000)
-  return { text, hash: text ? crypto.createHash('sha256').update(text).digest('hex').slice(0, 16) : null }
+  const names = known.length
+    ? known.map(c => ({ name: c.name, aliases: c.aliases || [] }))
+    : rows.map(r => ({ name: r.heading, aliases: [] }))
+  const images = (await store.characterImages().catch(() => [])).map(r => ({ name: r.heading, url: r.image }))
+  const hashed = text + images.map(i => `\n${i.name} ${i.url}`).join('')
+  return { text, hash: text ? crypto.createHash('sha256').update(hashed).digest('hex').slice(0, 16) : null, names, images }
 }
 
-module.exports = { startWiki, refresh, crawl, extractFacts, extractPending, embedPending, processPending, searchWiki, characterContext, enabled, searchable, wikiRoots }
+module.exports = { startWiki, refresh, crawl, extractFacts, extractPending, embedPending, processPending, searchWiki, relatedKnowledge, characterContext, enabled, searchable, wikiRoots }

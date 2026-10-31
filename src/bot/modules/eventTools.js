@@ -417,17 +417,18 @@ function withServerEmojis (text, guild) {
 }
 
 // The server's emojis for the model. With descriptions (emojiDescriber.js), one per line with what
-// it shows and when to use it, those closest in meaning to `query` first; otherwise just the codes.
-async function emojiSection (guild, query) {
+// it shows and when to use it, those closest in meaning to the request first (`vectorOf()`
+// resolves to its embedding, or null); otherwise just the codes.
+async function emojiSection (guild, vectorOf) {
   const emojis = usableEmojis(guild)
   if (!emojis.length) return []
   const head = '### サーバー絵文字（返事で使うときは、この書き方のまま書く）'
   const notes = emojiDescriber.enabled() ? await emojiStore.descriptions(guild.id).catch(() => ({})) : {}
   if (!Object.keys(notes).length) return [head, emojis.slice(0, MAX_PROFILE_EMOJIS).map(emojiCode).join(' ')]
   let first = []
-  if (query) {
-    first = await embedQuery(query)
-      .then(q => emojiStore.nearestEmojis(guild.id, q, embeddingModel(), MAX_PROFILE_EMOJIS))
+  const vector = await vectorOf()
+  if (vector) {
+    first = await emojiStore.nearestEmojis(guild.id, vector, embeddingModel(), MAX_PROFILE_EMOJIS)
       .catch(e => {
         global.logger.warn(`Could not rank the emojis of ${guild.id}: ${e.message}`)
         return []
@@ -470,7 +471,25 @@ async function describeServer (guild, member, requestChannelID, { query = '' } =
     .map(r => r.name)
   if (roles.length) lines.push('', '### ロール', roles.slice(0, MAX_PROFILE_ROLES).join(', '))
 
-  const emojiLines = await emojiSection(guild, query)
+  // The request embedded once, when first needed, for the knowledge and the emojis that suit it.
+  let embedding = null
+  const vectorOf = () => {
+    if (!query) return Promise.resolve(null)
+    if (!embedding) {
+      embedding = embedQuery(query).catch(e => {
+        global.logger.warn(`Could not embed the request in ${guild.id}: ${e.message}`)
+        return null
+      })
+    }
+    return embedding
+  }
+  const known = wikiKnowledge.searchable() ? await wikiKnowledge.relatedKnowledge(query, await vectorOf()).catch(() => []) : []
+  if (known.length) {
+    lines.push('', '### コミュニティの知識（wiki と配信者の X より。依頼に関係しそうなもの）',
+      'キャラクターが何者かはここ（と search_wiki）で確かめ、絵文字の説明（見た目）から決めつけないこと。', ...known)
+  }
+
+  const emojiLines = await emojiSection(guild, vectorOf)
   if (emojiLines.length) lines.push('', ...emojiLines)
 
   lines.push('', '### 登録済みのイベント', await scheduledEvents(guild).catch(e => `（取得できませんでした: ${e.message}）`))

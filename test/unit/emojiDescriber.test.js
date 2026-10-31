@@ -29,7 +29,8 @@ function installModels (descriptions) {
         })
       }
     }
-    const [prompt, image] = body.contents[0].parts
+    const parts = body.contents[0].parts
+    const [prompt, image] = [parts[0], parts[parts.length - 1]]
     const name = prompt.text.match(/「:(\w+):」/)[1]
     seen.described.push({ name, image: image.inlineData.mimeType })
     return { ok: true, json: async () => ({ candidates: [{ content: { role: 'model', parts: [{ text: descriptions[name] }] } }] }) }
@@ -139,6 +140,40 @@ describe('syncGuild', () => {
     installModels({ kusa: '', naki: '泣いている顔' })
     assert.deepEqual(await emojiDescriber.syncGuild({ id: '100', emojis: [{ id: '1', name: 'kusa' }, { id: '2', name: 'naki' }] }), { described: 1, embedded: 1, failed: 1 }, 'one failing does not hold the other up')
     assert.equal(rows.get('1').description, undefined)
+  })
+})
+
+describe('describeEmoji', () => {
+  test('shows the wiki\'s pictures of the characters before the emoji, and says which character its name has', async (t) => {
+    configureGateway()
+    t.mock.method(urlFetcher, 'fetchImage', async url => ({ buffer: Buffer.from(url), contentType: 'image/png' }))
+    let body
+    global.fetch = async (url, init) => {
+      body = JSON.parse(init.body)
+      return { ok: true, json: async () => ({ candidates: [{ content: { parts: [{ text: 'よつろんが笑っている。ごきげんなときに使う' }] } }] }) }
+    }
+    const context = {
+      text: '- よつろん（yotsuron）: 頭に大きな四葉、白々しい笑顔',
+      names: [{ name: 'よつろん', aliases: ['yotsuron'] }, { name: 'クリーム', aliases: [] }],
+      references: [{ name: 'よつろん', buffer: Buffer.from('ref'), contentType: 'image/png' }]
+    }
+    assert.equal(await emojiDescriber.describeEmoji({ id: '1', name: 'Yotsuron_happy' }, context), 'よつろんが笑っている。ごきげんなときに使う')
+    const parts = body.contents[0].parts
+    assert.match(parts[0].text, /頭に大きな四葉/)
+    assert.match(parts[0].text, /キャラクター「よつろん」の名前が入っています/)
+    assert.match(parts[0].text, /形（頭の飾り・顔・輪郭など）で見比べて/)
+    assert.deepEqual(parts.slice(1).map(p => p.text || p.inlineData.data), [
+      '参考: wiki の「よつろん」の画像', Buffer.from('ref').toString('base64'),
+      '説明する絵文字「:Yotsuron_happy:」の画像', Buffer.from('https://cdn.discordapp.com/emojis/1.png?size=96').toString('base64')
+    ])
+    assert.equal(body.generationConfig.mediaResolution, 'MEDIA_RESOLUTION_LOW')
+  })
+
+  test('names in the emoji\'s name are found by name or other name, ignoring case', () => {
+    const names = [{ name: 'よつろん', aliases: ['yotsuron'] }, { name: 'クリーム', aliases: ['kream'] }, { name: 'x', aliases: [] }]
+    assert.deepEqual(emojiDescriber.namedIn('YOTSURON_cry', names), ['よつろん'])
+    assert.deepEqual(emojiDescriber.namedIn('kream2', names), ['クリーム'])
+    assert.deepEqual(emojiDescriber.namedIn('xyz', names), [], 'a one-letter name matches nothing')
   })
 })
 
