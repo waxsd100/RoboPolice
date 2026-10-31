@@ -179,6 +179,10 @@ accumulates:
   different one starts over.
 - Each video keeps its title, description, publish date, length and stream state and time
   (`YOUTUBE_API_KEY`, YouTube Data API).
+- A summary lists the topics in order, each with the time it starts (`[12:34]`). Wherever a summary
+  is shown to the model or in `/youtube summarize`, those times are links that open the video there
+  (`&t=754s`), and the model is told to give a video's URL, and the link to the moment, whenever it
+  mentions one. Summaries made before this have no times; `force:True` makes them again.
 - What a video actually says is summarized only when needed: when a video link is given or the
   question is about a video's contents, the model calls `summarize_youtube_video`, which hands the
   public video's URL to Gemini (low media resolution) and stores the summary. Gemini answers only

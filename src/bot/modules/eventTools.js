@@ -3,6 +3,7 @@ const { describeForums } = require('./forumPost')
 const youtubeDB = require('../../db/interfaces/postgres/youtube')
 const messageDB = require('../../db/interfaces/postgres/read')
 const videoSummary = require('./videoSummary')
+const { linkTimestamps } = require('../utils/youtube')
 const { fromStoredContent } = require('../../db/interfaces/postgres/create')
 const semanticSearch = require('./semanticSearch')
 const { messageEmbeddingsEnabled } = require('./embeddingIndexer')
@@ -277,7 +278,7 @@ function createTools ({ guild, member, ask, progress = () => {} }) {
       })
       const link = `https://www.youtube.com/watch?v=${videoID}`
       sources.push(link)
-      return `${link} の内容の要約${cached ? '（保存済み）' : ''}:\n${summary}`
+      return `${link} の内容の要約${cached ? '（保存済み）' : ''}:\n${linkTimestamps(summary, videoID)}`
     }
   }
 
@@ -311,7 +312,7 @@ function formatVideo (v) {
   const description = (v.description || '').replace(/\s+/g, ' ').slice(0, 200)
   const lines = [head]
   if (description) lines.push(`  ${description}`)
-  if (v.summary) lines.push(`  内容の要約: ${v.summary.replace(/\s+/g, ' ').slice(0, 400)}`)
+  if (v.summary) lines.push(`  内容の要約: ${linkTimestamps(v.summary.replace(/\s+/g, ' ').slice(0, 400), v.video_id)}`)
   return lines.join('\n')
 }
 
@@ -323,7 +324,7 @@ async function searchYouTube (guildID, query) {
   // Summaries of linked videos from other channels are knowledge too.
   const others = (await youtubeDB.getOtherSummaries(guildID))
     .filter(s => matchesAll(words, s.summary))
-    .map(s => `- https://www.youtube.com/watch?v=${s.video_id}\n  内容の要約: ${s.summary.replace(/\s+/g, ' ').slice(0, 400)}`)
+    .map(s => `- https://www.youtube.com/watch?v=${s.video_id}\n  内容の要約: ${linkTimestamps(s.summary.replace(/\s+/g, ' ').slice(0, 400), s.video_id)}`)
   const otherLines = others.length ? ['', `その他の要約済み動画（${others.length} 件）:`, ...others.slice(0, MAX_YOUTUBE_RESULTS)] : []
 
   if (!knowledge) return ['このサーバーには YouTube チャンネルが設定されていません（運営が /youtube set で設定できます）', ...otherLines].join('\n')

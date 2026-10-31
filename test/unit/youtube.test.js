@@ -218,3 +218,22 @@ describe('routing through Cloudflare AI Gateway', () => {
     assert.match(calls[0].url, /^https:\/\/www\.googleapis\.com\//)
   })
 })
+
+describe('linkTimestamps', () => {
+  const { linkTimestamps } = require('../../src/bot/utils/youtube')
+
+  test('turns the times of a summary into links that open the video there', () => {
+    assert.equal(
+      linkTimestamps('- [0:00] 挨拶\n- [12:34] 告知\n- [1:02:03] 質問コーナー', 'abcdefghijk'),
+      '- [0:00](https://www.youtube.com/watch?v=abcdefghijk&t=0s) 挨拶\n' +
+      '- [12:34](https://www.youtube.com/watch?v=abcdefghijk&t=754s) 告知\n' +
+      '- [1:02:03](https://www.youtube.com/watch?v=abcdefghijk&t=3723s) 質問コーナー'
+    )
+  })
+
+  test('leaves other brackets, existing links and summaries without times alone', () => {
+    const text = '[告知] 11/3 [12:34](https://x) 時間なしの要約'
+    assert.equal(linkTimestamps(text, 'abcdefghijk'), text)
+    assert.equal(linkTimestamps(null, 'abcdefghijk'), '')
+  })
+})
