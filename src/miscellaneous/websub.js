@@ -110,7 +110,11 @@ async function subscribe (channelID, fetchImpl = fetch) {
     }),
     signal: AbortSignal.timeout(15000)
   })
-  if (!res.ok && res.status !== 202) throw new Error(`hub refused ${channelID}: HTTP ${res.status}`)
+  if (!res.ok && res.status !== 202) {
+    // The hub says why in the body (e.g. an unreachable callback, or a secret over 200 bytes).
+    const reason = await Promise.resolve(res.text?.()).catch(() => '')
+    throw new Error(`hub refused ${channelID}: HTTP ${res.status}${reason ? ` ${String(reason).replace(/\s+/g, ' ').trim().slice(0, 300)}` : ''}`)
+  }
 }
 
 // Subscribes channels that have no subscription or whose subscription runs out within a day.
