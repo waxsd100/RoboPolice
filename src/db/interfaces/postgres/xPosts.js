@@ -21,11 +21,12 @@ async function knownIds (account) {
   return new Set(rows.rows.map(r => r.id))
 }
 
-// The account's posts made in the month of `month` (YYYY-MM, in Japan time), oldest first.
+// The account's posts made in the month of `month` (YYYY-MM, in Japan time), oldest first. A
+// range on created_at, so the index on the account and created_at is used.
 async function postsOfMonth (account, month) {
   const rows = await pool.query(
     `SELECT id, url, text, created_at, reply_to FROM x_posts
-     WHERE account = $1 AND to_char(created_at AT TIME ZONE 'Asia/Tokyo', 'YYYY-MM') = $2
+     WHERE account = $1 AND created_at >= (($2 || '-01')::timestamp AT TIME ZONE 'Asia/Tokyo') AND created_at < ((($2 || '-01')::timestamp + interval '1 month') AT TIME ZONE 'Asia/Tokyo')
      ORDER BY created_at`,
     [account, month])
   return rows.rows
