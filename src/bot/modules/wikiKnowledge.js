@@ -71,7 +71,7 @@ const KIND_LABELS = { character: 'キャラクター', quote: '名言・台詞',
 const MAX_FACTS = 30
 
 const EXTRACT_PROMPT = [
-  'これは YouTuber のファンが書いた wiki の一部です。ここから知識を取り出して、JSON の配列で返してください。',
+  'これは YouTuber についての文章（ファンが書いた wiki の一部、または本人の X のポスト）です。ここから知識を取り出して、JSON の配列で返してください。',
   '- character: 登場するキャラクター（配信者本人のキャラクター・ゲームのキャラクターなど）。name に名前、aliases に別名・読み・ローマ字表記、content に何者か・見た目の特徴（色・形・目立つ部分）・性格を書く。',
   '- quote: 名言・台詞・口ぐせ。name にその言葉をそのまま、content に誰がいつどんな場面で言ったか・どんな意味で使われるかを書く。',
   '- term: 用語・ネタ・コミュニティでよく使われる言葉。name に言葉、content に意味や由来を書く。',
@@ -149,6 +149,22 @@ async function embedPending () {
   }
 }
 
+// Takes knowledge out of, and embeds, whatever is new in the knowledge tables: wiki pages and X
+// posts alike (twitterKnowledge.js stores posts as pages too). One at a time.
+let processing = null
+function processPending (log = m => global.logger.warn(m)) {
+  if (!isGatewayConfigured()) return Promise.resolve(null)
+  if (!processing) {
+    processing = (async () => {
+      const extracted = await extractPending({ log })
+      if (extracted) global.logger.info(`[KNOWLEDGE]: Took knowledge out of ${extracted} part(s)`)
+      const embedded = await embedPending()
+      if (embedded) global.logger.info(`[KNOWLEDGE]: Embedded ${embedded} part(s) and piece(s) of knowledge`)
+    })().finally(() => { processing = null })
+  }
+  return processing
+}
+
 // Reads the wikis not read within WIKI_REFRESH_HOURS, then embeds what is new.
 let running = false
 async function refresh ({ force = false } = {}) {
@@ -164,12 +180,7 @@ async function refresh ({ force = false } = {}) {
       const gone = read.length ? await store.deletePagesExcept(root.origin, read) : 0
       global.logger.info(`[WIKI]: Read ${read.length} page(s) of ${root.origin}${gone ? `, ${gone} gone` : ''}`)
     }
-    if (isGatewayConfigured()) {
-      const extracted = await extractPending({ log: m => global.logger.warn(`[WIKI]: ${m}`) })
-      if (extracted) global.logger.info(`[WIKI]: Took knowledge out of ${extracted} part(s)`)
-      const embedded = await embedPending()
-      if (embedded) global.logger.info(`[WIKI]: Embedded ${embedded} part(s)`)
-    }
+    await processPending(m => global.logger.warn(`[WIKI]: ${m}`))
     // Emojis described before the wiki said who the characters are get described again.
     require('./emojiDescriber').startDescriber()
     return true
@@ -188,10 +199,15 @@ function startWiki () {
   return setInterval(() => refresh(), CHECK_EVERY_MS)
 }
 
-// What the wiki knows closest in meaning to `query`, as the search_wiki tool returns it: the
-// knowledge taken out of it first, then the parts of pages themselves for detail.
+// Whether there is any knowledge to search: a wiki or X accounts are set.
+function searchable () {
+  return enabled() || require('./twitterKnowledge').enabled()
+}
+
+// What the wiki (and the X posts) know closest in meaning to `query`, as the search_wiki tool
+// returns it: the knowledge taken out first, then the parts of pages and posts themselves.
 async function searchWiki (query, { facts = 8, sections = 3 } = {}) {
-  if (!enabled()) return 'wiki は設定されていません'
+  if (!searchable()) return 'wiki は設定されていません'
   if (!await store.hasSections()) return 'wiki はまだ読み込まれていません（しばらくすると読み込まれます）'
   const q = await embedQuery(query)
   const [knowledge, parts] = await Promise.all([store.nearestFacts(q, model(), facts), store.nearestSections(q, model(), sections)])
@@ -210,7 +226,7 @@ async function searchWiki (query, { facts = 8, sections = 3 } = {}) {
 // The characters taken out as knowledge (with other names and looks) when there are any, else the
 // parts of the pages about characters.
 async function characterContext () {
-  if (!enabled()) return { text: '', hash: null }
+  if (!searchable()) return { text: '', hash: null }
   const known = await store.characterFacts().catch(() => [])
   const rows = known.length
     ? known.map(c => ({ heading: `${c.name}${c.aliases?.length ? `（${c.aliases.join('、')}）` : ''}`, text: c.content }))
@@ -219,4 +235,4 @@ async function characterContext () {
   return { text, hash: text ? crypto.createHash('sha256').update(text).digest('hex').slice(0, 16) : null }
 }
 
-module.exports = { startWiki, refresh, crawl, extractFacts, extractPending, embedPending, searchWiki, characterContext, enabled, wikiRoots }
+module.exports = { startWiki, refresh, crawl, extractFacts, extractPending, embedPending, processPending, searchWiki, characterContext, enabled, searchable, wikiRoots }
