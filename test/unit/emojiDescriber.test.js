@@ -47,9 +47,9 @@ describe('syncGuild', () => {
       for (const e of emojis) rows.set(e.id, { ...rows.get(e.id), emoji_id: e.id, name: e.name })
       for (const id of rows.keys()) if (!emojis.some(e => e.id === id)) rows.delete(id)
     })
-    t.mock.method(store, 'emojisToDescribe', async () => [...rows.values()].filter(r => !r.description || r.described_name !== r.name))
+    t.mock.method(store, 'emojisToDescribe', async (guildID, limit) => [...rows.values()].filter(r => !r.description || r.described_name !== r.name).slice(0, limit))
     t.mock.method(store, 'saveDescription', async (id, name, description) => Object.assign(rows.get(id), { description, described_name: name, embedding: null }))
-    t.mock.method(store, 'emojisToEmbed', async () => [...rows.values()].filter(r => r.description && !r.embedding))
+    t.mock.method(store, 'emojisToEmbed', async (guildID, model, limit) => [...rows.values()].filter(r => r.description && !r.embedding).slice(0, limit))
     t.mock.method(store, 'saveEmbedding', async (id, embedding, model) => Object.assign(rows.get(id), { embedding, model }))
     t.mock.method(global.logger, 'info', () => {})
   })
@@ -57,7 +57,7 @@ describe('syncGuild', () => {
   test('describes each usable emoji from its name and image, then embeds name and description', async () => {
     const seen = installModels({ kusa: '草が生えている。笑ったときに使う（16文字）', naki: '泣いている顔。悲しいときに使う' })
     const guild = { id: '100', emojis: [{ id: '1', name: 'kusa' }, { id: '2', name: 'naki', animated: true }, { id: '3', name: 'staff', roles: ['9'] }] }
-    assert.deepEqual(await emojiDescriber.syncGuild(guild), { described: 2, embedded: 2 })
+    assert.deepEqual(await emojiDescriber.syncGuild(guild), { described: 2, embedded: 2, failed: 0 })
     assert.deepEqual(seen.described, [{ name: 'kusa', image: 'image/png' }, { name: 'naki', image: 'image/png' }])
     assert.deepEqual(seen.embedded, [':kusa: 草が生えている。笑ったときに使う', ':naki: 泣いている顔。悲しいときに使う'])
     assert.equal(rows.get('1').description, '草が生えている。笑ったときに使う', 'no count of characters')
@@ -65,10 +65,10 @@ describe('syncGuild', () => {
     assert.ok(!rows.has('3'), 'an emoji limited to some roles is not used')
 
     // Nothing new: nothing is asked again. A renamed emoji is described again.
-    assert.deepEqual(await emojiDescriber.syncGuild(guild), { described: 0, embedded: 0 })
+    assert.deepEqual(await emojiDescriber.syncGuild(guild), { described: 0, embedded: 0, failed: 0 })
     installModels({ www: '草が生えている。笑ったときに使う' })
     guild.emojis[0].name = 'www'
-    assert.deepEqual(await emojiDescriber.syncGuild(guild), { described: 1, embedded: 1 })
+    assert.deepEqual(await emojiDescriber.syncGuild(guild), { described: 1, embedded: 1, failed: 0 })
   })
 
   test('the wiki\'s characters are given, so an emoji of one is named; a change describes them again', async (t) => {
@@ -97,10 +97,18 @@ describe('syncGuild', () => {
     assert.equal(prompts.length, 2)
   })
 
+  test('more emojis than one batch are all described in one run', async () => {
+    const descriptions = Object.fromEntries(Array.from({ length: 120 }, (_, i) => [`e${i}`, `絵文字${i}`]))
+    installModels(descriptions)
+    const guild = { id: '100', emojis: Array.from({ length: 120 }, (_, i) => ({ id: String(i), name: `e${i}` })) }
+    assert.deepEqual(await emojiDescriber.syncGuild(guild), { described: 120, embedded: 120, failed: 0 })
+    assert.ok([...rows.values()].every(r => r.description && r.embedding))
+  })
+
   test('an emoji that cannot be described is left for the next run', async (t) => {
     t.mock.method(global.logger, 'warn', () => {})
-    installModels({ kusa: '' })
-    assert.deepEqual(await emojiDescriber.syncGuild({ id: '100', emojis: [{ id: '1', name: 'kusa' }] }), { described: 0, embedded: 0 })
+    installModels({ kusa: '', naki: '泣いている顔' })
+    assert.deepEqual(await emojiDescriber.syncGuild({ id: '100', emojis: [{ id: '1', name: 'kusa' }, { id: '2', name: 'naki' }] }), { described: 1, embedded: 1, failed: 1 }, 'one failing does not hold the other up')
     assert.equal(rows.get('1').description, undefined)
   })
 })
