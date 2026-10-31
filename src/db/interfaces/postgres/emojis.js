@@ -15,13 +15,14 @@ async function syncEmojis (guildID, emojis) {
   await pool.query('DELETE FROM guild_emojis WHERE guild_id = $1 AND NOT (emoji_id = ANY($2))', [guildID, emojis.map(e => e.id)])
 }
 
-// Emojis of the server with no description for their current name: [{ emoji_id, name, animated }].
-async function emojisToDescribe (guildID, limit) {
+// Emojis of the server with no description for their current name, or described with other
+// knowledge of the characters (contextHash): [{ emoji_id, name, animated }].
+async function emojisToDescribe (guildID, limit, contextHash = null) {
   const rows = await pool.query(
     `SELECT emoji_id, name, animated FROM guild_emojis
-     WHERE guild_id = $1 AND (description IS NULL OR described_name IS DISTINCT FROM name)
+     WHERE guild_id = $1 AND (description IS NULL OR described_name IS DISTINCT FROM name OR context_hash IS DISTINCT FROM $3)
      ORDER BY emoji_id LIMIT $2`,
-    [guildID, limit])
+    [guildID, limit, contextHash])
   return rows.rows
 }
 
@@ -35,11 +36,11 @@ async function emojisToEmbed (guildID, model, limit) {
   return rows.rows
 }
 
-async function saveDescription (emojiID, name, description) {
+async function saveDescription (emojiID, name, description, contextHash = null) {
   // A new description needs a new embedding.
   await pool.query(
-    'UPDATE guild_emojis SET description = $2, described_name = $3, embedding = NULL, model_id = NULL, updated_at = now() WHERE emoji_id = $1',
-    [emojiID, description, name])
+    'UPDATE guild_emojis SET description = $2, described_name = $3, context_hash = $4, embedding = NULL, model_id = NULL, updated_at = now() WHERE emoji_id = $1',
+    [emojiID, description, name, contextHash])
 }
 
 async function saveEmbedding (emojiID, embedding, model) {

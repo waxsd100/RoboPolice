@@ -70,6 +70,32 @@ describe('syncGuild', () => {
     assert.deepEqual(await emojiDescriber.syncGuild(guild), { described: 1, embedded: 1 })
   })
 
+  test('the wiki\'s characters are given, so an emoji of one is named; a change describes them again', async (t) => {
+    const wiki = require('../../src/bot/modules/wikiKnowledge')
+    let context = { text: '- よつろん: 頭に大きな四葉がある、爽やかな笑顔のキャラクター', hash: 'h1' }
+    t.mock.method(wiki, 'characterContext', async () => context)
+    const prompts = []
+    global.fetch = async (url, init) => {
+      const body = JSON.parse(init.body)
+      if (String(url).endsWith(':batchEmbedContents')) {
+        return { ok: true, json: async () => ({ embeddings: body.requests.map(r => ({ values: new Array(r.outputDimensionality).fill(0.1) })) }) }
+      }
+      prompts.push(body.contents[0].parts[0].text)
+      return { ok: true, json: async () => ({ candidates: [{ content: { parts: [{ text: 'よつろんの笑顔。ごきげんなときに使う' }] } }] }) }
+    }
+    const guild = { id: '100', emojis: [{ id: '1', name: 'yotsu' }] }
+    t.mock.method(store, 'emojisToDescribe', async (guildID, limit, hash) => [...rows.values()].filter(r => !r.description || r.context_hash !== hash))
+    t.mock.method(store, 'saveDescription', async (id, name, description, hash) => Object.assign(rows.get(id), { description, described_name: name, context_hash: hash, embedding: null }))
+    await emojiDescriber.syncGuild(guild)
+    assert.match(prompts[0], /コミュニティの wiki より[\s\S]*よつろん: 頭に大きな四葉/)
+    assert.equal(rows.get('1').description, 'よつろんの笑顔。ごきげんなときに使う')
+    await emojiDescriber.syncGuild(guild)
+    assert.equal(prompts.length, 1, 'same characters: not again')
+    context = { text: `${context.text}\n- クリーム: 謎の生物`, hash: 'h2' }
+    await emojiDescriber.syncGuild(guild)
+    assert.equal(prompts.length, 2)
+  })
+
   test('an emoji that cannot be described is left for the next run', async (t) => {
     t.mock.method(global.logger, 'warn', () => {})
     installModels({ kusa: '' })

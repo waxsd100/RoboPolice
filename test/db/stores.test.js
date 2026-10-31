@@ -159,6 +159,48 @@ describe('stores', { skip: !database.available && 'needs PGHOST' }, () => {
     assert.deepEqual(await emojis.descriptions('g1'), { e1: '笑ったとき' })
   })
 
+  test('the wiki: pages split in parts, unchanged parts keep their embedding, searched by meaning', async () => {
+    const wiki = require('../../src/db/interfaces/postgres/wiki')
+    const axis = i => { const v = new Int8Array(512); v[i] = 127; return v }
+    const root = 'https://w.example'
+    await wiki.savePage(`${root}/d/chars`, 'のばまんのキャラクター', [
+      { heading: 'のばまんのキャラクター', text: 'はじめに', images: [] },
+      { heading: 'よつろん', text: '四葉の笑顔', images: ['https://image01.seesaawiki.jp/a.png'] },
+      { heading: 'クリーム', text: '謎の生物', images: [] }
+    ])
+    await wiki.savePage(`${root}/d/quotes`, '名言集', [{ heading: '名言', text: '有名な台詞', images: [] }])
+    assert.equal((await wiki.sectionsToEmbed('A', 10)).length, 4)
+    for (const [i, s] of (await wiki.sectionsToEmbed('A', 10)).entries()) await wiki.saveSectionEmbedding(s.url, s.position, axis(i), 'A')
+    assert.deepEqual(await wiki.sectionsToEmbed('A', 10), [])
+    assert.deepEqual((await wiki.nearestSections(axis(3), 'A', 2)).map(s => [s.title, s.heading]), [['名言集', '名言'], ['のばまんのキャラクター', 'のばまんのキャラクター']])
+    assert.deepEqual(await wiki.characters(), [{ heading: 'よつろん', text: '四葉の笑顔' }, { heading: 'クリーム', text: '謎の生物' }])
+
+    // Knowledge taken out of each part, once per version of the part.
+    const pending = await wiki.sectionsToExtract(10)
+    assert.equal(pending.length, 4)
+    const yotsu = pending.find(p => p.heading === 'よつろん')
+    await wiki.saveFacts(yotsu.url, yotsu.position, yotsu.text_hash, [{ kind: 'character', name: 'よつろん', aliases: ['yotsuron'], content: '四葉の笑顔' }])
+    for (const p of pending.filter(p => p !== yotsu)) await wiki.saveFacts(p.url, p.position, p.text_hash, [])
+    assert.deepEqual(await wiki.sectionsToExtract(10), [])
+    const [fact] = await wiki.factsToEmbed('A', 10)
+    await wiki.saveFactEmbedding(fact.id, axis(7), 'A')
+    assert.deepEqual((await wiki.nearestFacts(axis(7), 'A', 1)).map(f => [f.kind, f.name, f.aliases, f.heading]), [['character', 'よつろん', ['yotsuron'], 'よつろん']])
+    assert.deepEqual(await wiki.characterFacts(), [{ name: 'よつろん', aliases: ['yotsuron'], content: '四葉の笑顔' }])
+
+    // Read again with one part changed and one gone: only the changed one is embedded again.
+    await wiki.savePage(`${root}/d/chars`, 'のばまんのキャラクター', [
+      { heading: 'のばまんのキャラクター', text: 'はじめに', images: [] },
+      { heading: 'よつろん', text: '四葉の笑顔（更新）', images: [] }
+    ])
+    assert.deepEqual((await wiki.sectionsToEmbed('A', 10)).map(s => s.heading), ['よつろん'])
+    assert.deepEqual((await wiki.sectionsToExtract(10)).map(s => s.heading), ['よつろん'], 'a changed part is read again')
+    assert.equal((await q('SELECT count(*)::int AS n FROM wiki_sections WHERE url = $1', [`${root}/d/chars`]))[0].n, 2)
+    assert.ok(await wiki.lastRead(root))
+    assert.equal(await wiki.deletePagesExcept(root, [`${root}/d/chars`]), 1)
+    assert.deepEqual((await q('SELECT url FROM wiki_sections GROUP BY url')).map(r => r.url), [`${root}/d/chars`])
+    assert.deepEqual((await q('SELECT name FROM wiki_facts')).map(r => r.name), ['よつろん'], 'knowledge goes with its page')
+  })
+
   describe('YouTube', () => {
     const store = () => require('../../src/db/interfaces/postgres/youtube')
     const video = (id, extra = {}) => ({ id, title: `動画 ${id}`, description: '', publishedAt: `2026-10-0${id.slice(1)}T00:00:00Z`, liveStatus: 'none', scheduledStart: null, duration: 'PT1H', ...extra })

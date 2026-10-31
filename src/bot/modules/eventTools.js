@@ -5,6 +5,7 @@ const messageDB = require('../../db/interfaces/postgres/read')
 const videoSummary = require('./videoSummary')
 const { linkTimestamps } = require('../utils/youtube')
 const emojiDescriber = require('./emojiDescriber')
+const wikiKnowledge = require('./wikiKnowledge')
 const emojiStore = require('../../db/interfaces/postgres/emojis')
 const { embedQuery, model: embeddingModel } = require('../utils/embeddings')
 const { fromStoredContent } = require('../../db/interfaces/postgres/create')
@@ -26,6 +27,12 @@ const SEARCH_SERVER_MESSAGES = {
   name: 'search_server_messages',
   description: 'このサーバーで依頼者が読めるすべてのチャンネルの保存済みメッセージから、query と意味が近いものを探す（言い回しが違っても見つかる）。どのチャンネルの話か分からないときや、サーバー全体の話題を調べるときに使う。',
   parameters: { type: 'OBJECT', properties: { query: { type: 'STRING', description: '探したい内容（文章でよい）' } }, required: ['query'] }
+}
+
+const SEARCH_WIKI = {
+  name: 'search_wiki',
+  description: 'コミュニティの wiki（配信者のキャラクター・名言・台詞・ネタ・用語・基本情報など）から、query と意味が近い記述を探す。キャラクターや名言・ネタについての話題、配信者らしい言い回しを知りたいときに使う。',
+  parameters: { type: 'OBJECT', properties: { query: { type: 'STRING', description: '探したい内容（キャラクター名、名言の一部、話題など）' } }, required: ['query'] }
 }
 
 const DECLARATIONS = [
@@ -275,6 +282,9 @@ function createTools ({ guild, member, ask, progress = () => {} }) {
     async search_youtube ({ query }) {
       return searchYouTube(guild.id, query)
     },
+    async search_wiki ({ query }) {
+      return wikiKnowledge.searchWiki(String(query || ''))
+    },
     async summarize_youtube_video ({ url }) {
       const { videoID, summary, cached } = await videoSummary.summarizeVideo(guild.id, url, {
         onStart: timeoutMs => progress(`動画の内容を読み取っています…（長い動画は数分かかります。最大 ${Math.round(timeoutMs / 60000)} 分）`)
@@ -298,7 +308,8 @@ function createTools ({ guild, member, ask, progress = () => {} }) {
     }
   }
 
-  return { declarations: messageEmbeddingsEnabled() ? [...DECLARATIONS, SEARCH_SERVER_MESSAGES] : DECLARATIONS, call, sources, readMessage, readThread }
+  const declarations = [...DECLARATIONS, ...(messageEmbeddingsEnabled() ? [SEARCH_SERVER_MESSAGES] : []), ...(wikiKnowledge.enabled() ? [SEARCH_WIKI] : [])]
+  return { declarations, call, sources, readMessage, readThread }
 }
 
 async function scheduledEvents (guild) {

@@ -139,8 +139,21 @@ The server profile lists the server's custom emojis (those not limited to roles)
 use one now and then where it fits. An emoji the model writes as `:name:` is turned into the
 server emoji of that name.
 
+With `WIKI_URLS` set, the community's wiki is knowledge too (`src/bot/modules/wikiKnowledge.js`):
+the worker owning shard 0 reads every page of it once a week (one page a second, only the `/d/`
+pages its robots.txt allows), splits each at its headings, and stores the parts with embeddings in
+`wiki_pages` and `wiki_sections`. Gemini then takes knowledge out of each part, as structured
+JSON, into `wiki_facts`: characters (name, other names and readings, who they are and how they
+look), quotes (the words, and who said them when) and terms (running jokes, the community's words
+and what they mean), each embedded on its own; a part is read again only when it changes. The model
+searches all of it with `search_wiki` (the knowledge first, then the pages for detail), and uses its quotes now and then as the streamer would. It is fans' writing, so
+the model does not state it as the streamer's own word.
+
 Each emoji is described once from its image and name by Gemini (what it shows, when to use it) and
 stored with an embedding of that description in `guild_emojis` (`src/bot/modules/emojiDescriber.js`).
+When the wiki describes characters (pages whose title has キャラクター), Gemini is given them, so an
+emoji of a character is named; when what the wiki says about them changes, the emojis are described
+again.
 Each worker does this in the background for the servers it hosts, at startup and when a server's
 emojis change; a renamed emoji is described again. The profile then lists each emoji with its
 description, those closest in meaning to the request first. `EMOJI_DESCRIPTIONS=false` turns it off.
@@ -445,6 +458,8 @@ the secrets if it leaks, so keep it only on the platform and delete it in the co
 | `GEMINI_MODEL` | Optional. Defaults to `gemini-flash-latest` |
 | `YOUTUBE_API_KEY` | Optional. YouTube Data API v3 key for `/youtube`. Unset disables the command |
 | `VIDEO_SUMMARY_TIMEOUT_MINUTES` | Optional. How long a video summary may take. Defaults to 10 |
+| `WIKI_URLS` | Optional. Top pages of the community's wikis (comma-separated), e.g. `https://novamanhikoushiki.memo.wiki/`. Read in full weekly, split at headings and embedded; the model searches them with `search_wiki` (characters, quotes, running jokes), and emoji descriptions name the characters they describe |
+| `WIKI_REFRESH_HOURS`, `WIKI_DELAY_MS` | Optional. How often a wiki is read again (default 168) and the wait between its pages (default 1000) |
 | `EMOJI_DESCRIPTIONS` | Optional. `false` stops describing the server's custom emojis (Gemini looks at each one's image and name; the descriptions are embedded so the emojis that suit a request are offered first) |
 | `LIVE_EVENT_AI_DESCRIPTION` | Optional. `false` stops the AI's line on what a stream is about (from its title, description and thumbnail) at the top of its Discord event |
 | `LIVE_ARCHIVE_SUMMARY` | Optional. `false` stops summarizing a stream's archive once it is over (tried 30 minutes after it ends, then hourly, three times at most) |
