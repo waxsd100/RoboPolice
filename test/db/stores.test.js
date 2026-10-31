@@ -186,6 +186,14 @@ describe('stores', { skip: !database.available && 'needs PGHOST' }, () => {
     await wiki.saveFactEmbedding(fact.id, axis(7), 'A')
     assert.deepEqual((await wiki.nearestFacts(axis(7), 'A', 1)).map(f => [f.kind, f.name, f.aliases, f.heading]), [['character', 'よつろん', ['yotsuron'], 'よつろん']])
     assert.deepEqual(await wiki.characterFacts(), [{ name: 'よつろん', aliases: ['yotsuron'], content: '四葉の笑顔' }])
+    // Characters named in X posts are not among them: the posts change daily, and every emoji would
+    // be described again each time.
+    const xPage = 'https://x.com/someone#2026-10'
+    await wiki.savePage(xPage, '@someone の X 2026-10', [{ heading: '2026-10', text: '新キャラ登場', images: [] }])
+    const [xPart] = (await wiki.sectionsToExtract(10)).filter(p => p.url === xPage)
+    await wiki.saveFacts(xPage, xPart.position, xPart.text_hash, [{ kind: 'character', name: '新キャラ', content: 'X に出てきた' }])
+    assert.deepEqual((await wiki.characterFacts()).map(c => c.name), ['よつろん'])
+    await wiki.deletePagesExcept('https://x.com', [])
 
     // Read again with one part changed and one gone: only the changed one is embedded again.
     await wiki.savePage(`${root}/d/chars`, 'のばまんのキャラクター', [

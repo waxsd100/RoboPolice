@@ -146,8 +146,8 @@ async function nearestFacts (query, model, limit) {
 // The characters the wiki's knowledge names, one per name: [{ name, aliases, content }].
 async function characterFacts (limit = 100) {
   const rows = await pool.query(
-    `SELECT DISTINCT ON (name) name, aliases, content FROM wiki_facts WHERE kind = 'character'
-     ORDER BY name, length(content) DESC LIMIT $1`,
+    `SELECT DISTINCT ON (name) name, aliases, content FROM wiki_facts WHERE kind = 'character' AND url NOT LIKE 'https://x.com/%'
+     ORDER BY name, length(content) DESC, content LIMIT $1`,
     [limit])
   return rows.rows
 }
