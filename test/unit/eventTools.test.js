@@ -271,6 +271,18 @@ describe('withServerEmojis', () => {
       'やっほー <:nobaman_wave:11> 今日も <a:party:12> <:nobaman_wave:11> :unknown: :staffonly: 10:30:00 https://e.com'
     )
   })
+
+  test('takes emojis out of code formatting, where Discord shows them as text', () => {
+    assert.equal(
+      withServerEmojis('・`<a:party:12>`（踊る）\n・`:nobaman_wave:` と ``<:nobaman_wave:11> <a:party:12>``\n```\n<:nobaman_wave:11>\n```', g),
+      '・<a:party:12>（踊る）\n・<:nobaman_wave:11> と <:nobaman_wave:11> <a:party:12>\n<:nobaman_wave:11>'
+    )
+    assert.equal(withServerEmojis('`npm run test` と `:unknown:`', g), '`npm run test` と `:unknown:`', 'other code and unknown emojis stay')
+  })
+
+  test('a server emoji written with a wrong ID or a wrong a: gets its own code', () => {
+    assert.equal(withServerEmojis('<:party:12> <a:nobaman_wave:99> <:other:55>', g), '<a:party:12> <:nobaman_wave:11> <:other:55>')
+  })
 })
 
 describe('describeServer', () => {

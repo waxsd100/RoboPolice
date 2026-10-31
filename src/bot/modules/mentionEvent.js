@@ -74,10 +74,22 @@ function mentionPattern () {
 }
 
 // Only an explicit @mention in the text. message.mentions also includes the author of a replied-to
-// message, so replying to one of the bot's own answers would otherwise start a new draft.
+// message, so it is not used.
 function isMentioned (message) {
   const guild = message.channel.guild
   return [...message.content.matchAll(mentionPattern())].some(m => !m[1] || isOwnRole(guild, m[1]))
+}
+
+// A Discord reply (with the mention turned off) to one of the bot's own answers: the bot's
+// messages that are themselves replies, so not its logs (posted through webhooks) or other posts.
+function repliesToBot (message) {
+  const ref = message.referencedMessage
+  return !!(message.messageReference && ref && ref.author?.id === global.bot.user.id && !ref.webhookID && ref.messageReference)
+}
+
+// Talking to the bot: mentioning it, or replying to its answer.
+function isAddressed (message) {
+  return isMentioned(message) || repliesToBot(message)
 }
 
 let warnedUnconfigured = false
@@ -342,7 +354,7 @@ function asker (reply, channelID, requesterID) {
 
 async function handle (message) {
   if (takeReply(message)) return
-  if (!isMentioned(message)) return
+  if (!isAddressed(message)) return
   const guild = message.channel.guild
   const reference = { messageReference: { messageID: message.id, failIfNotExists: false } }
 

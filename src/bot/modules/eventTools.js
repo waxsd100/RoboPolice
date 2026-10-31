@@ -405,15 +405,25 @@ function emojiCode (e) {
   return `<${e.animated ? 'a' : ''}:${e.name}:${e.id}>`
 }
 
-// The model sometimes writes a server emoji as :name: rather than its code; Discord shows that as
-// plain text, so it is turned into the code when the server has such an emoji.
+// The model sometimes writes a server emoji as :name: rather than its code, puts codes in ` (code
+// formatting, where Discord shows them as text), or gets the ID or the a: of an animated one
+// wrong. Emojis the server has are written as their exact code, outside code formatting; others
+// are left as written.
+const EMOJI = '(?:<a?:\\w{2,32}:\\d+>|:\\w{2,32}:)'
+const CODED_EMOJIS = new RegExp(`(\`{1,3})\\s*(${EMOJI}(?:\\s*${EMOJI})*)\\s*\\1`, 'g')
 function withServerEmojis (text, guild) {
-  const byName = new Map(usableEmojis(guild).map(e => [e.name, e]))
-  return text.replace(/(<a?)?:(\w{2,32}):(\d+>)?/g, (whole, open, name, close) => {
-    if (open || close) return whole
-    const emoji = byName.get(name)
-    return emoji ? emojiCode(emoji) : whole
-  })
+  const emojis = usableEmojis(guild)
+  const byName = new Map(emojis.map(e => [e.name, e]))
+  const byID = new Map(emojis.map(e => [e.id, e]))
+  const find = (name, id, bare) => bare ? byName.get(bare) : (byID.get(id) || byName.get(name))
+  const ONE = /<(a?):(\w{2,32}):(\d+)>|:(\w{2,32}):/g
+  return text
+    // Only when every emoji inside is the server's: anything else in ` may be meant as code.
+    .replace(CODED_EMOJIS, (whole, ticks, inside) => [...inside.matchAll(ONE)].every(m => find(m[2], m[3], m[4])) ? inside : whole)
+    .replace(ONE, (whole, animated, name, id, bare) => {
+      const emoji = find(name, id, bare)
+      return emoji ? emojiCode(emoji) : whole
+    })
 }
 
 // The server's emojis for the model. With descriptions (emojiDescriber.js), one per line with what
