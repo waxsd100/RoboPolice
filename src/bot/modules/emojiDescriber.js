@@ -2,8 +2,8 @@
 // an emoji's image and name and says what it shows and when it is used, and that text is embedded
 // so the emojis closest to a conversation can be offered first (describeServer in eventTools.js).
 //
-// Runs in the background on each worker for the servers it hosts: at startup and when a server's
-// emojis change. Only new or renamed emojis are described; changing GEMINI_EMBEDDING_MODEL embeds
+// Runs in the background on each worker for the servers it hosts: at startup, when a server's
+// emojis change, and every 6 hours (for those that failed). Only new or renamed emojis are described; changing GEMINI_EMBEDDING_MODEL embeds
 // them again. EMOJI_DESCRIPTIONS=false turns it off.
 const store = require('../../db/interfaces/postgres/emojis')
 const urlFetcher = require('../utils/urlFetcher')
@@ -15,6 +15,7 @@ const backgroundQueue = require('../utils/backgroundQueue')
 const { ownerFirst } = require('../utils/priority')
 
 const PER_RUN = 50
+const CHECK_EVERY_MS = 6 * 60 * 60 * 1000
 const MAX_DESCRIPTION = 80
 // Changing how emojis are described describes them all again: it is part of the hash stored with
 // each description.
@@ -62,24 +63,35 @@ async function syncGuild (guild) {
   // When what the wiki says about the characters changes, every emoji is described again.
   const characters = await require('./wikiKnowledge').characterContext()
   const hash = `v${DESCRIBE_VERSION}:${characters.hash || ''}`
+  // PER_RUN at a time until none are left. One that fails is left out for the rest of this run,
+  // so it cannot hold the others up, and is tried again on the next (CHECK_EVERY_MS at the latest).
   let described = 0
-  for (const emoji of await store.emojisToDescribe(guild.id, PER_RUN, hash)) {
-    try {
-      const description = await backgroundQueue.run(guild.id, () => describeEmoji(emoji, characters.text))
-      await store.saveDescription(emoji.emoji_id, emoji.name, description, hash)
-      described++
-    } catch (e) {
-      global.logger.warn(`[EMOJIS]: Could not describe :${emoji.name}: in ${guild.id}: ${e.message}`)
+  const failed = new Set()
+  for (;;) {
+    const batch = (await store.emojisToDescribe(guild.id, PER_RUN + failed.size, hash)).filter(e => !failed.has(e.emoji_id))
+    if (batch.length === 0) break
+    for (const emoji of batch) {
+      try {
+        const description = await backgroundQueue.run(guild.id, () => describeEmoji(emoji, characters.text))
+        await store.saveDescription(emoji.emoji_id, emoji.name, description, hash)
+        described++
+      } catch (e) {
+        failed.add(emoji.emoji_id)
+        global.logger.warn(`[EMOJIS]: Could not describe :${emoji.name}: in ${guild.id}: ${e.message}`)
+      }
     }
   }
   const current = model()
-  const pending = await store.emojisToEmbed(guild.id, current, PER_RUN)
-  if (pending.length) {
+  let embedded = 0
+  for (;;) {
+    const pending = await store.emojisToEmbed(guild.id, current, PER_RUN)
+    if (pending.length === 0) break
     const vectors = await embed(pending.map(embedText))
     for (const [i, e] of pending.entries()) await store.saveEmbedding(e.emoji_id, vectors[i], current)
+    embedded += pending.length
   }
-  if (described || pending.length) global.logger.info(`[EMOJIS]: ${guild.id}: described ${described}, embedded ${pending.length} emoji(s)`)
-  return { described, embedded: pending.length }
+  if (described || embedded || failed.size) global.logger.info(`[EMOJIS]: ${guild.id}: described ${described}, embedded ${embedded} emoji(s)${failed.size ? `, ${failed.size} failed` : ''}`)
+  return { described, embedded, failed: failed.size }
 }
 
 // Servers waiting to be synced, worked through one at a time.
@@ -106,9 +118,17 @@ function schedule (guild) {
   drain()
 }
 
+function scheduleAll () {
+  for (const guild of global.bot.guilds.values()) schedule(guild)
+}
+
+// At startup, then every CHECK_EVERY_MS: emojis that failed are tried again, and anything missed
+// is picked up. A server with nothing to do costs a few small queries.
+let timer = null
 function startDescriber () {
   if (!enabled()) return
-  for (const guild of global.bot.guilds.values()) schedule(guild)
+  scheduleAll()
+  if (!timer) timer = setInterval(scheduleAll, CHECK_EVERY_MS)
 }
 
 module.exports = { startDescriber, schedule, syncGuild, describeEmoji, usableEmojis, enabled, embedText }
