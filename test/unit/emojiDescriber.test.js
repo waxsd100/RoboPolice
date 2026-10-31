@@ -194,6 +194,18 @@ describe('the emojis in the server profile', () => {
     assert.equal(nearest.mock.calls[0].arguments[0], '100')
   })
 
+  test('a reply is matched with the conversation it replies to, which counts more', async (t) => {
+    configureGateway()
+    const seen = installModels({})
+    t.mock.method(store, 'descriptions', async () => ({ 11: '泣いている顔', 12: '草' }))
+    const nearest = t.mock.method(store, 'nearestEmojis', async () => ['11'])
+    await describeServer(guild(), createMember({ id: '1' }), '1', { query: '草', context: 'user2: 推しが卒業して悲しい' })
+    assert.deepEqual(seen.embedded, ['user2: 推しが卒業して悲しい', '草'], 'both, in one request')
+    const vector = nearest.mock.calls[0].arguments[1]
+    assert.ok(vector[1] > vector[0], 'closer to the conversation (悲) than to the reply (草)')
+    assert.ok(vector[0] > 0, 'the reply still counts')
+  })
+
   test('without descriptions (or turned off), just the codes', async (t) => {
     const descriptions = t.mock.method(store, 'descriptions', async () => ({}))
     configureGateway()

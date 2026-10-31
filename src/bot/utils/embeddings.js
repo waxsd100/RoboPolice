@@ -52,6 +52,14 @@ async function embedQuery (text) {
   return (await embed([text], 'RETRIEVAL_QUERY'))[0]
 }
 
+// One vector for several texts' vectors, each counting `weights[i]` (e.g. a conversation counting
+// more than the message that continues it): their weighted sum, normalized.
+function blend (vectors, weights) {
+  const sum = new Array(vectors[0].length).fill(0)
+  vectors.forEach((v, i) => { for (let d = 0; d < v.length; d++) sum[d] += v[d] * weights[i] })
+  return quantize(sum)
+}
+
 // Cosine similarity of two quantized unit vectors, -1..1.
 function similarity (a, b) {
   let dot = 0
@@ -73,4 +81,4 @@ function fromBase64 (text) {
   return new Int8Array(buffer.buffer, buffer.byteOffset, buffer.byteLength)
 }
 
-module.exports = { embed, embedQuery, model, similarity, quantize, toVectorLiteral, toBase64, fromBase64, DIMENSIONS, BATCH_SIZE }
+module.exports = { embed, embedQuery, blend, model, similarity, quantize, toVectorLiteral, toBase64, fromBase64, DIMENSIONS, BATCH_SIZE }
