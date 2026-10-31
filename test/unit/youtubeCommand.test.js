@@ -193,7 +193,7 @@ describe('/youtube', () => {
     require('../helpers/fakes').installGemini([[{ text: '要約' }]])
     const it = interaction('summarize', [{ name: 'count', value: 1 }])
     await command.func(it)
-    assert.equal(it.replies[0].content, '動画の内容を要約しています（1/1）: 最新\n長い動画は1本で数分かかります。')
+    assert.equal(it.replies[0].content, '動画の内容を要約しています（完了 0/1、1 本を同時に処理中）\n・最新\n長い動画は1本で数分かかります。')
     assert.equal(it.replies[1].content, '1/1 本の動画を要約しました。メンションで依頼したときに AI が参照します。\n✅ [最新](https://www.youtube.com/watch?v=newVideo001)')
     assert.equal(store.summaries[100].newVideo001, '要約')
     assert.equal(it.replies.length, 2)

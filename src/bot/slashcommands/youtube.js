@@ -137,7 +137,13 @@ async function summarize (interaction, sub) {
   try {
     const results = await summarizeLatest(guildID, videos, {
       force,
-      onProgress: (done, total, video) => interaction.editOriginalMessage({ content: `動画の内容を要約しています（${done + 1}/${total}）: ${video.title}\n長い動画は1本で数分かかります。` }).catch(() => {})
+      onProgress: ({ done, total, running }) => interaction.editOriginalMessage({
+        content: [
+          `動画の内容を要約しています（完了 ${done}/${total}、${running.length} 本を同時に処理中）`,
+          ...running.map(v => `・${v.title}`),
+          '長い動画は1本で数分かかります。'
+        ].join('\n').slice(0, 2000)
+      }).catch(() => {})
     })
     const head = `${results.filter(r => !r.error).length}/${results.length} 本の動画を${force ? '要約し直しました' : '要約しました'}。メンションで依頼したときに AI が参照します。`
     // Failures first: with many videos, not every line fits in one message.
