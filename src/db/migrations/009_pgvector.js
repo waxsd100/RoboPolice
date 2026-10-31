@@ -33,6 +33,10 @@ module.exports = async client => {
   // A video without an embedding row is embedded again by the indexer.
   await convert(client, 'youtube_video_embeddings', 'video_id')
 
+  // A parallel HNSW build shares its graph through dynamic shared memory (/dev/shm), which
+  // containers keep small (64 MB by default): the build then fails with "could not resize shared
+  // memory segment". One process builds it in its own memory instead.
+  await client.query('SET LOCAL max_parallel_maintenance_workers = 0')
   for (const table of ['message_embeddings', 'youtube_video_embeddings']) {
     await client.query(`ALTER TABLE ${table} DROP COLUMN embedding`)
     await client.query(`ALTER TABLE ${table} RENAME COLUMN vec TO embedding`)
