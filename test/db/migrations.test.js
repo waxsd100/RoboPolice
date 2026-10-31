@@ -127,17 +127,6 @@ describe('migrations', { skip: !database.available && 'needs PGHOST' }, () => {
     assert.ok(!tables.includes('youtube_websub') && !tables.some(t => t.startsWith('old_')))
   })
 
-  test('what a server stores refers to it; rows of servers the bot left are dropped', async () => {
-    assert.deepEqual((await q('SELECT id FROM messages ORDER BY id')).map(r => r.id), ['m1', 'm2', 'm4'], 'm3 was of a server with no settings; m4 has no server recorded')
-    assert.deepEqual((await q("SELECT guild_id FROM guild_youtube WHERE guild_id = 'g3'")), [], 'g3 had no guilds row')
-    assert.deepEqual(await q('SELECT name FROM embedding_models'), [{ name: 'model-a' }])
-    await q("DELETE FROM guilds WHERE id = 'g1'")
-    assert.deepEqual((await q("SELECT id FROM messages WHERE guild_id = 'g1'")), [])
-    assert.deepEqual((await q("SELECT guild_id FROM guild_youtube WHERE guild_id = 'g1'")), [])
-    assert.deepEqual((await q("SELECT guild_id FROM guild_youtube_summaries WHERE guild_id = 'g1'")), [])
-    await assert.rejects(q("INSERT INTO guild_youtube (guild_id, channel_ref) VALUES ('nowhere', '@x')"), /foreign key/)
-  })
-
   test('embeddings are pgvector halfvecs with an HNSW index; broken ones are made again', async () => {
     const [row] = await q("SELECT format_type(atttypid, atttypmod) AS type FROM pg_attribute WHERE attrelid = 'message_embeddings'::regclass AND attname = 'embedding'")
     assert.equal(row.type, 'halfvec(512)')
@@ -147,5 +136,16 @@ describe('migrations', { skip: !database.available && 'needs PGHOST' }, () => {
     assert.deepEqual((await q('SELECT video_id FROM youtube_video_embeddings')), [{ video_id: 'v1' }])
     const indexes = (await q("SELECT indexname FROM pg_indexes WHERE indexdef LIKE '%hnsw%' ORDER BY indexname")).map(r => r.indexname)
     assert.deepEqual(indexes, ['message_embeddings_hnsw', 'youtube_video_embeddings_hnsw'])
+  })
+
+  test('what a server stores refers to it; rows of servers the bot left are dropped', async () => {
+    assert.deepEqual((await q('SELECT id FROM messages ORDER BY id')).map(r => r.id), ['m1', 'm2', 'm4'], 'm3 was of a server with no settings; m4 has no server recorded')
+    assert.deepEqual((await q("SELECT guild_id FROM guild_youtube WHERE guild_id = 'g3'")), [], 'g3 had no guilds row')
+    assert.deepEqual(await q('SELECT name FROM embedding_models'), [{ name: 'model-a' }])
+    await q("DELETE FROM guilds WHERE id = 'g1'")
+    assert.deepEqual((await q("SELECT id FROM messages WHERE guild_id = 'g1'")), [])
+    assert.deepEqual((await q("SELECT guild_id FROM guild_youtube WHERE guild_id = 'g1'")), [])
+    assert.deepEqual((await q("SELECT guild_id FROM guild_youtube_summaries WHERE guild_id = 'g1'")), [])
+    await assert.rejects(q("INSERT INTO guild_youtube (guild_id, channel_ref) VALUES ('nowhere', '@x')"), /foreign key/)
   })
 })
