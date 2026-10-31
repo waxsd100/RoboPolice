@@ -60,8 +60,8 @@ function createChannel () {
   return { channel, replies }
 }
 
-function mention (channel, content, { author = REQUESTER, member = createMember({ id: author }), messageReference, attachments = [] } = {}) {
-  return { id: '500', content, author: { id: author, username: `user${author}` }, member, channel, messageReference, attachments }
+function mention (channel, content, { author = REQUESTER, member = createMember({ id: author }), messageReference, referencedMessage, attachments = [] } = {}) {
+  return { id: '500', content, author: { id: author, username: `user${author}` }, member, channel, messageReference, referencedMessage, attachments }
 }
 
 function buttons (reply) {
@@ -837,7 +837,7 @@ describe('mention → event / forum post (integration)', () => {
       const { channel, replies } = createChannel()
       installGemini([body => {
         assert.match(body.contents[0].parts[0].text, /### サーバー絵文字（返事で使うときは、この書き方のまま書く）\n<:nobaman_wave:950>/)
-        assert.match(body.systemInstruction.parts[0].text, /サーバー絵文字」があれば、話の流れに合うときにたまに使って/)
+        assert.match(body.systemInstruction.parts[0].text, /サーバー絵文字」があれば、話の流れに合うときに使って[\s\S]*` や ``` で囲まないで/)
         return [call('submit_chat_reply', { text: 'こんばんは :nobaman_wave:' })]
       }])
       await mentionEvent.handle(mention(channel, '<@BOT> こんばんは'))
@@ -859,6 +859,33 @@ describe('mention → event / forum post (integration)', () => {
       await mentionEvent.handle(mention(channel, '<@BOT> それの続きは？', { messageReference: { messageID: '611', channelID: '201' } }))
       assert.equal(requests.length, 1)
       assert.equal(replies[0].state.content, '続きは来週の配信でやる予定はまだ決まってないよ！')
+    } finally {
+      delete MESSAGES['201/610']
+      delete MESSAGES['201/611']
+    }
+  })
+
+  test('chat: a Discord reply to the bot\'s answer, without the mention, is answered too', async () => {
+    MESSAGES['201/610'] = { content: '<@BOT> おすすめの動画ある？', author: { id: REQUESTER, username: `user${REQUESTER}` } }
+    const answer = { id: '611', content: 'マイクラ実況の最新回がおすすめ！', author: { id: 'BOT', username: 'bot' }, messageReference: { messageID: '610', channelID: '201' } }
+    MESSAGES['201/611'] = answer
+    try {
+      const { channel, replies } = createChannel()
+      const requests = installGemini([[call('submit_chat_reply', { text: 'まだ決まってないよ！' })]])
+      await mentionEvent.handle(mention(channel, 'それの続きは？', { messageReference: { messageID: '611', channelID: '201' }, referencedMessage: answer }))
+      assert.equal(requests.length, 1)
+      assert.match(requests[0].body.contents[0].parts[0].text, /それの続きは？/)
+      assert.equal(replies[0].state.content, 'まだ決まってないよ！')
+
+      // Not a reply to the bot's answer: a log or post of the bot (not a reply), or someone else's message.
+      const log = { id: '612', content: 'メッセージが削除されました', author: { id: 'BOT', username: 'bot' }, webhookID: 'W1', messageReference: { messageID: '1' } }
+      const post = { id: '613', content: 'お知らせ', author: { id: 'BOT', username: 'bot' } }
+      const other = { id: '614', content: 'やあ', author: { id: '2', username: 'user2' }, messageReference: { messageID: '1' } }
+      for (const ref of [log, post, other]) {
+        await mentionEvent.handle(mention(channel, 'ふーん', { messageReference: { messageID: ref.id, channelID: '201' }, referencedMessage: ref }))
+      }
+      assert.equal(requests.length, 1)
+      assert.equal(replies.length, 1)
     } finally {
       delete MESSAGES['201/610']
       delete MESSAGES['201/611']
