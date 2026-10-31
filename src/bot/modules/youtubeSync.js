@@ -6,7 +6,7 @@ const { summarizeVideo } = require('./videoSummary')
 
 const DEFAULT_AUTO_SYNC_MINUTES = 15
 const FEED_TIMEOUT_MS = 15000
-const MAX_SUMMARIES = 10
+const MAX_SUMMARIES = 50
 
 // Reads the configured channel from YouTube and adds to what is stored: the whole channel the first
 // time, afterwards only what is new (plus the newest page again, for streams that changed state).

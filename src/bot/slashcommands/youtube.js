@@ -139,13 +139,31 @@ async function summarize (interaction, sub) {
       force,
       onProgress: (done, total, video) => interaction.editOriginalMessage({ content: `動画の内容を要約しています（${done + 1}/${total}）: ${video.title}\n長い動画は1本で数分かかります。` }).catch(() => {})
     })
-    const lines = results.map(({ video, error }) => error ? `⚠️ ${video.title}: ${error}` : `✅ [${video.title}](${video.url})`)
-    const content = `${results.filter(r => !r.error).length}/${results.length} 本の動画を${force ? '要約し直しました' : '要約しました'}。メンションで依頼したときに AI が参照します。\n${lines.join('\n')}`.slice(0, 2000)
-    await finish(interaction, content)
+    const head = `${results.filter(r => !r.error).length}/${results.length} 本の動画を${force ? '要約し直しました' : '要約しました'}。メンションで依頼したときに AI が参照します。`
+    // Failures first: with many videos, not every line fits in one message.
+    const lines = [
+      ...results.filter(r => r.error).map(({ video, error }) => `⚠️ ${video.title}: ${error}`),
+      ...results.filter(r => !r.error).map(({ video }) => `✅ [${video.title}](${video.url})`)
+    ]
+    await finish(interaction, fitLines(head, lines))
     return null
   } finally {
     summarizing.delete(guildID)
   }
+}
+
+// `head` and as many of `lines` as fit in one message, then how many were left out.
+function fitLines (head, lines, max = 2000) {
+  const shown = []
+  for (const [i, line] of lines.entries()) {
+    const rest = lines.length - i - 1
+    const tail = rest ? `\n…ほか ${rest} 本` : ''
+    if ([head, ...shown, line].join('\n').length + tail.length > max) {
+      return `${[head, ...shown].join('\n')}\n…ほか ${lines.length - i} 本`
+    }
+    shown.push(line)
+  }
+  return [head, ...shown].join('\n')
 }
 
 async function run (interaction) {

@@ -213,6 +213,25 @@ describe('/youtube', () => {
     assert.equal(store.summaries[100].newVideo001, '作り直し')
   })
 
+  test('summarize: up to 50 videos; failures first, and what does not fit in one message is counted', async () => {
+    require('../helpers/fakes').configureGateway()
+    const videos = Array.from({ length: 60 }, (_, i) => {
+      const id = `video${String(i).padStart(6, '0')}`
+      return { video_id: id, title: `とても長いタイトルの動画 その${i} ${'あ'.repeat(30)}`, url: `https://www.youtube.com/watch?v=${id}`, live_status: 'none' }
+    })
+    store.knowledge[100] = { channel: { channel_ref: '@x', channel_id: UC }, videos }
+    // One video fails (Gemini returns nothing), the rest are summarized.
+    require('../helpers/fakes').installGemini(Array.from({ length: 50 }, (_, i) => [{ text: i === 7 ? '' : `要約${i}` }]))
+    const it = interaction('summarize', [{ name: 'count', value: 50 }])
+    await command.func(it)
+    const result = it.replies.at(-1).content
+    assert.ok(result.startsWith('49/50 本の動画を要約しました。'))
+    assert.match(result.split('\n')[1], /^⚠️ とても長いタイトルの動画 その7 /, 'the failure comes first')
+    assert.ok(result.length <= 2000)
+    assert.match(result, /\n…ほか \d+ 本$/)
+    assert.equal(Object.keys(store.summaries[100]).length, 49)
+  })
+
   test('summarize: posts the result in the channel when the interaction can no longer be edited', async () => {
     require('../helpers/fakes').configureGateway()
     store.knowledge[100] = { channel: { channel_ref: '@x', channel_id: UC }, videos: [{ video_id: 'newVideo001', title: '最新', url: 'https://www.youtube.com/watch?v=newVideo001', live_status: 'none' }] }
