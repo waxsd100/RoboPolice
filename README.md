@@ -153,9 +153,11 @@ With `TWITTER_ACCOUNTS` set, the streamer's own X posts are knowledge too
 (`src/bot/modules/twitterKnowledge.js`). They are read through FxTwitter's public API
 (api.fxtwitter.com), not X's: the first time up to `TWITTER_MAX_PAGES` pages back, then every
 `TWITTER_REFRESH_HOURS` until posts already stored, one request every 2 seconds, a failed request
-tried again twice. Reposts of others are left out. Posts are stored in `social_posts`, and each
-month's posts are written as one page of the knowledge tables (one line per post with its date and
-URL), so knowledge is taken out of them and they are searched with `search_wiki` like the wiki; the
+tried again twice. Reposts of others are left out. Posts are stored in `x_posts`, and each
+month's posts are written as one page of the X knowledge tables `x_pages` / `x_sections` /
+`x_facts` (one line per post with its date and URL; the same shape as the wiki's tables, kept apart
+from them), so knowledge is taken out of them and they are searched with `search_wiki` together
+with the wiki; the
 model gives a post's URL when it mentions one. FxTwitter is a third-party service and may change or
 stop; nothing stored is lost then.
 
