@@ -138,12 +138,18 @@ function buildPrompt ({ request, referenced, channelName, channelID, server, for
 
 // A failed Gemini call. `hint` is safe to show the requester (who is server staff); `message` has
 // the response body for the logs.
+// `blocked`: why Google refused to answer (a promptFeedback.blockReason such as PROHIBITED_CONTENT,
+// or a safety finishReason), null for any other failure. Asking again with the same input is
+// refused again.
 class GeminiError extends Error {
-  constructor (message, hint) {
+  constructor (message, hint, blocked = null) {
     super(message)
     this.hint = hint
+    this.blocked = blocked
   }
 }
+
+const BLOCKING_FINISH_REASONS = ['SAFETY', 'PROHIBITED_CONTENT', 'BLOCKLIST', 'SPII']
 
 // fetch gives up on a response that has not started after 5 minutes (undici's headersTimeout and
 // bodyTimeout), whatever the AbortSignal says. Gemini answers only once it is done, so a call
@@ -220,7 +226,11 @@ async function geminiRequest (model, method, body, { timeoutMs = GEMINI_TIMEOUT_
 async function callGemini (model, body, options) {
   const data = await geminiRequest(model, 'generateContent', body, options)
   const content = data.candidates?.[0]?.content
-  if (!content?.parts?.length) throw new GeminiError(`Gemini returned no content: ${JSON.stringify(data).slice(0, 1000)}`, 'AI から応答がありませんでした')
+  if (!content?.parts?.length) {
+    const finish = data.candidates?.[0]?.finishReason
+    const blocked = data.promptFeedback?.blockReason || (BLOCKING_FINISH_REASONS.includes(finish) ? finish : null)
+    throw new GeminiError(`Gemini returned no content: ${JSON.stringify(data).slice(0, 1000)}`, 'AI から応答がありませんでした', blocked)
+  }
   return content
 }
 

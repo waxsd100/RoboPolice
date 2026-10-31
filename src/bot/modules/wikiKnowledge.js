@@ -126,7 +126,15 @@ async function extractPending ({ log = () => {} } = {}) {
         await tables.saveFacts(section.url, section.position, section.text_hash, await extractFacts(section))
         done++
       } catch (e) {
-        log(`Could not take knowledge out of ${section.title} / ${section.heading}: ${e.message}`)
+        if (e.blocked) {
+          // Google refuses this text (e.g. PROHIBITED_CONTENT) and would again: it is marked done with
+          // no knowledge, not sent again until it changes. Its text is still embedded and searchable.
+          await tables.saveFacts(section.url, section.position, section.text_hash, [])
+            .then(() => global.logger.info(`[KNOWLEDGE]: Skipped ${section.title} / ${section.heading}: Gemini blocked it (${e.blocked})`))
+            .catch(err => log(`Could not mark ${section.title} / ${section.heading} as skipped: ${err.message}`))
+        } else {
+          log(`Could not take knowledge out of ${section.title} / ${section.heading}: ${e.message}`)
+        }
       }
     }
   }
