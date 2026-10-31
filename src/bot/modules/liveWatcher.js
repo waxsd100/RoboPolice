@@ -15,6 +15,8 @@ const { fetchVideos } = require('../utils/youtube')
 const { feedVideoIds } = require('./youtubeSync')
 const urlFetcher = require('../utils/urlFetcher')
 const { cropTo, SIZES } = require('../utils/imageCrop')
+const { describeStream } = require('./streamBlurb')
+const { isGatewayConfigured } = require('../utils/aiGateway')
 
 const DEFAULT_POLL_SECONDS = 60
 const DEFAULT_LENGTH_MS = 2 * 60 * 60 * 1000
@@ -24,7 +26,8 @@ const START_MARGIN_MS = 60 * 1000
 const EXTEND_BEFORE_MS = 15 * 60 * 1000
 const EXTEND_BY_MS = 60 * 60 * 1000
 const STATUS = { scheduled: 1, active: 2, completed: 3, canceled: 4 }
-const MAX_DESCRIPTION = 900
+// Discord takes up to 1000 characters; the stream's URL goes last.
+const MAX_DESCRIPTION = 1000
 
 function pollSeconds () {
   const raw = process.env.YOUTUBE_LIVE_POLL_SECONDS
@@ -36,28 +39,51 @@ function request (method, url, body) {
   return global.bot.requestHandler.request(method, url, true, body)
 }
 
-// The stream's thumbnail as an event cover, or nothing if it can't be read.
-async function coverOf (video) {
-  if (!video.thumbnail) return {}
+// The stream's thumbnail ({ buffer, mimeType }), or null if it can't be read.
+async function thumbnailOf (video) {
+  if (!video.thumbnail) return null
   try {
-    const { buffer } = await urlFetcher.fetchImage(video.thumbnail)
-    return { image: `data:image/jpeg;base64,${(await cropTo(buffer, SIZES.eventCover)).toString('base64')}` }
+    const { buffer, contentType } = await urlFetcher.fetchImage(video.thumbnail)
+    return { buffer, mimeType: contentType || 'image/jpeg' }
+  } catch (_) {
+    return null
+  }
+}
+
+// The thumbnail as an event cover, or nothing.
+async function coverOf (thumbnail) {
+  if (!thumbnail) return {}
+  try {
+    return { image: `data:image/jpeg;base64,${(await cropTo(thumbnail.buffer, SIZES.eventCover)).toString('base64')}` }
   } catch (_) {
     return {}
   }
 }
 
+// What the AI says the stream is about (when it can), then as much of the stream's description as
+// fits, then its URL.
+function eventDescription (video, blurb) {
+  const tail = `\n\n${video.url}`
+  const head = blurb ? `${blurb}\n\n` : ''
+  const room = Math.max(MAX_DESCRIPTION - head.length - tail.length, 0)
+  const own = (video.description || '').trim()
+  const excerpt = own.length > room ? `${own.slice(0, Math.max(room - 1, 0))}…` : own
+  return `${head}${excerpt}${tail}`.trim()
+}
+
 async function createEvent (guild, video, start) {
   const end = new Date(start.getTime() + DEFAULT_LENGTH_MS)
+  const thumbnail = await thumbnailOf(video)
+  const blurb = await describeStream(video, thumbnail)
   const created = await request('POST', `/guilds/${guild.id}/scheduled-events`, {
     name: video.title.slice(0, 100),
-    description: `${(video.description || '').slice(0, MAX_DESCRIPTION)}\n\n${video.url}`.trim(),
+    description: eventDescription(video, blurb),
     privacy_level: 2,
     entity_type: 3,
     entity_metadata: { location: video.url.slice(0, 100) },
     scheduled_start_time: start.toISOString(),
     scheduled_end_time: end.toISOString(),
-    ...(await coverOf(video)),
+    ...(await coverOf(thumbnail)),
     reason: 'YouTube stream'
   })
   return { eventID: created.id, scheduledEnd: end }
@@ -173,6 +199,33 @@ async function watchedGuilds (channelID = null) {
     .filter(c => c.live_events && global.bot.guilds.has(c.guild_id) && (!channelID || c.channel_id === channelID))
 }
 
+// Once a stream is over and YouTube has its archive, what was said in it is summarized and stored
+// like any video summary, for the mention assistant (LIVE_ARCHIVE_SUMMARY=false turns it off).
+// An archive is first tried 30 minutes after the stream ends, then hourly, at most three times.
+// One at a time per worker, in the background: a summary takes minutes and the poll must go on.
+let summarizingArchive = false
+function archiveSummariesEnabled () {
+  return isGatewayConfigured() && process.env.LIVE_ARCHIVE_SUMMARY !== 'false'
+}
+
+async function summarizeArchives (guildID) {
+  if (summarizingArchive || !archiveSummariesEnabled()) return null
+  summarizingArchive = true
+  try {
+    const [archive] = await youtubeDB.archivesToSummarize(guildID)
+    if (!archive) return null
+    await youtubeDB.recordArchiveAttempt(guildID, archive.video_id)
+    await require('./videoSummary').summarizeVideo(guildID, archive.url)
+    global.logger.info(`[LIVE]: Summarized the archive of ${archive.video_id} in ${guildID}`)
+    return archive.video_id
+  } catch (e) {
+    global.logger.warn(`[LIVE]: Could not summarize an archive in ${guildID}, trying again later: ${e.message}`)
+    return null
+  } finally {
+    summarizingArchive = false
+  }
+}
+
 // One periodic pass at a time; a push checks its channel right away, alongside.
 let polling = false
 async function checkAll (channelID = null) {
@@ -183,6 +236,7 @@ async function checkAll (channelID = null) {
   try {
     for (const { guild_id: guildID, channel_id: id } of await watchedGuilds(channelID)) {
       await checkGuild(guildID, id).catch(e => global.logger.warn(`[LIVE]: Checking ${guildID} failed: ${e.message}`))
+      summarizeArchives(guildID) // not awaited
     }
   } catch (e) {
     global.logger.warn(`[LIVE]: Checking streams failed: ${e.message}`)
@@ -201,4 +255,4 @@ function startWatcher () {
   return setInterval(() => checkAll(), seconds * 1000)
 }
 
-module.exports = { startWatcher, checkAll, checkGuild, follow, STATUS }
+module.exports = { startWatcher, checkAll, checkGuild, follow, summarizeArchives, eventDescription, STATUS }

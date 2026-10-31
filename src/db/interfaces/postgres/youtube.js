@@ -155,11 +155,34 @@ async function getLiveEvents (guildID) {
   return Object.fromEntries(rows.rows.map(r => [r.video_id, r]))
 }
 
+// ended_at is set the first time the event is completed.
 async function saveLiveEvent (guildID, videoID, { eventID, status, scheduledStart, scheduledEnd }) {
   await pool.query(
-    `INSERT INTO youtube_live_events (guild_id, video_id, event_id, status, scheduled_start, scheduled_end) VALUES ($1, $2, $3, $4, $5, $6)
-     ON CONFLICT (guild_id, video_id) DO UPDATE SET event_id = $3, status = $4, scheduled_start = $5, scheduled_end = $6`,
+    `INSERT INTO youtube_live_events (guild_id, video_id, event_id, status, scheduled_start, scheduled_end, ended_at)
+     VALUES ($1, $2, $3, $4, $5, $6, CASE WHEN $4 = 'completed' THEN now() END)
+     ON CONFLICT (guild_id, video_id) DO UPDATE SET event_id = $3, status = $4, scheduled_start = $5, scheduled_end = $6,
+       ended_at = COALESCE(youtube_live_events.ended_at, CASE WHEN $4 = 'completed' THEN now() END)`,
     [guildID, videoID, eventID, status, scheduledStart, scheduledEnd])
+}
+
+// The server's streams that are over and whose archive has no summary yet, oldest ending first:
+// ended at least `waitMinutes` ago, tried fewer than `maxAttempts` times and not in the last
+// `retryMinutes`. [{ video_id, url }]
+async function archivesToSummarize (guildID, { waitMinutes = 30, retryMinutes = 60, maxAttempts = 3, limit = 1 } = {}) {
+  const rows = await pool.query(
+    `SELECT e.video_id, 'https://www.youtube.com/watch?v=' || e.video_id AS url FROM youtube_live_events e
+     WHERE e.guild_id = $1 AND e.status = 'completed' AND e.ended_at < now() - make_interval(mins => $2)
+       AND e.archive_attempts < $4 AND (e.archive_tried_at IS NULL OR e.archive_tried_at < now() - make_interval(mins => $3))
+       AND NOT EXISTS (SELECT 1 FROM youtube_summaries s WHERE s.video_id = e.video_id)
+     ORDER BY e.ended_at LIMIT $5`,
+    [guildID, waitMinutes, retryMinutes, maxAttempts, limit])
+  return rows.rows
+}
+
+async function recordArchiveAttempt (guildID, videoID) {
+  await pool.query(
+    'UPDATE youtube_live_events SET archive_attempts = archive_attempts + 1, archive_tried_at = now() WHERE guild_id = $1 AND video_id = $2',
+    [guildID, videoID])
 }
 
 // Channels some server has set whose push subscription runs out before `before` (or that have none).
@@ -224,4 +247,4 @@ async function deleteGuildYouTube (guildID) {
   await collectGarbage()
 }
 
-module.exports = { setChannel, getVideoIds, saveSync, getKnowledge, getOverview, listChannels, setLiveEvents, upsertVideos, getLiveVideoIds, getLiveEvents, saveLiveEvent, websubDue, saveWebsub, isKnownChannel, getSummary, saveSummary, getOtherSummaries, deleteGuildYouTube }
+module.exports = { setChannel, getVideoIds, saveSync, getKnowledge, getOverview, listChannels, setLiveEvents, upsertVideos, getLiveVideoIds, getLiveEvents, saveLiveEvent, archivesToSummarize, recordArchiveAttempt, websubDue, saveWebsub, isKnownChannel, getSummary, saveSummary, getOtherSummaries, deleteGuildYouTube }
