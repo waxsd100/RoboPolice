@@ -140,7 +140,9 @@ async function summarize (interaction, sub) {
       onProgress: ({ done, total, running }) => interaction.editOriginalMessage({
         content: [
           `動画の内容を要約しています（完了 ${done}/${total}、${running.length} 本を同時に処理中）`,
-          ...running.map(v => `・${v.title}`),
+          // Linked (with Discord's preview turned off, so the progress message stays small), with
+          // the video's ID.
+          ...running.map(v => `・[${String(v.title).replace(/[[\]]/g, '')}](<${v.url}>)（ID: \`${v.video_id}\`）`),
           '長い動画は1本で数分かかります。'
         ].join('\n').slice(0, 2000)
       }).catch(() => {})
@@ -148,8 +150,8 @@ async function summarize (interaction, sub) {
     const head = `${results.filter(r => !r.error).length}/${results.length} 本の動画を${force ? '要約し直しました' : '要約しました'}。メンションで依頼したときに AI が参照します。`
     // Failures first: with many videos, not every line fits in one message.
     const lines = [
-      ...results.filter(r => r.error).map(({ video, error }) => `⚠️ ${video.title}: ${error}`),
-      ...results.filter(r => !r.error).map(({ video }) => `✅ [${video.title}](${video.url})`)
+      ...results.filter(r => r.error).map(({ video, error }) => `⚠️ [${video.title}](<${video.url}>)（ID: \`${video.video_id}\`）: ${error}`),
+      ...results.filter(r => !r.error).map(({ video }) => `✅ [${video.title}](<${video.url}>)`)
     ]
     await finish(interaction, fitLines(head, lines))
     return null
