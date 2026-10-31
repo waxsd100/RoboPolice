@@ -3,7 +3,7 @@ const { test, describe, before, after } = require('node:test')
 const assert = require('node:assert/strict')
 const database = require('./database')
 require('../helpers/fakes')
-const { backfill, discordClient, snowflakeAt } = require('../../src/miscellaneous/backfillChannels')
+const { backfill, startBackfill, discordClient, snowflakeAt, DONE_KEY } = require('../../src/miscellaneous/backfillChannels')
 
 describe('backfillChannels', { skip: !database.available && 'needs PGHOST' }, () => {
   let pool
@@ -74,5 +74,46 @@ describe('backfillChannels', { skip: !database.available && 'needs PGHOST' }, ()
     })
     assert.deepEqual(await get('/x'), ['ok'])
     assert.deepEqual(waits, [1500, 200])
+  })
+
+  test('in the background: runs once, records that it is done, and can be turned off', async () => {
+    const store = new Map()
+    const redis = { get: async k => store.get(k) || null, set: async (k, v) => store.set(k, v) }
+    const quiet = { startup () {}, info () {}, warn () {} }
+    let requests = 0
+    const get = async path => {
+      requests++
+      return path.endsWith('/channels') ? [] : { threads: [] }
+    }
+    // One message is still unknown from the first test, and Discord has nothing for it.
+    assert.deepEqual(await startBackfill({ pool, redis, get, log: quiet }), { filled: 0, remaining: 1 })
+    assert.ok(store.get(DONE_KEY))
+    const before = requests
+    assert.equal(await startBackfill({ pool, redis, get, log: quiet }), null)
+    assert.equal(requests, before, 'not again once done')
+
+    store.clear()
+    process.env.BACKFILL_CHANNELS = 'false'
+    try {
+      assert.equal(await startBackfill({ pool, redis, get, log: quiet }), null)
+      assert.equal(requests, before)
+    } finally {
+      delete process.env.BACKFILL_CHANNELS
+    }
+
+    // A failure is logged and tried again at the next start.
+    const warned = []
+    const failing = async () => { throw new Error('Discord down') }
+    assert.equal(await startBackfill({ pool, redis, get: failing, log: { ...quiet, warn: m => warned.push(m) } }), null)
+    assert.match(warned[0], /Stopped: Discord down/)
+    assert.equal(store.get(DONE_KEY), undefined)
+  })
+
+  test('paces its requests', async () => {
+    const waits = []
+    const get = discordClient({ token: 't', pace: 250, wait: async ms => waits.push(ms), fetchImpl: async () => ({ ok: true, status: 200, headers: new Map(), json: async () => [] }) })
+    await get('/a')
+    await get('/b')
+    assert.deepEqual(waits, [250, 250])
   })
 })

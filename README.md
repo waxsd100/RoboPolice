@@ -350,10 +350,12 @@ layout: settings, image URLs and YouTube data move to their own tables and the o
 dropped, so going back to an older version needs the backup.
 
 Messages stored before channels were recorded have no `channel_id` and `guild_id`, so channel
-history and message search never find them. `npm run backfill-channels` fills them in once: it
-reads every channel and thread of each server back to the oldest such message (100 messages a
-request, waiting out rate limits) and matches IDs. Messages no longer on Discord stay unknown. It
-needs `BOT_TOKEN` and the `PG*` settings, and can be stopped and run again.
+history and message search never find them. The bot fills them in once, in the background after
+it starts: it reads every channel and thread of each server back to the oldest such message (100
+messages a request, one request every 250 ms, waiting out rate limits) and matches IDs. Messages no
+longer on Discord stay unknown. When it has finished, Redis records it (`backfill-channels:done`)
+and it does not run again; if it stops on an error, it tries again at the next start.
+`BACKFILL_CHANNELS=false` turns it off; `npm run backfill-channels` runs it by hand.
 
 A change to the schema is a new file (`NNN_name.sql`, or `NNN_name.js` exporting
 `async client => {}` for data SQL alone can't change); a file already applied is never edited.

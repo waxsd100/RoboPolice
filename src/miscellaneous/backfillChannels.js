@@ -1,12 +1,13 @@
-// One-off: fills channel_id and guild_id of messages stored before they were recorded. Discord
+// Fills channel_id and guild_id of messages stored before they were recorded. Discord
 // cannot say which channel a message ID is in, so this reads the history of every channel and
 // thread of each server back to the oldest such message (100 messages a request) and matches IDs.
 // Messages no longer on Discord stay as they are.
 //
-//   node src/miscellaneous/backfillChannels.js   (npm run backfill-channels)
-//
-// Needs BOT_TOKEN and the PG* settings, like the bot. Safe to stop and run again: it only touches
-// rows whose channel is still unknown.
+// The bot runs it once in the background (startBackfill, from the shard 0 worker), slowly so its
+// own requests keep their share of the rate limit, and records in Redis that it is done.
+// BACKFILL_CHANNELS=false turns that off. By hand: node src/miscellaneous/backfillChannels.js
+// (npm run backfill-channels). Safe to stop and run again: it only touches rows whose channel is
+// still unknown.
 const DISCORD_EPOCH = 1420070400000n
 const API = 'https://discord.com/api/v10'
 // Channel types whose messages can be read: text, voice, announcement, stage, and threads.
@@ -19,8 +20,10 @@ const sleep = ms => new Promise(resolve => setTimeout(resolve, ms))
 
 // GET from Discord, waiting out rate limits. Resolves to the JSON, or null for a channel the bot
 // cannot read (403) or that is gone (404).
-function discordClient ({ token, fetchImpl = fetch, wait = sleep }) {
+// pace: milliseconds to wait before each request.
+function discordClient ({ token, fetchImpl = fetch, wait = sleep, pace = 0 }) {
   return async function get (path) {
+    if (pace) await wait(pace)
     for (;;) {
       const res = await fetchImpl(`${API}${path}`, { headers: { Authorization: `Bot ${token}` } })
       if (res.status === 429) {
@@ -99,7 +102,33 @@ async function backfill ({ pool, get, log = () => {} }) {
   return { filled, remaining: pending.size }
 }
 
-module.exports = { backfill, channelsOf, messageIdPages, discordClient, snowflakeAt }
+const DONE_KEY = 'backfill-channels:done'
+const PACE_MS = 250
+
+// Runs the backfill once in the background, unless it has finished before or is turned off.
+// Resolves when it ends (the bot does not wait for it).
+async function startBackfill ({ pool = require('../db/clients/postgres'), redis = global.redis, get = discordClient({ token: process.env.BOT_TOKEN, pace: PACE_MS }), log = global.logger } = {}) {
+  if (process.env.BACKFILL_CHANNELS === 'false') return null
+  try {
+    if (await redis.get(DONE_KEY)) return null
+    const pending = (await pool.query('SELECT count(*)::int AS n FROM messages WHERE channel_id IS NULL')).rows[0].n
+    if (pending === 0) {
+      await redis.set(DONE_KEY, new Date().toISOString())
+      return null
+    }
+    log.startup(`[BACKFILL]: Finding the channel of ${pending.toLocaleString()} message(s) stored before channels were recorded, in the background.`)
+    const result = await backfill({ pool, get, log: m => log.info(`[BACKFILL]: ${m}`) })
+    await redis.set(DONE_KEY, new Date().toISOString())
+    log.info(`[BACKFILL]: Filled the channel of ${result.filled.toLocaleString()} message(s); ${result.remaining.toLocaleString()} are no longer on Discord and stay unknown.`)
+    return result
+  } catch (e) {
+    // Tried again at the next start.
+    log.warn(`[BACKFILL]: Stopped: ${e.message}`)
+    return null
+  }
+}
+
+module.exports = { backfill, startBackfill, channelsOf, messageIdPages, discordClient, snowflakeAt, DONE_KEY }
 
 if (require.main === module) {
   require('dotenv').config()
