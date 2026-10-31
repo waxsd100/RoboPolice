@@ -61,7 +61,7 @@ configured** — a server with none never has message content stored, since noth
 
 ### メンション（BOT に話しかける）
 
-`@ロボポリス` と BOT にメンションして、文章で頼みます。1人1日30回まで（`MENTION_DAILY_LIMIT`）。
+`@ロボポリス` と BOT にメンションして、文章で頼みます。オーナーのサーバーでは1人1日30回まで（`MENTION_DAILY_LIMIT`）、それ以外のサーバーでは1人1日5回・サーバー全体で1日30回まで。
 
 | 使い方 | 例 | 必要な権限 |
 |---|---|---|
@@ -158,9 +158,17 @@ Each worker does this in the background for the servers it hosts, at startup and
 emojis change; a renamed emoji is described again. The profile then lists each emoji with its
 description, those closest in meaning to the request first. `EMOJI_DESCRIPTIONS=false` turns it off.
 
-Each user can have 30 mentions answered per day (Japan time), across servers, counted in Redis
-(`src/bot/utils/mentionQuota.js`, `MENTION_DAILY_LIMIT`). If Redis is unreachable the mention goes
-through.
+Mentions answered per day (Japan time) are counted in Redis (`src/bot/utils/mentionQuota.js`): in
+the owner's servers (`OWNER_GUILD_IDS`) 30 per user (`MENTION_DAILY_LIMIT`); in any other server 5
+per user and 30 for the whole server (`MENTION_DAILY_LIMIT_OTHER`, `MENTION_GUILD_DAILY_LIMIT_OTHER`).
+If Redis is unreachable the mention goes through.
+
+Everything the bot does with AI in the background (video and archive summaries, emoji descriptions,
+stream blurbs) goes through one queue per worker (`src/bot/utils/backgroundQueue.js`,
+`AI_BACKGROUND_CONCURRENCY` at a time), where the owner's servers always go first; other servers'
+work waits until none of theirs is waiting. A stream blurb for another server that does not get its
+turn within a minute is left out rather than holding up the event. Message and video embeddings,
+YouTube syncs, stream checks and emoji descriptions also take the owner's servers first.
 
 Drafting is a Gemini function-calling loop (`src/bot/modules/eventDrafter.js`) over read-only tools
 (`src/bot/modules/eventTools.js`): fetch a web page, read a Discord message by link, read a channel's
@@ -460,6 +468,9 @@ the secrets if it leaks, so keep it only on the platform and delete it in the co
 | `VIDEO_SUMMARY_TIMEOUT_MINUTES` | Optional. How long a video summary may take. Defaults to 10 |
 | `WIKI_URLS` | Optional. Top pages of the community's wikis (comma-separated), e.g. `https://novamanhikoushiki.memo.wiki/`. Read in full weekly, split at headings and embedded; the model searches them with `search_wiki` (characters, quotes, running jokes), and emoji descriptions name the characters they describe |
 | `WIKI_REFRESH_HOURS`, `WIKI_DELAY_MS` | Optional. How often a wiki is read again (default 168) and the wait between its pages (default 1000) |
+| `OWNER_GUILD_IDS` | Optional. The owner's servers (comma-separated), default `615170683068219393`. They get the looser mention limit and go first in all background AI work; every other server waits for them |
+| `MENTION_DAILY_LIMIT_OTHER`, `MENTION_GUILD_DAILY_LIMIT_OTHER` | Optional. Mentions a day outside the owner's servers: per user (default 5) and for the whole server (default 30). `MENTION_DAILY_LIMIT` (default 30) is per user in the owner's servers. 0 turns a limit off |
+| `AI_BACKGROUND_CONCURRENCY` | Optional. How many background AI jobs (video and archive summaries, emoji descriptions, stream blurbs) run at once on a worker (default 3) |
 | `EMOJI_DESCRIPTIONS` | Optional. `false` stops describing the server's custom emojis (Gemini looks at each one's image and name; the descriptions are embedded so the emojis that suit a request are offered first) |
 | `LIVE_EVENT_AI_DESCRIPTION` | Optional. `false` stops the AI's line on what a stream is about (from its title, description and thumbnail) at the top of its Discord event |
 | `LIVE_ARCHIVE_SUMMARY` | Optional. `false` stops summarizing a stream's archive once it is over (tried 30 minutes after it ends, then hourly, three times at most) |

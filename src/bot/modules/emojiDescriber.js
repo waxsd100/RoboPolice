@@ -11,6 +11,8 @@ const { callGemini, DEFAULT_GEMINI_MODEL } = require('./eventDrafter')
 const { embed, model } = require('../utils/embeddings')
 const { isGatewayConfigured } = require('../utils/aiGateway')
 const { withoutCharCount } = require('../utils/textClean')
+const backgroundQueue = require('../utils/backgroundQueue')
+const { ownerFirst } = require('../utils/priority')
 
 const PER_RUN = 50
 const MAX_DESCRIPTION = 80
@@ -63,7 +65,8 @@ async function syncGuild (guild) {
   let described = 0
   for (const emoji of await store.emojisToDescribe(guild.id, PER_RUN, hash)) {
     try {
-      await store.saveDescription(emoji.emoji_id, emoji.name, await describeEmoji(emoji, characters.text), hash)
+      const description = await backgroundQueue.run(guild.id, () => describeEmoji(emoji, characters.text))
+      await store.saveDescription(emoji.emoji_id, emoji.name, description, hash)
       described++
     } catch (e) {
       global.logger.warn(`[EMOJIS]: Could not describe :${emoji.name}: in ${guild.id}: ${e.message}`)
@@ -87,7 +90,8 @@ async function drain () {
   running = true
   try {
     while (queue.size) {
-      const [id, guild] = queue.entries().next().value
+      // The owner's servers first.
+      const [id, guild] = ownerFirst([...queue.entries()], ([id]) => id)[0]
       queue.delete(id)
       await syncGuild(guild).catch(e => global.logger.warn(`[EMOJIS]: Could not sync ${id}: ${e.message}`))
     }

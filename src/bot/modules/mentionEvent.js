@@ -373,8 +373,12 @@ async function handle (message) {
     let reply
     try {
       reply = await message.channel.createMessage({ content: '内容を読み取っています…', ...reference })
-      const quota = await mentionQuota.take(message.author.id)
-      if (!quota.allowed) throw new StopDrafting(`今日の利用回数の上限（1日${quota.limit}回）に達しました。明日（日本時間の0時以降）またお試しください。`)
+      const quota = await mentionQuota.take(message.author.id, guild.id)
+      if (!quota.allowed) {
+        throw new StopDrafting(quota.scope === 'guild'
+          ? `このサーバーの今日の利用回数の上限（1日${quota.limit}回）に達しました。明日（日本時間の0時以降）またお試しください。`
+          : `今日の利用回数の上限（1日${quota.limit}回）に達しました。明日（日本時間の0時以降）またお試しください。`)
+      }
       usage.onWait = ms => reply.edit({ content: `AI が混み合っているため、${Math.ceil(ms / 1000)} 秒待ってから再試行します…` }).catch(() => {})
       const member = message.member
       const tools = createTools({

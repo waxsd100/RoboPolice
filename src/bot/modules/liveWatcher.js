@@ -16,6 +16,7 @@ const { feedVideoIds } = require('./youtubeSync')
 const urlFetcher = require('../utils/urlFetcher')
 const { cropTo, SIZES } = require('../utils/imageCrop')
 const { describeStream } = require('./streamBlurb')
+const { ownerFirst } = require('../utils/priority')
 const { isGatewayConfigured } = require('../utils/aiGateway')
 
 const DEFAULT_POLL_SECONDS = 60
@@ -74,7 +75,7 @@ function eventDescription (video, blurb) {
 async function createEvent (guild, video, start) {
   const end = new Date(start.getTime() + DEFAULT_LENGTH_MS)
   const thumbnail = await thumbnailOf(video)
-  const blurb = await describeStream(video, thumbnail)
+  const blurb = await describeStream(video, thumbnail, guild.id)
   const created = await request('POST', `/guilds/${guild.id}/scheduled-events`, {
     name: video.title.slice(0, 100),
     description: eventDescription(video, blurb),
@@ -234,7 +235,7 @@ async function checkAll (channelID = null) {
     polling = true
   }
   try {
-    for (const { guild_id: guildID, channel_id: id } of await watchedGuilds(channelID)) {
+    for (const { guild_id: guildID, channel_id: id } of ownerFirst(await watchedGuilds(channelID), c => c.guild_id)) {
       await checkGuild(guildID, id).catch(e => global.logger.warn(`[LIVE]: Checking ${guildID} failed: ${e.message}`))
       summarizeArchives(guildID) // not awaited
     }
