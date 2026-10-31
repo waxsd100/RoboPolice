@@ -4,6 +4,7 @@ const prune = require('../../miscellaneous/prune')
 const youtubeSync = require('../modules/youtubeSync')
 const embeddingIndexer = require('../modules/embeddingIndexer')
 const liveWatcher = require('../modules/liveWatcher')
+const { saveGuildDetails } = require('../../db/interfaces/postgres/update')
 
 let failedHealthCheckCount = 0
 
@@ -21,6 +22,11 @@ module.exports = {
       // ...and, once, finds the channel of messages stored before channels were recorded.
       require('../../miscellaneous/backfillChannels').startBackfill()
     }
+    // Every worker keeps the details of the servers it hosts current (member counts change hourly enough).
+    const saveDetails = () => Promise.all([...global.bot.guilds.values()].map(g => saveGuildDetails(g)))
+      .catch(e => global.logger.warn(`Could not save server details: ${e.message}`))
+    saveDetails()
+    setInterval(saveDetails, 60 * 60 * 1000)
     // Every worker checks the servers it hosts for new YouTube videos.
     youtubeSync.startAutoSync()
     // ...and follows their streams, for those that turned stream events on.

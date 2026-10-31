@@ -7,6 +7,7 @@ async function createGuild (guild) {
   try {
     // Settings start empty: no event is logged, no channel ignored (see migrations/002_guild_settings.sql).
     await pool.query('INSERT INTO guilds (id, owner_id) VALUES ($1, $2) ON CONFLICT (id) DO NOTHING', [guild.id, guild.ownerID])
+    await require('./update').saveGuildDetails(guild)
     await cacheGuild(guild.id)
   } catch (e) {
     global.logger.warn(`Could not create the settings of ${guild.id}: ${e.message}`)
