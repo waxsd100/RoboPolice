@@ -9,6 +9,10 @@ require('../helpers/fakes')
 
 describe('migrations', { skip: !database.available && 'needs PGHOST' }, () => {
   let pool, aes, migrate
+  // An embedding as stored before pgvector: 512 signed bytes, base64.
+  const legacyBytes = new Int8Array(512)
+  legacyBytes[0] = 127
+  const legacyVector = Buffer.from(legacyBytes.buffer).toString('base64')
   const q = async (sql, args) => (await pool.query(sql, args)).rows
 
   before(async () => {
@@ -27,11 +31,13 @@ describe('migrations', { skip: !database.available && 'needs PGHOST' }, () => {
     const piece = url => aes.encrypt(Buffer.from(url).toString('base64url'))
     await q(`INSERT INTO messages (id, author_id, content, attachment_b64, ts, channel_id, guild_id, embedded) VALUES
       ('m1', 'u1', $1, $2, '2026-10-01', 'c1', 'g1', true),
-      ('m2', 'u1', $1, '', '2026-10-02', 'c1', 'g1', false),
+      ('m2', 'u1', $1, '', '2026-10-02', 'c1', 'g1', true),
       ('m3', 'u1', $1, '', '2026-10-03', 'c7', 'left-server', false),
       ('m4', 'u1', $1, '', '2026-09-01', NULL, NULL, false)`,
     [aes.encrypt('hi'), [piece('https://cdn/a.png'), piece('https://cdn/b.png')].join('|')])
-    await q("INSERT INTO message_embeddings (message_id, guild_id, channel_id, ts, embedding, model) VALUES ('m1', 'g1', 'c1', '2026-10-01', $1, 'model-a')", [aes.encrypt('vec')])
+    await q("INSERT INTO message_embeddings (message_id, guild_id, channel_id, ts, embedding, model) VALUES ('m1', 'g1', 'c1', '2026-10-01', $1, 'model-a')", [aes.encrypt(legacyVector)])
+    // Not 512 components: dropped, and the message embedded again.
+    await q("INSERT INTO message_embeddings (message_id, guild_id, channel_id, ts, embedding, model) VALUES ('m2', 'g1', 'c1', '2026-10-02', $1, 'model-a')", [aes.encrypt('AAAA')])
     // Two servers with the same channel, so every video is stored twice; one legacy row without an ID.
     await q(`INSERT INTO youtube_channels (guild_id, channel_ref, channel_id, title, synced_at, backfill_token, live_events) VALUES
       ('g1', '@chan', 'UC1', 'チャンネル', '2026-10-01', NULL, true),
@@ -39,8 +45,8 @@ describe('migrations', { skip: !database.available && 'needs PGHOST' }, () => {
       ('g3', '@legacy', NULL, NULL, NULL, NULL, false)`)
     for (const guild of ['g1', 'g2']) {
       await q(`INSERT INTO youtube_videos (guild_id, video_id, title, published_at, live_status, url, embedding, embedding_hash, embedding_model) VALUES
-        ($1, 'v1', '動画1', '2026-09-01', 'none', 'https://www.youtube.com/watch?v=v1', 'e1', 'h1', 'model-a'),
-        ($1, 'v2', '配信', '2026-09-02', 'upcoming', 'https://www.youtube.com/watch?v=v2', NULL, NULL, NULL)`, [guild])
+        ($1, 'v1', '動画1', '2026-09-01', 'none', 'https://www.youtube.com/watch?v=v1', $2, 'h1', 'model-a'),
+        ($1, 'v2', '配信', '2026-09-02', 'upcoming', 'https://www.youtube.com/watch?v=v2', NULL, NULL, NULL)`, [guild, legacyVector])
     }
     await q(`INSERT INTO youtube_summaries (guild_id, video_id, summary, created_at) VALUES
       ('g1', 'v1', '古い要約', '2026-09-01'), ('g2', 'v1', '新しい要約', '2026-09-05'), ('g1', 'x9', '他チャンネルの要約', '2026-09-03')`)
@@ -89,7 +95,7 @@ describe('migrations', { skip: !database.available && 'needs PGHOST' }, () => {
   test('message content, image URLs and embeddings are no longer encrypted in the app', async () => {
     assert.deepEqual(await q("SELECT id, content FROM messages WHERE id IN ('m1', 'm2') ORDER BY id"), [{ id: 'm1', content: 'hi' }, { id: 'm2', content: 'hi' }])
     assert.deepEqual((await q('SELECT url FROM message_attachments ORDER BY position')).map(r => r.url), ['https://cdn/a.png', 'https://cdn/b.png'])
-    assert.deepEqual(await q('SELECT embedding FROM message_embeddings'), [{ embedding: 'vec' }])
+    assert.deepEqual(await q('SELECT message_id FROM message_embeddings'), [{ message_id: 'm1' }])
   })
 
   test('channels and videos are stored once, servers point at them', async () => {
@@ -130,5 +136,16 @@ describe('migrations', { skip: !database.available && 'needs PGHOST' }, () => {
     assert.deepEqual((await q("SELECT guild_id FROM guild_youtube WHERE guild_id = 'g1'")), [])
     assert.deepEqual((await q("SELECT guild_id FROM guild_youtube_summaries WHERE guild_id = 'g1'")), [])
     await assert.rejects(q("INSERT INTO guild_youtube (guild_id, channel_ref) VALUES ('nowhere', '@x')"), /foreign key/)
+  })
+
+  test('embeddings are pgvector halfvecs with an HNSW index; broken ones are made again', async () => {
+    const [row] = await q("SELECT format_type(atttypid, atttypmod) AS type FROM pg_attribute WHERE attrelid = 'message_embeddings'::regclass AND attname = 'embedding'")
+    assert.equal(row.type, 'halfvec(512)')
+    const [m1] = await q("SELECT 1 - (embedding <=> $1::halfvec) AS score FROM message_embeddings WHERE message_id = 'm1'", [`[${['1', ...Array(511).fill('0')].join(',')}]`])
+    assert.ok(Math.abs(Number(m1.score) - 1) < 0.001, 'the vector survived the conversion')
+    assert.deepEqual((await q("SELECT embedded FROM messages WHERE id = 'm2'")), [{ embedded: false }])
+    assert.deepEqual((await q('SELECT video_id FROM youtube_video_embeddings')), [{ video_id: 'v1' }])
+    const indexes = (await q("SELECT indexname FROM pg_indexes WHERE indexdef LIKE '%hnsw%' ORDER BY indexname")).map(r => r.indexname)
+    assert.deepEqual(indexes, ['message_embeddings_hnsw', 'youtube_video_embeddings_hnsw'])
   })
 })

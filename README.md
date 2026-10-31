@@ -232,8 +232,11 @@ message get an embedding from Gemini's embedding model (`GEMINI_EMBEDDING_MODEL`
 embeddings) find things worded differently ("怖いゲーム" finds a video titled "ホラー"). A result
 that contains every word of the query still comes first.
 
-- No vector database or Postgres extension: vectors are 512 signed bytes, stored in a TEXT column
-  and compared in Node (`src/bot/utils/embeddings.js`, `src/bot/modules/semanticSearch.js`).
+- Vectors (512 dimensions) are stored as pgvector `halfvec` columns with an HNSW index, and
+  Postgres finds the nearest ones (`src/db/interfaces/postgres/embeddings.js`). The database needs
+  the pgvector extension, 0.7 or later (0.8 or later for complete results when a search is limited
+  to some channels; older versions scan exactly instead). Migration 009 enables it and converts
+  the vectors stored before.
 - `src/bot/modules/embeddingIndexer.js` runs on the worker owning shard 0 every
   `EMBEDDING_INTERVAL_MINUTES` (default 5, 0 is off): videos whose text changed, then up to 1000
   messages not embedded yet, newest first. A large history is worked through over many runs.
