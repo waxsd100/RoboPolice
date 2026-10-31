@@ -193,7 +193,7 @@ describe('/youtube', () => {
     require('../helpers/fakes').installGemini([[{ text: '要約' }]])
     const it = interaction('summarize', [{ name: 'count', value: 1 }])
     await command.func(it)
-    assert.equal(it.replies[0].content, '動画の内容を要約しています（1/1）: 最新\n長い動画は1本で数分かかります。')
+    assert.equal(it.replies[0].content, '動画の内容を要約しています（完了 0/1、1 本を同時に処理中）\n・最新\n長い動画は1本で数分かかります。')
     assert.equal(it.replies[1].content, '1/1 本の動画を要約しました。メンションで依頼したときに AI が参照します。\n✅ [最新](https://www.youtube.com/watch?v=newVideo001)')
     assert.equal(store.summaries[100].newVideo001, '要約')
     assert.equal(it.replies.length, 2)
@@ -211,6 +211,25 @@ describe('/youtube', () => {
     await command.func(forced)
     assert.match(forced.replies.at(-1).content, /^1\/1 本の動画を要約し直しました。[\s\S]*最新/)
     assert.equal(store.summaries[100].newVideo001, '作り直し')
+  })
+
+  test('summarize: up to 50 videos; failures first, and what does not fit in one message is counted', async () => {
+    require('../helpers/fakes').configureGateway()
+    const videos = Array.from({ length: 60 }, (_, i) => {
+      const id = `video${String(i).padStart(6, '0')}`
+      return { video_id: id, title: `とても長いタイトルの動画 その${i} ${'あ'.repeat(30)}`, url: `https://www.youtube.com/watch?v=${id}`, live_status: 'none' }
+    })
+    store.knowledge[100] = { channel: { channel_ref: '@x', channel_id: UC }, videos }
+    // One video fails (Gemini returns nothing), the rest are summarized.
+    require('../helpers/fakes').installGemini(Array.from({ length: 50 }, (_, i) => [{ text: i === 7 ? '' : `要約${i}` }]))
+    const it = interaction('summarize', [{ name: 'count', value: 50 }])
+    await command.func(it)
+    const result = it.replies.at(-1).content
+    assert.ok(result.startsWith('49/50 本の動画を要約しました。'))
+    assert.match(result.split('\n')[1], /^⚠️ とても長いタイトルの動画 その7 /, 'the failure comes first')
+    assert.ok(result.length <= 2000)
+    assert.match(result, /\n…ほか \d+ 本$/)
+    assert.equal(Object.keys(store.summaries[100]).length, 49)
   })
 
   test('summarize: posts the result in the channel when the interaction can no longer be edited', async () => {

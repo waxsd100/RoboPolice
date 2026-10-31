@@ -34,9 +34,9 @@ module.exports = {
             options: [{
               type: ERIS_CONSTANTS.ApplicationCommandOptionTypes.INTEGER,
               name: 'count',
-              description: 'How many of the newest videos (1-10, default 3)',
+              description: 'How many of the newest videos (1-50, default 3)',
               min_value: 1,
-              max_value: 10,
+              max_value: 50,
               required: false
             }, {
               type: ERIS_CONSTANTS.ApplicationCommandOptionTypes.BOOLEAN,

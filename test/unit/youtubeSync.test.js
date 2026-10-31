@@ -181,13 +181,50 @@ describe('summarizing the newest videos', () => {
     assert.equal(await store.getSummary(id(3)), '新しい要約')
   })
 
-  test('summarizes them one by one, reporting progress and failures without stopping', async () => {
+  test('summarizes them, reporting progress and failures without stopping', async () => {
     installGemini([[{ text: '要約A' }], new Error('boom')])
     const progress = []
     const results = await youtubeSync.summarizeLatest('100', await youtubeSync.videosToSummarize('100', 2), {
-      onProgress: (done, total, v) => progress.push(`${done + 1}/${total} ${v.title}`)
+      concurrency: 1,
+      onProgress: ({ done, total, running }) => progress.push(`${done}/${total} ${running.map(v => v.title).join(',')}`)
     })
-    assert.deepEqual(progress, ['1/2 動画4', '2/2 動画2'])
+    assert.deepEqual(progress, ['0/2 動画4', '1/2 動画2'])
     assert.deepEqual(results.map(r => [r.video.video_id, r.error]), [[id(4), null], [id(2), 'AI の呼び出しに失敗しました（HTTP 500）']])
+  })
+
+  test('summarizes several at once, never more than the limit, and keeps the order of the results', async (t) => {
+    const videoSummary = require('../../src/bot/modules/videoSummary')
+    let running = 0
+    let most = 0
+    const finish = []
+    t.mock.method(videoSummary, 'summarizeVideo', async (guildID, url) => {
+      running++
+      most = Math.max(most, running)
+      // Later videos finish first, so the results are not in finishing order.
+      await new Promise(resolve => setTimeout(resolve, 30 - Number(url.slice(-1)) * 5))
+      running--
+      finish.push(url.slice(-1))
+      if (url.endsWith('3')) throw new Error('boom')
+    })
+    const videos = Array.from({ length: 5 }, (_, i) => ({ title: `v${i}`, url: `https://youtu.be/x${i}` }))
+    const progress = []
+    const results = await youtubeSync.summarizeLatest('100', videos, { concurrency: 3, onProgress: p => progress.push(p.running.length) })
+    assert.equal(most, 3)
+    assert.notDeepEqual(finish, ['0', '1', '2', '3', '4'])
+    assert.deepEqual(results.map(r => [r.video.title, r.error]), [['v0', null], ['v1', null], ['v2', null], ['v3', 'boom'], ['v4', null]])
+    assert.deepEqual(progress.slice(0, 3), [1, 2, 3])
+  })
+
+  test('the number at once comes from VIDEO_SUMMARY_CONCURRENCY, 1 to 10, 3 by default', () => {
+    const cases = [[undefined, 3], ['5', 5], ['0', 3], ['abc', 3], ['50', 10]]
+    try {
+      for (const [value, expected] of cases) {
+        if (value === undefined) delete process.env.VIDEO_SUMMARY_CONCURRENCY
+        else process.env.VIDEO_SUMMARY_CONCURRENCY = value
+        assert.equal(youtubeSync.summaryConcurrency(), expected, String(value))
+      }
+    } finally {
+      delete process.env.VIDEO_SUMMARY_CONCURRENCY
+    }
   })
 })

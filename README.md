@@ -81,7 +81,7 @@ configured** — a server with none never has message content stored, since noth
 |---|---|---|
 | `/youtube set channel:<URL か @名前>` | サーバーの YouTube チャンネルを設定し、動画の情報を読み込む。見つかったチャンネルを表示して「はい / いいえ」で確認する。別のチャンネルに変えると、保存していた動画の情報は消える | サーバーの管理 |
 | `/youtube sync` | チャンネルを読み直し、新しい動画と配信の状態を取り込む（普段は自動） | サーバーの管理 |
-| `/youtube summarize count:<1〜10> force:<True/False> url:<動画リンク>` | まだ要約していない動画を新しい順に `count` 本（初期値 3）要約する。`force:True` で要約済みも作り直す。`url` を指定するとその1本だけを要約して内容を表示する（他のチャンネルの動画でも可） | サーバーの管理 |
+| `/youtube summarize count:<1〜50> force:<True/False> url:<動画リンク>` | まだ要約していない動画を新しい順に `count` 本（初期値 3）要約する。3本ずつ同時に要約する（`VIDEO_SUMMARY_CONCURRENCY` で1〜10本に変更可）。本数が多いと時間がかかる。`force:True` で要約済みも作り直す。`url` を指定するとその1本だけを要約して内容を表示する（他のチャンネルの動画でも可） | サーバーの管理 |
 | `/youtube liveevents enabled:<True/False>` | 配信をサーバーのイベントとして自動で登録する（予定の枠で作成、開始で開催中、終了で終了）。通常の動画は対象外 | サーバーの管理（BOT にイベントの管理） |
 | `/youtube show` | 設定しているチャンネル、保存している動画の数、配信の予定、配信のイベント登録の有無を表示する | サーバーの管理 |
 | `/setup via_presets` | よく使うログをまとめて有効にする | Webhook の管理・チャンネルの管理・監査ログの表示 |
@@ -186,7 +186,7 @@ accumulates:
   10) and the reply shows that a video is being read. Past 5 minutes that needs its own undici
   dispatcher, since `fetch` otherwise gives up on a response that has not started by then. The same video is never
   summarized twice for a server; summaries of videos from other channels are kept as well.
-- `/youtube summarize count:<1-10>` summarizes the newest stored videos that have no summary yet
+- `/youtube summarize count:<1-50>` summarizes the newest stored videos that have no summary yet
   (default 3, streams that are live or upcoming skipped; `force:True` takes the newest whether or not
   they have one and replaces the stored summary; `url:<video link>` summarizes that one video, from
   any public channel and without a channel set, and shows the summary), one at a time, showing progress. A long
@@ -428,6 +428,7 @@ the secrets if it leaks, so keep it only on the platform and delete it in the co
 | `GEMINI_MODEL` | Optional. Defaults to `gemini-flash-latest` |
 | `YOUTUBE_API_KEY` | Optional. YouTube Data API v3 key for `/youtube`. Unset disables the command |
 | `VIDEO_SUMMARY_TIMEOUT_MINUTES` | Optional. How long a video summary may take. Defaults to 10 |
+| `VIDEO_SUMMARY_CONCURRENCY` | Optional. How many videos `/youtube summarize` summarizes at once (1-10). Defaults to 3 |
 | `YOUTUBE_AUTO_SYNC_MINUTES` | Optional. How often to check each server's YouTube channel for new videos. Defaults to 15; 0 turns it off |
 | `YOUTUBE_LIVE_POLL_SECONDS` | Optional. How often to check for streams on servers with stream events on. Defaults to 60; 0 turns it off |
 | `YOUTUBE_WEBSUB_URL`, `YOUTUBE_WEBSUB_SECRET` | Optional. The service's public HTTPS address and a secret, to receive YouTube pushes (see above). `PORT` sets the port listened on (Railway sets it) |

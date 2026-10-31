@@ -2,11 +2,11 @@
 // automatically when the channel has something new, and summaries of the newest videos in bulk.
 const { parseChannelRef, fetchChannelKnowledge } = require('../utils/youtube')
 const youtubeDB = require('../../db/interfaces/postgres/youtube')
-const { summarizeVideo } = require('./videoSummary')
+const videoSummary = require('./videoSummary')
 
 const DEFAULT_AUTO_SYNC_MINUTES = 15
 const FEED_TIMEOUT_MS = 15000
-const MAX_SUMMARIES = 10
+const MAX_SUMMARIES = 50
 
 // Reads the configured channel from YouTube and adds to what is stored: the whole channel the first
 // time, afterwards only what is new (plus the newest page again, for streams that changed state).
@@ -107,20 +107,44 @@ async function videosToSummarize (guildID, count, { force = false } = {}) {
     .slice(0, Math.min(Math.max(count, 1), MAX_SUMMARIES))
 }
 
-// Summarizes them one at a time (each is a long Gemini call). onProgress(done, total, video) is
-// called before each; force replaces stored summaries. Resolves to [{ video, error }] in order.
-async function summarizeLatest (guildID, videos, { onProgress = () => {}, force = false } = {}) {
-  const results = []
-  for (const [i, video] of videos.entries()) {
-    await onProgress(i, videos.length, video)
-    try {
-      await summarizeVideo(guildID, video.url, { force })
-      results.push({ video, error: null })
-    } catch (e) {
-      results.push({ video, error: e.hint || e.message })
+const DEFAULT_CONCURRENCY = 3
+const MAX_CONCURRENCY = 10
+
+// How many videos are summarized at once (VIDEO_SUMMARY_CONCURRENCY). Each is one long Gemini
+// call; more at once finish sooner but reach Gemini's per-minute limits sooner, in which case the
+// calls wait and retry (eventDrafter.js).
+function summaryConcurrency () {
+  const n = Math.floor(Number(process.env.VIDEO_SUMMARY_CONCURRENCY))
+  return n >= 1 ? Math.min(n, MAX_CONCURRENCY) : DEFAULT_CONCURRENCY
+}
+
+// Summarizes them, a few at a time. onProgress({ done, total, running }) is called whenever one
+// starts or ends (running: the videos being summarized now); force replaces stored summaries.
+// Resolves to [{ video, error }] in the order of `videos`.
+async function summarizeLatest (guildID, videos, { onProgress = () => {}, force = false, concurrency = summaryConcurrency() } = {}) {
+  const results = new Array(videos.length)
+  const running = new Set()
+  let next = 0
+  let done = 0
+  const report = () => Promise.resolve(onProgress({ done, total: videos.length, running: [...running] })).catch(() => {})
+  async function worker () {
+    while (next < videos.length) {
+      const i = next++
+      const video = videos[i]
+      running.add(video)
+      await report()
+      try {
+        await videoSummary.summarizeVideo(guildID, video.url, { force })
+        results[i] = { video, error: null }
+      } catch (e) {
+        results[i] = { video, error: e.hint || e.message }
+      }
+      running.delete(video)
+      done++
     }
   }
+  await Promise.all(Array.from({ length: Math.min(concurrency, videos.length) }, worker))
   return results
 }
 
-module.exports = { sync, syncIfChanged, syncOnPush, autoSyncAll, startAutoSync, feedVideoIds, videosToSummarize, summarizeLatest, MAX_SUMMARIES }
+module.exports = { sync, syncIfChanged, syncOnPush, autoSyncAll, startAutoSync, feedVideoIds, videosToSummarize, summarizeLatest, summaryConcurrency, MAX_SUMMARIES }
