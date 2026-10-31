@@ -1,5 +1,5 @@
 const cacheGuild = require('../utils/cacheGuild')
-const deleteGuild = require('../../db/interfaces/postgres/delete').deleteGuild
+const resetGuild = require('../../db/interfaces/postgres/delete').resetGuild
 const createGuild = require('../../db/interfaces/postgres/create').createGuild
 
 module.exports = {
@@ -62,8 +62,8 @@ module.exports = {
           }]
         })
         complete = true
-        await deleteGuild(message.channel.guild.id)
         await createGuild(message.channel.guild)
+        await resetGuild(message.channel.guild.id)
         await cacheGuild(message.channel.guild.id)
         return
       }

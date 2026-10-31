@@ -100,9 +100,18 @@ describe('stores', { skip: !database.available && 'needs PGHOST' }, () => {
       const pages = []
       for await (const page of store.messageEmbeddingPages('g1', ['c1'], { model: 'A' })) pages.push(...page)
       assert.deepEqual(pages.map(r => [r.message_id, r.channel_id, r.embedding]), [['m8', 'c1', 'v8']])
+      assert.deepEqual((await q('SELECT name FROM embedding_models ORDER BY name')).map(r => r.name), ['A', 'B'], 'one row per model')
       assert.equal(await store.resetStaleMessageEmbeddings('A', 10), 1)
       assert.deepEqual((await store.pendingMessages(10)).map(m => m.id).slice(0, 1), ['m7'])
     })
+  })
+
+  test('%reset clears the settings and keeps what is stored', async () => {
+    await require('../../src/db/interfaces/postgres/update').setEventsLogId('g1', 'c1', ['messageDelete'])
+    await require('../../src/db/interfaces/postgres/delete').resetGuild('g1')
+    assert.deepEqual(await q("SELECT * FROM guild_event_logs WHERE guild_id = 'g1'"), [])
+    assert.equal((await q("SELECT log_bots FROM guilds WHERE id = 'g1'"))[0].log_bots, false)
+    assert.ok((await q("SELECT count(*)::int AS n FROM messages WHERE guild_id = 'g1'"))[0].n > 0)
   })
 
   describe('YouTube', () => {
@@ -176,6 +185,7 @@ describe('stores', { skip: !database.available && 'needs PGHOST' }, () => {
     })
 
     test('a server set before channel IDs were stored gets one on its sync', async () => {
+      await q("INSERT INTO guilds (id, owner_id) VALUES ('g3', 'o3')")
       await q("INSERT INTO guild_youtube (guild_id, channel_ref) VALUES ('g3', '@legacy')")
       assert.equal((await store().getOverview('g3')).channel_id, null)
       await store().saveSync('g3', { channel: { ...channel, id: 'UC3' }, videos: [video('v3')] })

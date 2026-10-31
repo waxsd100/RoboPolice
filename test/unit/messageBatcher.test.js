@@ -13,9 +13,9 @@ describe('messageBatcher', () => {
     t.mock.method(pool, 'getPostgresClient', async () => ({ query: async sql => sent.push(sql), release () {} }))
     for (let i = 0; i < 10; i++) await batcher.addItem([`m${i}`, '1', 'hi', i === 3 ? ['https://cdn/a.png', 'https://cdn/b.png'] : [], '2026-10-29T00:00:00.000Z', '201', '100'])
     assert.equal(sent[0], 'BEGIN')
-    assert.match(sent[1], /^INSERT INTO messages \(id, author_id, content, ts, channel_id, guild_id\) VALUES \('m0', '1', 'hi', '2026-10-29T00:00:00.000Z', '201', '100'\), /)
+    assert.match(sent[1], /^INSERT INTO messages \(id, author_id, content, ts, channel_id, guild_id\)\s+SELECT .* FROM \(VALUES \('m0', '1', 'hi', '2026-10-29T00:00:00.000Z', '201', '100'\), /s)
     assert.equal((sent[1].match(/\('m\d'/g) || []).length, 10, 'no message lost')
-    assert.equal(sent[2], "INSERT INTO message_attachments (message_id, position, url) VALUES ('m3', '0', 'https://cdn/a.png'), ('m3', '1', 'https://cdn/b.png') ON CONFLICT DO NOTHING")
+    assert.match(sent[2], /^INSERT INTO message_attachments \(message_id, position, url\)\s+SELECT .* FROM \(VALUES \('m3', '0', 'https:\/\/cdn\/a.png'\), \('m3', '1', 'https:\/\/cdn\/b.png'\)\)/s)
     assert.equal(sent[3], 'COMMIT')
   })
 
