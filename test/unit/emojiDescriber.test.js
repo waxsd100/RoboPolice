@@ -105,6 +105,35 @@ describe('syncGuild', () => {
     assert.ok([...rows.values()].every(r => r.description && r.embedding))
   })
 
+  test('each batch is embedded as soon as it is described, and those described before are embedded first', async () => {
+    const descriptions = Object.fromEntries(Array.from({ length: 25 }, (_, i) => [`e${i}`, `絵文字${i}`]))
+    const seen = installModels(descriptions)
+    const order = []
+    const fetch = global.fetch
+    global.fetch = async (url, init) => {
+      order.push(String(url).endsWith(':batchEmbedContents') ? 'embed' : 'describe')
+      return fetch(url, init)
+    }
+    rows.set('99', { emoji_id: '99', name: 'old', description: '前に説明した', described_name: 'old' })
+    const guild = { id: '100', emojis: [{ id: '99', name: 'old' }, ...Array.from({ length: 25 }, (_, i) => ({ id: String(i), name: `e${i}` }))] }
+    assert.deepEqual(await emojiDescriber.syncGuild(guild), { described: 25, embedded: 26, failed: 0 })
+    assert.equal(seen.embedded[0], ':old: 前に説明した')
+    const runs = order.join(',').replace(/(describe,)+/g, 'D,')
+    assert.equal(runs, 'embed,D,embed,D,embed,D,embed', 'described ten at a time, each ten embedded at once')
+  })
+
+  test('an embedding failure is logged; the descriptions are kept and embedded on the next run', async (t) => {
+    const warn = t.mock.method(global.logger, 'warn', () => {})
+    installModels({ kusa: '草' })
+    const fetch = global.fetch
+    global.fetch = async (url, init) => String(url).endsWith(':batchEmbedContents') ? { ok: false, status: 500, text: async () => 'down' } : fetch(url, init)
+    const guild = { id: '100', emojis: [{ id: '1', name: 'kusa' }] }
+    assert.deepEqual(await emojiDescriber.syncGuild(guild), { described: 1, embedded: 0, failed: 0 })
+    assert.match(warn.mock.calls[0].arguments[0], /Could not embed the emojis of 100/)
+    global.fetch = fetch
+    assert.deepEqual(await emojiDescriber.syncGuild(guild), { described: 0, embedded: 1, failed: 0 })
+  })
+
   test('an emoji that cannot be described is left for the next run', async (t) => {
     t.mock.method(global.logger, 'warn', () => {})
     installModels({ kusa: '', naki: '泣いている顔' })

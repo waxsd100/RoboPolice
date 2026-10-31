@@ -1,6 +1,7 @@
 // Describes each server's custom emojis so the model can use them where they fit: Gemini looks at
 // an emoji's image and name and says what it shows and when it is used, and that text is embedded
 // so the emojis closest to a conversation can be offered first (describeServer in eventTools.js).
+// Each few are embedded as soon as they are described.
 //
 // Runs in the background on each worker for the servers it hosts: at startup, when a server's
 // emojis change, and every 6 hours (for those that failed). Only new or renamed emojis are described; changing GEMINI_EMBEDDING_MODEL embeds
@@ -14,7 +15,8 @@ const { withoutCharCount } = require('../utils/textClean')
 const backgroundQueue = require('../utils/backgroundQueue')
 const { ownerFirst } = require('../utils/priority')
 
-const PER_RUN = 50
+const PER_RUN = 10
+const EMBED_BATCH = 50
 const CHECK_EVERY_MS = 6 * 60 * 60 * 1000
 const MAX_DESCRIPTION = 80
 // Changing how emojis are described describes them all again: it is part of the hash stored with
@@ -56,15 +58,37 @@ async function describeEmoji (emoji, characters = '') {
 
 const embedText = e => `:${e.name}: ${e.description}`
 
+// Embeds the server's described emojis that have no embedding by the current model. A failure is
+// logged and left for the next run. Resolves to how many were embedded.
+async function embedPending (guildID) {
+  const current = model()
+  let embedded = 0
+  try {
+    for (;;) {
+      const pending = await store.emojisToEmbed(guildID, current, EMBED_BATCH)
+      if (pending.length === 0) break
+      const vectors = await embed(pending.map(embedText))
+      for (const [i, e] of pending.entries()) await store.saveEmbedding(e.emoji_id, vectors[i], current)
+      embedded += pending.length
+    }
+  } catch (e) {
+    global.logger.warn(`[EMOJIS]: Could not embed the emojis of ${guildID}: ${e.message}`)
+  }
+  return embedded
+}
+
 // Brings one server's stored emojis in step with Discord, then describes and embeds what is
-// missing (up to PER_RUN each; the next run goes on). Resolves to { described, embedded }.
+// missing. Resolves to { described, embedded, failed }.
 async function syncGuild (guild) {
   await store.syncEmojis(guild.id, usableEmojis(guild))
   // When what the wiki says about the characters changes, every emoji is described again.
   const characters = await require('./wikiKnowledge').characterContext()
   const hash = `v${DESCRIBE_VERSION}:${characters.hash || ''}`
-  // PER_RUN at a time until none are left. One that fails is left out for the rest of this run,
-  // so it cannot hold the others up, and is tried again on the next (CHECK_EVERY_MS at the latest).
+  // Embedded first: those described before (in a run that stopped part way) are searchable at once.
+  let embedded = await embedPending(guild.id)
+  // PER_RUN at a time until none are left, each batch embedded as soon as it is described, so a
+  // description is never long without its embedding. One that fails is left out for the rest of
+  // this run, so it cannot hold the others up, and is tried again on the next (CHECK_EVERY_MS at the latest).
   let described = 0
   const failed = new Set()
   for (;;) {
@@ -80,15 +104,7 @@ async function syncGuild (guild) {
         global.logger.warn(`[EMOJIS]: Could not describe :${emoji.name}: in ${guild.id}: ${e.message}`)
       }
     }
-  }
-  const current = model()
-  let embedded = 0
-  for (;;) {
-    const pending = await store.emojisToEmbed(guild.id, current, PER_RUN)
-    if (pending.length === 0) break
-    const vectors = await embed(pending.map(embedText))
-    for (const [i, e] of pending.entries()) await store.saveEmbedding(e.emoji_id, vectors[i], current)
-    embedded += pending.length
+    embedded += await embedPending(guild.id)
   }
   if (described || embedded || failed.size) global.logger.info(`[EMOJIS]: ${guild.id}: described ${described}, embedded ${embedded} emoji(s)${failed.size ? `, ${failed.size} failed` : ''}`)
   return { described, embedded, failed: failed.size }
