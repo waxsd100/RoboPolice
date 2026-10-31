@@ -204,6 +204,12 @@ async function isKnownChannel (channelID) {
   return rows.rows.length !== 0
 }
 
+// The stored length of a video (ISO 8601, e.g. PT3H2M1S), or null when it is not stored.
+async function videoDuration (videoID) {
+  const rows = await pool.query('SELECT duration FROM youtube_videos WHERE video_id = $1', [videoID])
+  return rows.rows[0]?.duration || null
+}
+
 // The stored summary of a video, whichever server asked for it first.
 async function getSummary (videoID) {
   const rows = await pool.query('SELECT summary FROM youtube_summaries WHERE video_id = $1', [videoID])
@@ -247,4 +253,4 @@ async function deleteGuildYouTube (guildID) {
   await collectGarbage()
 }
 
-module.exports = { setChannel, getVideoIds, saveSync, getKnowledge, getOverview, listChannels, setLiveEvents, upsertVideos, getLiveVideoIds, getLiveEvents, saveLiveEvent, archivesToSummarize, recordArchiveAttempt, websubDue, saveWebsub, isKnownChannel, getSummary, saveSummary, getOtherSummaries, deleteGuildYouTube }
+module.exports = { setChannel, getVideoIds, saveSync, getKnowledge, getOverview, listChannels, setLiveEvents, upsertVideos, getLiveVideoIds, getLiveEvents, saveLiveEvent, archivesToSummarize, recordArchiveAttempt, websubDue, saveWebsub, isKnownChannel, videoDuration, getSummary, saveSummary, getOtherSummaries, deleteGuildYouTube }

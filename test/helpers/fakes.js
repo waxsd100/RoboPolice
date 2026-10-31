@@ -183,6 +183,7 @@ function installYouTubeStore (knowledge = {}, summaries = {}) {
   }
   // Summaries are shared: one made for any server is found for all.
   store.getSummary = async videoID => Object.values(summaries).find(s => s[videoID])?.[videoID] || null
+  store.videoDuration = async videoID => Object.values(knowledge).flatMap(k => k.videos || []).find(v => v.video_id === videoID)?.duration || null
   store.saveSummary = async (guildID, videoID, summary = null) => {
     writes.push({ saveSummary: [guildID, videoID] })
     summaries[guildID] = { ...summaries[guildID], [videoID]: summary ?? await store.getSummary(videoID) }

@@ -93,6 +93,18 @@ describe('websub', () => {
     })
   })
 
+  test('a refusal is logged with the reason the hub gives', async () => {
+    const logged = []
+    const logger = global.logger
+    global.logger = { ...logger, warn: m => logged.push(m) }
+    try {
+      await websub.renew({ websubDue: async () => [UC] }, async () => ({ ok: false, status: 400, text: async () => 'Invalid value for hub.callback:\n  not reachable' }))
+    } finally {
+      global.logger = logger
+    }
+    assert.deepEqual(logged, [`[WEBSUB]: hub refused ${UC}: HTTP 400 Invalid value for hub.callback: not reachable`])
+  })
+
   test('does not start without a public URL and a secret', () => {
     delete process.env.YOUTUBE_WEBSUB_URL
     assert.equal(websub.start(), null)
