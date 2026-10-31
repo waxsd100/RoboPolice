@@ -166,6 +166,27 @@ describe('stores', { skip: !database.available && 'needs PGHOST' }, () => {
       assert.deepEqual([overview.video_count, overview.summary_count, overview.live_count], [2, 1, 1])
     })
 
+    test('a stream\'s archive is due for a summary a while after it ends, a few times at most', async () => {
+      await store().saveLiveEvent('g1', 'v2', { eventID: 'ev9', status: 'active', scheduledStart: null, scheduledEnd: null })
+      assert.equal((await q("SELECT ended_at FROM youtube_live_events WHERE video_id = 'v2' AND guild_id = 'g1'"))[0].ended_at, null)
+      await store().saveLiveEvent('g1', 'v2', { eventID: 'ev9', status: 'completed', scheduledStart: null, scheduledEnd: null })
+      assert.deepEqual(await store().archivesToSummarize('g1'), [], 'not right after it ends')
+      assert.deepEqual(await store().archivesToSummarize('g1', { waitMinutes: 0 }), [{ video_id: 'v2', url: 'https://www.youtube.com/watch?v=v2' }])
+      await store().recordArchiveAttempt('g1', 'v2')
+      assert.deepEqual(await store().archivesToSummarize('g1', { waitMinutes: 0 }), [], 'not again within the hour')
+      assert.deepEqual((await store().archivesToSummarize('g1', { waitMinutes: 0, retryMinutes: 0 })).length, 1)
+      assert.deepEqual(await store().archivesToSummarize('g1', { waitMinutes: 0, retryMinutes: 0, maxAttempts: 1 }), [])
+      const [first] = await q("SELECT ended_at FROM youtube_live_events WHERE video_id = 'v2' AND guild_id = 'g1'")
+      await store().saveLiveEvent('g1', 'v2', { eventID: 'ev9', status: 'completed', scheduledStart: null, scheduledEnd: null })
+      const [again] = await q("SELECT ended_at FROM youtube_live_events WHERE video_id = 'v2' AND guild_id = 'g1'")
+      assert.deepEqual(again.ended_at, first.ended_at, 'the first end is kept')
+      await q("UPDATE youtube_live_events SET archive_attempts = 0, archive_tried_at = NULL WHERE video_id = 'v2'")
+      await store().saveSummary('g1', 'v2', '配信の要約')
+      assert.deepEqual(await store().archivesToSummarize('g1', { waitMinutes: 0 }), [], 'not once summarized')
+      await q("DELETE FROM guild_youtube_summaries WHERE video_id = 'v2'")
+      await q("DELETE FROM youtube_summaries WHERE video_id = 'v2'")
+    })
+
     test('stream events, settings and push subscriptions', async () => {
       await store().setLiveEvents('g1', true)
       await store().saveLiveEvent('g1', 'v2', { eventID: 'ev1', status: 'scheduled', scheduledStart: null, scheduledEnd: null })

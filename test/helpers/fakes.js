@@ -159,8 +159,15 @@ function installYouTubeStore (knowledge = {}, summaries = {}) {
   store.getLiveEvents = async guildID => ({ ...(liveEvents[guildID] || {}) })
   store.saveLiveEvent = async (guildID, videoID, { eventID, status, scheduledStart, scheduledEnd }) => {
     liveEvents[guildID] = liveEvents[guildID] || {}
-    liveEvents[guildID][videoID] = { event_id: eventID, status, scheduled_start: scheduledStart, scheduled_end: scheduledEnd }
+    const before = liveEvents[guildID][videoID]
+    liveEvents[guildID][videoID] = { ...before, event_id: eventID, status, scheduled_start: scheduledStart, scheduled_end: scheduledEnd, archive_attempts: before?.archive_attempts || 0 }
   }
+  // Any completed stream without a summary is due (the store also waits after it ends and between tries).
+  store.archivesToSummarize = async guildID => Object.entries(liveEvents[guildID] || {})
+    .filter(([id, e]) => e.status === 'completed' && e.archive_attempts < 3 && !Object.values(summaries).some(s => s[id]))
+    .slice(0, 1)
+    .map(([id]) => ({ video_id: id, url: `https://www.youtube.com/watch?v=${id}` }))
+  store.recordArchiveAttempt = async (guildID, videoID) => { liveEvents[guildID][videoID].archive_attempts++ }
   store.saveSync = async (guildID, { channel, videos, backfillToken = null }) => {
     writes.push({ saveSync: guildID, videos: videos.map(v => v.id), backfillToken })
     const byID = new Map(knowledge[guildID].videos.map(v => [v.video_id, v]))

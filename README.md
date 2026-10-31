@@ -82,7 +82,7 @@ configured** — a server with none never has message content stored, since noth
 | `/youtube set channel:<URL か @名前>` | サーバーの YouTube チャンネルを設定し、動画の情報を読み込む。見つかったチャンネルを表示して「はい / いいえ」で確認する。別のチャンネルに変えると、保存していた動画の情報は消える | サーバーの管理 |
 | `/youtube sync` | チャンネルを読み直し、新しい動画と配信の状態を取り込む（普段は自動） | サーバーの管理 |
 | `/youtube summarize count:<1〜50> force:<True/False> url:<動画リンク>` | まだ要約していない動画を新しい順に `count` 本（初期値 3）要約する。3本ずつ同時に要約する（`VIDEO_SUMMARY_CONCURRENCY` で1〜10本に変更可）。本数が多いと時間がかかる。`force:True` で要約済みも作り直す。`url` を指定するとその1本だけを要約して内容を表示する（他のチャンネルの動画でも可） | サーバーの管理 |
-| `/youtube liveevents enabled:<True/False>` | 配信をサーバーのイベントとして自動で登録する（予定の枠で作成、開始で開催中、終了で終了）。通常の動画は対象外 | サーバーの管理（BOT にイベントの管理） |
+| `/youtube liveevents enabled:<True/False>` | 配信をサーバーのイベントとして自動で登録する（予定の枠で作成、開始で開催中、終了で終了）。説明の先頭に AI が配信内容の紹介を書き、終了後はアーカイブを自動で要約する。通常の動画は対象外 | サーバーの管理（BOT にイベントの管理） |
 | `/youtube show` | 設定しているチャンネル、保存している動画の数、配信の予定、配信のイベント登録の有無を表示する | サーバーの管理 |
 | `/setup via_presets` | よく使うログをまとめて有効にする | Webhook の管理・チャンネルの管理・監査ログの表示 |
 | `/setup via_individual_event` | ログの種類を1つずつ選んで有効にする | 同上 |
@@ -209,6 +209,13 @@ description, link and thumbnail as the cover (an unscheduled stream gets one whe
 straight away); moved when the start time changes; started when the stream goes live; kept open past
 its planned end while it runs; completed when it ends, or cancelled if the stream is called off or
 deleted. An event someone deletes is left alone.
+
+With AI Gateway set up, the event's description starts with two or three sentences from Gemini on
+what the stream is about, made from its title, description and thumbnail (a stream can't be watched
+while it is live). Once a stream is over, its archive is summarized like any video, so the mention
+assistant knows what was said; this is tried 30 minutes after it ends, then hourly, three times at
+most, on the worker hosting the server, one at a time. Each summary is one Gemini call on the whole
+archive. `LIVE_EVENT_AI_DESCRIPTION=false` and `LIVE_ARCHIVE_SUMMARY=false` turn these off.
 
 Each worker checks the servers it hosts every `YOUTUBE_LIVE_POLL_SECONDS` (default 60, 0 is off).
 A check reads the channel's public feed (no API quota) and asks the API only about new entries and
@@ -428,6 +435,8 @@ the secrets if it leaks, so keep it only on the platform and delete it in the co
 | `GEMINI_MODEL` | Optional. Defaults to `gemini-flash-latest` |
 | `YOUTUBE_API_KEY` | Optional. YouTube Data API v3 key for `/youtube`. Unset disables the command |
 | `VIDEO_SUMMARY_TIMEOUT_MINUTES` | Optional. How long a video summary may take. Defaults to 10 |
+| `LIVE_EVENT_AI_DESCRIPTION` | Optional. `false` stops the AI's line on what a stream is about (from its title, description and thumbnail) at the top of its Discord event |
+| `LIVE_ARCHIVE_SUMMARY` | Optional. `false` stops summarizing a stream's archive once it is over (tried 30 minutes after it ends, then hourly, three times at most) |
 | `VIDEO_SUMMARY_CONCURRENCY` | Optional. How many videos `/youtube summarize` summarizes at once (1-10). Defaults to 3 |
 | `YOUTUBE_AUTO_SYNC_MINUTES` | Optional. How often to check each server's YouTube channel for new videos. Defaults to 15; 0 turns it off |
 | `YOUTUBE_LIVE_POLL_SECONDS` | Optional. How often to check for streams on servers with stream events on. Defaults to 60; 0 turns it off |
