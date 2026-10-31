@@ -149,6 +149,16 @@ and what they mean), each embedded on its own; a part is read again only when it
 searches all of it with `search_wiki` (the knowledge first, then the pages for detail), and uses its quotes now and then as the streamer would. It is fans' writing, so
 the model does not state it as the streamer's own word.
 
+With `TWITTER_ACCOUNTS` set, the streamer's own X posts are knowledge too
+(`src/bot/modules/twitterKnowledge.js`). They are read through FxTwitter's public API
+(api.fxtwitter.com), not X's: the first time up to `TWITTER_MAX_PAGES` pages back, then every
+`TWITTER_REFRESH_HOURS` until posts already stored, one request every 2 seconds, a failed request
+tried again twice. Reposts of others are left out. Posts are stored in `social_posts`, and each
+month's posts are written as one page of the knowledge tables (one line per post with its date and
+URL), so knowledge is taken out of them and they are searched with `search_wiki` like the wiki; the
+model gives a post's URL when it mentions one. FxTwitter is a third-party service and may change or
+stop; nothing stored is lost then.
+
 Each emoji is described once from its image and name by Gemini (what it shows, when to use it) and
 stored with an embedding of that description in `guild_emojis` (`src/bot/modules/emojiDescriber.js`).
 When the wiki describes characters (pages whose title has キャラクター), Gemini is given them, so an
@@ -460,6 +470,8 @@ the secrets if it leaks, so keep it only on the platform and delete it in the co
 | `VIDEO_SUMMARY_TIMEOUT_MINUTES` | Optional. How long a video summary may take. Defaults to 10 |
 | `WIKI_URLS` | Optional. Top pages of the community's wikis (comma-separated), e.g. `https://novamanhikoushiki.memo.wiki/`. Read in full weekly, split at headings and embedded; the model searches them with `search_wiki` (characters, quotes, running jokes), and emoji descriptions name the characters they describe |
 | `WIKI_REFRESH_HOURS`, `WIKI_DELAY_MS` | Optional. How often a wiki is read again (default 168) and the wait between its pages (default 1000) |
+| `TWITTER_ACCOUNTS` | Optional. The streamer's X accounts (comma-separated, without @), e.g. `nobamangames`. Their posts are read through FxTwitter and become knowledge like the wiki (searched with `search_wiki`) |
+| `TWITTER_REFRESH_HOURS`, `TWITTER_MAX_PAGES` | Optional. How often new posts are read (default 6) and how many pages back the first read goes (default 100, about 10 posts a page) |
 | `EMOJI_DESCRIPTIONS` | Optional. `false` stops describing the server's custom emojis (Gemini looks at each one's image and name; the descriptions are embedded so the emojis that suit a request are offered first) |
 | `LIVE_EVENT_AI_DESCRIPTION` | Optional. `false` stops the AI's line on what a stream is about (from its title, description and thumbnail) at the top of its Discord event |
 | `LIVE_ARCHIVE_SUMMARY` | Optional. `false` stops summarizing a stream's archive once it is over (tried 30 minutes after it ends, then hourly, three times at most) |
