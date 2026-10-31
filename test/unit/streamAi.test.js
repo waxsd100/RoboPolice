@@ -5,6 +5,7 @@ const { configureGateway, installGemini, installYouTubeStore } = require('../hel
 const urlFetcher = require('../../src/bot/utils/urlFetcher')
 const { describeStream } = require('../../src/bot/modules/streamBlurb')
 const liveWatcher = require('../../src/bot/modules/liveWatcher')
+const gameLinks = require('../../src/bot/modules/gameLinks')
 
 const video = (extra = {}) => ({
   id: 'live0000001',
@@ -26,10 +27,13 @@ afterEach(() => {
 describe('describeStream', () => {
   beforeEach(() => configureGateway())
 
-  test('asks Gemini with the title, the description and the thumbnail', async () => {
-    const requests = installGemini([[{ text: 'ゲストと一緒にマイクラで城を建てる配信。' }]])
-    const line = await describeStream(video(), { buffer: Buffer.from('jpeg'), mimeType: 'image/jpeg' })
-    assert.equal(line, 'ゲストと一緒にマイクラで城を建てる配信。')
+  test('asks Gemini with the title, the description and the thumbnail, for a line and the games played', async (t) => {
+    const requests = installGemini([[{ text: JSON.stringify({ blurb: 'ゲストと一緒にマイクラで城を建てる配信。（20文字）', games: [{ name: 'マインクラフト', name_en: 'Minecraft' }, { name: ' ' }] }) }]])
+    const looked = t.mock.method(gameLinks, 'linksFor', async games => games.map(g => ({ name: g.name, url: 'https://www.minecraft.net/' })))
+    const described = await describeStream(video(), { buffer: Buffer.from('jpeg'), mimeType: 'image/jpeg' })
+    assert.deepEqual(described, { blurb: 'ゲストと一緒にマイクラで城を建てる配信。', games: [{ name: 'マインクラフト', url: 'https://www.minecraft.net/' }] })
+    assert.deepEqual(looked.mock.calls[0].arguments[0], [{ name: 'マインクラフト', nameEn: 'Minecraft' }])
+    assert.equal(requests[0].body.generationConfig.responseMimeType, 'application/json')
     const [text, image] = requests[0].body.contents[0].parts
     assert.match(text.text, /タイトル: 【マイクラ】城を建てる\n概要欄:\n今日はみんなで城づくり/)
     assert.deepEqual(image, { inlineData: { mimeType: 'image/jpeg', data: Buffer.from('jpeg').toString('base64') } })
@@ -50,14 +54,15 @@ describe('describeStream', () => {
 })
 
 describe('the event of a stream', () => {
-  test('starts with what the AI says, then the stream\'s own description and its URL', async (t) => {
+  test('starts with what the AI says and the games\' pages, then the stream\'s own description and its URL', async (t) => {
     configureGateway()
     t.mock.method(urlFetcher, 'fetchImage', async () => { throw new Error('no thumbnail here') })
-    installGemini([[{ text: 'マイクラで城を建てる配信。' }]])
+    t.mock.method(gameLinks, 'linksFor', async () => [{ name: 'マインクラフト', url: 'https://store.steampowered.com/app/1/' }])
+    installGemini([[{ text: JSON.stringify({ blurb: 'マイクラで城を建てる配信。', games: [{ name: 'マインクラフト' }] }) }]])
     const calls = []
     global.bot = { requestHandler: { request: async (method, url, auth, body) => { calls.push(body); return { id: 'EV1' } } } }
     await liveWatcher.follow({ id: '100' }, video(), undefined, new Date('2026-11-01T00:00:00Z'))
-    assert.equal(calls[0].description, 'マイクラで城を建てる配信。\n\n今日はみんなで城づくり。ゲスト：〇〇さん\n\nhttps://www.youtube.com/watch?v=live0000001')
+    assert.equal(calls[0].description, 'マイクラで城を建てる配信。\n\n🎮 マインクラフト: https://store.steampowered.com/app/1/\n\n今日はみんなで城づくり。ゲスト：〇〇さん\n\nhttps://www.youtube.com/watch?v=live0000001')
     delete global.bot
   })
 

@@ -61,11 +61,12 @@ async function coverOf (thumbnail) {
   }
 }
 
-// What the AI says the stream is about (when it can), then as much of the stream's description as
-// fits, then its URL.
-function eventDescription (video, blurb) {
+// What the AI says the stream is about (when it can), the pages of the games played (games:
+// [{ name, url }]), then as much of the stream's description as fits, then its URL.
+function eventDescription (video, blurb, games = []) {
   const tail = `\n\n${video.url}`
-  const head = blurb ? `${blurb}\n\n` : ''
+  const gameLines = games.map(g => `🎮 ${g.name}: ${g.url}`).join('\n')
+  const head = [blurb, gameLines].filter(Boolean).map(part => `${part}\n\n`).join('')
   const room = Math.max(MAX_DESCRIPTION - head.length - tail.length, 0)
   const own = (video.description || '').trim()
   const excerpt = own.length > room ? `${own.slice(0, Math.max(room - 1, 0))}…` : own
@@ -75,10 +76,10 @@ function eventDescription (video, blurb) {
 async function createEvent (guild, video, start) {
   const end = new Date(start.getTime() + DEFAULT_LENGTH_MS)
   const thumbnail = await thumbnailOf(video)
-  const blurb = await describeStream(video, thumbnail, guild.id)
+  const described = await describeStream(video, thumbnail, guild.id)
   const created = await request('POST', `/guilds/${guild.id}/scheduled-events`, {
     name: video.title.slice(0, 100),
-    description: eventDescription(video, blurb),
+    description: eventDescription(video, described?.blurb, described?.games),
     privacy_level: 2,
     entity_type: 3,
     entity_metadata: { location: video.url.slice(0, 100) },
