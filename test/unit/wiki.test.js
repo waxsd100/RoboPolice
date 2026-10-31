@@ -1,5 +1,5 @@
 // Reading the community wiki: pages split at their headings, the crawl, and searching it.
-const { test, describe, afterEach } = require('node:test')
+const { test, describe, beforeEach, afterEach, mock } = require('node:test')
 const assert = require('node:assert/strict')
 const { configureGateway, installEmbeddingModel } = require('../helpers/fakes')
 const { parseWikiPage } = require('../../src/bot/utils/wikiPage')
@@ -13,7 +13,17 @@ const page = (title, body, extra = '') => `<html><head><title>${title} - テス�
 <div id="page-footer">footer</div>
 <div class="user-area"><h2>Menu</h2><a href="/d/MenuBar1">menu</a></div>${extra}</body></html>`
 
-afterEach(() => { delete process.env.WIKI_URLS })
+// The Discord messages' tables are empty here unless a test says otherwise.
+const discordStore = require('../../src/db/interfaces/postgres/discordKnowledge')
+beforeEach(() => {
+  for (const [name, value] of [['hasSections', false], ['sectionsToExtract', []], ['nearestFacts', []], ['nearestSections', []]]) {
+    mock.method(discordStore, name, async () => value)
+  }
+})
+afterEach(() => {
+  delete process.env.WIKI_URLS
+  mock.restoreAll()
+})
 
 describe('parseWikiPage', () => {
   test("splits the body at its headings, keeps each part's images, and finds the wiki's pages", () => {

@@ -4,11 +4,13 @@ const getMessageFromBatch = require('../../db/messageBatcher').getMessage
 const deleteMessage = require('../../db/interfaces/postgres/delete').deleteMessage
 const cacheGuild = require('../utils/cacheGuild')
 const { isBeyondRetention, messageTimestamp } = require('../utils/retention')
+const discordKnowledge = require('../modules/discordKnowledge')
 
 module.exports = {
   name: 'messageDelete',
   type: 'on',
   handle: async message => {
+    discordKnowledge.onDelete(message.id).catch(e => global.logger.warn(`[DISCORD]: ${e.message}`))
     if (!message.channel.guild) return
     const guildSettings = global.bot.guildSettingsCache[message.channel.guild.id]
     if (!guildSettings) await cacheGuild(message.channel.guild.id)

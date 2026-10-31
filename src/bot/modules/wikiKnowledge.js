@@ -16,9 +16,11 @@ const { callGemini, DEFAULT_GEMINI_MODEL } = require('./eventDrafter')
 const { withoutCharCount } = require('../utils/textClean')
 const store = require('../../db/interfaces/postgres/wiki')
 const xStore = require('../../db/interfaces/postgres/xKnowledge')
+const discordStore = require('../../db/interfaces/postgres/discordKnowledge')
 
-// The knowledge tables: the wiki's, and the X posts' (twitterKnowledge.js), worked on alike.
-const stores = () => [store, xStore]
+// The knowledge tables: the wiki's, the X posts' (twitterKnowledge.js) and the streamer's Discord
+// messages' (discordKnowledge.js), worked on alike.
+const stores = () => [store, xStore, discordStore]
 
 const DEFAULT_REFRESH_HOURS = 168
 const DEFAULT_DELAY_MS = 1000
@@ -75,7 +77,7 @@ const KIND_LABELS = { character: 'キャラクター', quote: '名言・台詞',
 const MAX_FACTS = 30
 
 const EXTRACT_PROMPT = [
-  'これは YouTuber についての文章（ファンが書いた wiki の一部、または本人の X のポスト）です。ここから知識を取り出して、JSON の配列で返してください。',
+  'これは YouTuber についての文章（ファンが書いた wiki の一部、または本人の X のポストや Discord での発言）です。ここから知識を取り出して、JSON の配列で返してください。',
   '- character: 登場するキャラクター（配信者本人のキャラクター・ゲームのキャラクターなど）。name に名前、aliases に別名・読み・ローマ字表記、content に何者か・見た目の特徴（色・形・目立つ部分）・性格を書く。',
   '- quote: 名言・台詞・口ぐせ。name にその言葉をそのまま、content に誰がいつどんな場面で言ったか・どんな意味で使われるかを書く。',
   '- term: 用語・ネタ・コミュニティでよく使われる言葉。name に言葉、content に意味や由来を書く。',
@@ -185,10 +187,12 @@ function processPending (log = m => global.logger.warn(m)) {
 // Reads the wikis not read within WIKI_REFRESH_HOURS, then embeds what is new.
 let running = false
 async function refresh ({ force = false } = {}) {
-  if (running || !enabled()) return null
+  if (running || !searchable()) return null
   running = true
   try {
     const maxAge = setting('WIKI_REFRESH_HOURS', DEFAULT_REFRESH_HOURS) * 3600 * 1000
+    // Without WIKI_URLS there is no wiki to read, but the X posts and Discord messages still get
+    // their knowledge taken out below.
     for (const root of wikiRoots()) {
       const last = await store.lastRead(root.origin)
       if (!force && last && Date.now() - new Date(last).getTime() < maxAge) continue
@@ -210,15 +214,15 @@ async function refresh ({ force = false } = {}) {
 }
 
 function startWiki () {
-  if (!enabled()) return null
-  global.logger.startup(`[WIKI]: Reading ${wikiRoots().map(r => r.origin).join(', ')} as knowledge.`)
+  if (!searchable()) return null
+  if (enabled()) global.logger.startup(`[WIKI]: Reading ${wikiRoots().map(r => r.origin).join(', ')} as knowledge.`)
   refresh()
   return setInterval(() => refresh(), CHECK_EVERY_MS)
 }
 
-// Whether there is any knowledge to search: a wiki or X accounts are set.
+// Whether there is any knowledge to search: a wiki, X accounts or Discord accounts are set.
 function searchable () {
-  return enabled() || require('./twitterKnowledge').enabled()
+  return enabled() || require('./twitterKnowledge').enabled() || require('./discordKnowledge').enabled()
 }
 
 // What the wiki (and the X posts) know closest in meaning to `query`, as the search_wiki tool
