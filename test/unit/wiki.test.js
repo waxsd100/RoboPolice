@@ -92,6 +92,24 @@ describe('searchWiki', () => {
     assert.doesNotMatch(text, /wiki の用語/)
   })
 
+  test('the knowledge for the server profile: characters named in the request, then the closest', async (t) => {
+    process.env.WIKI_URLS = ROOT
+    const xStore = require('../../src/db/interfaces/postgres/xKnowledge')
+    t.mock.method(store, 'characterFacts', async () => [{ name: 'よつろん', aliases: ['yotsuron'], content: '頭に大きな四葉' }, { name: 'クリーム', aliases: [], content: '謎の生物' }])
+    t.mock.method(store, 'nearestFacts', async () => [
+      { kind: 'character', name: 'よつろん', aliases: [], content: '重複', score: 0.9 },
+      { kind: 'quote', name: 'ご安心を', aliases: [], content: '決まり文句', score: 0.7 },
+      { kind: 'term', name: '遠い', aliases: [], content: 'x', score: 0.2 }
+    ])
+    t.mock.method(xStore, 'nearestFacts', async () => [])
+    assert.deepEqual(await wiki.relatedKnowledge('よつろんって何色？', [1]), [
+      '- [キャラクター] よつろん（yotsuron）: 頭に大きな四葉',
+      '- [名言・台詞] ご安心を: 決まり文句'
+    ])
+    delete process.env.WIKI_URLS
+    assert.deepEqual(await wiki.relatedKnowledge('よつろん', [1]), [], 'nothing without a wiki')
+  })
+
   test('says so when there is no wiki, or it is not read yet', async (t) => {
     assert.equal(await wiki.searchWiki('x'), 'wiki は設定されていません')
     process.env.WIKI_URLS = ROOT
@@ -108,13 +126,21 @@ describe('searchWiki', () => {
     assert.equal(text, '- よつろん: 四葉の 笑顔。')
     assert.match(hash, /^[0-9a-f]{16}$/)
     delete process.env.WIKI_URLS
-    assert.deepEqual(await wiki.characterContext(), { text: '', hash: null })
+    assert.deepEqual(await wiki.characterContext(), { text: '', hash: null, names: [], images: [] })
   })
 
   test('the characters come from the knowledge, with other names and looks, when there is any', async (t) => {
     process.env.WIKI_URLS = ROOT
     t.mock.method(store, 'characterFacts', async () => [{ name: 'よつろん', aliases: ['yotsuron'], content: '頭に大きな四葉。白々しい笑顔' }])
-    assert.equal((await wiki.characterContext()).text, '- よつろん（yotsuron）: 頭に大きな四葉。白々しい笑顔')
+    const images = t.mock.method(store, 'characterImages', async () => [])
+    const context = await wiki.characterContext()
+    assert.equal(context.text, '- よつろん（yotsuron）: 頭に大きな四葉。白々しい笑顔')
+    assert.deepEqual(context.names, [{ name: 'よつろん', aliases: ['yotsuron'] }])
+    // The wiki's pictures of the characters go with them, and are part of the hash.
+    images.mock.mockImplementation(async () => [{ heading: 'よつろん', image: 'https://image01.seesaawiki.jp/y.png' }])
+    const withImage = await wiki.characterContext()
+    assert.deepEqual(withImage.images, [{ name: 'よつろん', url: 'https://image01.seesaawiki.jp/y.png' }])
+    assert.notEqual(withImage.hash, context.hash)
   })
 })
 

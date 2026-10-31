@@ -92,6 +92,18 @@ function createStore (prefix) {
     return rows.rows.filter(r => !seen.has(r.heading) && seen.add(r.heading))
   }
 
+  // An image of each character the wiki shows one of: the first image in the parts of pages whose
+  // title has キャラクター, in the order of the pages. [{ heading, image }]
+  async function characterImages (limit = 6) {
+    const rows = await pool.query(
+      `SELECT s.heading, s.images[1] AS image FROM ${T.sections} s JOIN ${T.pages} p ON p.url = s.url
+       WHERE p.title LIKE '%キャラクター%' AND s.heading <> p.title AND cardinality(s.images) > 0
+       ORDER BY p.url, s.position LIMIT $1`,
+      [limit * 3])
+    const seen = new Set()
+    return rows.rows.filter(r => !seen.has(r.heading) && seen.add(r.heading)).slice(0, limit)
+  }
+
   // Parts whose knowledge has not been taken out since they last changed:
   // [{ url, position, title, heading, text, text_hash }].
   async function sectionsToExtract (limit) {
@@ -163,7 +175,7 @@ function createStore (prefix) {
     return rows.rows.length !== 0
   }
 
-  return { savePage, deletePagesExcept, lastRead, sectionsToEmbed, saveSectionEmbedding, nearestSections, characters, sectionsToExtract, saveFacts, factsToEmbed, saveFactEmbedding, nearestFacts, characterFacts, hasSections }
+  return { savePage, deletePagesExcept, lastRead, sectionsToEmbed, saveSectionEmbedding, nearestSections, characters, characterImages, sectionsToExtract, saveFacts, factsToEmbed, saveFactEmbedding, nearestFacts, characterFacts, hasSections }
 }
 
 // The wiki's tables.
