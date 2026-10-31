@@ -106,10 +106,12 @@ function installEmbeddingStore ({ videos = {}, messages = [], pending = [] } = {
 // Replaces the Redis counter behind the daily mention limit with an in-memory one.
 function installQuotaStore () {
   const counts = new Map()
-  require('../../src/bot/utils/mentionQuota').store.increment = async key => {
+  const { store } = require('../../src/bot/utils/mentionQuota')
+  store.increment = async key => {
     counts.set(key, (counts.get(key) || 0) + 1)
     return counts.get(key)
   }
+  store.decrement = async key => counts.set(key, (counts.get(key) || 0) - 1)
   return counts
 }
 

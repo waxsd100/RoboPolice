@@ -6,6 +6,7 @@
 // Videos have one vector each.
 const pool = require('../../clients/postgres')
 const { toVectorLiteral } = require('../../../bot/utils/embeddings')
+const { ownerGuildIDs } = require('../../../bot/utils/priority')
 
 // Embedding models by name -> ID in embedding_models. A model is added the first time it is used.
 const modelIds = new Map()
@@ -20,11 +21,12 @@ async function modelId (name) {
   return modelIds.get(name)
 }
 
-// Newest messages not handled yet: [{ id, guild_id, channel_id, ts, content }].
+// Messages not handled yet, those of the owner's servers first, then newest first:
+// [{ id, guild_id, channel_id, ts, content }].
 async function pendingMessages (limit) {
   const rows = await pool.query(
-    'SELECT id, guild_id, channel_id, ts, content FROM messages WHERE NOT embedded ORDER BY ts DESC LIMIT $1',
-    [limit])
+    'SELECT id, guild_id, channel_id, ts, content FROM messages WHERE NOT embedded ORDER BY (guild_id = ANY($2)) DESC NULLS LAST, ts DESC LIMIT $1',
+    [limit, ownerGuildIDs()])
   return rows.rows
 }
 
@@ -110,13 +112,15 @@ async function getMessages (ids) {
   return rows.rows
 }
 
-// Every stored video with what its embedding is made from: [{ video_id, title, description,
-// summary, text_hash }].
+// Every stored video with what its embedding is made from, those of channels the owner's servers
+// set first: [{ video_id, title, description, summary, text_hash }].
 async function videosForEmbedding () {
   const rows = await pool.query(
     `SELECT v.video_id, v.title, v.description, s.summary, e.text_hash FROM youtube_videos v
      LEFT JOIN youtube_summaries s ON s.video_id = v.video_id
-     LEFT JOIN youtube_video_embeddings e ON e.video_id = v.video_id`)
+     LEFT JOIN youtube_video_embeddings e ON e.video_id = v.video_id
+     ORDER BY EXISTS (SELECT 1 FROM guild_youtube g WHERE g.channel_id = v.channel_id AND g.guild_id = ANY($1)) DESC`,
+    [ownerGuildIDs()])
   return rows.rows
 }
 
