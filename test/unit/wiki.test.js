@@ -67,6 +67,8 @@ describe('searchWiki', () => {
     t.mock.method(store, 'hasSections', async () => true)
     t.mock.method(store, 'nearestFacts', async () => [{ kind: 'quote', name: '〇〇だぜ', aliases: [], content: '配信の締めに言う', url: `${ROOT}d/q`, title: '名言集', heading: '締め' }])
     const nearest = t.mock.method(store, 'nearestSections', async () => [{ url: `${ROOT}d/q`, title: '名言集', heading: '締め', text: '有名な台詞。', score: 0.9 }])
+    const xStore = require('../../src/db/interfaces/postgres/xKnowledge')
+    t.mock.method(xStore, 'hasSections', async () => false)
     const text = await wiki.searchWiki('名言')
     assert.equal(text, [
       'wiki で「名言」に意味が近いもの（近い順）:', '', '知識:', '- [名言・台詞] 〇〇だぜ: 配信の締めに言う（名言集 / 締め）',
@@ -75,10 +77,26 @@ describe('searchWiki', () => {
     assert.equal(nearest.mock.calls[0].arguments[1], 'gemini-embedding-001')
   })
 
+  test('the wiki\'s and the X posts\' tables are searched together, the closest first', async (t) => {
+    process.env.WIKI_URLS = ROOT
+    configureGateway()
+    installEmbeddingModel()
+    const xStore = require('../../src/db/interfaces/postgres/xKnowledge')
+    for (const tables of [store, xStore]) t.mock.method(tables, 'hasSections', async () => true)
+    t.mock.method(store, 'nearestFacts', async () => [{ kind: 'term', name: 'wiki の用語', aliases: [], content: 'a', title: 'wiki', heading: 'h', score: 0.5 }])
+    t.mock.method(xStore, 'nearestFacts', async () => [{ kind: 'term', name: 'X の用語', aliases: [], content: 'b', title: '@a のポスト', heading: 'h', score: 0.8 }])
+    t.mock.method(store, 'nearestSections', async () => [])
+    t.mock.method(xStore, 'nearestSections', async () => [])
+    const text = await wiki.searchWiki('用語', { facts: 1 })
+    assert.match(text, /X の用語/)
+    assert.doesNotMatch(text, /wiki の用語/)
+  })
+
   test('says so when there is no wiki, or it is not read yet', async (t) => {
     assert.equal(await wiki.searchWiki('x'), 'wiki は設定されていません')
     process.env.WIKI_URLS = ROOT
     t.mock.method(store, 'hasSections', async () => false)
+    t.mock.method(require('../../src/db/interfaces/postgres/xKnowledge'), 'hasSections', async () => false)
     assert.match(await wiki.searchWiki('x'), /まだ読み込まれていません/)
   })
 
@@ -127,6 +145,7 @@ describe('extractFacts', () => {
     const saved = []
     t.mock.method(store, 'sectionsToExtract', async () => [{ url: 'u', position: 0, title: 't', heading: 'a', text: 'x', text_hash: 'h0' }, { url: 'u', position: 1, title: 't', heading: 'b', text: 'y', text_hash: 'h1' }])
     t.mock.method(store, 'saveFacts', async (url, position, hash, facts) => saved.push([position, hash, facts.length]))
+    t.mock.method(require('../../src/db/interfaces/postgres/xKnowledge'), 'sectionsToExtract', async () => [])
     configureGateway()
     const { installGemini } = require('../helpers/fakes')
     installGemini([new Error('boom'), [{ text: '[]' }]])

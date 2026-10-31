@@ -54,6 +54,24 @@ describe('migrations', { skip: !database.available && 'needs PGHOST' }, () => {
       ('g1', 'v2', 'ev1', 'scheduled'), ('g1', 'gone-video', 'ev2', 'completed')`)
     await q("INSERT INTO youtube_websub (channel_id, expires_at) VALUES ('UC1', '2026-11-01')")
 
+    // Up to 014: X posts stored in the wiki's tables, as they were before 015.
+    const upTo14 = fs.mkdtempSync(path.join(os.tmpdir(), 'migrations-'))
+    for (const m of require('../../src/db/migrate').migrationFiles().filter(m => m.version <= 14)) {
+      // A .js migration requires files next to it: it is loaded from where it is.
+      if (m.kind === 'js') fs.writeFileSync(path.join(upTo14, path.basename(m.file)), `module.exports = require(${JSON.stringify(m.file)})\n`)
+      else fs.copyFileSync(m.file, path.join(upTo14, path.basename(m.file)))
+    }
+    await migrate({ dir: upTo14 })
+    await q(`INSERT INTO wiki_pages (url, title) VALUES
+      ('https://w.example/d/chars', 'キャラクター'), ('https://x.com/nobamangames#2026-10', '@nobamangames のポスト（2026年10月）')`)
+    await q(`INSERT INTO wiki_sections (url, position, heading, text, text_hash, facts_hash) VALUES
+      ('https://w.example/d/chars', 0, 'よつろん', '四葉', 'h1', 'h1'),
+      ('https://x.com/nobamangames#2026-10', 0, '2026年10月 1', '告知', 'h2', 'h2')`)
+    await q(`INSERT INTO wiki_facts (url, position, kind, name, content) VALUES
+      ('https://w.example/d/chars', 0, 'character', 'よつろん', '四葉の笑顔'),
+      ('https://x.com/nobamangames#2026-10', 0, 'term', '告知', 'お知らせ')`)
+    await q("INSERT INTO social_posts (id, account, url, text, created_at) VALUES ('1', 'nobamangames', 'https://x.com/nobamangames/status/1', '告知', '2026-10-01')")
+
     await migrate()
   })
   after(() => database.drop())
@@ -62,6 +80,16 @@ describe('migrations', { skip: !database.available && 'needs PGHOST' }, () => {
     const versions = (await q('SELECT version FROM schema_migrations ORDER BY version')).map(r => r.version)
     assert.deepEqual(versions, require('../../src/db/migrate').migrationFiles().map(m => m.version))
     assert.deepEqual(await migrate(), [])
+  })
+
+  test('the X posts move to tables of their own, with their knowledge', async () => {
+    assert.deepEqual((await q('SELECT url FROM wiki_pages')).map(r => r.url), ['https://w.example/d/chars'])
+    assert.deepEqual((await q('SELECT name FROM wiki_facts')).map(r => r.name), ['よつろん'])
+    assert.deepEqual((await q('SELECT url, title FROM x_pages')), [{ url: 'https://x.com/nobamangames#2026-10', title: '@nobamangames のポスト（2026年10月）' }])
+    assert.deepEqual((await q('SELECT heading, text, facts_hash FROM x_sections')), [{ heading: '2026年10月 1', text: '告知', facts_hash: 'h2' }])
+    assert.deepEqual((await q('SELECT kind, name, content FROM x_facts')), [{ kind: 'term', name: '告知', content: 'お知らせ' }])
+    assert.deepEqual((await q('SELECT id, account FROM x_posts')), [{ id: '1', account: 'nobamangames' }])
+    assert.equal((await q("SELECT to_regclass('social_posts') AS t"))[0].t, null)
   })
 
   test('server settings become rows', async () => {
