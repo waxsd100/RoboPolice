@@ -13,6 +13,7 @@ const { parseWikiPage } = require('../utils/wikiPage')
 const { embed, embedQuery, model } = require('../utils/embeddings')
 const { isGatewayConfigured } = require('../utils/aiGateway')
 const { callGemini, DEFAULT_GEMINI_MODEL } = require('./eventDrafter')
+const { withoutCharCount } = require('../utils/textClean')
 const store = require('../../db/interfaces/postgres/wiki')
 
 const DEFAULT_REFRESH_HOURS = 168
@@ -75,7 +76,7 @@ const EXTRACT_PROMPT = [
   '- quote: 名言・台詞・口ぐせ。name にその言葉をそのまま、content に誰がいつどんな場面で言ったか・どんな意味で使われるかを書く。',
   '- term: 用語・ネタ・コミュニティでよく使われる言葉。name に言葉、content に意味や由来を書く。',
   '本文に書かれていることだけを使い、推測で付け足さないでください。当てはまるものがなければ空の配列を返してください。',
-  'content は1項目200文字以内。'
+  'content は1項目あたり短く（長くても200文字程度）。文字数は書かないでください。'
 ].join('\n')
 
 const FACT_SCHEMA = {
@@ -106,7 +107,7 @@ async function extractFacts (section) {
       kind: f.kind,
       name: String(f.name).trim().slice(0, 200),
       aliases: (Array.isArray(f.aliases) ? f.aliases : []).map(a => String(a).trim()).filter(Boolean).slice(0, 10),
-      content: String(f.content).trim().slice(0, 400)
+      content: withoutCharCount(String(f.content).trim()).slice(0, 400)
     }))
 }
 

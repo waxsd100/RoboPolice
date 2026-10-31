@@ -4,6 +4,8 @@
 // The pinned Eris predates forum channels: it caches them as plain guild channels without tags or
 // flags. Permissions come from that cache; tags, flags and guidelines are fetched from the API.
 
+const { withoutCharCount } = require('../utils/textClean')
+
 const FORUM_TYPES = [15, 16] // GUILD_FORUM, GUILD_MEDIA
 const REQUIRE_TAG = 1 << 4
 const MAX_TAGS = 5
@@ -110,7 +112,7 @@ async function toForumPost (draft, guild, member) {
       channelID: channel.id,
       name: title,
       message: {
-        content: content.slice(0, MAX_CONTENT),
+        content: withoutCharCount(content).slice(0, MAX_CONTENT),
         // The text comes from the model; never let it ping @everyone, roles or members.
         allowed_mentions: { parse: [] }
       },

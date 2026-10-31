@@ -10,9 +10,13 @@ const urlFetcher = require('../utils/urlFetcher')
 const { callGemini, DEFAULT_GEMINI_MODEL } = require('./eventDrafter')
 const { embed, model } = require('../utils/embeddings')
 const { isGatewayConfigured } = require('../utils/aiGateway')
+const { withoutCharCount } = require('../utils/textClean')
 
 const PER_RUN = 50
 const MAX_DESCRIPTION = 80
+// Changing how emojis are described describes them all again: it is part of the hash stored with
+// each description.
+const DESCRIBE_VERSION = 2
 
 function enabled () {
   return isGatewayConfigured() && process.env.EMOJI_DESCRIPTIONS !== 'false'
@@ -36,13 +40,13 @@ async function describeEmoji (emoji, characters = '') {
     contents: [{
       role: 'user',
       parts: [
-        { text: `Discord のカスタム絵文字「:${emoji.name}:」の画像です。何が描かれているか、どんな気持ちや場面で使う絵文字かを、日本語の1文（${MAX_DESCRIPTION}文字以内）で書いてください。前置きは不要です。${known}` },
+        { text: `Discord のカスタム絵文字「:${emoji.name}:」の画像です。何が描かれているか、どんな気持ちや場面で使う絵文字かを、日本語の短い1文で書いてください。前置きや文字数は書かないでください。${known}` },
         { inlineData: { mimeType: contentType || 'image/png', data: buffer.toString('base64') } }
       ]
     }],
     generationConfig: { temperature: 0.2 }
   }, { timeoutMs: 30 * 1000 })
-  const text = content.parts.map(p => p.text || '').join('').replace(/\s+/g, ' ').trim()
+  const text = withoutCharCount(content.parts.map(p => p.text || '').join('').replace(/\s+/g, ' ').trim())
   if (!text) throw new Error('Gemini returned no description')
   return text.slice(0, MAX_DESCRIPTION)
 }
@@ -55,10 +59,11 @@ async function syncGuild (guild) {
   await store.syncEmojis(guild.id, usableEmojis(guild))
   // When what the wiki says about the characters changes, every emoji is described again.
   const characters = await require('./wikiKnowledge').characterContext()
+  const hash = `v${DESCRIBE_VERSION}:${characters.hash || ''}`
   let described = 0
-  for (const emoji of await store.emojisToDescribe(guild.id, PER_RUN, characters.hash)) {
+  for (const emoji of await store.emojisToDescribe(guild.id, PER_RUN, hash)) {
     try {
-      await store.saveDescription(emoji.emoji_id, emoji.name, await describeEmoji(emoji, characters.text), characters.hash)
+      await store.saveDescription(emoji.emoji_id, emoji.name, await describeEmoji(emoji, characters.text), hash)
       described++
     } catch (e) {
       global.logger.warn(`[EMOJIS]: Could not describe :${emoji.name}: in ${guild.id}: ${e.message}`)
