@@ -1266,3 +1266,22 @@ describe('mention → event / forum post (integration)', () => {
     })
   })
 })
+
+describe('recentBotReplies', () => {
+  test('the bot\'s own replies in the channel, newest first, not its logs or the reply being written', async () => {
+    installBot({
+      guilds: [guild],
+      messages: {
+        '201/1': { id: '1', content: '書いている途中', author: { id: 'BOT' }, messageReference: { messageID: '9' } },
+        '201/2': { id: '2', content: 'ご安心を！', author: { id: 'BOT' }, messageReference: { messageID: '8' } },
+        '201/3': { id: '3', content: 'ログ', author: { id: 'BOT' }, webhookID: 'W', messageReference: { messageID: '7' } },
+        '201/4': { id: '4', content: '告知です', author: { id: 'BOT' } },
+        '201/5': { id: '5', content: '人の発言', author: { id: '2' }, messageReference: { messageID: '6' } },
+        '201/6': { id: '6', content: '前の返事', author: { id: 'BOT' }, messageReference: { messageID: '5' } }
+      }
+    })
+    assert.deepEqual(await mentionEvent.recentBotReplies('201', '1'), ['ご安心を！', '前の返事'])
+    global.bot.getMessages = async () => { throw new Error('Missing Access') }
+    assert.deepEqual(await mentionEvent.recentBotReplies('201'), [])
+  })
+})

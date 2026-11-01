@@ -256,24 +256,42 @@ async function searchWiki (query, { facts = 8, sections = 3 } = {}) {
 
 // What the knowledge says about the request, for the server's profile sent with every request, so
 // the model knows the community's characters and words without having to search first:
-// characters named in the request (by name or other name), then the knowledge closest in meaning
-// to it (`vector`, its embedding). Lines; none when there is no knowledge or nothing near.
+// characters named in the request (by name or other name), then knowledge close in meaning to it
+// (`vector`, its embedding). The close ones are drawn at random from several times as many, the
+// closer the likelier, so the same request does not bring up the same jokes every time. Lines;
+// none when there is no knowledge or nothing near.
 const MIN_RELATED_SCORE = 0.55
-async function relatedKnowledge (query, vector, { limit = 6 } = {}) {
+const RELATED_CANDIDATES = 3 // times `limit`
+async function relatedKnowledge (query, vector, { limit = 6, random = Math.random } = {}) {
   if (!searchable() || !String(query || '').trim()) return []
   const text = String(query)
   const named = (await store.characterFacts().catch(() => []))
     .filter(c => [c.name, ...(c.aliases || [])].some(n => n && n.length >= 2 && text.includes(n)))
     .map(c => ({ kind: 'character', ...c }))
   const near = vector
-    ? (await Promise.all(stores().map(t => t.nearestFacts(vector, model(), limit).catch(() => []))))
-        .flat().filter(f => (f.score ?? 0) >= MIN_RELATED_SCORE).sort((a, b) => b.score - a.score)
+    ? (await Promise.all(stores().map(t => t.nearestFacts(vector, model(), limit * RELATED_CANDIDATES).catch(() => []))))
+        .flat().filter(f => (f.score ?? 0) >= MIN_RELATED_SCORE)
     : []
   const seen = new Set()
-  return [...named, ...near]
-    .filter(f => !seen.has(`${f.kind}:${f.name}`) && seen.add(`${f.kind}:${f.name}`))
-    .slice(0, limit)
+  const key = f => `${f.kind}:${f.name}`
+  const picked = named.filter(f => !seen.has(key(f)) && seen.add(key(f))).slice(0, limit)
+  const pool = near.filter(f => !seen.has(key(f)) && seen.add(key(f)))
+  return [...picked, ...weightedSample(pool, limit - picked.length, f => f.score - MIN_RELATED_SCORE + 0.05, random)]
     .map(f => `- [${KIND_LABELS[f.kind]}] ${f.name}${f.aliases?.length ? `（${f.aliases.join('、')}）` : ''}: ${f.content}`)
+}
+
+// `count` of `items` drawn at random without repeats, each as likely as its weight.
+function weightedSample (items, count, weightOf, random = Math.random) {
+  const left = [...items]
+  const out = []
+  while (out.length < count && left.length) {
+    const total = left.reduce((n, item) => n + weightOf(item), 0)
+    let r = random() * total
+    let i = left.findIndex(item => (r -= weightOf(item)) < 0)
+    if (i < 0) i = left.length - 1
+    out.push(left.splice(i, 1)[0])
+  }
+  return out
 }
 
 // Who the wiki's characters are, for describing emojis: { text, hash }, text empty when unknown.
@@ -299,4 +317,4 @@ async function characterContext () {
   return { text, hash: text ? crypto.createHash('sha256').update(hashed).digest('hex').slice(0, 16) : null, names, images }
 }
 
-module.exports = { startWiki, refresh, crawl, extractFacts, extractPending, embedPending, processPending, searchWiki, relatedKnowledge, characterContext, enabled, searchable, wikiRoots }
+module.exports = { weightedSample, startWiki, refresh, crawl, extractFacts, extractPending, embedPending, processPending, searchWiki, relatedKnowledge, characterContext, enabled, searchable, wikiRoots }
