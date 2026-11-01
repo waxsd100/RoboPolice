@@ -312,7 +312,7 @@ describe('/youtube', () => {
 
     const shown = interaction('show')
     await command.func(shown)
-    assert.equal(shown.replies[0].embeds[0].fields.find(f => f.name === '配信のイベント登録').value, '有効')
+    assert.equal(shown.replies[0].embeds[0].fields.find(f => f.name === '配信・新着動画のイベント登録').value, '有効')
 
     const off = interaction('liveevents', [{ name: 'enabled', value: false }])
     await command.func(off)

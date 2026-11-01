@@ -304,6 +304,12 @@ describe('stores', { skip: !database.available && 'needs PGHOST' }, () => {
       assert.deepEqual(await store().archivesToSummarize('g1', { waitMinutes: 0 }), [], 'not once summarized')
       await q("DELETE FROM guild_youtube_summaries WHERE video_id = 'v2'")
       await q("DELETE FROM youtube_summaries WHERE video_id = 'v2'")
+      // An upload's event is not a stream: its video is never summarized as an archive.
+      await q("DELETE FROM youtube_live_events WHERE video_id = 'v2'")
+      await store().saveLiveEvent('g1', 'v2', { eventID: 'ev9', status: 'completed', kind: 'upload' })
+      assert.equal((await store().getLiveEvents('g1')).v2.kind, 'upload')
+      assert.deepEqual(await store().archivesToSummarize('g1', { waitMinutes: -1 }), [])
+      await q("DELETE FROM youtube_live_events WHERE video_id = 'v2'")
     })
 
     test('stream events, settings and push subscriptions', async () => {

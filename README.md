@@ -82,7 +82,7 @@ configured** — a server with none never has message content stored, since noth
 | `/youtube set channel:<URL か @名前>` | サーバーの YouTube チャンネルを設定し、動画の情報を読み込む。見つかったチャンネルを表示して「はい / いいえ」で確認する。別のチャンネルに変えると、保存していた動画の情報は消える | サーバーの管理 |
 | `/youtube sync` | チャンネルを読み直し、新しい動画と配信の状態を取り込む（普段は自動） | サーバーの管理 |
 | `/youtube summarize count:<1〜50> force:<True/False> url:<動画リンク>` | まだ要約していない動画を新しい順に `count` 本（初期値 3）要約する。3本ずつ同時に要約する（`VIDEO_SUMMARY_CONCURRENCY` で1〜10本に変更可）。本数が多いと時間がかかる。`force:True` で要約済みも作り直す。`url` を指定するとその1本だけを要約して内容を表示する（他のチャンネルの動画でも可） | サーバーの管理 |
-| `/youtube liveevents enabled:<True/False>` | 配信をサーバーのイベントとして自動で登録する（予定の枠で作成、開始で開催中、終了で終了）。説明の先頭に AI が配信内容の紹介を書き、終了後はアーカイブを自動で要約する。通常の動画は対象外 | サーバーの管理（BOT にイベントの管理） |
+| `/youtube liveevents enabled:<True/False>` | 配信をサーバーのイベントとして自動で登録する（予定の枠で作成、開始で開催中、終了で終了）。説明の先頭に AI が配信内容の紹介を書き、終了後はアーカイブを自動で要約する。新しく投稿された動画も「📺 新着動画」として投稿から24時間イベントにする | サーバーの管理（BOT にイベントの管理） |
 | `/youtube show` | 設定しているチャンネル、保存している動画の数、配信の予定、配信のイベント登録の有無を表示する | サーバーの管理 |
 | `/setup via_presets` | よく使うログをまとめて有効にする | Webhook の管理・チャンネルの管理・監査ログの表示 |
 | `/setup via_individual_event` | ログの種類を1つずつ選んで有効にする | 同上 |
@@ -266,8 +266,10 @@ accumulates:
 ### Streams as server events
 
 `/youtube liveevents enabled:True` (Manage Server; the bot needs Manage Events) makes the server's
-YouTube streams scheduled events (`src/bot/modules/liveWatcher.js`). Ordinary videos never become
-events. Each stream's event follows it: made when the stream is scheduled, with its title,
+YouTube streams scheduled events (`src/bot/modules/liveWatcher.js`), and new uploads too: an
+ordinary video seen in the channel's feed within `UPLOAD_EVENT_MAX_AGE_HOURS` (default 6) of its
+upload becomes a "📺 新着動画" event, started at once with its description, link and thumbnail, and
+ended after `UPLOAD_EVENT_HOURS` (default 24); `UPLOAD_EVENTS=false` turns that off. Each stream's event follows it: made when the stream is scheduled, with its title,
 description, link and thumbnail as the cover (an unscheduled stream gets one when it starts, started
 straight away); moved when the start time changes; started when the stream goes live; kept open past
 its planned end while it runs; completed when it ends, or cancelled if the stream is called off or

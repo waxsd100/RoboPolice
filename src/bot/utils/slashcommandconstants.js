@@ -51,7 +51,7 @@ exports.commands = [
       {
         type: ERIS_CONSTANTS.ApplicationCommandOptionTypes.SUB_COMMAND,
         name: 'liveevents',
-        description: 'Register this channel\'s streams as server events automatically',
+        description: 'Register this channel\'s streams and new uploads as server events automatically',
         options: [{
           type: ERIS_CONSTANTS.ApplicationCommandOptionTypes.BOOLEAN,
           name: 'enabled',
