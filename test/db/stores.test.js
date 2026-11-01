@@ -261,16 +261,19 @@ describe('stores', { skip: !database.available && 'needs PGHOST' }, () => {
     const video = (id, extra = {}) => ({ id, title: `動画 ${id}`, description: '', publishedAt: `2026-10-0${id.slice(1)}T00:00:00Z`, liveStatus: 'none', scheduledStart: null, duration: 'PT1H', ...extra })
     const channel = { id: 'UC1', title: 'チャンネル', description: '説明', handle: '@chan', url: 'https://www.youtube.com/@chan' }
 
-    test('two servers with the same channel share its videos', async () => {
-      await store().setChannel('g1', '@chan', 'UC1')
-      await store().setChannel('g2', 'https://www.youtube.com/@chan', 'UC1')
-      await store().saveSync('g1', { channel, videos: [video('v1'), video('v2', { liveStatus: 'upcoming' }), video('v1')] })
-      assert.deepEqual([...await store().getVideoIds('g2')].sort(), ['v1', 'v2'])
-      const knowledge = await store().getKnowledge('g2')
-      assert.equal(knowledge.channel.title, 'チャンネル')
-      assert.equal(knowledge.channel.channel_ref, 'https://www.youtube.com/@chan')
-      assert.deepEqual(knowledge.videos.map(v => [v.video_id, v.url]), [['v2', 'https://www.youtube.com/watch?v=v2'], ['v1', 'https://www.youtube.com/watch?v=v1']])
-      assert.deepEqual(await store().getLiveVideoIds('g1'), ['v2'])
+    test('the bot\'s channels are every server\'s: their videos are found from any server', async () => {
+      await store().setBotChannels([{ ref: '@chan', id: 'UC1' }])
+      await store().saveSync({ channel, videos: [video('v1'), video('v2', { liveStatus: 'upcoming' }), video('v1')] })
+      assert.deepEqual([...await store().getVideoIds()].sort(), ['v1', 'v2'])
+      assert.deepEqual([...await store().getVideoIds('UC1')].sort(), ['v1', 'v2'])
+      for (const guild of ['g1', 'g2']) {
+        const knowledge = await store().getKnowledge(guild)
+        assert.equal(knowledge.channel.title, 'チャンネル')
+        assert.equal(knowledge.channels[0].channel_ref, '@chan')
+        assert.deepEqual(knowledge.videos.map(v => [v.video_id, v.url]), [['v2', 'https://www.youtube.com/watch?v=v2'], ['v1', 'https://www.youtube.com/watch?v=v1']])
+      }
+      assert.deepEqual(await store().getLiveVideoIds('UC1'), ['v2'])
+      assert.deepEqual(await store().recentVideoIds('UC1', new Date('2026-10-01T12:00:00Z')), ['v2'])
       assert.deepEqual((await q('SELECT count(*)::int AS n FROM youtube_videos'))[0].n, 2)
     })
 
@@ -283,6 +286,7 @@ describe('stores', { skip: !database.available && 'needs PGHOST' }, () => {
       assert.deepEqual(await store().getOtherSummaries('g2'), [])
       const overview = await store().getOverview('g2')
       assert.deepEqual([overview.video_count, overview.summary_count, overview.live_count], [2, 1, 1])
+      assert.deepEqual(overview.channels.map(c => [c.channel_id, c.video_count]), [['UC1', 2]])
     })
 
     test('a stream\'s archive is due for a summary a while after it ends, a few times at most', async () => {
@@ -314,11 +318,15 @@ describe('stores', { skip: !database.available && 'needs PGHOST' }, () => {
 
     test('stream events, settings and push subscriptions', async () => {
       await store().setLiveEvents('g1', true)
+      await store().setLiveEvents('g2', false)
       await store().saveLiveEvent('g1', 'v2', { eventID: 'ev1', status: 'scheduled', scheduledStart: null, scheduledEnd: null })
       assert.equal((await store().getLiveEvents('g1')).v2.event_id, 'ev1')
-      assert.deepEqual((await store().listChannels()).sort((a, b) => a.guild_id.localeCompare(b.guild_id)), [
-        { guild_id: 'g1', channel_id: 'UC1', live_events: true }, { guild_id: 'g2', channel_id: 'UC1', live_events: false }
-      ])
+      assert.equal((await store().getLiveEvents('g1', 'UC1')).v2.event_id, 'ev1')
+      assert.deepEqual(await store().getLiveEvents('g1', 'UCother'), {})
+      assert.deepEqual(await store().listLiveEventGuilds(), ['g1'])
+      assert.equal((await store().getKnowledge('g1')).live_events, true)
+      assert.equal((await store().getKnowledge('g2')).live_events, false)
+      assert.deepEqual((await store().listChannels()).map(c => c.channel_id), ['UC1'])
       assert.equal(await store().isKnownChannel('UC1'), true)
       assert.deepEqual(await store().websubDue(new Date()), ['UC1'])
       await store().saveWebsub('UC1', new Date(Date.now() + 86400000))
@@ -339,32 +347,30 @@ describe('stores', { skip: !database.available && 'needs PGHOST' }, () => {
       assert.deepEqual(await embeddings.videoScores('g2', axis(0), 'B'), {})
     })
 
-    test('a channel goes when no server has it; summaries when no server asked for them', async () => {
-      // g1 moves to another channel: its stream events go, the shared videos stay for g2.
-      await store().setChannel('g1', '@other', 'UC2')
-      assert.deepEqual(await store().getLiveEvents('g1'), {})
-      assert.deepEqual([...await store().getVideoIds('g1')], [])
-      assert.equal((await store().getOverview('g1')).synced_at, null)
-      assert.deepEqual([...await store().getVideoIds('g2')].sort(), ['v1', 'v2'])
+    test('a channel the bot stops following goes with its videos; summaries when no server asked for them', async () => {
+      // Another channel added: the first keeps everything accumulated.
+      await store().setBotChannels([{ ref: '@chan', id: 'UC1' }, { ref: '@other', id: 'UC2' }])
+      assert.deepEqual((await store().listChannels()).map(c => [c.channel_id, c.channel_ref]), [['UC1', '@chan'], ['UC2', '@other']])
+      assert.deepEqual([...await store().getVideoIds('UC1')].sort(), ['v1', 'v2'])
+      assert.equal(await store().isKnownChannel('UC2'), true)
 
-      await store().deleteGuildYouTube('g2')
+      // The first dropped: its videos, embeddings and stream events go.
+      await store().setBotChannels([{ ref: '@other', id: 'UC2' }])
       assert.deepEqual(await q('SELECT channel_id FROM youtube_channels'), [{ channel_id: 'UC2' }])
       assert.deepEqual(await q('SELECT * FROM youtube_videos'), [])
       assert.deepEqual(await q('SELECT * FROM youtube_video_embeddings'), [])
-      // g1 still asked for both of its summaries.
+      assert.deepEqual(await store().getLiveEvents('g1'), {})
+      assert.equal(await store().isKnownChannel('UC1'), false)
+
+      // Summaries stay while a server asked for them.
       assert.deepEqual((await q('SELECT video_id FROM youtube_summaries ORDER BY video_id')).map(r => r.video_id), ['v1', 'x9'])
+      await store().deleteGuildYouTube('g2')
       await store().deleteGuildYouTube('g1')
       assert.deepEqual(await q('SELECT * FROM youtube_summaries'), [])
+      assert.deepEqual(await q("SELECT * FROM guild_youtube WHERE guild_id IN ('g1', 'g2')"), [])
+      await store().setBotChannels([])
       assert.deepEqual(await q('SELECT * FROM youtube_channels'), [])
-    })
-
-    test('a server set before channel IDs were stored gets one on its sync', async () => {
-      await q("INSERT INTO guilds (id, owner_id) VALUES ('g3', 'o3')")
-      await q("INSERT INTO guild_youtube (guild_id, channel_ref) VALUES ('g3', '@legacy')")
-      assert.equal((await store().getOverview('g3')).channel_id, null)
-      await store().saveSync('g3', { channel: { ...channel, id: 'UC3' }, videos: [video('v3')] })
-      assert.equal((await store().getOverview('g3')).channel_id, 'UC3')
-      assert.deepEqual([...await store().getVideoIds('g3')], ['v3'])
+      assert.equal(await store().getKnowledge('g1'), null)
     })
   })
 })

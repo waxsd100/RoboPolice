@@ -126,13 +126,14 @@ describe('migrations', { skip: !database.available && 'needs PGHOST' }, () => {
     assert.deepEqual(await q('SELECT message_id FROM message_embeddings'), [{ message_id: 'm1' }])
   })
 
-  test('channels and videos are stored once, servers point at them', async () => {
+  test('channels and videos are stored once; the channels servers had set become the bot\'s', async () => {
     assert.deepEqual(await q('SELECT channel_id, title, backfill_token, websub_expires_at IS NOT NULL AS websub FROM youtube_channels'), [
       { channel_id: 'UC1', title: 'チャンネル', backfill_token: null, websub: true }
     ])
-    assert.deepEqual(await q('SELECT guild_id, channel_ref, channel_id, live_events FROM guild_youtube ORDER BY guild_id'), [
-      { guild_id: 'g1', channel_ref: '@chan', channel_id: 'UC1', live_events: true },
-      { guild_id: 'g2', channel_ref: 'https://youtube.com/@chan', channel_id: 'UC1', live_events: false }
+    assert.deepEqual(await q('SELECT channel_id, channel_ref FROM youtube_bot_channels'), [{ channel_id: 'UC1', channel_ref: '@chan' }])
+    assert.deepEqual(await q('SELECT guild_id, live_events FROM guild_youtube ORDER BY guild_id'), [
+      { guild_id: 'g1', live_events: true },
+      { guild_id: 'g2', live_events: false }
     ])
     assert.deepEqual(await q('SELECT video_id, channel_id FROM youtube_videos ORDER BY video_id'), [
       { video_id: 'v1', channel_id: 'UC1' }, { video_id: 'v2', channel_id: 'UC1' }
@@ -174,6 +175,6 @@ describe('migrations', { skip: !database.available && 'needs PGHOST' }, () => {
     assert.deepEqual((await q("SELECT id FROM messages WHERE guild_id = 'g1'")), [])
     assert.deepEqual((await q("SELECT guild_id FROM guild_youtube WHERE guild_id = 'g1'")), [])
     assert.deepEqual((await q("SELECT guild_id FROM guild_youtube_summaries WHERE guild_id = 'g1'")), [])
-    await assert.rejects(q("INSERT INTO guild_youtube (guild_id, channel_ref) VALUES ('nowhere', '@x')"), /foreign key/)
+    await assert.rejects(q("INSERT INTO guild_youtube (guild_id) VALUES ('nowhere')"), /foreign key/)
   })
 })

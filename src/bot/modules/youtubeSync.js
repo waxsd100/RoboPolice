@@ -1,26 +1,58 @@
-// Keeping each server's YouTube knowledge current: the sync /youtube runs, the same sync run
-// automatically when the channel has something new, and summaries of the newest videos in bulk.
-const { parseChannelRef, fetchChannelKnowledge, durationSeconds } = require('../utils/youtube')
+// Keeping the YouTube knowledge current: the channels the bot follows (YOUTUBE_CHANNELS, one list
+// for every server), the sync /youtube runs, the same sync run automatically when a channel has
+// something new, and summaries of the newest videos in bulk.
+const { parseChannelRef, resolveChannel, fetchChannelKnowledge, durationSeconds } = require('../utils/youtube')
 const youtubeDB = require('../../db/interfaces/postgres/youtube')
 const videoSummary = require('./videoSummary')
-const { ownerFirst } = require('../utils/priority')
+const { knowledgeSetting } = require('../utils/knowledgeDefaults')
 
 const DEFAULT_AUTO_SYNC_MINUTES = 15
 const FEED_TIMEOUT_MS = 15000
 const MAX_SUMMARIES = 50
 
-// Reads the configured channel from YouTube and adds to what is stored: the whole channel the first
-// time, afterwards only what is new (plus the newest page again, for streams that changed state).
+// The channels named in YOUTUBE_CHANNELS (comma-separated: @name, a channel URL or its ID).
+function configuredChannels () {
+  return String(knowledgeSetting('YOUTUBE_CHANNELS')).split(',').map(s => s.trim()).filter(Boolean)
+}
+
+// Makes the bot follow the channels named in YOUTUBE_CHANNELS. All of them are resolved first: if
+// one cannot be, nothing changes (a typo must not drop a channel and its videos). Resolves to the
+// channels followed, or null when nothing changed.
+async function applyConfiguredChannels () {
+  const refs = configuredChannels()
+  if (!refs.length || !process.env.YOUTUBE_API_KEY) return null
+  const channels = []
+  for (const ref of refs) {
+    const parsed = parseChannelRef(ref)
+    if (!parsed) throw new Error(`YOUTUBE_CHANNELS: "${ref}" is not a channel`)
+    const id = parsed.id || (await resolveChannel(parsed, process.env.YOUTUBE_API_KEY)).id
+    channels.push({ ref, id })
+  }
+  await youtubeDB.setBotChannels(channels)
+  return channels
+}
+
+// Reads one channel from YouTube and adds to what is stored: the whole channel the first time,
+// afterwards only what is new (plus the newest page again, for streams that changed state).
+// Resolves to { added, more } (more: older videos are left for the next sync).
+async function syncChannel (channel) {
+  const knownIds = await youtubeDB.getVideoIds(channel.channel_id)
+  const knowledge = await fetchChannelKnowledge({ id: channel.channel_id }, process.env.YOUTUBE_API_KEY, { knownIds, backfillToken: channel.backfill_token })
+  await youtubeDB.saveSync(knowledge)
+  return { added: new Set(knowledge.videos.filter(v => !knownIds.has(v.id)).map(v => v.id)).size, more: !!knowledge.backfillToken }
+}
+
+// Syncs every channel the bot follows, for /youtube sync. guildID: whose view to return.
 async function sync (guildID) {
-  const stored = await youtubeDB.getOverview(guildID)
-  const knownIds = await youtubeDB.getVideoIds(guildID)
-  // Rows set before channel IDs were stored have only the reference.
-  const ref = stored.channel_id ? { id: stored.channel_id } : parseChannelRef(stored.channel_ref)
-  const knowledge = await fetchChannelKnowledge(ref, process.env.YOUTUBE_API_KEY, { knownIds, backfillToken: stored.backfill_token })
-  await youtubeDB.saveSync(guildID, knowledge)
-  const added = new Set(knowledge.videos.filter(v => !knownIds.has(v.id)).map(v => v.id)).size
+  let added = 0
+  let more = false
+  for (const channel of await youtubeDB.listChannels()) {
+    const result = await syncChannel(channel)
+    added += result.added
+    more = more || result.more
+  }
   const note = [`新しく ${added} 件の動画を保存しました。`]
-  if (knowledge.backfillToken) note.push('動画が多いため、残りの古い動画は次の `/youtube sync` で続きから取得します（自動の取得でも続きを読みます）。')
+  if (more) note.push('動画が多いため、残りの古い動画は次の `/youtube sync` で続きから取得します（自動の取得でも続きを読みます）。')
   return { knowledge: await youtubeDB.getKnowledge(guildID), note: note.join(''), added }
 }
 
@@ -31,20 +63,18 @@ async function feedVideoIds (channelID) {
   return [...(await res.text()).matchAll(/<yt:videoId>([\w-]{11})<\/yt:videoId>/g)].map(m => m[1])
 }
 
-// Syncs one server if there is anything to pick up: a video not stored yet (seen in the free feed),
-// a live or upcoming stream whose state may have changed, or older videos left from a first read.
-// Resolves to the number of videos added, or null when nothing needed doing.
-async function syncIfChanged (guildID) {
-  const stored = await youtubeDB.getOverview(guildID)
-  if (!stored?.channel_id) return null
-  let reason = stored.backfill_token ? 'backfill' : stored.live_count ? 'live' : null
+// Syncs one channel if there is anything to pick up: a video not stored yet (seen in the free
+// feed), a live or upcoming stream whose state may have changed, or older videos left from a first
+// read. Resolves to the number of videos added, or null when nothing needed doing.
+async function syncIfChanged (channel) {
+  let reason = channel.backfill_token ? 'backfill' : (await youtubeDB.getLiveVideoIds(channel.channel_id)).length ? 'live' : null
   if (!reason) {
-    const known = await youtubeDB.getVideoIds(guildID)
-    if ((await feedVideoIds(stored.channel_id)).some(id => !known.has(id))) reason = 'new video'
+    const known = await youtubeDB.getVideoIds(channel.channel_id)
+    if ((await feedVideoIds(channel.channel_id)).some(id => !known.has(id))) reason = 'new video'
   }
   if (!reason) return null
-  const { added } = await sync(guildID)
-  global.logger.info(`[YOUTUBE]: Synced ${guildID} automatically (${reason}), ${added} new video(s)`)
+  const { added } = await syncChannel(channel)
+  global.logger.info(`[YOUTUBE]: Synced ${channel.title || channel.channel_id} automatically (${reason}), ${added} new video(s)`)
   return added
 }
 
@@ -54,15 +84,17 @@ function autoSyncMinutes () {
   return raw && Number.isFinite(minutes) && minutes >= 0 ? minutes : DEFAULT_AUTO_SYNC_MINUTES
 }
 
+// The channels are the bot's, not a server's: one worker (the one owning shard 0) syncs them.
+const syncsHere = () => !global.bot?.shards || !!global.bot.shards.find?.(s => s.id === 0) || global.bot.shards.has?.(0)
+
 let running = false
-// One pass over the servers this worker hosts; each worker handles its own, so none is done twice.
+// One pass over the channels the bot follows.
 async function autoSyncAll () {
-  if (running) return
+  if (running || !syncsHere()) return
   running = true
   try {
-    const channels = await youtubeDB.listChannels()
-    for (const { guild_id: guildID } of ownerFirst(channels.filter(c => global.bot.guilds.has(c.guild_id)), c => c.guild_id)) {
-      await syncIfChanged(guildID).catch(e => global.logger.warn(`[YOUTUBE]: Automatic sync of ${guildID} failed: ${e.message}`))
+    for (const channel of await youtubeDB.listChannels()) {
+      await syncIfChanged(channel).catch(e => global.logger.warn(`[YOUTUBE]: Automatic sync of ${channel.channel_id} failed: ${e.message}`))
     }
   } catch (e) {
     global.logger.warn(`[YOUTUBE]: Automatic sync failed: ${e.message}`)
@@ -71,21 +103,28 @@ async function autoSyncAll () {
   }
 }
 
-// A push from YouTube (an upload, a new stream, or a title or description changed): sync every
-// server this worker hosts that set that channel.
+// A push from YouTube (an upload, a new stream, or a title or description changed): sync that
+// channel, if the bot follows it.
 async function syncOnPush (channelID) {
-  const channels = (await youtubeDB.listChannels()).filter(c => c.channel_id === channelID && global.bot.guilds.has(c.guild_id))
-  for (const { guild_id: guildID } of channels) {
-    await sync(guildID)
-      .then(({ added }) => global.logger.info(`[YOUTUBE]: Synced ${guildID} on a YouTube push, ${added} new video(s)`))
-      .catch(e => global.logger.warn(`[YOUTUBE]: Sync of ${guildID} on a push failed: ${e.message}`))
-  }
+  if (!syncsHere()) return
+  const channel = (await youtubeDB.listChannels()).find(c => c.channel_id === channelID)
+  if (!channel) return
+  await syncChannel(channel)
+    .then(({ added }) => global.logger.info(`[YOUTUBE]: Synced ${channel.title || channelID} on a YouTube push, ${added} new video(s)`))
+    .catch(e => global.logger.warn(`[YOUTUBE]: Sync of ${channelID} on a push failed: ${e.message}`))
 }
 
-// With YouTube pushes set up (websub.js), a channel is synced when YouTube says something changed;
-// without them, every YOUTUBE_AUTO_SYNC_MINUTES.
+// At startup: the channels named in YOUTUBE_CHANNELS are followed (on the worker owning shard 0),
+// then, with YouTube pushes set up (websub.js), a channel is synced when YouTube says something
+// changed; without them, every YOUTUBE_AUTO_SYNC_MINUTES.
 function startAutoSync () {
   if (!process.env.YOUTUBE_API_KEY) return null
+  if (syncsHere()) {
+    applyConfiguredChannels()
+      .then(channels => channels && global.logger.startup(`[YOUTUBE]: Following ${channels.map(c => c.ref).join(', ')}.`))
+      .then(() => autoSyncAll())
+      .catch(e => global.logger.warn(`[YOUTUBE]: Could not follow the channels of YOUTUBE_CHANNELS, keeping those followed: ${e.message}`))
+  }
   if (require('../../miscellaneous/websub').enabled()) {
     global.logger.startup('[YOUTUBE]: Syncing channels when YouTube pushes an upload.')
     require('cluster').worker?.on('message', message => {
@@ -156,4 +195,4 @@ async function summarizeLatest (guildID, videos, { onProgress = () => {}, force 
   return results
 }
 
-module.exports = { sync, syncIfChanged, syncOnPush, autoSyncAll, startAutoSync, feedVideoIds, videosToSummarize, summarizeLatest, shortestFirst, summaryConcurrency, MAX_SUMMARIES }
+module.exports = { sync, syncChannel, syncIfChanged, syncOnPush, autoSyncAll, startAutoSync, applyConfiguredChannels, configuredChannels, feedVideoIds, videosToSummarize, summarizeLatest, shortestFirst, summaryConcurrency, MAX_SUMMARIES }

@@ -352,7 +352,7 @@ describe('describeServer', () => {
   test('mentions the stored YouTube channel', async () => {
     installYouTubeStore({ 100: { channel: { channel_ref: '@x', title: 'のばまんch', synced_at: new Date('2026-10-29T12:00:00Z') }, videos: [{}, {}] } })
     const text = await describeServer(createGuild(), member, '1')
-    assert.match(text, /### YouTube\nのばまんch（動画 2 件を保存、取得 2026-10-29T12:00:00\.000Z）。詳しくは search_youtube で調べる/)
+    assert.match(text, /### YouTube\nのばまんch（動画 2 件を保存、取得 2026-10-29T12:00:00\.000Z）\n詳しくは search_youtube で調べる/)
   })
 
   test('still describes the server when events or YouTube cannot be read', async () => {
@@ -378,7 +378,7 @@ describe('search_youtube', () => {
 
   test('says when no channel is set, or it has not been read yet', async () => {
     installYouTubeStore()
-    assert.match((await tools().call('search_youtube', {})).result, /YouTube チャンネルが設定されていません（運営が \/youtube set で設定できます）/)
+    assert.match((await tools().call('search_youtube', {})).result, /BOT が見ている YouTube チャンネルはありません/)
     installYouTubeStore({ 100: { channel: { channel_ref: '@x', synced_at: null }, videos: [] } })
     assert.match((await tools().call('search_youtube', {})).result, /まだ情報を取得していません/)
   })
@@ -387,9 +387,9 @@ describe('search_youtube', () => {
     installYouTubeStore({ 100: { channel: synced, videos } })
     const text = (await tools().call('search_youtube', {})).result
     assert.equal(text, [
-      'チャンネル: のばまんch（https://y/c）',
-      '概要: ゲーム配信',
-      '情報の取得日時: 2026-10-29T12:00:00.000Z（保存している動画 3 件、うち内容の要約あり 0 件）',
+      'チャンネル: のばまんch（https://y/c、取得 2026-10-29T12:00:00.000Z）',
+      '  概要: ゲーム配信',
+      '保存している動画 3 件、うち内容の要約あり 0 件',
       '新しい順の動画:',
       '- [配信予定 2026-11-03T11:00:00.000Z] 11/3 記念配信（公開 2026-10-28）https://y/v2',
       '  周年記念',
@@ -448,7 +448,7 @@ describe('YouTube summaries in the tools', () => {
   test('search_youtube shows other summaries even when no channel is set', async () => {
     installYouTubeStore({}, { 100: { otherVideo1: '要約' } })
     const text = (await tools().call('search_youtube', {})).result
-    assert.match(text, /YouTube チャンネルが設定されていません[\s\S]*その他の要約済み動画（1 件）/)
+    assert.match(text, /BOT が見ている YouTube チャンネルはありません[\s\S]*その他の要約済み動画（1 件）/)
   })
 
   test('summarize_youtube_video returns the summary and records the video as a source', async () => {

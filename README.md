@@ -46,7 +46,7 @@ Short version; the Privacy Policy is authoritative.
 | Message ID, author ID, channel ID, server ID, timestamp, content and image URLs (not encrypted by the app; see below) | PostgreSQL `messages`, `message_attachments` | `MESSAGE_HISTORY_DAYS` days, or forever if unset; all of a server's go when the app leaves it |
 | Per-server settings (log channels, ignored channels, disabled events), and the server's name, icon URL, member count and when the app joined | PostgreSQL `guilds`, `guild_emojis` (custom emojis with an AI description), `guild_event_logs`, `guild_ignored_channels`, `guild_disabled_events` | Until the app leaves the server |
 | Invite counters, webhook handles, guild settings | Redis | 3 hours |
-| The YouTube channel set with `/youtube`, its description and every video read from it, plus summaries of linked videos' contents (public YouTube data) | PostgreSQL `guild_youtube`, `youtube_channels`, `youtube_videos`, `youtube_summaries`, `guild_youtube_summaries` | Channels and videos until no server has the channel set; summaries until no server that asked for them remains |
+| The YouTube channels the bot follows (`YOUTUBE_CHANNELS`), their descriptions and every video read from them, each server's event setting, plus summaries of linked videos' contents (public YouTube data) | PostgreSQL `youtube_bot_channels`, `guild_youtube`, `youtube_channels`, `youtube_videos`, `youtube_summaries`, `guild_youtube_summaries` | Channels and videos until the bot no longer follows the channel; summaries until no server that asked for them remains |
 
 Message content, image URLs and message embeddings are stored as they are: the app no longer
 encrypts them with `AES_KEY` (migration 006 decrypted what was stored), since encryption is moving
@@ -79,8 +79,7 @@ configured** — a server with none never has message content stored, since noth
 
 | コマンド | 内容 | 必要な権限 |
 |---|---|---|
-| `/youtube set channel:<URL か @名前>` | サーバーの YouTube チャンネルを設定し、動画の情報を読み込む。見つかったチャンネルを表示して「はい / いいえ」で確認する。別のチャンネルに変えると、保存していた動画の情報は消える | サーバーの管理 |
-| `/youtube sync` | チャンネルを読み直し、新しい動画と配信の状態を取り込む（普段は自動） | サーバーの管理 |
+| `/youtube sync` | BOT が見ているチャンネルを読み直し、新しい動画と配信の状態を取り込む（普段は自動。オーナーのサーバーからのみ） | サーバーの管理 |
 | `/youtube summarize count:<1〜50> force:<True/False> url:<動画リンク>` | まだ要約していない動画を新しい順に `count` 本（初期値 3）要約する。3本ずつ同時に要約する（`VIDEO_SUMMARY_CONCURRENCY` で1〜10本に変更可）。本数が多いと時間がかかる。`force:True` で要約済みも作り直す。`url` を指定するとその1本だけを要約して内容を表示する（他のチャンネルの動画でも可） | サーバーの管理 |
 | `/youtube liveevents enabled:<True/False>` | 配信をサーバーのイベントとして自動で登録する（予定の枠で作成、開始で開催中、終了で終了）。説明の先頭に AI が配信内容の紹介を書き、終了後はアーカイブを自動で要約する。新しく投稿された動画も「📺 新着動画」として投稿から24時間イベントにする | サーバーの管理（BOT にイベントの管理） |
 | `/youtube show` | 設定しているチャンネル、保存している動画の数、配信の予定、配信のイベント登録の有無を表示する | サーバーの管理 |
@@ -226,16 +225,18 @@ messages straight from Discord when nothing is stored.
 
 ### YouTube knowledge
 
-`/youtube set channel:<URL or @handle>` (Manage Server) shows the channel it found and, once the
-member who ran it presses はい, sets it as the server's YouTube channel and reads it right away
-(replacing another channel says that its stored videos will go); `/youtube sync` reads it again and `/youtube show` shows what is stored. Knowledge
-accumulates:
+The YouTube channels are the bot's, the same for every server: `YOUTUBE_CHANNELS` names them
+(comma-separated `@handle`, channel URL or `UC…` ID; default のばまんゲームス, `UCTW2tw0Mhho72MojB1L48IQ`, and のばまん・ロー・エフォート, `UCz7pNw3UkTF9WQjHcYpFD9g`).
+At startup the worker owning shard 0 resolves every one (if one cannot be, nothing changes) and
+follows exactly those: a channel added is read from the start, one removed goes with its videos.
+That worker also keeps them synced. `/youtube show` shows them in any server, and `/youtube sync`
+(from the owner's servers) reads them again. Each server still chooses for itself whether their
+streams and uploads become its events (`/youtube liveevents`). Knowledge accumulates:
 
 - The first read walks the channel's whole upload list (up to 5000 videos, 2 quota units per 50).
   Later reads stop at the first page of already-stored videos, so they cost 3 units unless much is
   new, while the newest page is always re-read to catch streams that went live or ended.
-- Videos are added or refreshed, never dropped. Setting the same channel again keeps them; setting a
-  different one starts over.
+- Videos are added or refreshed, never dropped while the bot follows the channel.
 - Each video keeps its title, description, publish date, length and stream state and time
   (`YOUTUBE_API_KEY`, YouTube Data API).
 - A summary lists the topics in order, each with the time it starts (`[12:34]`). Wherever a summary
@@ -528,7 +529,8 @@ the secrets if it leaks, so keep it only on the platform and delete it in the co
 | `LIVE_EVENT_AI_DESCRIPTION` | Optional. `false` stops the AI's line on what a stream is about (from its title, description and thumbnail) at the top of its Discord event |
 | `LIVE_ARCHIVE_SUMMARY` | Optional. `false` stops summarizing a stream's archive once it is over (tried 30 minutes after it ends, then hourly, three times at most) |
 | `VIDEO_SUMMARY_CONCURRENCY` | Optional. How many videos `/youtube summarize` summarizes at once (1-10). Defaults to 3 |
-| `YOUTUBE_AUTO_SYNC_MINUTES` | Optional. How often to check each server's YouTube channel for new videos. Defaults to 15; 0 turns it off |
+| `YOUTUBE_CHANNELS` | Optional (default `UCTW2tw0Mhho72MojB1L48IQ,UCz7pNw3UkTF9WQjHcYpFD9g`, のばまんゲームス and のばまん・ロー・エフォート; empty keeps those followed). The YouTube channels the bot follows for every server, comma-separated `@handle`, channel URL or `UC…` ID |
+| `YOUTUBE_AUTO_SYNC_MINUTES` | Optional. How often to check the bot's YouTube channels for new videos. Defaults to 15; 0 turns it off |
 | `YOUTUBE_LIVE_POLL_SECONDS` | Optional. How often to check for streams on servers with stream events on. Defaults to 60; 0 turns it off |
 | `YOUTUBE_WEBSUB_URL`, `YOUTUBE_WEBSUB_SECRET` | Optional. The service's public HTTPS address and a secret, to receive YouTube pushes (see above). `PORT` sets the port listened on (Railway sets it) |
 | `MESSAGE_EMBEDDINGS` | Optional. `true` embeds every stored message for search by meaning (sends them to Gemini; see above). Off by default |

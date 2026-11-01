@@ -7,23 +7,12 @@ exports.commands = [
   },
   {
     name: 'youtube',
-    description: 'Set the YouTube channel the assistant knows about, and refresh what it knows',
+    description: 'The YouTube channels the assistant knows about (the bot\'s, for every server)',
     options: [
       {
         type: ERIS_CONSTANTS.ApplicationCommandOptionTypes.SUB_COMMAND,
-        name: 'set',
-        description: 'Set this server\'s YouTube channel and read it now',
-        options: [{
-          type: ERIS_CONSTANTS.ApplicationCommandOptionTypes.STRING,
-          name: 'channel',
-          description: 'Channel URL (youtube.com/@name or /channel/UC...) or @name',
-          required: true
-        }]
-      },
-      {
-        type: ERIS_CONSTANTS.ApplicationCommandOptionTypes.SUB_COMMAND,
         name: 'sync',
-        description: 'Read the channel again (latest videos and lives)'
+        description: 'Read the channels again (latest videos and lives; from the owner\'s servers)'
       },
       {
         type: ERIS_CONSTANTS.ApplicationCommandOptionTypes.SUB_COMMAND,
