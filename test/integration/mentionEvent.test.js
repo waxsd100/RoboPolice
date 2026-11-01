@@ -862,6 +862,28 @@ describe('mention → event / forum post (integration)', () => {
     assert.equal(replies[0].state.content, '楽しそうに踊ってるね！')
   })
 
+  test('chat: a combined emoji, even of the server\'s own emojis, is shown stitched into one picture', async (t) => {
+    const sharp = require('sharp')
+    const tile = await sharp({ create: { width: 96, height: 96, channels: 4, background: { r: 9, g: 9, b: 9, alpha: 1 } } }).png().toBuffer()
+    t.mock.method(urlFetcher, 'fetchImage', async () => ({ buffer: tile, contentType: 'image/png' }))
+    const { channel, replies } = createChannel()
+    channel.guild.emojis = [{ id: '111111111111111111', name: 'big1' }, { id: '222222222222222222', name: 'big2' }]
+    try {
+      installGemini([body => {
+        const parts = body.contents[0].parts
+        assert.match(parts[1].text, /連結絵文字: 複数の絵文字を並べて1枚の絵にしたもの/)
+        assert.equal(parts[2].text, '連結絵文字 :big1::big2:')
+        assert.equal(parts[3].inlineData.mimeType, 'image/png')
+        assert.equal(parts.length, 4, 'the tiles are not shown one by one')
+        return [call('submit_chat_reply', { text: '大きいよつろんだ！' })]
+      }])
+      await mentionEvent.handle(mention(channel, '<@BOT> <:big1:111111111111111111><:big2:222222222222222222>'))
+      assert.equal(replies[0].state.content, '大きいよつろんだ！')
+    } finally {
+      delete channel.guild.emojis
+    }
+  })
+
   test('chat: replying to the bot\'s answer continues the conversation', async () => {
     MESSAGES['201/610'] = { content: '<@BOT> おすすめの動画ある？', author: { id: REQUESTER, username: `user${REQUESTER}` } }
     MESSAGES['201/611'] = { content: 'マイクラ実況の最新回がおすすめ！', author: { id: 'BOT', username: 'bot' }, messageReference: { messageID: '610', channelID: '201' } }

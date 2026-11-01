@@ -337,16 +337,22 @@ async function check (conversation, { name, args, calls = [] }) {
 }
 
 // forum: a forum channel named in the request ({ id, name }), images: URLs of attached images.
-// pictures: images the model is shown with the request, [{ name, buffer, mimeType }] (other
-// servers' emojis in it, foreignEmojis.js).
+// pictures: images the model is shown with the request, [{ name, buffer, mimeType, combined }]
+// (combined emojis and other servers' emojis in it, foreignEmojis.js).
 // edit: something the bot made earlier that the request changes, as { kind, current } where
 // current is its content in the submit tool's terms. Only that kind can be submitted, and a forum
 // post stays in its forum.
 async function draft ({ request, referenced, channelName, channelID, server, forum = null, images = [], pictures = [], edit = null, guild, member, tools, now = new Date() }) {
+  const combined = pictures.filter(p => p.combined)
+  const foreign = pictures.filter(p => !p.combined)
+  const notes = [
+    ...(combined.length ? ['連結絵文字: 複数の絵文字を並べて1枚の絵にしたものです。並べた形のままつないだ画像を付けています。1つずつではなく、全体で何を表しているか読み取ってください。'] : []),
+    ...(foreign.length ? [`ほかのサーバーの絵文字（${foreign.map(p => `:${p.name}:`).join(' ')}）: このサーバーにない絵文字の画像です。このサーバーの絵文字ではないので、返事には使わないでください。`] : [])
+  ]
   const shown = pictures.length
     ? [
-        { text: `## メッセージ中のほかのサーバーの絵文字\n依頼メッセージや返信先に出てくる、このサーバーにない絵文字の画像です（${pictures.map(p => `:${p.name}:`).join(' ')}）。何を表しているか読み取って、話の意味をつかむのに使ってください。このサーバーの絵文字ではないので、返事には使わないでください。` },
-        ...pictures.flatMap(p => [{ text: `:${p.name}:` }, { inlineData: { mimeType: p.mimeType, data: p.buffer.toString('base64') } }])
+        { text: `## メッセージ中の絵文字の画像\n依頼メッセージや返信先に出てくる絵文字を画像で付けています。何を表しているか読み取って、話の意味をつかむのに使ってください。\n${notes.map(n => `- ${n}`).join('\n')}` },
+        ...pictures.flatMap(p => [{ text: p.combined ? `連結絵文字 ${p.name}` : `:${p.name}:` }, { inlineData: { mimeType: p.mimeType, data: p.buffer.toString('base64') } }])
       ]
     : []
   const conversation = {
