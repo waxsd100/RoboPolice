@@ -173,6 +173,14 @@ are stored in `discord_posts`, and each account's messages of a month become one
 and link), so knowledge is taken out of them and they are searched with `search_wiki` together with
 the wiki and the X posts; the model gives a message's link when it mentions one. Threads are not read.
 
+With `KNOWLEDGE_TOPICS` set (comma-separated or one per line, each with what it is, e.g.
+`ぽみそしる（のばまんが所属する実況者グループ）`), topics the wiki and the posts say little about are
+looked up on the web (`src/bot/modules/webKnowledge.js`): Gemini searches each with Google Search
+once every `WEB_REFRESH_HOURS` (default 168) and sums up what it found (members, when it started,
+what it does, official links) with its sources and the date. That is stored in `web_pages` /
+`web_sections` / `web_facts`, its knowledge taken out and searched with `search_wiki` like the rest;
+the model says it is what was found as of that date, not certain fact.
+
 Each emoji is described once from its image and name by Gemini (what it shows, when to use it) and
 stored with an embedding of that description in `guild_emojis` (`src/bot/modules/emojiDescriber.js`).
 When the wiki describes characters (pages whose title has キャラクター), Gemini is given them, so an
@@ -507,6 +515,8 @@ the secrets if it leaks, so keep it only on the platform and delete it in the co
 | `TWITTER_REFRESH_HOURS`, `TWITTER_MAX_PAGES` | Optional. How often new posts are read (default 6) and how many pages back the first read goes (default 100, about 10 posts a page) |
 | `DISCORD_KNOWLEDGE_USERS` | Optional. User IDs (comma-separated) whose own messages in the owner's servers' `@everyone` channels become knowledge, e.g. the streamer's account. Their past messages are read once, then new ones are followed |
 | `DISCORD_HISTORY_DELAY_MS` | Optional. Wait between history requests when reading past messages (default 1000) |
+| `KNOWLEDGE_TOPICS` | Optional. Topics to look up on the web with Gemini's Google Search and keep as knowledge (comma-separated or one per line), e.g. `ぽみそしる（のばまんが所属する実況者グループ）,トマスコ（トマトスコスコ人生、のばまんが所属するユニット）` |
+| `WEB_REFRESH_HOURS` | Optional. How often each topic is looked up again (default 168) |
 | `OWNER_GUILD_IDS` | Optional. The owner's servers (comma-separated), default `615170683068219393`. They get the looser mention limit and go first in all background AI work; every other server waits for them |
 | `MENTION_DAILY_LIMIT_OTHER`, `MENTION_GUILD_DAILY_LIMIT_OTHER` | Optional. Mentions a day outside the owner's servers: per user (default 5) and for the whole server (default 30). `MENTION_DAILY_LIMIT` (default 30) is per user in the owner's servers. 0 turns a limit off |
 | `AI_BACKGROUND_CONCURRENCY` | Optional. How many background AI jobs (video and archive summaries, emoji descriptions, stream blurbs) run at once on a worker (default 3) |
