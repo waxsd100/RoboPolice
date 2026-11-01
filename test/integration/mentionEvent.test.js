@@ -847,6 +847,21 @@ describe('mention → event / forum post (integration)', () => {
     }
   })
 
+  test('chat: another server\'s emoji in the request is shown to the model as an image, for that request only', async (t) => {
+    t.mock.method(urlFetcher, 'fetchImage', async url => ({ buffer: Buffer.from(url), contentType: 'image/png' }))
+    const { channel, replies } = createChannel()
+    const requests = installGemini([body => {
+      const parts = body.contents[0].parts
+      assert.match(parts[1].text, /ほかのサーバーの絵文字[\s\S]*:yotsu_dance:[\s\S]*返事には使わないで/)
+      assert.equal(parts[2].text, ':yotsu_dance:')
+      assert.deepEqual(parts[3], { inlineData: { mimeType: 'image/png', data: Buffer.from('https://cdn.discordapp.com/emojis/123456789012345678.png?size=96').toString('base64') } })
+      return [call('submit_chat_reply', { text: '楽しそうに踊ってるね！' })]
+    }])
+    await mentionEvent.handle(mention(channel, '<@BOT> これ見て <a:yotsu_dance:123456789012345678>'))
+    assert.equal(requests.length, 1)
+    assert.equal(replies[0].state.content, '楽しそうに踊ってるね！')
+  })
+
   test('chat: replying to the bot\'s answer continues the conversation', async () => {
     MESSAGES['201/610'] = { content: '<@BOT> おすすめの動画ある？', author: { id: REQUESTER, username: `user${REQUESTER}` } }
     MESSAGES['201/611'] = { content: 'マイクラ実況の最新回がおすすめ！', author: { id: 'BOT', username: 'bot' }, messageReference: { messageID: '610', channelID: '201' } }

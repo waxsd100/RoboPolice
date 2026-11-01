@@ -337,12 +337,20 @@ async function check (conversation, { name, args, calls = [] }) {
 }
 
 // forum: a forum channel named in the request ({ id, name }), images: URLs of attached images.
+// pictures: images the model is shown with the request, [{ name, buffer, mimeType }] (other
+// servers' emojis in it, foreignEmojis.js).
 // edit: something the bot made earlier that the request changes, as { kind, current } where
 // current is its content in the submit tool's terms. Only that kind can be submitted, and a forum
 // post stays in its forum.
-async function draft ({ request, referenced, channelName, channelID, server, forum = null, images = [], edit = null, guild, member, tools, now = new Date() }) {
+async function draft ({ request, referenced, channelName, channelID, server, forum = null, images = [], pictures = [], edit = null, guild, member, tools, now = new Date() }) {
+  const shown = pictures.length
+    ? [
+        { text: `## メッセージ中のほかのサーバーの絵文字\n依頼メッセージや返信先に出てくる、このサーバーにない絵文字の画像です（${pictures.map(p => `:${p.name}:`).join(' ')}）。何を表しているか読み取って、話の意味をつかむのに使ってください。このサーバーの絵文字ではないので、返事には使わないでください。` },
+        ...pictures.flatMap(p => [{ text: `:${p.name}:` }, { inlineData: { mimeType: p.mimeType, data: p.buffer.toString('base64') } }])
+      ]
+    : []
   const conversation = {
-    contents: [{ role: 'user', parts: [{ text: buildPrompt({ request, referenced, channelName, channelID, server, forum, images, edit, now }) }] }],
+    contents: [{ role: 'user', parts: [{ text: buildPrompt({ request, referenced, channelName, channelID, server, forum, images, edit, now }) }, ...shown] }],
     guild,
     member,
     tools,

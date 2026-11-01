@@ -3,6 +3,7 @@ const { v4: uuidv4 } = require('uuid')
 const { draft, revise, isConfigured, ENTITY_TYPES } = require('./eventDrafter')
 const { createTools, describeServer, withServerEmojis, StopDrafting } = require('./eventTools')
 const { withLinkCards } = require('../utils/linkCards')
+const { foreignEmojis, emojiPictures } = require('../utils/foreignEmojis')
 const { EMBED_COLORS } = require('../utils/constants')
 const { hasStaffAccess } = require('../utils/staffAccess')
 const { redact } = require('../utils/redact')
@@ -419,6 +420,8 @@ async function handle (message) {
         global.logger.warn(`Could not describe server ${guild.id}: ${e.message}`)
         return null
       })
+      // Other servers' emojis in what was said are shown to the model as images, for this request only.
+      const pictures = await emojiPictures(foreignEmojis([request, referenced?.text], guild)).catch(() => [])
       let result = await draft({
         request,
         referenced,
@@ -427,6 +430,7 @@ async function handle (message) {
         server,
         forum: namedForum(message),
         images: attached,
+        pictures,
         edit,
         guild,
         member,
