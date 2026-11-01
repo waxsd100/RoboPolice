@@ -62,6 +62,14 @@ const SUBMIT_CHAT_DECLARATION = {
 
 const SUBMIT_DECLARATIONS = [SUBMIT_EVENT_DECLARATION, SUBMIT_FORUM_DECLARATION, SUBMIT_CHAT_DECLARATION]
 
+// How varied the answers are (GEMINI_TEMPERATURE, 0-2). Chat replies want some variety; drafts
+// are checked field by field (toScheduledEvent, toForumPost) whatever the model writes.
+const DEFAULT_TEMPERATURE = 0.7
+function temperature () {
+  const t = Number(process.env.GEMINI_TEMPERATURE)
+  return process.env.GEMINI_TEMPERATURE && t >= 0 && t <= 2 ? t : DEFAULT_TEMPERATURE
+}
+
 // Sent with every request, unchanged, so Gemini can reuse it from its cache: what changes per
 // request (the time, the server, the request) goes in the prompt instead (buildPrompt).
 const SYSTEM_INSTRUCTION = [
@@ -96,6 +104,7 @@ const SYSTEM_INSTRUCTION = [
   'このサーバーは、サーバーの情報の「YouTube」にあるチャンネルのコミュニティです。あなたはそのチャンネルの配信者本人になりきって、コミュニティのメンバーと話してください。',
   '- 一人称・口調・口ぐせ・ノリは、動画や配信の題名・説明・要約から配信者らしいものにし、視聴者に話しかけるように親しみやすく接する。',
   '- wiki の名言や口ぐせは、話の流れに合うときに配信者らしい言い回しとして使う（毎回ではなく）。wiki はファンが書いたものなので、本人が決めた事実として断言しない。',
+  '- 同じネタ・名言・口ぐせ・言い回し・書き出しを何度も使わない。「最近の返事」にあるものは避け、毎回ちがう切り口で返す。知識は全部を盛り込まず、話に合うものを選んで使う（使わなくてもよい）。',
   '- X のポスト（x.com の URL のもの）と Discord での発言（discord.com/channels のリンクのもの）は本人の発言。触れるときはその URL も書く。',
   '- 「Web 検索で調べたもの」は調べた日の時点の情報で、古かったり間違っていたりすることがある（メンバーの変化など）。断言せず「調べた範囲では」のように伝える。',
   '- サーバー絵文字の説明は絵文字の見た目と使いどころで、キャラクターの説明ではない。キャラクターが何者か・どんな見た目かは知識で確かめ、絵文字の色や形から決めつけない。',
@@ -128,7 +137,9 @@ function formatNow (now) {
 
 const EDIT_LABELS = { event: 'イベント', forum: 'フォーラム投稿' }
 
-function buildPrompt ({ request, referenced, channelName, channelID, server, forum, images, edit, now }) {
+const MAX_RECENT_REPLY = 200
+
+function buildPrompt ({ request, referenced, channelName, channelID, server, forum, images, edit, recentReplies = [], now }) {
   const lines = [
     `現在日時: ${formatNow(now)}（${TIMEZONE}）`,
     `依頼されたチャンネル: #${channelName}${channelID ? `（ID: ${channelID}）` : ''}`,
@@ -150,6 +161,10 @@ function buildPrompt ({ request, referenced, channelName, channelID, server, for
     lines.push('', '## 依頼メッセージの返信先', referenced.text)
   }
   if (server) lines.push('', '## このサーバーの情報（最新）', server)
+  if (recentReplies.length) {
+    lines.push('', '## 最近の返事（あなた（BOT）がこのチャンネルで最近送ったもの。新しい順。同じネタ・言い回し・書き出しを繰り返さないこと）',
+      ...recentReplies.map(t => `- ${t.replace(/\s+/g, ' ').slice(0, MAX_RECENT_REPLY)}`))
+  }
   return lines.join('\n')
 }
 
@@ -259,7 +274,7 @@ function generate (contents, declarations, allowed = null) {
     tools: [{ functionDeclarations: declarations }],
     // ANY: every turn must be a tool call, so the loop always ends in a submit_* call.
     toolConfig: { functionCallingConfig: { mode: 'ANY', ...(allowed ? { allowedFunctionNames: allowed } : {}) } },
-    generationConfig: { temperature: 0.2 }
+    generationConfig: { temperature: temperature() }
   })
 }
 
@@ -354,7 +369,8 @@ async function check (conversation, { name, args, calls = [] }) {
 // edit: something the bot made earlier that the request changes, as { kind, current } where
 // current is its content in the submit tool's terms. Only that kind can be submitted, and a forum
 // post stays in its forum.
-async function draft ({ request, referenced, channelName, channelID, server, forum = null, images = [], pictures = [], edit = null, guild, member, tools, now = new Date() }) {
+// recentReplies: what the bot said lately in the channel, newest first, so it does not repeat itself.
+async function draft ({ request, referenced, channelName, channelID, server, forum = null, images = [], pictures = [], edit = null, recentReplies = [], guild, member, tools, now = new Date() }) {
   const combined = pictures.filter(p => p.combined)
   const foreign = pictures.filter(p => !p.combined)
   const notes = [
@@ -368,7 +384,7 @@ async function draft ({ request, referenced, channelName, channelID, server, for
       ]
     : []
   const conversation = {
-    contents: [{ role: 'user', parts: [{ text: buildPrompt({ request, referenced, channelName, channelID, server, forum, images, edit, now }) }, ...shown] }],
+    contents: [{ role: 'user', parts: [{ text: buildPrompt({ request, referenced, channelName, channelID, server, forum, images, edit, recentReplies, now }) }, ...shown] }],
     guild,
     member,
     tools,

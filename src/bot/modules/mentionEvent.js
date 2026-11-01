@@ -89,6 +89,18 @@ function repliesToBot (message) {
   return !!(message.messageReference && ref && ref.author?.id === global.bot.user.id && !ref.webhookID && ref.messageReference)
 }
 
+// What the bot answered lately in the channel (its own replies, newest first), so it does not tell
+// the same jokes again. Empty when the channel cannot be read.
+const RECENT_MESSAGES_READ = 50
+const MAX_RECENT_REPLIES = 8
+async function recentBotReplies (channelID, exceptID = null) {
+  const messages = await global.bot.getMessages(channelID, { limit: RECENT_MESSAGES_READ }).catch(() => [])
+  return messages
+    .filter(m => m.id !== exceptID && m.author?.id === global.bot.user.id && !m.webhookID && m.messageReference && m.content?.trim())
+    .slice(0, MAX_RECENT_REPLIES)
+    .map(m => m.content)
+}
+
 // Talking to the bot: mentioning it, or replying to its answer.
 function isAddressed (message) {
   return isMentioned(message) || repliesToBot(message)
@@ -423,9 +435,11 @@ async function handle (message) {
       // Combined emojis and other servers' emojis in what was said are shown to the model as
       // images, for this request only.
       const pictures = await picturesFor([request, referenced?.text], guild).catch(() => [])
+      const recentReplies = edit ? [] : await recentBotReplies(message.channel.id, reply.id)
       let result = await draft({
         request,
         referenced,
+        recentReplies,
         channelName: message.channel.name,
         channelID: message.channel.id,
         server,
@@ -584,4 +598,4 @@ async function handle (message) {
   })
 }
 
-module.exports = { handle, extractRequest }
+module.exports = { handle, extractRequest, recentBotReplies }

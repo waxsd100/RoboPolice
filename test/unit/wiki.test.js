@@ -122,6 +122,29 @@ describe('searchWiki', () => {
     assert.deepEqual(await wiki.relatedKnowledge('よつろん', [1]), [], 'nothing without a wiki')
   })
 
+  test('the close knowledge is drawn at random, the closer the likelier, so it varies', async (t) => {
+    process.env.WIKI_URLS = ROOT
+    const xStore = require('../../src/db/interfaces/postgres/xKnowledge')
+    t.mock.method(store, 'characterFacts', async () => [])
+    const asked = []
+    t.mock.method(store, 'nearestFacts', async (vector, model, limit) => {
+      asked.push(limit)
+      return ['A', 'B', 'C', 'D'].map((name, i) => ({ kind: 'term', name, aliases: [], content: name, score: 0.9 - i * 0.1 }))
+    })
+    t.mock.method(xStore, 'nearestFacts', async () => [])
+    const names = lines => lines.map(l => l.match(/\] (\w)/)[1])
+    assert.deepEqual(names(await wiki.relatedKnowledge('話', [1], { limit: 2, random: () => 0 })), ['A', 'B'])
+    assert.deepEqual(names(await wiki.relatedKnowledge('話', [1], { limit: 2, random: () => 0.999 })), ['D', 'C'])
+    assert.equal(asked[0], 6, 'several times as many candidates as are used')
+  })
+
+  test('weightedSample draws without repeats, by weight', () => {
+    const items = [{ n: 'a', w: 1 }, { n: 'b', w: 3 }]
+    assert.deepEqual(wiki.weightedSample(items, 1, i => i.w, () => 0.5).map(i => i.n), ['b'])
+    assert.deepEqual(wiki.weightedSample(items, 1, i => i.w, () => 0.1).map(i => i.n), ['a'])
+    assert.deepEqual(wiki.weightedSample(items, 5, i => i.w, Math.random).map(i => i.n).sort(), ['a', 'b'])
+  })
+
   test('says so when there is no wiki, or it is not read yet', async (t) => {
     assert.equal(await wiki.searchWiki('x'), 'wiki は設定されていません')
     process.env.WIKI_URLS = ROOT

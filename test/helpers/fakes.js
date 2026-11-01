@@ -225,6 +225,7 @@ function configureGateway () {
   delete process.env.CLOUDFLARE_AI_GATEWAY_BYOK_ALIAS
   delete process.env.GEMINI_MODEL
   delete process.env.GEMINI_MAX_STEPS
+  delete process.env.GEMINI_TEMPERATURE
 }
 
 // A fake Gemini. `turns` is a list of model turns; each is an array of parts, or a function that

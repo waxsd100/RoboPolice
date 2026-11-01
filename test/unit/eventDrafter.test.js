@@ -278,6 +278,24 @@ describe('draft', () => {
     assert.match(last.contents.at(-1).parts.at(-1).text, /これ以上ツールで調べず/)
   })
 
+  test('shows the bot\'s recent replies so it does not repeat itself, and answers with some variety', async (t) => {
+    const requests = installGemini([[call('submit_chat_reply', { text: 'やあ' })]])
+    await draft({ request: 'こんにちは', channelName: 'general', guild, tools, recentReplies: ['ご安心を！\n今日も元気', '前の返事'], now: NOW })
+    const prompt = requests[0].body.contents[0].parts[0].text
+    assert.match(prompt, /## 最近の返事[^\n]*\n- ご安心を！ 今日も元気\n- 前の返事/)
+    assert.equal(requests[0].body.generationConfig.temperature, 0.7)
+    process.env.GEMINI_TEMPERATURE = '1.2'
+    t.after(() => { delete process.env.GEMINI_TEMPERATURE })
+    const again = installGemini([[call('submit_chat_reply', { text: 'やあ' })]])
+    await draft({ request: 'こんにちは', channelName: 'general', guild, tools, now: NOW })
+    assert.equal(again[0].body.generationConfig.temperature, 1.2)
+    assert.doesNotMatch(again[0].body.contents[0].parts[0].text, /最近の返事/)
+    process.env.GEMINI_TEMPERATURE = '9'
+    const outOfRange = installGemini([[call('submit_chat_reply', { text: 'やあ' })]])
+    await draft({ request: 'こんにちは', channelName: 'general', guild, tools, now: NOW })
+    assert.equal(outOfRange[0].body.generationConfig.temperature, 0.7)
+  })
+
   test('GEMINI_MAX_STEPS changes the limit', async (t) => {
     process.env.GEMINI_MAX_STEPS = '3'
     t.after(() => { delete process.env.GEMINI_MAX_STEPS })
