@@ -8,8 +8,13 @@ const DEFAULT_GEMINI_MODEL = 'gemini-flash-latest'
 const GEMINI_TIMEOUT_MS = 60000
 // Each step is one Gemini round trip; a draft normally needs 1-3 lookups (and maybe a question)
 // before submitting, a chat reply sometimes many more (wiki, X, videos, …). Lookups cost few
-// tokens, so the limit is generous. The last step may only submit, with what was looked up by then.
+// tokens, so the limit is generous; GEMINI_MAX_STEPS changes it. The last step may only submit,
+// with what was looked up by then.
 const MAX_STEPS = 20
+function maxSteps () {
+  const n = Number(process.env.GEMINI_MAX_STEPS)
+  return Number.isInteger(n) && n >= 1 ? n : MAX_STEPS
+}
 const LAST_STEP_NOTE = '調べられるのはここまでです。これ以上ツールで調べず、ここまでに分かったことだけで提出してください（分からないところは分からないと書く）。'
 // Dates in messages and event pages are written for this community's local time.
 const TIMEZONE = 'Asia/Tokyo'
@@ -262,8 +267,9 @@ function generate (contents, declarations, allowed = null) {
 // `contents` so the conversation can be continued with a correction. Returns the submit call.
 async function runAgent (contents, tools, submits = SUBMIT_DECLARATIONS) {
   const declarations = [...tools.declarations, ...submits]
-  for (let step = 0; step < MAX_STEPS; step++) {
-    const last = step === MAX_STEPS - 1
+  const steps = maxSteps()
+  for (let step = 0; step < steps; step++) {
+    const last = step === steps - 1
     // The last step answers with what is known instead of failing: only a submit can be called.
     if (last && step > 0) contents[contents.length - 1].parts.push({ text: LAST_STEP_NOTE })
     const content = await generate(contents, declarations, last ? submits.map(d => d.name) : null)

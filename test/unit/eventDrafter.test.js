@@ -278,6 +278,17 @@ describe('draft', () => {
     assert.match(last.contents.at(-1).parts.at(-1).text, /これ以上ツールで調べず/)
   })
 
+  test('GEMINI_MAX_STEPS changes the limit', async (t) => {
+    process.env.GEMINI_MAX_STEPS = '3'
+    t.after(() => { delete process.env.GEMINI_MAX_STEPS })
+    const requests = installGemini([[call('lookup')], [call('lookup')], [submit({ name: 'B', start: '2026-11-03T19:00:00+09:00' })]])
+    assert.equal((await draft({ request: 'x', channelName: 'general', guild, tools, now: NOW })).event.name, 'B')
+    assert.ok(requests[2].body.toolConfig.functionCallingConfig.allowedFunctionNames)
+    process.env.GEMINI_MAX_STEPS = 'many'
+    installGemini(Array.from({ length: MAX_STEPS }, () => [call('lookup')]))
+    assert.match((await draft({ request: 'x', channelName: 'general', guild, tools, now: NOW })).error, /手順が多すぎた/, 'an unusable value keeps the default')
+  })
+
   test('stops if the model still does not submit', async () => {
     installGemini(Array.from({ length: MAX_STEPS }, () => [call('lookup')]))
     const result = await draft({ request: 'x', channelName: 'general', guild, tools, now: NOW })
