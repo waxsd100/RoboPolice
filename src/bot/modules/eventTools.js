@@ -19,6 +19,8 @@ const MAX_QUESTIONS = 3
 const MAX_OPTIONS = 4
 const MAX_RESULT_CHARS = 20000
 const MESSAGE_LINK = /^https?:\/\/(?:(?:ptb|canary)\.)?discord(?:app)?\.com\/channels\/(\d+)\/(\d+)\/(\d+)/i
+// A link to a channel itself (no message).
+const CHANNEL_LINK = /^https?:\/\/(?:(?:ptb|canary)\.)?discord(?:app)?\.com\/channels\/(\d+)\/(\d+)\/?(?:[?#]|$)/i
 
 // Tools the model can call while drafting. A tool without arguments has no `parameters` at all:
 // Gemini rejects an OBJECT schema whose `properties` is empty, which failed every request.
@@ -58,7 +60,7 @@ const DECLARATIONS = [
   },
   {
     name: 'get_discord_message',
-    description: 'このサーバーの Discord メッセージリンク（https://discord.com/channels/サーバーID/チャンネルID/メッセージID）が指すメッセージを読む。',
+    description: 'このサーバーの Discord メッセージリンク（https://discord.com/channels/サーバーID/チャンネルID/メッセージID）が指すメッセージを読む。チャンネルへのリンク（…/サーバーID/チャンネルID）なら、そのチャンネルの最近のメッセージを読む。',
     parameters: { type: 'OBJECT', properties: { link: { type: 'STRING' } }, required: ['link'] }
   },
   {
@@ -205,12 +207,17 @@ function createTools ({ guild, member, ask, progress = () => {} }) {
 
   const executors = {
     async fetch_url ({ url }) {
-      if (MESSAGE_LINK.test(url)) return executors.get_discord_message({ link: url })
+      if (MESSAGE_LINK.test(url) || CHANNEL_LINK.test(url)) return executors.get_discord_message({ link: url })
       const page = await urlFetcher.fetchPageText(url)
       sources.push(page.url)
       return page.text
     },
     async get_discord_message ({ link }) {
+      const channelLink = String(link).match(CHANNEL_LINK)
+      if (channelLink) {
+        if (channelLink[1] !== guild.id) throw new Error('別のサーバーのチャンネルは読めません')
+        return executors.get_recent_messages({ channel_id: channelLink[2] })
+      }
       const match = String(link).match(MESSAGE_LINK)
       if (!match) throw new Error('Discord のメッセージリンクではありません')
       if (match[1] !== guild.id) throw new Error('別のサーバーのメッセージは読めません')
@@ -427,6 +434,51 @@ function withServerEmojis (text, guild) {
     })
 }
 
+// The model sometimes writes a channel as #name rather than <#ID>, which Discord shows as a link.
+// Names of channels the requester can see are turned into links; anything else is left as written
+// (a hashtag, a URL fragment, <#ID> already).
+function withServerChannels (text, guild, member) {
+  const channels = [...guild.channels.values()]
+    .filter(c => c.type !== 4 && c.name && c.permissionsOf(member.id).has('viewChannel'))
+    .sort((a, b) => b.name.length - a.name.length)
+  if (!channels.length) return text
+  const byName = new Map(channels.map(c => [c.name, c]))
+  const names = [...byName.keys()].map(n => n.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'))
+  const pattern = new RegExp(`(?<![\\p{L}\\p{N}_/<&=-])#(${names.join('|')})(?![\\p{L}\\p{N}_-])`, 'gu')
+  return text.replace(pattern, (whole, name) => `<#${byName.get(name).id}>`)
+}
+
+// What the channel a request was made in is, for "このチャンネルについて教えて": its name, kind,
+// category (or, for a thread, the channel it is in) and description. Null when unknown.
+function requestChannelInfo (channelID, guild) {
+  const c = global.bot.getChannel?.(channelID)
+  if (!c || (c.guild?.id && c.guild.id !== guild.id)) return null
+  const parent = c.parentID ? guild.channels.get(c.parentID) || global.bot.getChannel?.(c.parentID) : null
+  const isThread = [10, 11, 12].includes(c.type)
+  return [
+    `#${c.name}（ID: ${c.id}、${CHANNEL_TYPES[c.type] || c.type}`,
+    parent ? (isThread ? `、<#${parent.id}>（#${parent.name}）の中のスレッド` : `、カテゴリ「${parent.name}」`) : '',
+    '）',
+    c.topic ? `\n  チャンネルの説明: ${c.topic.replace(/\s+/g, ' ').slice(0, MAX_TOPIC * 3)}` : '',
+    isThread && parent?.topic ? `\n  親チャンネルの説明: ${parent.topic.replace(/\s+/g, ' ').slice(0, MAX_TOPIC * 3)}` : ''
+  ].join('')
+}
+
+// The channels a message names (<#ID> or a link to one), as lines for the model:
+// "<#ID>: #name（type）— topic". Only channels of the server the requester can see.
+function namedChannels (texts, guild, member) {
+  const ids = new Set()
+  for (const t of texts) {
+    for (const m of String(t || '').matchAll(/<#(\d+)>|discord(?:app)?\.com\/channels\/(\d+)\/(\d+)/g)) {
+      if (m[1]) ids.add(m[1])
+      else if (m[2] === guild.id) ids.add(m[3])
+    }
+  }
+  return [...ids].map(id => guild.channels.get(id))
+    .filter(c => c && c.permissionsOf(member.id).has('viewChannel'))
+    .map(c => `- <#${c.id}>: #${c.name}（${CHANNEL_TYPES[c.type] || c.type}）${c.topic ? ` — ${c.topic.replace(/\s+/g, ' ').slice(0, MAX_TOPIC)}` : ''}`)
+}
+
 // The server's emojis for the model. With descriptions (emojiDescriber.js), one per line with what
 // it shows and when to use it, those closest in meaning to the request first (`vectorOf()`
 // resolves to its embedding, or null); otherwise just the codes.
@@ -476,7 +528,7 @@ async function describeServer (guild, member, requestChannelID, { query = '', co
     if (!byCategory.has(category)) byCategory.set(category, [])
     byCategory.get(category).push(channelLine(c, requestChannelID))
   }
-  lines.push('', '### チャンネル（依頼者が見られるもの）')
+  lines.push('', '### チャンネル（依頼者が見られるもの。返事で触れるときは <#ID> の形で書くとリンクになる）')
   for (const [category, channels] of byCategory) lines.push(`[${category}]`, ...channels)
   if (visible.length > MAX_PROFILE_CHANNELS) lines.push(`…ほか ${visible.length - MAX_PROFILE_CHANNELS} 件`)
 
@@ -526,4 +578,4 @@ async function describeServer (guild, member, requestChannelID, { query = '', co
   return lines.join('\n')
 }
 
-module.exports = { createTools, formatMessage, describeServer, withServerEmojis, searchYouTube, MESSAGE_LINK, StopDrafting }
+module.exports = { createTools, formatMessage, describeServer, withServerEmojis, withServerChannels, namedChannels, requestChannelInfo, searchYouTube, MESSAGE_LINK, CHANNEL_LINK, StopDrafting }
