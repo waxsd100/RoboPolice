@@ -6,7 +6,7 @@ const store = require('../../src/db/interfaces/postgres/xPosts')
 const knowledgeStore = require('../../src/db/interfaces/postgres/xKnowledge')
 const x = require('../../src/bot/modules/twitterKnowledge')
 
-afterEach(() => { delete process.env.TWITTER_ACCOUNTS })
+afterEach(() => { process.env.TWITTER_ACCOUNTS = '' })
 
 const tweet = (id, text, extra = {}) => ({
   id,

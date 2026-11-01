@@ -23,7 +23,7 @@ beforeEach(() => {
   }
 })
 afterEach(() => {
-  delete process.env.WIKI_URLS
+  process.env.WIKI_URLS = ''
   mock.restoreAll()
 })
 
@@ -118,7 +118,7 @@ describe('searchWiki', () => {
       '- [キャラクター] よつろん（yotsuron）: 頭に大きな四葉',
       '- [名言・台詞] ご安心を: 決まり文句'
     ])
-    delete process.env.WIKI_URLS
+    process.env.WIKI_URLS = ''
     assert.deepEqual(await wiki.relatedKnowledge('よつろん', [1]), [], 'nothing without a wiki')
   })
 
@@ -137,7 +137,7 @@ describe('searchWiki', () => {
     const { text, hash } = await wiki.characterContext()
     assert.equal(text, '- よつろん: 四葉の 笑顔。')
     assert.match(hash, /^[0-9a-f]{16}$/)
-    delete process.env.WIKI_URLS
+    process.env.WIKI_URLS = ''
     assert.deepEqual(await wiki.characterContext(), { text: '', hash: null, names: [], images: [] })
   })
 

@@ -12,6 +12,7 @@
 //
 // FxTwitter is a third-party service, not X's API: it may change or stop. When it fails, nothing
 // stored is lost and the next run tries again.
+const { knowledgeSetting } = require('../utils/knowledgeDefaults')
 const knowledgeStore = require('../../db/interfaces/postgres/xKnowledge')
 const store = require('../../db/interfaces/postgres/xPosts')
 
@@ -25,7 +26,7 @@ const TIMEOUT_MS = 20 * 1000
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms))
 
 function accounts () {
-  return String(process.env.TWITTER_ACCOUNTS || '').split(',').map(s => s.trim().replace(/^@/, '')).filter(a => /^\w{1,15}$/.test(a))
+  return String(knowledgeSetting('TWITTER_ACCOUNTS')).split(',').map(s => s.trim().replace(/^@/, '')).filter(a => /^\w{1,15}$/.test(a))
 }
 
 function enabled () {

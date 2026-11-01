@@ -6,7 +6,7 @@ const store = require('../../src/db/interfaces/postgres/webKnowledge')
 const web = require('../../src/bot/modules/webKnowledge')
 
 const NOW = new Date('2026-11-01T03:00:00Z')
-afterEach(() => { delete process.env.KNOWLEDGE_TOPICS; delete process.env.WEB_REFRESH_HOURS })
+afterEach(() => { process.env.KNOWLEDGE_TOPICS = ''; delete process.env.WEB_REFRESH_HOURS })
 
 describe('webKnowledge', () => {
   test('looks each topic up with Google Search and stores it as a page with its date', async (t) => {
@@ -21,10 +21,10 @@ describe('webKnowledge', () => {
     assert.equal(await web.refresh({ now: NOW }), 1, 'the one looked up a day ago is not looked up again')
     assert.deepEqual(requests[0].body.tools, [{ google_search: {} }])
     assert.match(requests[0].body.contents[0].parts[0].text, /今日は 2026-11-01 です。[\s\S]*ぽみそしる（のばまんが所属する実況者グループ）[\s\S]*出典/)
-    assert.equal(pages[0].url, 'topic:ぽみそしる（のばまんが所属する実況者グループ）')
-    assert.equal(pages[0].title, '「ぽみそしる（のばまんが所属する実況者グループ）」について（Web 検索で調べたもの、2026-11-01 時点）')
+    assert.equal(pages[0].url, 'topic:ぽみそしる', 'kept under its name, so rewording the explanation keeps the page')
+    assert.equal(pages[0].title, '「ぽみそしる」について（Web 検索で調べたもの、2026-11-01 時点）')
     assert.match(pages[0].sections[0].text, /^## 概要\nポッキーが主催する実況者グループ。\n\n## メンバー/)
-    assert.deepEqual(removed.mock.calls[0].arguments, ['topic:', ['topic:ぽみそしる（のばまんが所属する実況者グループ）', 'topic:トマスコ（トマトスコスコ人生）']])
+    assert.deepEqual(removed.mock.calls[0].arguments, ['topic:', ['topic:ぽみそしる', 'topic:トマスコ']])
   })
 
   test('a failure is logged and tried again next time; nothing without topics', async (t) => {
@@ -38,7 +38,7 @@ describe('webKnowledge', () => {
     assert.equal(await web.refresh({ now: NOW, log: m => logged.push(m) }), 0)
     assert.match(logged[0], /\[WEB\]: Could not look up ぽみそしる/)
     assert.equal(saved.mock.callCount(), 0)
-    delete process.env.KNOWLEDGE_TOPICS
+    process.env.KNOWLEDGE_TOPICS = ''
     assert.equal(web.enabled(), false)
     assert.equal(await web.refresh({ now: NOW }), 0)
   })

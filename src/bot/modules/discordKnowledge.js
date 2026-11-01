@@ -9,6 +9,7 @@
 // the Discord knowledge tables (discord_pages / discord_sections / discord_facts; one line per
 // message with its date, channel and link), whose knowledge the worker owning shard 0 takes out and
 // embeds with the wiki's (processPending), so they are searched with search_wiki.
+const { knowledgeSetting } = require('../utils/knowledgeDefaults')
 const { Constants } = require('eris')
 const store = require('../../db/interfaces/postgres/discordPosts')
 const knowledgeStore = require('../../db/interfaces/postgres/discordKnowledge')
@@ -22,7 +23,7 @@ const TEXT_CHANNELS = [0, 5]
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms))
 
 function users () {
-  return String(process.env.DISCORD_KNOWLEDGE_USERS || '').split(',').map(s => s.trim()).filter(Boolean)
+  return String(knowledgeSetting('DISCORD_KNOWLEDGE_USERS')).split(',').map(s => s.trim()).filter(Boolean)
 }
 
 function enabled () {
