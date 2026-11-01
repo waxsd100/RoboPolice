@@ -448,6 +448,22 @@ function withServerChannels (text, guild, member) {
   return text.replace(pattern, (whole, name) => `<#${byName.get(name).id}>`)
 }
 
+// What the channel a request was made in is, for "このチャンネルについて教えて": its name, kind,
+// category (or, for a thread, the channel it is in) and description. Null when unknown.
+function requestChannelInfo (channelID, guild) {
+  const c = global.bot.getChannel?.(channelID)
+  if (!c || (c.guild?.id && c.guild.id !== guild.id)) return null
+  const parent = c.parentID ? guild.channels.get(c.parentID) || global.bot.getChannel?.(c.parentID) : null
+  const isThread = [10, 11, 12].includes(c.type)
+  return [
+    `#${c.name}（ID: ${c.id}、${CHANNEL_TYPES[c.type] || c.type}`,
+    parent ? (isThread ? `、<#${parent.id}>（#${parent.name}）の中のスレッド` : `、カテゴリ「${parent.name}」`) : '',
+    '）',
+    c.topic ? `\n  チャンネルの説明: ${c.topic.replace(/\s+/g, ' ').slice(0, MAX_TOPIC * 3)}` : '',
+    isThread && parent?.topic ? `\n  親チャンネルの説明: ${parent.topic.replace(/\s+/g, ' ').slice(0, MAX_TOPIC * 3)}` : ''
+  ].join('')
+}
+
 // The channels a message names (<#ID> or a link to one), as lines for the model:
 // "<#ID>: #name（type）— topic". Only channels of the server the requester can see.
 function namedChannels (texts, guild, member) {
@@ -562,4 +578,4 @@ async function describeServer (guild, member, requestChannelID, { query = '', co
   return lines.join('\n')
 }
 
-module.exports = { createTools, formatMessage, describeServer, withServerEmojis, withServerChannels, namedChannels, searchYouTube, MESSAGE_LINK, CHANNEL_LINK, StopDrafting }
+module.exports = { createTools, formatMessage, describeServer, withServerEmojis, withServerChannels, namedChannels, requestChannelInfo, searchYouTube, MESSAGE_LINK, CHANNEL_LINK, StopDrafting }

@@ -3,7 +3,7 @@ const assert = require('node:assert/strict')
 // Load first: it sets the environment the bot modules read when they are required.
 const { createGuild, createMember, installBot } = require('../helpers/fakes')
 const urlFetcher = require('../../src/bot/utils/urlFetcher')
-const { createTools, formatMessage, withServerEmojis, withServerChannels, namedChannels, StopDrafting } = require('../../src/bot/modules/eventTools')
+const { createTools, formatMessage, withServerEmojis, withServerChannels, namedChannels, requestChannelInfo, StopDrafting } = require('../../src/bot/modules/eventTools')
 
 const REQUESTER = '1'
 const guild = createGuild({
@@ -486,5 +486,26 @@ describe('channels in replies', () => {
       '- <#204>: #ボイス（voice）'
     ])
     assert.deepEqual(namedChannels(['https://discord.com/channels/300/301'], guild, member), [], 'another server\'s')
+  })
+})
+
+describe('requestChannelInfo', () => {
+  test('the request channel with its kind, category and description; a thread with the channel it is in', () => {
+    const g = createGuild({
+      channels: [
+        { id: '10', name: '雑談部屋', type: 4 },
+        { id: '11', name: 'general', type: 0 },
+        { id: '12', name: '募集', type: 15 }
+      ]
+    })
+    Object.assign(g.channels.get('11'), { parentID: '10', topic: 'なんでも\n話す場所' })
+    Object.assign(g.channels.get('12'), { topic: '一緒に遊ぶ人を募集' })
+    installBot({ guilds: [g] })
+    const thread = { id: '13', name: '金曜の募集', type: 11, parentID: '12', guild: g }
+    const getChannel = global.bot.getChannel
+    global.bot.getChannel = id => id === '13' ? thread : getChannel(id)
+    assert.equal(requestChannelInfo('11', g), '#general（ID: 11、text、カテゴリ「雑談部屋」）\n  チャンネルの説明: なんでも 話す場所')
+    assert.equal(requestChannelInfo('13', g), '#金曜の募集（ID: 13、thread、<#12>（#募集）の中のスレッド）\n  親チャンネルの説明: 一緒に遊ぶ人を募集')
+    assert.equal(requestChannelInfo('999', g), null)
   })
 })

@@ -95,6 +95,7 @@ const SYSTEM_INSTRUCTION = [
   '- 依頼メッセージが返信のときは、返信をたどった会話を渡している。その中の「あなた（BOT）」は、あなた自身がこれまでに送ったメッセージです。必ずその会話の続きとして、前に話した内容を踏まえて答えてください。',
   '- 「このチャンネルの内容をもとに」「これまでの話から」のような依頼では search_channel_history で保存済みのメッセージを読む。直近の数件で足りるときや保存がないときは get_recent_messages。',
   '- Discord のメッセージリンクとチャンネルへのリンクは get_discord_message、それ以外の URL は fetch_url で読む。',
+  '- 「このチャンネルについて教えて」のようにチャンネルそのものを聞かれたら、名前と説明だけで済ませず、get_recent_messages（足りなければ search_channel_history）でそのチャンネルの最近のやり取りを読んで、どんな話をしている場所かを答える。「このチャンネル」「ここ」は依頼されたチャンネル。読めなかったときはそう伝える。',
   '- チャンネルの話題（どこで何を話す・ルール・告知・募集など）は、サーバーの情報のチャンネル一覧（説明つき）で当てはまるチャンネルを探す。中身が必要なら get_recent_messages か search_channel_history でそのチャンネルを読む。依頼や会話にチャンネル（<#ID> やチャンネルへのリンク）が出てきて、その中身が話に関係するときも読みに行く。',
   '- チャンネルや動画・配信の話題は search_youtube で保存済みの情報を調べてから答える。summarize_youtube_video は、動画リンクが貼られたときか、動画の中で話している内容が必要なときだけ使う（費用がかかるため、題名と説明で足りるときは使わない）。要約は保存され、次からは search_youtube でも見つかる。',
   '- キャラクター・名言・台詞・ネタ・用語などコミュニティならではの話題は、サーバーの情報の「コミュニティの知識」を見て、足りなければ search_wiki で調べてから答える。',
@@ -141,10 +142,10 @@ const EDIT_LABELS = { event: 'イベント', forum: 'フォーラム投稿' }
 
 const MAX_RECENT_REPLY = 200
 
-function buildPrompt ({ request, referenced, channelName, channelID, server, forum, images, edit, recentReplies = [], channels = [], now }) {
+function buildPrompt ({ request, referenced, channelName, channelID, channelInfo = null, server, forum, images, edit, recentReplies = [], channels = [], now }) {
   const lines = [
     `現在日時: ${formatNow(now)}（${TIMEZONE}）`,
-    `依頼されたチャンネル: #${channelName}${channelID ? `（ID: ${channelID}）` : ''}`,
+    `依頼されたチャンネル: ${channelInfo || `#${channelName}${channelID ? `（ID: ${channelID}）` : ''}`}`,
     '',
     '## 依頼メッセージ',
     request || '（本文なし。返信先のメッセージから作成）'
@@ -372,6 +373,9 @@ async function check (conversation, { name, args, calls = [] }) {
 // edit: something the bot made earlier that the request changes, as { kind, current } where
 // current is its content in the submit tool's terms. Only that kind can be submitted, and a forum
 // post stays in its forum.
+// Required when used: eventTools requires this module.
+const eventTools = () => require('./eventTools')
+
 // recentReplies: what the bot said lately in the channel, newest first, so it does not repeat itself.
 async function draft ({ request, referenced, channelName, channelID, server, forum = null, images = [], pictures = [], edit = null, recentReplies = [], guild, member, tools, now = new Date() }) {
   const combined = pictures.filter(p => p.combined)
@@ -387,7 +391,7 @@ async function draft ({ request, referenced, channelName, channelID, server, for
       ]
     : []
   const conversation = {
-    contents: [{ role: 'user', parts: [{ text: buildPrompt({ request, referenced, channelName, channelID, server, forum, images, edit, recentReplies, channels: member ? require('./eventTools').namedChannels([request, referenced?.text], guild, member) : [], now }) }, ...shown] }],
+    contents: [{ role: 'user', parts: [{ text: buildPrompt({ request, referenced, channelName, channelID, channelInfo: channelID ? eventTools().requestChannelInfo(channelID, guild) : null, server, forum, images, edit, recentReplies, channels: member ? eventTools().namedChannels([request, referenced?.text], guild, member) : [], now }) }, ...shown] }],
     guild,
     member,
     tools,

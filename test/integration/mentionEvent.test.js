@@ -617,7 +617,7 @@ describe('mention → event / forum post (integration)', () => {
     const requests = installGemini([[submit({ found: false, reason: 'x' })]])
     await mentionEvent.handle(mention(channel, '<@BOT> このチャンネルの内容でイベントを作って'))
     const prompt = requests[0].body.contents[0].parts[0].text
-    assert.match(prompt, /依頼されたチャンネル: #general（ID: 201）/)
+    assert.match(prompt, /依頼されたチャンネル: #general（ID: 201、text）/)
     assert.match(prompt, /## このサーバーの情報（最新）\nサーバー名: テストサーバー/)
     assert.match(prompt, /- 201: #general（text） ← 依頼されたチャンネル/)
     assert.doesNotMatch(prompt, /#staff/, 'channels the requester cannot see are left out')
@@ -666,7 +666,7 @@ describe('mention → event / forum post (integration)', () => {
     const { channel, replies } = createChannel()
     const requests = installGemini([
       body => {
-        assert.match(body.contents[0].parts[0].text, /依頼されたチャンネル: #general（ID: 201）/)
+        assert.match(body.contents[0].parts[0].text, /依頼されたチャンネル: #general（ID: 201、text）/)
         return [call('search_channel_history', { channel_id: '201', query: '勉強会' })]
       },
       body => {
