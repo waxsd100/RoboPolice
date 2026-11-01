@@ -94,7 +94,8 @@ const SYSTEM_INSTRUCTION = [
   '- サーバーの情報（チャンネル・ロール・登録済みイベント・サーバー絵文字・コミュニティの知識・YouTube）は依頼と一緒に渡している。',
   '- 依頼メッセージが返信のときは、返信をたどった会話を渡している。その中の「あなた（BOT）」は、あなた自身がこれまでに送ったメッセージです。必ずその会話の続きとして、前に話した内容を踏まえて答えてください。',
   '- 「このチャンネルの内容をもとに」「これまでの話から」のような依頼では search_channel_history で保存済みのメッセージを読む。直近の数件で足りるときや保存がないときは get_recent_messages。',
-  '- Discord のメッセージリンクは get_discord_message、それ以外の URL は fetch_url で読む。',
+  '- Discord のメッセージリンクとチャンネルへのリンクは get_discord_message、それ以外の URL は fetch_url で読む。',
+  '- チャンネルの話題（どこで何を話す・ルール・告知・募集など）は、サーバーの情報のチャンネル一覧（説明つき）で当てはまるチャンネルを探す。中身が必要なら get_recent_messages か search_channel_history でそのチャンネルを読む。依頼や会話にチャンネル（<#ID> やチャンネルへのリンク）が出てきて、その中身が話に関係するときも読みに行く。',
   '- チャンネルや動画・配信の話題は search_youtube で保存済みの情報を調べてから答える。summarize_youtube_video は、動画リンクが貼られたときか、動画の中で話している内容が必要なときだけ使う（費用がかかるため、題名と説明で足りるときは使わない）。要約は保存され、次からは search_youtube でも見つかる。',
   '- キャラクター・名言・台詞・ネタ・用語などコミュニティならではの話題は、サーバーの情報の「コミュニティの知識」を見て、足りなければ search_wiki で調べてから答える。',
   '- ゲームに触れるときは find_game で調べる。',
@@ -113,6 +114,7 @@ const SYSTEM_INSTRUCTION = [
   '## 返事の書き方',
   '- Discord のメッセージとして読みやすく、長くても500文字程度。返事・説明・本文に文字数（「（120文字）」など）は書かない。',
   '- 動画や配信・ページに触れるときは、長い URL を本文に並べず、[題名](URL) の形のリンクで書く（URL は必ず入れる。動画のサムネイル付きのカードは BOT が返事の下に付ける）。要約の時間が [12:34](…&t=754s) のようなリンクになっていれば、話題に合う場面のリンクをそのまま書く。時間やリンクは自分で作らない。',
+  '- チャンネルに触れるとき（「〜は <#ID> でどうぞ」など、案内に役立つとき）は <#チャンネルID> の形で書く（Discord でリンクになる）。ID はサーバーの情報の一覧にあるものだけ使い、作らない。',
   '- ゲームの Discord のゲームメンション（<@$数字> の形）が find_game で分かれば、そのままの書き方で書く（ゲームのプロフィールが表示される）。数字は自分で作らない。',
   '- サーバーの情報に「サーバー絵文字」があれば、話の流れに合うときに使ってください。数に決まりはないが、多すぎて読みにくくならない程度に。書き方は一覧のとおり <:名前:ID> のままにし、一覧にない絵文字は作らない。',
   '- 絵文字は ` や ``` で囲まないでください（囲むと絵文字にならず、<:名前:ID> の文字のまま表示される）。絵文字を紹介・一覧するときも、囲まずにそのまま書く。'
@@ -139,7 +141,7 @@ const EDIT_LABELS = { event: 'イベント', forum: 'フォーラム投稿' }
 
 const MAX_RECENT_REPLY = 200
 
-function buildPrompt ({ request, referenced, channelName, channelID, server, forum, images, edit, recentReplies = [], now }) {
+function buildPrompt ({ request, referenced, channelName, channelID, server, forum, images, edit, recentReplies = [], channels = [], now }) {
   const lines = [
     `現在日時: ${formatNow(now)}（${TIMEZONE}）`,
     `依頼されたチャンネル: #${channelName}${channelID ? `（ID: ${channelID}）` : ''}`,
@@ -160,6 +162,7 @@ function buildPrompt ({ request, referenced, channelName, channelID, server, for
   } else if (referenced) {
     lines.push('', '## 依頼メッセージの返信先', referenced.text)
   }
+  if (channels.length) lines.push('', '## 依頼や会話に出てくるチャンネル', ...channels)
   if (server) lines.push('', '## このサーバーの情報（最新）', server)
   if (recentReplies.length) {
     lines.push('', '## 最近の返事（あなた（BOT）がこのチャンネルで最近送ったもの。新しい順。同じネタ・言い回し・書き出しを繰り返さないこと）',
@@ -384,7 +387,7 @@ async function draft ({ request, referenced, channelName, channelID, server, for
       ]
     : []
   const conversation = {
-    contents: [{ role: 'user', parts: [{ text: buildPrompt({ request, referenced, channelName, channelID, server, forum, images, edit, recentReplies, now }) }, ...shown] }],
+    contents: [{ role: 'user', parts: [{ text: buildPrompt({ request, referenced, channelName, channelID, server, forum, images, edit, recentReplies, channels: member ? require('./eventTools').namedChannels([request, referenced?.text], guild, member) : [], now }) }, ...shown] }],
     guild,
     member,
     tools,

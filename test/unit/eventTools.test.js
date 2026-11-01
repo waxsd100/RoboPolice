@@ -3,7 +3,7 @@ const assert = require('node:assert/strict')
 // Load first: it sets the environment the bot modules read when they are required.
 const { createGuild, createMember, installBot } = require('../helpers/fakes')
 const urlFetcher = require('../../src/bot/utils/urlFetcher')
-const { createTools, formatMessage, withServerEmojis, StopDrafting } = require('../../src/bot/modules/eventTools')
+const { createTools, formatMessage, withServerEmojis, withServerChannels, namedChannels, StopDrafting } = require('../../src/bot/modules/eventTools')
 
 const REQUESTER = '1'
 const guild = createGuild({
@@ -65,6 +65,14 @@ describe('get_discord_message', () => {
 
   test('refuses something that is not a message link', async () => {
     assert.match((await tools().call('get_discord_message', { link: 'https://example.com' })).error, /メッセージリンクではありません/)
+  })
+
+  test('a link to a channel reads its recent messages, if both can read it', async () => {
+    const res = await tools().call('get_discord_message', { link: 'https://discord.com/channels/100/201' })
+    assert.match(res.result, /11\/3 19時から交流会/)
+    assert.match((await tools().call('fetch_url', { url: 'https://discord.com/channels/100/201/' })).result, /詳細はこちら/)
+    assert.match((await tools().call('get_discord_message', { link: 'https://discord.com/channels/100/202' })).error, /依頼者がこのチャンネル/)
+    assert.match((await tools().call('get_discord_message', { link: 'https://discord.com/channels/300/301' })).error, /別のサーバー/)
   })
 
   test('reports a deleted message as a tool error', async () => {
@@ -328,7 +336,7 @@ describe('describeServer', () => {
       'メンバー数: 12000',
       'ルールチャンネル: <#11>',
       '',
-      '### チャンネル（依頼者が見られるもの）',
+      '### チャンネル（依頼者が見られるもの。返事で触れるときは <#ID> の形で書くとリンクになる）',
       '[（カテゴリなし）]',
       '- 14: #ボイス（voice）',
       '[イベント]',
@@ -463,5 +471,20 @@ describe('YouTube summaries in the tools', () => {
     assert.deepEqual(t.sources, ['https://www.youtube.com/watch?v=abcdefghijk'])
     const again = await t.call('summarize_youtube_video', { url: 'https://www.youtube.com/watch?v=abcdefghijk' })
     assert.match(again.result, /の内容の要約（保存済み）:/)
+  })
+})
+
+describe('channels in replies', () => {
+  test('#name of a channel the requester can see becomes a link; other # stay', () => {
+    assert.equal(withServerChannels('雑談は #general で、ボイスは #ボイス へ。#staff は秘密', guild, member), '雑談は <#201> で、ボイスは <#204> へ。#staff は秘密')
+    assert.equal(withServerChannels('<#201> と https://x.com/a#general と #generalist', guild, member), '<#201> と https://x.com/a#general と #generalist')
+  })
+
+  test('the channels a message names, with what they are', () => {
+    assert.deepEqual(namedChannels(['<#201> を見て', 'https://discord.com/channels/100/204 と <#202> と <#999>'], guild, member), [
+      '- <#201>: #general（text）',
+      '- <#204>: #ボイス（voice）'
+    ])
+    assert.deepEqual(namedChannels(['https://discord.com/channels/300/301'], guild, member), [], 'another server\'s')
   })
 })

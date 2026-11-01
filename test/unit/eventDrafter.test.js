@@ -296,6 +296,14 @@ describe('draft', () => {
     assert.equal(outOfRange[0].body.generationConfig.temperature, 0.7)
   })
 
+  test('tells the model what the channels a message names are', async () => {
+    const { createMember } = require('../helpers/fakes')
+    const seen = createGuild({ channels: [{ id: '202', name: 'ボイス', type: 2, readers: ['1'] }] })
+    const requests = installGemini([[call('submit_chat_reply', { text: 'やあ' })]])
+    await draft({ request: '<#202> って何するところ？', channelName: 'general', guild: seen, member: createMember({ id: '1' }), tools, now: NOW })
+    assert.match(requests[0].body.contents[0].parts[0].text, /## 依頼や会話に出てくるチャンネル\n- <#202>: #ボイス（voice）/)
+  })
+
   test('GEMINI_MAX_STEPS changes the limit', async (t) => {
     process.env.GEMINI_MAX_STEPS = '3'
     t.after(() => { delete process.env.GEMINI_MAX_STEPS })
