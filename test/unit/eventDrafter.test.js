@@ -1,6 +1,6 @@
 const { test, describe, beforeEach } = require('node:test')
 const assert = require('node:assert/strict')
-const { draft, revise, toScheduledEvent, isConfigured, ENTITY_TYPES } = require('../../src/bot/modules/eventDrafter')
+const { draft, revise, toScheduledEvent, isConfigured, ENTITY_TYPES, MAX_STEPS } = require('../../src/bot/modules/eventDrafter')
 const { createGuild, configureGateway, installGemini, call, submit, lastToolResponses } = require('../helpers/fakes')
 
 const NOW = new Date('2026-10-29T15:00:00+09:00')
@@ -268,21 +268,21 @@ describe('draft', () => {
   })
 
   test('the last step may only submit, with what was looked up', async () => {
-    const requests = installGemini([...Array.from({ length: 9 }, () => [call('lookup')]), [submit({ name: 'B', start: '2026-11-03T19:00:00+09:00' })]])
+    const requests = installGemini([...Array.from({ length: MAX_STEPS - 1 }, () => [call('lookup')]), [submit({ name: 'B', start: '2026-11-03T19:00:00+09:00' })]])
     const result = await draft({ request: 'x', channelName: 'general', guild, tools, now: NOW })
     assert.equal(result.event.name, 'B')
-    assert.equal(toolCalls.length, 9)
-    assert.equal(requests[8].body.toolConfig.functionCallingConfig.allowedFunctionNames, undefined)
-    const last = requests[9].body
+    assert.equal(toolCalls.length, MAX_STEPS - 1)
+    assert.equal(requests[MAX_STEPS - 2].body.toolConfig.functionCallingConfig.allowedFunctionNames, undefined)
+    const last = requests[MAX_STEPS - 1].body
     assert.deepEqual(last.toolConfig.functionCallingConfig.allowedFunctionNames, ['submit_event_draft', 'submit_forum_post_draft', 'submit_chat_reply'])
     assert.match(last.contents.at(-1).parts.at(-1).text, /これ以上ツールで調べず/)
   })
 
   test('stops if the model still does not submit', async () => {
-    installGemini(Array.from({ length: 10 }, () => [call('lookup')]))
+    installGemini(Array.from({ length: MAX_STEPS }, () => [call('lookup')]))
     const result = await draft({ request: 'x', channelName: 'general', guild, tools, now: NOW })
     assert.match(result.error, /手順が多すぎた/)
-    assert.equal(toolCalls.length, 10)
+    assert.equal(toolCalls.length, MAX_STEPS)
   })
 
   test('passes the reason through when the model gives up', async () => {

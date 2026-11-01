@@ -7,8 +7,9 @@ const { currentUsage } = require('../utils/geminiUsage')
 const DEFAULT_GEMINI_MODEL = 'gemini-flash-latest'
 const GEMINI_TIMEOUT_MS = 60000
 // Each step is one Gemini round trip; a draft normally needs 1-3 lookups (and maybe a question)
-// before submitting. The last step may only submit, with what was looked up by then.
-const MAX_STEPS = 10
+// before submitting, a chat reply sometimes many more (wiki, X, videos, …). Lookups cost few
+// tokens, so the limit is generous. The last step may only submit, with what was looked up by then.
+const MAX_STEPS = 20
 const LAST_STEP_NOTE = '調べられるのはここまでです。これ以上ツールで調べず、ここまでに分かったことだけで提出してください（分からないところは分からないと書く）。'
 // Dates in messages and event pages are written for this community's local time.
 const TIMEZONE = 'Asia/Tokyo'
@@ -394,4 +395,4 @@ async function revise (conversation, correction) {
   return check(conversation, await runAgent(conversation.contents, conversation.tools, conversation.submits))
 }
 
-module.exports = { draft, revise, isConfigured, toScheduledEvent, callGemini, geminiRequest, retryTimer, DEFAULT_GEMINI_MODEL, ENTITY_TYPES, GeminiError }
+module.exports = { draft, revise, MAX_STEPS, isConfigured, toScheduledEvent, callGemini, geminiRequest, retryTimer, DEFAULT_GEMINI_MODEL, ENTITY_TYPES, GeminiError }
