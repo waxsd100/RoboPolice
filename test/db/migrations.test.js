@@ -55,13 +55,7 @@ describe('migrations', { skip: !database.available && 'needs PGHOST' }, () => {
     await q("INSERT INTO youtube_websub (channel_id, expires_at) VALUES ('UC1', '2026-11-01')")
 
     // Up to 014: X posts stored in the wiki's tables, as they were before 015.
-    const upTo14 = fs.mkdtempSync(path.join(os.tmpdir(), 'migrations-'))
-    for (const m of require('../../src/db/migrate').migrationFiles().filter(m => m.version <= 14)) {
-      // A .js migration requires files next to it: it is loaded from where it is.
-      if (m.kind === 'js') fs.writeFileSync(path.join(upTo14, path.basename(m.file)), `module.exports = require(${JSON.stringify(m.file)})\n`)
-      else fs.copyFileSync(m.file, path.join(upTo14, path.basename(m.file)))
-    }
-    await migrate({ dir: upTo14 })
+    await migrateTo(14)
     await q(`INSERT INTO wiki_pages (url, title) VALUES
       ('https://w.example/d/chars', 'キャラクター'), ('https://x.com/nobamangames#2026-10', '@nobamangames のポスト（2026年10月）')`)
     await q(`INSERT INTO wiki_sections (url, position, heading, text, text_hash, facts_hash) VALUES
@@ -72,8 +66,22 @@ describe('migrations', { skip: !database.available && 'needs PGHOST' }, () => {
       ('https://x.com/nobamangames#2026-10', 0, 'term', '告知', 'お知らせ')`)
     await q("INSERT INTO social_posts (id, account, url, text, created_at) VALUES ('1', 'nobamangames', 'https://x.com/nobamangames/status/1', '告知', '2026-10-01')")
 
+    // Up to 020: a stream's end and archive tries kept on its event, as they were before 021.
+    await migrateTo(20)
+    await q("UPDATE youtube_live_events SET status = 'completed', ended_at = '2026-10-05', archive_attempts = 2, archive_tried_at = '2026-10-06' WHERE video_id = 'v2'")
+
     await migrate()
   })
+  // Applies the migrations up to `version`.
+  async function migrateTo (version) {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'migrations-'))
+    for (const m of require('../../src/db/migrate').migrationFiles().filter(m => m.version <= version)) {
+      // A .js migration requires files next to it: it is loaded from where it is.
+      if (m.kind === 'js') fs.writeFileSync(path.join(dir, path.basename(m.file)), `module.exports = require(${JSON.stringify(m.file)})\n`)
+      else fs.copyFileSync(m.file, path.join(dir, path.basename(m.file)))
+    }
+    await migrate({ dir })
+  }
   after(() => database.drop())
 
   test('records every migration, and a second run does nothing', async () => {
@@ -103,7 +111,7 @@ describe('migrations', { skip: !database.available && 'needs PGHOST' }, () => {
     assert.deepEqual(await q('SELECT guild_id, event FROM guild_disabled_events'), [{ guild_id: 'g1', event: 'presenceUpdate' }])
     assert.deepEqual(await q('SELECT id, log_bots FROM guilds ORDER BY id'), [{ id: 'g1', log_bots: true }, { id: 'g2', log_bots: false }])
     const columns = (await q("SELECT column_name FROM information_schema.columns WHERE table_name = 'guilds' ORDER BY column_name")).map(r => r.column_name)
-    assert.deepEqual(columns, ['details_updated_at', 'icon_url', 'id', 'joined_at', 'log_bots', 'member_count', 'name', 'owner_id'])
+    assert.deepEqual(columns, ['details_updated_at', 'icon_url', 'id', 'joined_at', 'log_bots', 'member_count', 'name', 'owner_id', 'youtube_live_events'])
   })
 
   test('image URLs become rows', async () => {
@@ -130,11 +138,13 @@ describe('migrations', { skip: !database.available && 'needs PGHOST' }, () => {
     assert.deepEqual(await q('SELECT channel_id, title, backfill_token, websub_expires_at IS NOT NULL AS websub FROM youtube_channels'), [
       { channel_id: 'UC1', title: 'チャンネル', backfill_token: null, websub: true }
     ])
-    assert.deepEqual(await q('SELECT channel_id, channel_ref FROM youtube_bot_channels'), [{ channel_id: 'UC1', channel_ref: '@chan' }])
-    assert.deepEqual(await q('SELECT guild_id, live_events FROM guild_youtube ORDER BY guild_id'), [
-      { guild_id: 'g1', live_events: true },
-      { guild_id: 'g2', live_events: false }
+    assert.deepEqual(await q('SELECT channel_id, channel_ref, position FROM youtube_channels'), [{ channel_id: 'UC1', channel_ref: '@chan', position: 0 }])
+    assert.deepEqual(await q('SELECT id, youtube_live_events FROM guilds ORDER BY id'), [
+      { id: 'g1', youtube_live_events: true },
+      { id: 'g2', youtube_live_events: false }
     ])
+    const tables = (await q("SELECT tablename FROM pg_tables WHERE schemaname = 'public'")).map(r => r.tablename)
+    assert.ok(!tables.includes('youtube_bot_channels') && !tables.includes('guild_youtube'))
     assert.deepEqual(await q('SELECT video_id, channel_id FROM youtube_videos ORDER BY video_id'), [
       { video_id: 'v1', channel_id: 'UC1' }, { video_id: 'v2', channel_id: 'UC1' }
     ])
@@ -150,8 +160,14 @@ describe('migrations', { skip: !database.available && 'needs PGHOST' }, () => {
     ])
   })
 
-  test('stream events whose video is gone are dropped', async () => {
+  test('stream events whose video is gone are dropped; a stream\'s end and archive tries move to its video', async () => {
     assert.deepEqual(await q('SELECT guild_id, video_id, event_id FROM youtube_live_events'), [{ guild_id: 'g1', video_id: 'v2', event_id: 'ev1' }])
+    assert.deepEqual(await q('SELECT video_id, stream_ended_at IS NOT NULL AS ended, archive_attempts, archive_tried_at IS NOT NULL AS tried FROM youtube_videos ORDER BY video_id'), [
+      { video_id: 'v1', ended: false, archive_attempts: 0, tried: false },
+      { video_id: 'v2', ended: true, archive_attempts: 2, tried: true }
+    ])
+    const columns = (await q("SELECT column_name FROM information_schema.columns WHERE table_name = 'youtube_live_events' ORDER BY column_name")).map(r => r.column_name)
+    assert.deepEqual(columns, ['event_id', 'guild_id', 'kind', 'scheduled_end', 'scheduled_start', 'status', 'video_id'])
     const tables = (await q("SELECT tablename FROM pg_tables WHERE schemaname = 'public' ORDER BY tablename")).map(r => r.tablename)
     assert.ok(!tables.includes('youtube_websub') && !tables.some(t => t.startsWith('old_')))
   })
@@ -169,12 +185,11 @@ describe('migrations', { skip: !database.available && 'needs PGHOST' }, () => {
 
   test('what a server stores refers to it; rows of servers the bot left are dropped', async () => {
     assert.deepEqual((await q('SELECT id FROM messages ORDER BY id')).map(r => r.id), ['m1', 'm2', 'm4'], 'm3 was of a server with no settings; m4 has no server recorded')
-    assert.deepEqual((await q("SELECT guild_id FROM guild_youtube WHERE guild_id = 'g3'")), [], 'g3 had no guilds row')
     assert.deepEqual(await q('SELECT name FROM embedding_models'), [{ name: 'model-a' }])
     await q("DELETE FROM guilds WHERE id = 'g1'")
     assert.deepEqual((await q("SELECT id FROM messages WHERE guild_id = 'g1'")), [])
-    assert.deepEqual((await q("SELECT guild_id FROM guild_youtube WHERE guild_id = 'g1'")), [])
+    assert.deepEqual((await q("SELECT guild_id FROM youtube_live_events WHERE guild_id = 'g1'")), [])
     assert.deepEqual((await q("SELECT guild_id FROM guild_youtube_summaries WHERE guild_id = 'g1'")), [])
-    await assert.rejects(q("INSERT INTO guild_youtube (guild_id) VALUES ('nowhere')"), /foreign key/)
+    await assert.rejects(q("INSERT INTO youtube_live_events (guild_id, video_id, event_id, status) VALUES ('nowhere', 'v1', 'e', 'scheduled')"), /foreign key/)
   })
 })

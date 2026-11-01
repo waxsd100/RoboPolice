@@ -155,6 +155,8 @@ function installYouTubeStore (knowledge = {}, summaries = {}) {
   store.listLiveEventGuilds = async () => [...new Set([...Object.keys(knowledge), ...Object.keys(liveSettings)])].filter(liveOn)
   store.liveEventsOn = async guildID => liveOn(guildID)
   const liveEvents = {}
+  // Tries to summarize each stream's archive, per video (the summary is shared by every server).
+  const archiveAttempts = {}
   store.setLiveEvents = async (guildID, enabled) => {
     writes.push({ setLiveEvents: [guildID, enabled] })
     liveSettings[guildID] = enabled
@@ -175,14 +177,14 @@ function installYouTubeStore (knowledge = {}, summaries = {}) {
   store.saveLiveEvent = async (guildID, videoID, { eventID, status, scheduledStart, scheduledEnd, kind = 'stream' }) => {
     liveEvents[guildID] = liveEvents[guildID] || {}
     const before = liveEvents[guildID][videoID]
-    liveEvents[guildID][videoID] = { ...before, event_id: eventID, status, kind: before?.kind || kind, scheduled_start: scheduledStart, scheduled_end: scheduledEnd, archive_attempts: before?.archive_attempts || 0 }
+    liveEvents[guildID][videoID] = { ...before, event_id: eventID, status, kind: before?.kind || kind, scheduled_start: scheduledStart, scheduled_end: scheduledEnd }
   }
   // Any completed stream without a summary is due (the store also waits after it ends and between tries).
   store.archivesToSummarize = async guildID => Object.entries(liveEvents[guildID] || {})
-    .filter(([id, e]) => e.kind !== 'upload' && e.status === 'completed' && e.archive_attempts < 3 && !Object.values(summaries).some(s => s[id]))
+    .filter(([id, e]) => e.kind !== 'upload' && e.status === 'completed' && (archiveAttempts[id] || 0) < 3 && !Object.values(summaries).some(s => s[id]))
     .slice(0, 1)
     .map(([id]) => ({ video_id: id, url: `https://www.youtube.com/watch?v=${id}` }))
-  store.recordArchiveAttempt = async (guildID, videoID) => { liveEvents[guildID][videoID].archive_attempts++ }
+  store.recordArchiveAttempt = async videoID => { archiveAttempts[videoID] = (archiveAttempts[videoID] || 0) + 1 }
   store.saveSync = async ({ channel, videos, backfillToken = null }) => {
     writes.push({ saveSync: channel.id, videos: videos.map(v => v.id), backfillToken })
     for (const k of entriesOf(channel.id)) {
@@ -212,7 +214,7 @@ function installYouTubeStore (knowledge = {}, summaries = {}) {
     delete summaries[guildID]
     if (knowledge[guildID]?.channel) knowledge[guildID].channel.live_events = false
   }
-  return { knowledge, summaries, writes, liveEvents }
+  return { knowledge, summaries, writes, liveEvents, archiveAttempts }
 }
 
 function configureGateway () {

@@ -291,28 +291,35 @@ describe('stores', { skip: !database.available && 'needs PGHOST' }, () => {
 
     test('a stream\'s archive is due for a summary a while after it ends, a few times at most', async () => {
       await store().saveLiveEvent('g1', 'v2', { eventID: 'ev9', status: 'active', scheduledStart: null, scheduledEnd: null })
-      assert.equal((await q("SELECT ended_at FROM youtube_live_events WHERE video_id = 'v2' AND guild_id = 'g1'"))[0].ended_at, null)
+      assert.equal((await q("SELECT stream_ended_at FROM youtube_videos WHERE video_id = 'v2'"))[0].stream_ended_at, null)
       await store().saveLiveEvent('g1', 'v2', { eventID: 'ev9', status: 'completed', scheduledStart: null, scheduledEnd: null })
       assert.deepEqual(await store().archivesToSummarize('g1'), [], 'not right after it ends')
       assert.deepEqual(await store().archivesToSummarize('g1', { waitMinutes: 0 }), [{ video_id: 'v2', url: 'https://www.youtube.com/watch?v=v2' }])
-      await store().recordArchiveAttempt('g1', 'v2')
+      await store().recordArchiveAttempt('v2')
       assert.deepEqual(await store().archivesToSummarize('g1', { waitMinutes: 0 }), [], 'not again within the hour')
       assert.deepEqual((await store().archivesToSummarize('g1', { waitMinutes: 0, retryMinutes: 0 })).length, 1)
       assert.deepEqual(await store().archivesToSummarize('g1', { waitMinutes: 0, retryMinutes: 0, maxAttempts: 1 }), [])
-      const [first] = await q("SELECT ended_at FROM youtube_live_events WHERE video_id = 'v2' AND guild_id = 'g1'")
+      // Tried once in any server, it counts for every server with an event for it.
+      await store().saveLiveEvent('g2', 'v2', { eventID: 'ev8', status: 'completed', scheduledStart: null, scheduledEnd: null })
+      assert.deepEqual(await store().archivesToSummarize('g2', { waitMinutes: 0 }), [], 'g1 tried it within the hour')
+      assert.deepEqual(await store().archivesToSummarize('g2', { waitMinutes: 0, retryMinutes: 0, maxAttempts: 1 }), [])
+      await q("DELETE FROM youtube_live_events WHERE guild_id = 'g2'")
+      const [first] = await q("SELECT stream_ended_at FROM youtube_videos WHERE video_id = 'v2'")
       await store().saveLiveEvent('g1', 'v2', { eventID: 'ev9', status: 'completed', scheduledStart: null, scheduledEnd: null })
-      const [again] = await q("SELECT ended_at FROM youtube_live_events WHERE video_id = 'v2' AND guild_id = 'g1'")
-      assert.deepEqual(again.ended_at, first.ended_at, 'the first end is kept')
-      await q("UPDATE youtube_live_events SET archive_attempts = 0, archive_tried_at = NULL WHERE video_id = 'v2'")
+      const [again] = await q("SELECT stream_ended_at FROM youtube_videos WHERE video_id = 'v2'")
+      assert.deepEqual(again.stream_ended_at, first.stream_ended_at, 'the first end is kept')
+      await q("UPDATE youtube_videos SET archive_attempts = 0, archive_tried_at = NULL WHERE video_id = 'v2'")
       await store().saveSummary('g1', 'v2', '配信の要約')
       assert.deepEqual(await store().archivesToSummarize('g1', { waitMinutes: 0 }), [], 'not once summarized')
       await q("DELETE FROM guild_youtube_summaries WHERE video_id = 'v2'")
       await q("DELETE FROM youtube_summaries WHERE video_id = 'v2'")
       // An upload's event is not a stream: its video is never summarized as an archive.
       await q("DELETE FROM youtube_live_events WHERE video_id = 'v2'")
+      await q("UPDATE youtube_videos SET stream_ended_at = NULL WHERE video_id = 'v2'")
       await store().saveLiveEvent('g1', 'v2', { eventID: 'ev9', status: 'completed', kind: 'upload' })
       assert.equal((await store().getLiveEvents('g1')).v2.kind, 'upload')
       assert.deepEqual(await store().archivesToSummarize('g1', { waitMinutes: -1 }), [])
+      assert.equal((await q("SELECT stream_ended_at FROM youtube_videos WHERE video_id = 'v2'"))[0].stream_ended_at, null)
       await q("DELETE FROM youtube_live_events WHERE video_id = 'v2'")
     })
 
@@ -348,6 +355,11 @@ describe('stores', { skip: !database.available && 'needs PGHOST' }, () => {
     })
 
     test('a channel the bot stops following goes with its videos; summaries when no server asked for them', async () => {
+      // A summary of one of the bot's videos stays while the video does, whoever asked for it.
+      await q("DELETE FROM guild_youtube_summaries WHERE video_id = 'v1'")
+      await store().deleteGuildYouTube('nobody')
+      assert.equal(await store().getSummary('v1'), '要約1')
+
       // Another channel added: the first keeps everything accumulated.
       await store().setBotChannels([{ ref: '@chan', id: 'UC1' }, { ref: '@other', id: 'UC2' }])
       assert.deepEqual((await store().listChannels()).map(c => [c.channel_id, c.channel_ref]), [['UC1', '@chan'], ['UC2', '@other']])
@@ -362,14 +374,17 @@ describe('stores', { skip: !database.available && 'needs PGHOST' }, () => {
       assert.deepEqual(await store().getLiveEvents('g1'), {})
       assert.equal(await store().isKnownChannel('UC1'), false)
 
-      // Summaries stay while a server asked for them.
-      assert.deepEqual((await q('SELECT video_id FROM youtube_summaries ORDER BY video_id')).map(r => r.video_id), ['v1', 'x9'])
+      // Then while a server asked for it.
+      assert.deepEqual((await q('SELECT video_id FROM youtube_summaries ORDER BY video_id')).map(r => r.video_id), ['x9'])
       await store().deleteGuildYouTube('g2')
       await store().deleteGuildYouTube('g1')
       assert.deepEqual(await q('SELECT * FROM youtube_summaries'), [])
-      assert.deepEqual(await q("SELECT * FROM guild_youtube WHERE guild_id IN ('g1', 'g2')"), [])
+      assert.deepEqual(await q("SELECT id FROM guilds WHERE id IN ('g1', 'g2') AND youtube_live_events"), [])
       await store().setBotChannels([])
       assert.deepEqual(await q('SELECT * FROM youtube_channels'), [])
+      // A sync that ends after its channel was dropped stores nothing.
+      await store().saveSync({ channel, videos: [video('v1')] })
+      assert.deepEqual(await q('SELECT * FROM youtube_videos'), [])
       assert.equal(await store().getKnowledge('g1'), null)
     })
   })

@@ -115,7 +115,7 @@ describe('summarizing a stream\'s archive', () => {
     await require('../../src/db/interfaces/postgres/youtube').saveLiveEvent('100', 'live0000002', { eventID: 'EV2', status: 'completed' })
     installGemini([new Error('not ready'), new Error('not ready'), new Error('not ready')])
     for (let i = 0; i < 3; i++) assert.equal(await liveWatcher.summarizeArchives('100'), null)
-    assert.equal(store.liveEvents[100].live0000002.archive_attempts, 3)
+    assert.equal(store.archiveAttempts.live0000002, 3)
     const requests = installGemini([])
     assert.equal(await liveWatcher.summarizeArchives('100'), null)
     assert.equal(requests.length, 0)

@@ -136,10 +136,7 @@ async function saveVideoEmbedding (videoID, embedding, hash, model) {
 // same for every server; guildID is kept for the callers).
 async function hasVideoEmbeddings (guildID, model) {
   const rows = await pool.query(
-    `SELECT 1 FROM youtube_video_embeddings e
-     JOIN youtube_videos v ON v.video_id = e.video_id
-     JOIN youtube_bot_channels b ON b.channel_id = v.channel_id
-     WHERE e.model_id = $1 LIMIT 1`,
+    'SELECT 1 FROM youtube_video_embeddings WHERE model_id = $1 LIMIT 1',
     [await modelId(model)])
   return rows.rows.length !== 0
 }
@@ -149,10 +146,7 @@ async function hasVideoEmbeddings (guildID, model) {
 // videos each, so all are scored.
 async function videoScores (guildID, query, model) {
   const rows = await pool.query(
-    `SELECT e.video_id, 1 - (e.embedding <=> $2::halfvec) AS score FROM youtube_video_embeddings e
-     JOIN youtube_videos v ON v.video_id = e.video_id
-     JOIN youtube_bot_channels b ON b.channel_id = v.channel_id
-     WHERE e.model_id = $1`,
+    'SELECT video_id, 1 - (embedding <=> $2::halfvec) AS score FROM youtube_video_embeddings WHERE model_id = $1',
     [await modelId(model), toVectorLiteral(query)])
   return Object.fromEntries(rows.rows.map(r => [r.video_id, Number(r.score)]))
 }
