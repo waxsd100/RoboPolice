@@ -267,7 +267,18 @@ describe('draft', () => {
     assert.deepEqual(requests[1].body.contents[1], { role: 'model', parts: turn })
   })
 
-  test('stops after too many steps', async () => {
+  test('the last step may only submit, with what was looked up', async () => {
+    const requests = installGemini([...Array.from({ length: 9 }, () => [call('lookup')]), [submit({ name: 'B', start: '2026-11-03T19:00:00+09:00' })]])
+    const result = await draft({ request: 'x', channelName: 'general', guild, tools, now: NOW })
+    assert.equal(result.event.name, 'B')
+    assert.equal(toolCalls.length, 9)
+    assert.equal(requests[8].body.toolConfig.functionCallingConfig.allowedFunctionNames, undefined)
+    const last = requests[9].body
+    assert.deepEqual(last.toolConfig.functionCallingConfig.allowedFunctionNames, ['submit_event_draft', 'submit_forum_post_draft', 'submit_chat_reply'])
+    assert.match(last.contents.at(-1).parts.at(-1).text, /これ以上ツールで調べず/)
+  })
+
+  test('stops if the model still does not submit', async () => {
     installGemini(Array.from({ length: 10 }, () => [call('lookup')]))
     const result = await draft({ request: 'x', channelName: 'general', guild, tools, now: NOW })
     assert.match(result.error, /手順が多すぎた/)
