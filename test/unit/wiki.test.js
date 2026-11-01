@@ -13,11 +13,13 @@ const page = (title, body, extra = '') => `<html><head><title>${title} - テス�
 <div id="page-footer">footer</div>
 <div class="user-area"><h2>Menu</h2><a href="/d/MenuBar1">menu</a></div>${extra}</body></html>`
 
-// The Discord messages' tables are empty here unless a test says otherwise.
-const discordStore = require('../../src/db/interfaces/postgres/discordKnowledge')
+// The Discord messages' and the web's tables are empty here unless a test says otherwise.
+const quietStores = [require('../../src/db/interfaces/postgres/discordKnowledge'), require('../../src/db/interfaces/postgres/webKnowledge')]
 beforeEach(() => {
-  for (const [name, value] of [['hasSections', false], ['sectionsToExtract', []], ['nearestFacts', []], ['nearestSections', []]]) {
-    mock.method(discordStore, name, async () => value)
+  for (const tables of quietStores) {
+    for (const [name, value] of [['hasSections', false], ['sectionsToExtract', []], ['nearestFacts', []], ['nearestSections', []]]) {
+      mock.method(tables, name, async () => value)
+    }
   }
 })
 afterEach(() => {

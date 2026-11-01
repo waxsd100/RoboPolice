@@ -247,6 +247,15 @@ describe('stores', { skip: !database.available && 'needs PGHOST' }, () => {
     assert.equal(await tables.deletePagesExcept('https://discord.com/channels/g1#u1-2026-10', []), 1)
   })
 
+  test('topics looked up on the web: their own tables, pages of topics no longer named dropped', async () => {
+    const web = require('../../src/db/interfaces/postgres/webKnowledge')
+    await web.savePage('topic:ぽみそしる', '「ぽみそしる」について', [{ heading: 'ぽみそしる 1', text: 'メンバー: ポッキー、のばまん', images: [] }])
+    await web.savePage('topic:昔のテーマ', '「昔のテーマ」について', [{ heading: '昔のテーマ 1', text: '古い', images: [] }])
+    assert.ok(await web.lastRead('topic:ぽみそしる'))
+    assert.equal(await web.deletePagesExcept('topic:', ['topic:ぽみそしる']), 1)
+    assert.deepEqual((await q('SELECT url FROM web_sections')).map(r => r.url), ['topic:ぽみそしる'])
+  })
+
   describe('YouTube', () => {
     const store = () => require('../../src/db/interfaces/postgres/youtube')
     const video = (id, extra = {}) => ({ id, title: `動画 ${id}`, description: '', publishedAt: `2026-10-0${id.slice(1)}T00:00:00Z`, liveStatus: 'none', scheduledStart: null, duration: 'PT1H', ...extra })
