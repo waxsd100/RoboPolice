@@ -268,10 +268,10 @@ describe('the channels the bot follows', () => {
     assert.deepEqual(store.writes, [], 'nothing changes')
   })
 
-  test('the default is のばまんゲームス', () => {
+  test('the default is のばまんゲームス and のばまん・ロー・エフォート', () => {
     delete process.env.YOUTUBE_CHANNELS
     try {
-      assert.deepEqual(youtubeSync.configuredChannels(), ['UCTW2tw0Mhho72MojB1L48IQ'])
+      assert.deepEqual(youtubeSync.configuredChannels(), ['UCTW2tw0Mhho72MojB1L48IQ', '@のばまんローエフォート'])
     } finally {
       process.env.YOUTUBE_CHANNELS = ''
     }
