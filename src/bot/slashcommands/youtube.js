@@ -21,7 +21,7 @@ function summary ({ channel, videos }) {
       { name: '設定', value: channel.channel_ref, inline: true },
       { name: '最終取得', value: synced, inline: true },
       { name: '保存している動画', value: `${videos.length} 件（内容の要約あり ${videos.filter(v => v.summary).length} 件）`, inline: true },
-      { name: '配信のイベント登録', value: channel.live_events ? '有効' : '無効（`/youtube liveevents enabled:True`）', inline: true },
+      { name: '配信・新着動画のイベント登録', value: channel.live_events ? '有効' : '無効（`/youtube liveevents enabled:True`）', inline: true },
       ...(lives.length ? [{ name: '配信', value: lives.slice(0, 5).map(v => `${LIVE_LABELS[v.live_status]}: [${v.title}](${v.url})`).join('\n') }] : [])
     ]
   }
@@ -80,8 +80,8 @@ async function liveEvents (interaction, sub) {
   await youtubeDB.setLiveEvents(interaction.guildID, enabled)
   return {
     content: enabled
-      ? 'これから始まる配信と、配信予定の枠を、サーバーのイベントとして自動で登録します。配信が始まるとイベントも開始し、終わると終了します（通常の動画は対象外です）。'
-      : '配信のイベント登録をやめました。登録済みのイベントはそのまま残ります。'
+      ? 'これから始まる配信と配信予定の枠、新しく投稿された動画を、サーバーのイベントとして自動で登録します。配信はイベントも始まり・終わりが連動し、新着動画は投稿から24時間イベントにします。'
+      : '配信・新着動画のイベント登録をやめました。登録済みのイベントはそのまま残ります。'
   }
 }
 

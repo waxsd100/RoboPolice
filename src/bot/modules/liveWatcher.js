@@ -1,5 +1,10 @@
-// Turns a server's YouTube streams into Discord scheduled events, for servers that turned it on
-// (/youtube liveevents). Only streams: ordinary videos never become events.
+// Turns a server's YouTube streams, and new uploads, into Discord scheduled events, for servers
+// that turned it on (/youtube liveevents).
+//
+// An upload's event (UPLOAD_EVENTS=false turns these off) starts as soon as the video is seen in
+// the channel's feed and stays open for UPLOAD_EVENT_HOURS (default 24), so members see the new
+// video in the server's events; then it is ended. Only uploads made in the last
+// UPLOAD_EVENT_MAX_AGE_HOURS (default 6) count, so turning this on does not post old videos.
 //
 // A stream's event follows it: made when the stream is scheduled (or, unscheduled, when it starts),
 // moved when the start time changes, started when it goes live, kept open while it runs, and ended
@@ -27,6 +32,17 @@ const START_MARGIN_MS = 60 * 1000
 const EXTEND_BEFORE_MS = 15 * 60 * 1000
 const EXTEND_BY_MS = 60 * 60 * 1000
 const STATUS = { scheduled: 1, active: 2, completed: 3, canceled: 4 }
+const DEFAULT_UPLOAD_EVENT_HOURS = 24
+const DEFAULT_UPLOAD_MAX_AGE_HOURS = 6
+
+function hoursSetting (name, fallback) {
+  const n = Number(process.env[name])
+  return process.env[name] && n > 0 ? n : fallback
+}
+
+function uploadEventsEnabled () {
+  return process.env.UPLOAD_EVENTS !== 'false'
+}
 // Discord takes up to 1000 characters; the stream's URL goes last.
 const MAX_DESCRIPTION = 1000
 
@@ -73,12 +89,13 @@ function eventDescription (video, blurb, games = []) {
   return `${head}${excerpt}${tail}`.trim()
 }
 
-async function createEvent (guild, video, start) {
-  const end = new Date(start.getTime() + DEFAULT_LENGTH_MS)
+async function createEvent (guild, video, start, { upload = false, length = DEFAULT_LENGTH_MS } = {}) {
+  const end = new Date(start.getTime() + length)
   const thumbnail = await thumbnailOf(video)
-  const described = await describeStream(video, thumbnail, guild.id)
+  // An upload is already out: its own description says what it is, with no AI line.
+  const described = upload ? null : await describeStream(video, thumbnail, guild.id)
   const created = await request('POST', `/guilds/${guild.id}/scheduled-events`, {
-    name: video.title.slice(0, 100),
+    name: `${upload ? '📺 新着動画: ' : ''}${video.title}`.slice(0, 100),
     description: eventDescription(video, described?.blurb, described?.games),
     privacy_level: 2,
     entity_type: 3,
@@ -86,7 +103,7 @@ async function createEvent (guild, video, start) {
     scheduled_start_time: start.toISOString(),
     scheduled_end_time: end.toISOString(),
     ...(await coverOf(thumbnail)),
-    reason: 'YouTube stream'
+    reason: upload ? 'YouTube upload' : 'YouTube stream'
   })
   return { eventID: created.id, scheduledEnd: end }
 }
@@ -156,7 +173,24 @@ async function follow (guild, video, record, now = new Date()) {
   return null // completed, canceled or gone: nothing more to do
 }
 
-// Checks one server: new streams from the feed, and the state of the ones being followed.
+// A new upload's event: started at once, open for UPLOAD_EVENT_HOURS. Null for one too old to announce.
+async function announceUpload (guild, video, now = new Date()) {
+  const published = new Date(video.publishedAt || 0)
+  if (now - published > hoursSetting('UPLOAD_EVENT_MAX_AGE_HOURS', DEFAULT_UPLOAD_MAX_AGE_HOURS) * 3600 * 1000) return null
+  const start = new Date(now.getTime() + START_MARGIN_MS)
+  const { eventID, scheduledEnd } = await createEvent(guild, video, start, { upload: true, length: hoursSetting('UPLOAD_EVENT_HOURS', DEFAULT_UPLOAD_EVENT_HOURS) * 3600 * 1000 })
+  await setStatus(guild, eventID, 'active')
+  return { eventID, status: 'active', scheduledStart: start, scheduledEnd, kind: 'upload' }
+}
+
+// An upload's event once its time is up: ended (Discord may have ended it already).
+async function endUpload (guild, record, now = new Date()) {
+  if (record.status !== 'active' || new Date(record.scheduled_end || 0) > now) return null
+  await setStatus(guild, record.event_id, 'completed').catch(e => { if (!/400|completed/i.test(e.message)) throw e })
+  return { eventID: record.event_id, status: 'completed', scheduledStart: record.scheduled_start, scheduledEnd: record.scheduled_end, kind: 'upload' }
+}
+
+// Checks one server: new streams and uploads from the feed, and the state of the ones being followed.
 // Resolves to the number of events changed.
 async function checkGuild (guildID, channelID) {
   const guild = global.bot.guilds.get(guildID)
@@ -173,20 +207,25 @@ async function checkGuild (guildID, channelID) {
     return 0
   }
   const byId = new Map(videos.map(v => [v.id, v]))
+  const isNew = new Set(fresh)
   let changed = 0
   for (const id of ids) {
     const video = byId.get(id) || null
-    if (video && !video.isStream) continue
+    const record = records[id]
+    const upload = record ? record.kind === 'upload' : !!(video && !video.isStream)
+    if (upload && !record && !(isNew.has(id) && uploadEventsEnabled())) continue
     try {
-      const next = await follow(guild, video, records[id])
+      const next = upload
+        ? (record ? await endUpload(guild, record) : await announceUpload(guild, video))
+        : await follow(guild, video, record)
       if (next) {
         await youtubeDB.saveLiveEvent(guildID, id, next)
         changed++
       }
     } catch (e) {
       if (records[id] && isGone(e)) {
-        // Someone deleted the event: leave this stream alone from now on.
-        await youtubeDB.saveLiveEvent(guildID, id, { eventID: records[id].event_id, status: 'gone', scheduledStart: records[id].scheduled_start, scheduledEnd: records[id].scheduled_end })
+        // Someone deleted the event: leave this video alone from now on.
+        await youtubeDB.saveLiveEvent(guildID, id, { eventID: records[id].event_id, status: 'gone', scheduledStart: records[id].scheduled_start, scheduledEnd: records[id].scheduled_end, kind: records[id].kind })
       } else {
         global.logger.warn(`[LIVE]: Could not update the event for ${id} in ${guildID}: ${e.message}`)
       }
@@ -257,4 +296,4 @@ function startWatcher () {
   return setInterval(() => checkAll(), seconds * 1000)
 }
 
-module.exports = { startWatcher, checkAll, checkGuild, follow, summarizeArchives, eventDescription, STATUS }
+module.exports = { startWatcher, checkAll, checkGuild, follow, announceUpload, endUpload, summarizeArchives, eventDescription, STATUS }

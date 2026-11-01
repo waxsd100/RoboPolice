@@ -139,17 +139,54 @@ describe('checkGuild', () => {
     id, snippet: { title: id, description: '', publishedAt: '2026-11-01T00:00:00Z', liveBroadcastContent, thumbnails: {} }, ...extra
   })
 
-  test('a new scheduled stream in the feed becomes an event; a new ordinary video does not', async () => {
+  test('a new scheduled stream in the feed becomes an event; an ordinary video uploaded long ago does not', async () => {
     const bot = installBot()
     const calls = fakeYouTube(['stream00001', 'video000001', 'old00000001'], [
       apiVideo('stream00001', 'upcoming', { liveStreamingDetails: { scheduledStartTime: '2099-01-01T00:00:00Z' } }),
-      apiVideo('video000001', 'none')
+      apiVideo('video000001', 'none', { snippet: { title: 'video000001', description: '', publishedAt: '2020-01-01T00:00:00Z', liveBroadcastContent: 'none', thumbnails: {} } })
     ])
     assert.equal(await liveWatcher.checkGuild('100', UC), 1)
     assert.deepEqual(calls, ['feed', 'videos:stream00001,video000001'])
     assert.equal(bot.calls.filter(c => c.method === 'POST').length, 1)
     assert.equal(store.liveEvents[100].stream00001.status, 'scheduled')
     assert.equal(store.liveEvents[100].video000001, undefined)
+  })
+
+  test('a new upload becomes an event that starts at once, then is ended when its time is up', async () => {
+    const bot = installBot()
+    const justNow = new Date(Date.now() - 10 * 60 * 1000).toISOString()
+    fakeYouTube(['upload00001'], [apiVideo('upload00001', 'none', { snippet: { title: '新しい動画', description: '説明', publishedAt: justNow, liveBroadcastContent: 'none', thumbnails: {} } })])
+    assert.equal(await liveWatcher.checkGuild('100', UC), 1)
+    const [created, started] = bot.calls
+    assert.equal(created.method, 'POST')
+    assert.equal(created.body.name, '📺 新着動画: 新しい動画')
+    assert.equal(created.body.reason, 'YouTube upload')
+    assert.equal(new Date(created.body.scheduled_end_time) - new Date(created.body.scheduled_start_time), 24 * 3600 * 1000)
+    assert.deepEqual(started.body, { status: 2 })
+    assert.equal(store.liveEvents[100].upload00001.kind, 'upload')
+    assert.equal(store.liveEvents[100].upload00001.status, 'active')
+
+    // Seen again before its end: nothing. After: ended, and its "archive" is never summarized.
+    bot.calls.length = 0
+    assert.equal(await liveWatcher.checkGuild('100', UC), 0)
+    assert.equal(bot.calls.length, 0)
+    store.liveEvents[100].upload00001.scheduled_end = new Date(Date.now() - 1000).toISOString()
+    assert.equal(await liveWatcher.checkGuild('100', UC), 1)
+    assert.deepEqual(bot.calls[0].body, { status: 3 })
+    assert.equal(store.liveEvents[100].upload00001.status, 'completed')
+    assert.deepEqual(await require('../../src/db/interfaces/postgres/youtube').archivesToSummarize('100'), [])
+  })
+
+  test('UPLOAD_EVENTS=false keeps uploads out of events', async () => {
+    process.env.UPLOAD_EVENTS = 'false'
+    try {
+      const bot = installBot()
+      fakeYouTube(['upload00002'], [apiVideo('upload00002', 'none', { snippet: { title: 'x', description: '', publishedAt: new Date().toISOString(), liveBroadcastContent: 'none', thumbnails: {} } })])
+      assert.equal(await liveWatcher.checkGuild('100', UC), 0)
+      assert.equal(bot.calls.length, 0)
+    } finally {
+      delete process.env.UPLOAD_EVENTS
+    }
   })
 
   test('costs no API quota when nothing is new or followed', async () => {
