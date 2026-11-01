@@ -2,6 +2,7 @@ const { test, describe, beforeEach, afterEach } = require('node:test')
 const assert = require('node:assert/strict')
 const { configureGateway, installGemini, installYouTubeStore } = require('../helpers/fakes')
 const youtubeSync = require('../../src/bot/modules/youtubeSync')
+const firstChannel = async () => (await require('../../src/db/interfaces/postgres/youtube').listChannels())[0]
 
 const UC = 'UC' + 'c'.repeat(22)
 const id = n => `vid${String(n).padStart(8, '0')}`
@@ -48,7 +49,7 @@ describe('syncIfChanged', () => {
 
   test('does nothing, and spends no API quota, when the feed has nothing new', async () => {
     const calls = fakeYouTube({ feed: [id(1)] })
-    assert.equal(await youtubeSync.syncIfChanged('100'), null)
+    assert.equal(await youtubeSync.syncIfChanged(await firstChannel()), null)
     assert.deepEqual(calls, ['feed'])
     assert.deepEqual(store.writes, [])
   })
@@ -56,7 +57,7 @@ describe('syncIfChanged', () => {
   test('syncs when the feed shows a new video', async (t) => {
     t.mock.method(global.logger, 'info', () => {})
     const calls = fakeYouTube({ feed: [id(2), id(1)], newVideos: [id(2)] })
-    assert.equal(await youtubeSync.syncIfChanged('100'), 1)
+    assert.equal(await youtubeSync.syncIfChanged(await firstChannel()), 1)
     assert.deepEqual(calls, ['feed', 'channels', 'playlistItems', 'videos'])
     assert.ok(store.knowledge[100].videos.some(v => v.video_id === id(2)))
   })
@@ -65,13 +66,13 @@ describe('syncIfChanged', () => {
     t.mock.method(global.logger, 'info', () => {})
     store.knowledge[100].videos = [video(1, { live_status: 'upcoming' })]
     let calls = fakeYouTube()
-    await youtubeSync.syncIfChanged('100')
+    await youtubeSync.syncIfChanged(await firstChannel())
     assert.equal(calls[0], 'channels')
 
     store.knowledge[100].videos = [video(1)]
     store.knowledge[100].channel.backfill_token = 'p3'
     calls = fakeYouTube()
-    await youtubeSync.syncIfChanged('100')
+    await youtubeSync.syncIfChanged(await firstChannel())
     assert.equal(calls[0], 'channels')
   })
 })
@@ -79,14 +80,14 @@ describe('syncIfChanged', () => {
 describe('autoSyncAll', () => {
   afterEach(() => { delete global.bot })
 
-  test('checks only the servers this worker hosts, and one failure does not stop the rest', async (t) => {
+  test('checks every channel the bot follows, once, and one failure does not stop the rest', async (t) => {
     process.env.YOUTUBE_API_KEY = 'k'
     installYouTubeStore({
       100: { channel: { channel_id: UC }, videos: [] },
       200: { channel: { channel_id: 'UC' + 'd'.repeat(22) }, videos: [] },
-      300: { channel: { channel_id: 'UC' + 'e'.repeat(22) }, videos: [] }
+      300: { channel: { channel_id: UC }, videos: [] }
     })
-    global.bot = { guilds: new Map([['100', {}], ['200', {}]]) }
+    global.bot = { shards: new Map([[0, { id: 0 }]]), guilds: new Map() }
     const warned = t.mock.method(global.logger, 'warn', () => {})
     const feeds = []
     global.fetch = async url => {
@@ -96,8 +97,17 @@ describe('autoSyncAll', () => {
       return { ok: true, text: async () => '<feed></feed>' }
     }
     await youtubeSync.autoSyncAll()
-    assert.deepEqual(feeds, [UC, 'UC' + 'd'.repeat(22)])
-    assert.match(warned.mock.calls[0].arguments[0], /Automatic sync of 100 failed: .*HTTP 500/)
+    assert.deepEqual(feeds, [UC, 'UC' + 'd'.repeat(22)], 'a channel two servers use is read once')
+    assert.match(warned.mock.calls[0].arguments[0], new RegExp(`Automatic sync of ${UC} failed: .*HTTP 500`))
+  })
+
+  test('only the worker owning shard 0 syncs: the channels are the bot\'s', async () => {
+    installYouTubeStore({ 100: { channel: { channel_id: UC }, videos: [] } })
+    global.bot = { shards: new Map([[3, { id: 3 }]]), guilds: new Map() }
+    const feeds = []
+    global.fetch = async () => { feeds.push('feed'); return { ok: true, text: async () => '' } }
+    await youtubeSync.autoSyncAll()
+    assert.deepEqual(feeds, [])
   })
 })
 
@@ -127,7 +137,7 @@ describe('syncing on YouTube pushes', () => {
     delete process.env.YOUTUBE_WEBSUB_SECRET
   })
 
-  test('a push syncs every hosted server that set that channel, and only those', async (t) => {
+  test('a push syncs that channel once, if the bot follows it', async (t) => {
     t.mock.method(global.logger, 'info', () => {})
     process.env.YOUTUBE_API_KEY = 'k'
     const store = installYouTubeStore({
@@ -135,10 +145,11 @@ describe('syncing on YouTube pushes', () => {
       200: { channel: { channel_id: UC }, videos: [] },
       300: { channel: { channel_id: 'UC' + 'q'.repeat(22) }, videos: [] }
     })
-    global.bot = { guilds: new Map([['100', {}], ['300', {}]]) }
+    global.bot = { shards: new Map([[0, { id: 0 }]]), guilds: new Map() }
     fakeYouTube({ newVideos: [id(9)] })
     await youtubeSync.syncOnPush(UC)
-    assert.deepEqual(store.writes.map(w => w.saveSync), ['100'], 'server 200 is on another worker, 300 has another channel')
+    await youtubeSync.syncOnPush('UC' + 'z'.repeat(22))
+    assert.deepEqual(store.writes.map(w => w.saveSync), [UC])
   })
 
   test('with pushes set up, there is no timed sync; without, there is', (t) => {
@@ -236,6 +247,33 @@ describe('summarizing the newest videos', () => {
       }
     } finally {
       delete process.env.VIDEO_SUMMARY_CONCURRENCY
+    }
+  })
+})
+
+describe('the channels the bot follows', () => {
+  afterEach(() => { process.env.YOUTUBE_CHANNELS = '' })
+
+  test('YOUTUBE_CHANNELS names them; every one is resolved before anything changes', async () => {
+    process.env.YOUTUBE_API_KEY = 'k'
+    const store = installYouTubeStore()
+    const calls = fakeYouTube()
+    process.env.YOUTUBE_CHANNELS = `${UC}, @other`
+    assert.deepEqual(await youtubeSync.applyConfiguredChannels(), [{ ref: UC, id: UC }, { ref: '@other', id: UC }])
+    assert.deepEqual(calls, ['channels'], 'an ID needs no lookup; a handle does')
+    assert.deepEqual(store.writes, [{ setBotChannels: [{ ref: UC, id: UC }, { ref: '@other', id: UC }] }])
+    process.env.YOUTUBE_CHANNELS = `${UC}, not a channel`
+    store.writes.length = 0
+    await assert.rejects(youtubeSync.applyConfiguredChannels(), /not a channel/)
+    assert.deepEqual(store.writes, [], 'nothing changes')
+  })
+
+  test('the default is のばまんゲームス', () => {
+    delete process.env.YOUTUBE_CHANNELS
+    try {
+      assert.deepEqual(youtubeSync.configuredChannels(), ['UCTW2tw0Mhho72MojB1L48IQ'])
+    } finally {
+      process.env.YOUTUBE_CHANNELS = ''
     }
   })
 })

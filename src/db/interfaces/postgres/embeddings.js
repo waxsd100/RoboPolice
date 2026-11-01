@@ -112,15 +112,14 @@ async function getMessages (ids) {
   return rows.rows
 }
 
-// Every stored video with what its embedding is made from, those of channels the owner's servers
-// set first: [{ video_id, title, description, summary, text_hash }].
+// Every stored video with what its embedding is made from, newest first:
+// [{ video_id, title, description, summary, text_hash }].
 async function videosForEmbedding () {
   const rows = await pool.query(
     `SELECT v.video_id, v.title, v.description, s.summary, e.text_hash FROM youtube_videos v
      LEFT JOIN youtube_summaries s ON s.video_id = v.video_id
      LEFT JOIN youtube_video_embeddings e ON e.video_id = v.video_id
-     ORDER BY EXISTS (SELECT 1 FROM guild_youtube g WHERE g.channel_id = v.channel_id AND g.guild_id = ANY($1)) DESC`,
-    [ownerGuildIDs()])
+     ORDER BY v.published_at DESC NULLS LAST`)
   return rows.rows
 }
 
@@ -133,27 +132,28 @@ async function saveVideoEmbedding (videoID, embedding, hash, model) {
     [videoID, toVectorLiteral(embedding), hash, await modelId(model)])
 }
 
-// Whether any video of the server's channel has an embedding made by `model`.
+// Whether any video of the bot's channels has an embedding made by `model` (the channels are the
+// same for every server; guildID is kept for the callers).
 async function hasVideoEmbeddings (guildID, model) {
   const rows = await pool.query(
     `SELECT 1 FROM youtube_video_embeddings e
      JOIN youtube_videos v ON v.video_id = e.video_id
-     JOIN guild_youtube g ON g.channel_id = v.channel_id
-     WHERE g.guild_id = $1 AND e.model_id = $2 LIMIT 1`,
-    [guildID, await modelId(model)])
+     JOIN youtube_bot_channels b ON b.channel_id = v.channel_id
+     WHERE e.model_id = $1 LIMIT 1`,
+    [await modelId(model)])
   return rows.rows.length !== 0
 }
 
-// { video_id: score } for the videos of the server's channel that have an embedding made by
-// `model`, score the cosine similarity to the vector `query`. A channel has at most a few thousand
-// videos, so all are scored.
+// { video_id: score } for the videos of the bot's channels that have an embedding made by `model`,
+// score the cosine similarity to the vector `query`. The channels have at most a few thousand
+// videos each, so all are scored.
 async function videoScores (guildID, query, model) {
   const rows = await pool.query(
-    `SELECT e.video_id, 1 - (e.embedding <=> $3::halfvec) AS score FROM youtube_video_embeddings e
+    `SELECT e.video_id, 1 - (e.embedding <=> $2::halfvec) AS score FROM youtube_video_embeddings e
      JOIN youtube_videos v ON v.video_id = e.video_id
-     JOIN guild_youtube g ON g.channel_id = v.channel_id
-     WHERE g.guild_id = $1 AND e.model_id = $2`,
-    [guildID, await modelId(model), toVectorLiteral(query)])
+     JOIN youtube_bot_channels b ON b.channel_id = v.channel_id
+     WHERE e.model_id = $1`,
+    [await modelId(model), toVectorLiteral(query)])
   return Object.fromEntries(rows.rows.map(r => [r.video_id, Number(r.score)]))
 }
 

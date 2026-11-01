@@ -1,72 +1,31 @@
-const Eris = require('eris')
-const { v4: uuidv4 } = require('uuid')
 const { EMBED_COLORS } = require('../utils/constants')
-const { parseChannelRef, parseVideoId, resolveChannel, linkTimestamps } = require('../utils/youtube')
+const { parseVideoId, linkTimestamps } = require('../utils/youtube')
 const { sync, videosToSummarize, summarizeLatest } = require('../modules/youtubeSync')
 const { summarizeVideo } = require('../modules/videoSummary')
 const youtubeDB = require('../../db/interfaces/postgres/youtube')
+const { isOwnerGuild } = require('../utils/priority')
 const { redact } = require('../utils/redact')
 
 const LIVE_LABELS = { live: '配信中', upcoming: '配信予定' }
 
-function summary ({ channel, videos }) {
-  const synced = channel.synced_at ? `<t:${Math.floor(new Date(channel.synced_at) / 1000)}:R>` : '未取得'
+// The channels the bot follows (the same for every server) and this server's setting.
+function summary ({ channels, videos, live_events: liveEvents }) {
   const lives = videos.filter(v => LIVE_LABELS[v.live_status])
+  const lines = channels.map(c => {
+    const count = videos.filter(v => v.channel_id === c.channel_id)
+    const synced = c.synced_at ? `<t:${Math.floor(new Date(c.synced_at) / 1000)}:R>` : '未取得'
+    return `・${c.url ? `[${c.title || c.channel_ref}](<${c.url}>)` : (c.title || c.channel_ref)}: 動画 ${count.length} 件（要約あり ${count.filter(v => v.summary).length} 件）、最終取得 ${synced}`
+  })
   return {
-    title: channel.title || channel.channel_ref,
-    url: channel.url || undefined,
-    description: (channel.description || '').slice(0, 300) || undefined,
+    title: 'BOT が見ている YouTube チャンネル',
+    description: lines.join('\n').slice(0, 4000),
     color: EMBED_COLORS.PURPLED_BLUE,
     fields: [
-      { name: '設定', value: channel.channel_ref, inline: true },
-      { name: '最終取得', value: synced, inline: true },
       { name: '保存している動画', value: `${videos.length} 件（内容の要約あり ${videos.filter(v => v.summary).length} 件）`, inline: true },
-      { name: '配信・新着動画のイベント登録', value: channel.live_events ? '有効' : '無効（`/youtube liveevents enabled:True`）', inline: true },
+      { name: '配信・新着動画のイベント登録', value: liveEvents ? '有効' : '無効（`/youtube liveevents enabled:True`）', inline: true },
       ...(lives.length ? [{ name: '配信', value: lives.slice(0, 5).map(v => `${LIVE_LABELS[v.live_status]}: [${v.title}](${v.url})`).join('\n') }] : [])
-    ]
-  }
-}
-
-const CONFIRM_TIMEOUT_MS = 2 * 60 * 1000
-const { BUTTON, ACTION_ROW } = Eris.Constants.ComponentTypes
-const { SUCCESS, DANGER } = Eris.Constants.ButtonStyles
-
-// Shows the channel that was found and waits for the member who ran the command to press はい or
-// いいえ. Setting a different channel drops what is stored for the current one, so that is said.
-// Resolves to true only for はい.
-async function confirmChannel (interaction, channel) {
-  const { awaitCustomID, cancelCustomID } = require('../events/interactionCreate')
-  const current = await youtubeDB.getOverview(interaction.guildID)
-  const replacing = current?.channel_id && current.channel_id !== channel.id
-  const [yes, no] = [uuidv4(), uuidv4()]
-  await interaction.editOriginalMessage({
-    content: [
-      'このチャンネルを設定しますか？',
-      replacing ? `⚠️ 今の「${current.title || current.channel_ref}」から変わり、保存している動画 ${current.video_count} 件と情報は削除されます。` : ''
-    ].filter(Boolean).join('\n'),
-    embeds: [{
-      title: channel.snippet.title,
-      url: `https://www.youtube.com/channel/${channel.id}`,
-      description: (channel.snippet.description || '').slice(0, 200) || undefined,
-      thumbnail: channel.snippet.thumbnails?.default?.url ? { url: channel.snippet.thumbnails.default.url } : undefined,
-      color: EMBED_COLORS.PURPLED_BLUE
-    }],
-    components: [{
-      type: ACTION_ROW,
-      components: [
-        { type: BUTTON, style: SUCCESS, label: 'はい', custom_id: yes },
-        { type: BUTTON, style: DANGER, label: 'いいえ', custom_id: no }
-      ]
-    }]
-  })
-  const userID = interaction.member?.user?.id || interaction.user?.id
-  try {
-    const pressed = await Promise.race([yes, no].map(id => awaitCustomID(id, userID, CONFIRM_TIMEOUT_MS)))
-    return pressed.data.custom_id === yes
-  } catch (_) {
-    return false
-  } finally {
-    [yes, no].forEach(cancelCustomID)
+    ],
+    footer: { text: 'チャンネルは BOT 共通です（YOUTUBE_CHANNELS で設定）' }
   }
 }
 
@@ -179,27 +138,13 @@ async function run (interaction) {
   if (!process.env.YOUTUBE_API_KEY) {
     return { content: 'YOUTUBE_API_KEY が設定されていないため使えません。' }
   }
-  if (sub.name === 'set') {
-    const input = sub.options.find(o => o.name === 'channel').value
-    const ref = parseChannelRef(input)
-    if (!ref) {
-      return { content: 'YouTube チャンネルの URL（https://www.youtube.com/@名前 または /channel/UC…）か、@名前 を指定してください。' }
-    }
-    // Resolved before anything is stored: a channel that does not exist changes nothing.
-    const channel = await resolveChannel(ref, process.env.YOUTUBE_API_KEY)
-    if (!await confirmChannel(interaction, channel)) {
-      return { content: 'YouTube チャンネルの設定をやめました。', embeds: [], components: [] }
-    }
-    await interaction.editOriginalMessage({ content: 'チャンネルの情報を取得しています…', embeds: [], components: [] }).catch(() => {})
-    await youtubeDB.setChannel(interaction.guildID, input.trim(), channel.id)
-    const { knowledge, note } = await sync(interaction.guildID)
-    return { content: `YouTube チャンネルを設定し、情報を取得しました。${note}メンションで依頼したときに AI が参照します。`, embeds: [summary(knowledge)], components: [] }
-  }
-  // A video given by its link needs no channel to be set.
+  // A video given by its link needs no channel.
   if (sub.name === 'summarize' && sub.options?.some(o => o.name === 'url')) return summarize(interaction, sub)
   const stored = await youtubeDB.getKnowledge(interaction.guildID)
-  if (!stored) return { content: 'YouTube チャンネルが設定されていません。`/youtube set` で設定してください。' }
+  if (!stored) return { content: 'BOT が見ている YouTube チャンネルがありません（環境変数 `YOUTUBE_CHANNELS` で設定します）。' }
   if (sub.name === 'sync') {
+    // The channels are the bot's: reading them again is for the owner's servers.
+    if (!isOwnerGuild(interaction.guildID)) return { content: 'チャンネルは BOT 共通のため、取得し直しはオーナーのサーバーからのみできます（新しい動画は自動で取得されます）。' }
     const { knowledge, note } = await sync(interaction.guildID)
     return { content: `最新の情報を取得しました。${note}`, embeds: [summary(knowledge)] }
   }

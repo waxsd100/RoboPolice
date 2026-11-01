@@ -6,6 +6,8 @@ const DEFAULTS = {
   WIKI_URLS: 'https://novamanhikoushiki.memo.wiki/',
   // twitterKnowledge.js
   TWITTER_ACCOUNTS: 'nobamangames',
+  // youtubeSync.js: the channels the bot follows, for every server (のばまんゲームス)
+  YOUTUBE_CHANNELS: 'UCTW2tw0Mhho72MojB1L48IQ',
   // discordKnowledge.js: のばまん's own account
   DISCORD_KNOWLEDGE_USERS: '615170548187791365',
   // webKnowledge.js

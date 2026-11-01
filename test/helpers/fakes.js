@@ -5,7 +5,7 @@ const http = require('http')
 process.env.AES_KEY = process.env.AES_KEY || 'test-aes-key'
 // The knowledge features have defaults for the real community (knowledgeDefaults.js); tests turn
 // them off unless they set one.
-for (const name of ['WIKI_URLS', 'TWITTER_ACCOUNTS', 'DISCORD_KNOWLEDGE_USERS', 'KNOWLEDGE_TOPICS']) process.env[name] ??= ''
+for (const name of ['WIKI_URLS', 'TWITTER_ACCOUNTS', 'DISCORD_KNOWLEDGE_USERS', 'KNOWLEDGE_TOPICS', 'YOUTUBE_CHANNELS']) process.env[name] ??= ''
 global.logger = global.logger || { info () {}, warn () {}, error () {}, debug () {}, startup () {}, fatal () {} }
 global.webhook = global.webhook || { generic () {}, warn () {}, error () {}, fatal () {} }
 
@@ -119,48 +119,58 @@ function installQuotaStore () {
 }
 
 // Replaces the YouTube store with an in-memory one, so no test reaches a real database.
-// knowledge: { guildID: { channel, videos } } as getKnowledge() returns it; summaries:
-// { guildID: { videoID: summary } }.
+// knowledge: { guildID: { channel, videos } }: each entry's channel is one the bot follows (the same
+// channel may appear for several servers), and channel.live_events is that server's setting.
+// summaries: { guildID: { videoID: summary } } (a summary made for any server is found for all).
 function installYouTubeStore (knowledge = {}, summaries = {}) {
   // No embeddings unless a test installs some: YouTube search falls back to keywords.
   installEmbeddingStore()
   const store = require('../../src/db/interfaces/postgres/youtube')
   const writes = []
-  const withSummaries = guildID => knowledge[guildID] && {
-    ...knowledge[guildID],
-    videos: knowledge[guildID].videos.map(v => ({ ...v, summary: summaries[guildID]?.[v.video_id] || v.summary || null }))
+  const liveSettings = {}
+  const anySummary = videoID => Object.values(summaries).find(s => s[videoID])?.[videoID] || null
+  // A channel given without its ID gets one, so it can be told apart.
+  const idOf = guildID => knowledge[guildID].channel.channel_id || `UC-unset-${guildID}`
+  const channels = () => [...new Map(Object.keys(knowledge).filter(g => knowledge[g].channel).map(g => [idOf(g), { ...knowledge[g].channel, channel_id: idOf(g) }])).values()]
+  const videosOf = g => (knowledge[g].videos || []).map((v, i) => ({ channel_id: idOf(g), video_id: v.video_id || `${g}-${i}`, ...v }))
+  const allVideos = () => [...new Map(Object.keys(knowledge).filter(g => knowledge[g].channel).flatMap(videosOf).map(v => [v.video_id, v])).values()]
+    .sort((a, b) => new Date(b.published_at || 0) - new Date(a.published_at || 0))
+  const liveOn = guildID => !!(liveSettings[guildID] ?? knowledge[guildID]?.channel?.live_events)
+  store.listChannels = async () => channels()
+  store.setBotChannels = async list => { writes.push({ setBotChannels: list }) }
+  store.getKnowledge = async guildID => {
+    if (!channels().length) return null
+    return { channels: channels(), channel: knowledge[guildID]?.channel || channels()[0], videos: allVideos().map(v => ({ ...v, summary: anySummary(v.video_id) || v.summary || null })), live_events: liveOn(guildID) }
   }
-  store.getKnowledge = async guildID => withSummaries(guildID) || null
-  store.getVideoIds = async guildID => new Set((knowledge[guildID]?.videos || []).map(v => v.video_id))
-  store.setChannel = async (guildID, ref, channelID) => {
-    writes.push({ setChannel: [guildID, ref, channelID] })
-    if (knowledge[guildID] && knowledge[guildID].channel.channel_id === channelID) {
-      knowledge[guildID].channel.channel_ref = ref
-      return
-    }
-    knowledge[guildID] = { channel: { guild_id: guildID, channel_ref: ref, channel_id: channelID, synced_at: null, backfill_token: null }, videos: [] }
+  store.getVideoIds = async (channelID = null) => new Set(allVideos().filter(v => !channelID || v.channel_id === channelID).map(v => v.video_id))
+  store.getOverview = async guildID => {
+    if (!channels().length) return null
+    const list = channels().map(c => {
+      const vs = allVideos().filter(v => v.channel_id === c.channel_id)
+      return { ...c, video_count: vs.length, summary_count: vs.filter(v => anySummary(v.video_id)).length, live_count: vs.filter(v => ['live', 'upcoming'].includes(v.live_status)).length }
+    })
+    const sum = key => list.reduce((n, c) => n + c[key], 0)
+    return { channels: list, video_count: sum('video_count'), summary_count: sum('summary_count'), live_count: sum('live_count'), live_events: liveOn(guildID) }
   }
-  store.getOverview = async guildID => knowledge[guildID] && {
-    ...knowledge[guildID].channel,
-    video_count: knowledge[guildID].videos.length,
-    summary_count: Object.keys(summaries[guildID] || {}).length,
-    live_count: knowledge[guildID].videos.filter(v => ['live', 'upcoming'].includes(v.live_status)).length
-  }
-  store.listChannels = async () => Object.entries(knowledge)
-    .filter(([, k]) => k.channel.channel_id)
-    .map(([guildID, k]) => ({ guild_id: guildID, channel_id: k.channel.channel_id, live_events: !!k.channel.live_events }))
+  store.listLiveEventGuilds = async () => [...new Set([...Object.keys(knowledge), ...Object.keys(liveSettings)])].filter(liveOn)
+  store.liveEventsOn = async guildID => liveOn(guildID)
   const liveEvents = {}
   store.setLiveEvents = async (guildID, enabled) => {
     writes.push({ setLiveEvents: [guildID, enabled] })
-    knowledge[guildID].channel.live_events = enabled
+    liveSettings[guildID] = enabled
   }
-  store.upsertVideos = async (guildID, videos) => {
-    writes.push({ upsertVideos: guildID, videos: videos.map(v => v.id) })
-    const byID = new Map((knowledge[guildID]?.videos || []).map(v => [v.video_id, v]))
-    for (const v of videos) byID.set(v.id, { ...byID.get(v.id), video_id: v.id, title: v.title, live_status: v.liveStatus, scheduled_start: v.scheduledStart, url: v.url })
-    if (knowledge[guildID]) knowledge[guildID].videos = [...byID.values()]
+  // The entries of the channel, where its videos are kept.
+  const entriesOf = channelID => Object.keys(knowledge).filter(g => knowledge[g].channel && idOf(g) === channelID).map(g => knowledge[g])
+  store.upsertVideos = async (channelID, videos) => {
+    writes.push({ upsertVideos: channelID, videos: videos.map(v => v.id) })
+    for (const k of entriesOf(channelID)) {
+      const byID = new Map((k.videos || []).map(v => [v.video_id, v]))
+      for (const v of videos) byID.set(v.id, { ...byID.get(v.id), video_id: v.id, title: v.title, live_status: v.liveStatus, scheduled_start: v.scheduledStart, published_at: v.publishedAt, url: v.url })
+      k.videos = [...byID.values()]
+    }
   }
-  store.getLiveVideoIds = async guildID => (knowledge[guildID]?.videos || []).filter(v => ['live', 'upcoming'].includes(v.live_status)).map(v => v.video_id)
+  store.recentVideoIds = async (channelID, since) => allVideos().filter(v => v.channel_id === channelID && v.published_at && new Date(v.published_at) > since).map(v => v.video_id)
+  store.getLiveVideoIds = async channelID => allVideos().filter(v => (!channelID || v.channel_id === channelID) && ['live', 'upcoming'].includes(v.live_status)).map(v => v.video_id)
   store.getLiveEvents = async guildID => ({ ...(liveEvents[guildID] || {}) })
   store.saveLiveEvent = async (guildID, videoID, { eventID, status, scheduledStart, scheduledEnd, kind = 'stream' }) => {
     liveEvents[guildID] = liveEvents[guildID] || {}
@@ -173,33 +183,34 @@ function installYouTubeStore (knowledge = {}, summaries = {}) {
     .slice(0, 1)
     .map(([id]) => ({ video_id: id, url: `https://www.youtube.com/watch?v=${id}` }))
   store.recordArchiveAttempt = async (guildID, videoID) => { liveEvents[guildID][videoID].archive_attempts++ }
-  store.saveSync = async (guildID, { channel, videos, backfillToken = null }) => {
-    writes.push({ saveSync: guildID, videos: videos.map(v => v.id), backfillToken })
-    const byID = new Map(knowledge[guildID].videos.map(v => [v.video_id, v]))
-    for (const v of videos) {
-      byID.set(v.id, { video_id: v.id, title: v.title, description: v.description, published_at: v.publishedAt, live_status: v.liveStatus, scheduled_start: v.scheduledStart, duration: v.duration, url: v.url })
-    }
-    knowledge[guildID] = {
-      channel: { ...knowledge[guildID].channel, channel_id: channel.id, title: channel.title, description: channel.description, handle: channel.handle, url: channel.url, backfill_token: backfillToken, synced_at: new Date('2026-10-29T12:00:00Z') },
-      videos: [...byID.values()].sort((a, b) => new Date(b.published_at) - new Date(a.published_at))
+  store.saveSync = async ({ channel, videos, backfillToken = null }) => {
+    writes.push({ saveSync: channel.id, videos: videos.map(v => v.id), backfillToken })
+    for (const k of entriesOf(channel.id)) {
+      const byID = new Map((k.videos || []).map(v => [v.video_id, v]))
+      for (const v of videos) {
+        byID.set(v.id, { video_id: v.id, title: v.title, description: v.description, published_at: v.publishedAt, live_status: v.liveStatus, scheduled_start: v.scheduledStart, duration: v.duration, url: v.url })
+      }
+      Object.assign(k.channel, { channel_id: channel.id, title: channel.title, description: channel.description, handle: channel.handle, url: channel.url, backfill_token: backfillToken, synced_at: new Date('2026-10-29T12:00:00Z') })
+      k.videos = [...byID.values()].sort((a, b) => new Date(b.published_at) - new Date(a.published_at))
     }
   }
   // Summaries are shared: one made for any server is found for all.
-  store.getSummary = async videoID => Object.values(summaries).find(s => s[videoID])?.[videoID] || null
+  store.getSummary = async videoID => anySummary(videoID)
   store.videoCards = async ids => Object.values(knowledge).flatMap(k => (k.videos || []).map(v => ({ video_id: v.video_id, title: v.title, channel_title: k.channel?.title || null })))
     .filter(v => ids.includes(v.video_id))
-  store.videoDuration = async videoID => Object.values(knowledge).flatMap(k => k.videos || []).find(v => v.video_id === videoID)?.duration || null
+  store.videoDuration = async videoID => allVideos().find(v => v.video_id === videoID)?.duration || null
   store.saveSummary = async (guildID, videoID, summary = null) => {
     writes.push({ saveSummary: [guildID, videoID] })
     summaries[guildID] = { ...summaries[guildID], [videoID]: summary ?? await store.getSummary(videoID) }
   }
   store.getOtherSummaries = async guildID => {
-    const own = new Set((knowledge[guildID]?.videos || []).map(v => v.video_id))
+    const own = new Set(allVideos().map(v => v.video_id))
     return Object.entries(summaries[guildID] || {}).filter(([id]) => !own.has(id)).map(([videoID, summary]) => ({ video_id: videoID, summary }))
   }
   store.deleteGuildYouTube = async guildID => {
-    delete knowledge[guildID]
+    delete liveSettings[guildID]
     delete summaries[guildID]
+    if (knowledge[guildID]?.channel) knowledge[guildID].channel.live_events = false
   }
   return { knowledge, summaries, writes, liveEvents }
 }

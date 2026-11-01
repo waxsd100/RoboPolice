@@ -368,9 +368,11 @@ async function searchYouTube (guildID, query) {
     .map(s => `- https://www.youtube.com/watch?v=${s.video_id}\n  内容の要約: ${linkTimestamps(s.summary.replace(/\s+/g, ' ').slice(0, 400), s.video_id)}`)
   const otherLines = others.length ? ['', `その他の要約済み動画（${others.length} 件）:`, ...others.slice(0, MAX_YOUTUBE_RESULTS)] : []
 
-  if (!knowledge) return ['このサーバーには YouTube チャンネルが設定されていません（運営が /youtube set で設定できます）', ...otherLines].join('\n')
-  const { channel, videos } = knowledge
-  if (!channel.synced_at) return [`YouTube チャンネル ${channel.channel_ref} は設定済みですが、まだ情報を取得していません（/youtube sync）`, ...otherLines].join('\n')
+  if (!knowledge) return ['BOT が見ている YouTube チャンネルはありません', ...otherLines].join('\n')
+  const { videos } = knowledge
+  const channels = (knowledge.channels || [knowledge.channel]).filter(c => c.synced_at)
+  if (!channels.length) return ['YouTube チャンネルはまだ情報を取得していません（しばらくすると自動で取得されます）', ...otherLines].join('\n')
+  const channelName = new Map(channels.map(c => [c.channel_id, c.title]))
   const matches = videos.filter(v => matchesAll(words, `${v.title}\n${v.description || ''}\n${v.summary || ''}`))
   // By meaning when embeddings exist, so different wording still finds the video.
   const ranked = words.length
@@ -382,13 +384,12 @@ async function searchYouTube (guildID, query) {
   // Otherwise lives first: "the next stream" is the usual question.
   const ordered = ranked || [...matches.filter(v => LIVE_LABELS[v.live_status]), ...matches.filter(v => !LIVE_LABELS[v.live_status])]
   return [
-    `チャンネル: ${channel.title}（${channel.url}）`,
-    channel.description ? `概要: ${channel.description.replace(/\s+/g, ' ').slice(0, 300)}` : '',
-    `情報の取得日時: ${new Date(channel.synced_at).toISOString()}（保存している動画 ${videos.length} 件、うち内容の要約あり ${videos.filter(v => v.summary).length} 件）`,
+    ...channels.map(c => `チャンネル: ${c.title}（${c.url}、取得 ${new Date(c.synced_at).toISOString()}）${c.description ? `\n  概要: ${c.description.replace(/\s+/g, ' ').slice(0, 200)}` : ''}`),
+    `保存している動画 ${videos.length} 件、うち内容の要約あり ${videos.filter(v => v.summary).length} 件`,
     ranked
       ? `「${query}」に意味が近い順の動画（語をすべて含むもの ${matches.length} 件を優先）:`
       : words.length ? `「${query}」に一致した動画: ${matches.length} 件` : '新しい順の動画:',
-    ...ordered.slice(0, MAX_YOUTUBE_RESULTS).map(formatVideo),
+    ...ordered.slice(0, MAX_YOUTUBE_RESULTS).map(v => channels.length > 1 && channelName.get(v.channel_id) ? formatVideo(v).replace(/^- /, `- 【${channelName.get(v.channel_id)}】`) : formatVideo(v)),
     ...(!ranked && matches.length > MAX_YOUTUBE_RESULTS ? [`…ほか ${matches.length - MAX_YOUTUBE_RESULTS} 件（query で絞り込めます）`] : []),
     ...otherLines
   ].filter(Boolean).join('\n')
@@ -515,10 +516,11 @@ async function describeServer (guild, member, requestChannelID, { query = '', co
   lines.push('', '### 登録済みのイベント', await scheduledEvents(guild).catch(e => `（取得できませんでした: ${e.message}）`))
 
   const youtube = await youtubeDB.getOverview(guild.id).catch(() => null)
-  lines.push('', '### YouTube', youtube?.synced_at
+  const synced = (youtube?.channels || []).filter(c => c.synced_at)
+  lines.push('', '### YouTube', synced.length
     ? [
-        `${youtube.title}（動画 ${youtube.video_count} 件を保存、取得 ${new Date(youtube.synced_at).toISOString()}）。詳しくは search_youtube で調べる`,
-        ...(youtube.description ? [`チャンネルの説明: ${youtube.description.replace(/\s+/g, ' ').slice(0, 300)}`] : [])
+        ...synced.map(c => `${c.title}（動画 ${c.video_count} 件を保存、取得 ${new Date(c.synced_at).toISOString()}）${c.description ? `\n  チャンネルの説明: ${c.description.replace(/\s+/g, ' ').slice(0, 200)}` : ''}`),
+        '詳しくは search_youtube で調べる'
       ].join('\n')
     : '設定なし')
   return lines.join('\n')

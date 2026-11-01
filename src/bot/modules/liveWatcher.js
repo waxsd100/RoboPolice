@@ -190,54 +190,70 @@ async function endUpload (guild, record, now = new Date()) {
   return { eventID: record.event_id, status: 'completed', scheduledStart: record.scheduled_start, scheduledEnd: record.scheduled_end, kind: 'upload' }
 }
 
-// Checks one server: new streams and uploads from the feed, and the state of the ones being followed.
-// Resolves to the number of events changed.
-async function checkGuild (guildID, channelID) {
-  const guild = global.bot.guilds.get(guildID)
-  if (!guild) return 0
-  const [known, liveIds, records] = await Promise.all([youtubeDB.getVideoIds(guildID), youtubeDB.getLiveVideoIds(guildID), youtubeDB.getLiveEvents(guildID)])
+// Checks one channel for the servers `guildIDs` (those this worker hosts that turned events on):
+// new streams and uploads, and the state of the ones being followed. The channel's videos are read
+// once for all of them. Resolves to the number of events changed.
+async function checkChannel (channelID, guildIDs, now = new Date()) {
+  const guilds = guildIDs.map(id => global.bot.guilds.get(id)).filter(Boolean)
+  if (guilds.length === 0) return 0
+  const since = new Date(now.getTime() - hoursSetting('UPLOAD_EVENT_MAX_AGE_HOURS', DEFAULT_UPLOAD_MAX_AGE_HOURS) * 3600 * 1000)
+  const [known, liveIds, recent] = await Promise.all([youtubeDB.getVideoIds(channelID), youtubeDB.getLiveVideoIds(channelID), youtubeDB.recentVideoIds(channelID, since)])
+  const recordsOf = new Map(await Promise.all(guilds.map(async g => [g.id, await youtubeDB.getLiveEvents(g.id, channelID)])))
   const fresh = (await feedVideoIds(channelID)).filter(id => !known.has(id))
-  const open = Object.entries(records).filter(([, r]) => r.status === 'scheduled' || r.status === 'active').map(([id]) => id)
-  const ids = [...new Set([...fresh, ...liveIds, ...open])]
+  const records = [...recordsOf.values()]
+  const open = records.flatMap(r => Object.entries(r).filter(([, e]) => e.status === 'scheduled' || e.status === 'active').map(([id]) => id))
+  // Recent uploads some server has no event for yet (another worker may have stored them first).
+  const unannounced = uploadEventsEnabled() ? recent.filter(id => records.some(r => !r[id])) : []
+  const ids = [...new Set([...fresh, ...liveIds, ...open, ...unannounced])]
   if (ids.length === 0) return 0
   const videos = await fetchVideos(ids, process.env.YOUTUBE_API_KEY)
-  await youtubeDB.upsertVideos(guildID, videos)
+  await youtubeDB.upsertVideos(channelID, videos)
+  let changed = 0
+  for (const guild of guilds) changed += await updateGuild(guild, ids, new Map(videos.map(v => [v.id, v])), recordsOf.get(guild.id))
+  return changed
+}
+
+// One server's events for the channel's videos `ids` (byId: their current state from YouTube).
+async function updateGuild (guild, ids, byId, records) {
   if (!guild.members.get(global.bot.user.id)?.permissions.has('manageEvents')) {
-    global.logger.warn(`[LIVE]: Cannot make events in ${guildID}: the bot lacks Manage Events`)
+    global.logger.warn(`[LIVE]: Cannot make events in ${guild.id}: the bot lacks Manage Events`)
     return 0
   }
-  const byId = new Map(videos.map(v => [v.id, v]))
-  const isNew = new Set(fresh)
   let changed = 0
   for (const id of ids) {
     const video = byId.get(id) || null
     const record = records[id]
     const upload = record ? record.kind === 'upload' : !!(video && !video.isStream)
-    if (upload && !record && !(isNew.has(id) && uploadEventsEnabled())) continue
+    // A new upload is announced while it is recent (announceUpload); an older one is left alone.
+    if (upload && !record && !uploadEventsEnabled()) continue
     try {
       const next = upload
         ? (record ? await endUpload(guild, record) : await announceUpload(guild, video))
         : await follow(guild, video, record)
       if (next) {
-        await youtubeDB.saveLiveEvent(guildID, id, next)
+        await youtubeDB.saveLiveEvent(guild.id, id, next)
         changed++
       }
     } catch (e) {
-      if (records[id] && isGone(e)) {
+      if (record && isGone(e)) {
         // Someone deleted the event: leave this video alone from now on.
-        await youtubeDB.saveLiveEvent(guildID, id, { eventID: records[id].event_id, status: 'gone', scheduledStart: records[id].scheduled_start, scheduledEnd: records[id].scheduled_end, kind: records[id].kind })
+        await youtubeDB.saveLiveEvent(guild.id, id, { eventID: record.event_id, status: 'gone', scheduledStart: record.scheduled_start, scheduledEnd: record.scheduled_end, kind: record.kind })
       } else {
-        global.logger.warn(`[LIVE]: Could not update the event for ${id} in ${guildID}: ${e.message}`)
+        global.logger.warn(`[LIVE]: Could not update the event for ${id} in ${guild.id}: ${e.message}`)
       }
     }
   }
   return changed
 }
 
-// The servers this worker hosts that turned stream events on, optionally only those of one channel.
-async function watchedGuilds (channelID = null) {
-  return (await youtubeDB.listChannels())
-    .filter(c => c.live_events && global.bot.guilds.has(c.guild_id) && (!channelID || c.channel_id === channelID))
+// One server and one channel (checkChannel for a single server).
+function checkGuild (guildID, channelID) {
+  return checkChannel(channelID, [guildID])
+}
+
+// The servers this worker hosts that turned stream events on.
+async function watchedGuilds () {
+  return ownerFirst((await youtubeDB.listLiveEventGuilds()).filter(id => global.bot.guilds.has(id)))
 }
 
 // Once a stream is over and YouTube has its archive, what was said in it is summarized and stored
@@ -275,10 +291,12 @@ async function checkAll (channelID = null) {
     polling = true
   }
   try {
-    for (const { guild_id: guildID, channel_id: id } of ownerFirst(await watchedGuilds(channelID), c => c.guild_id)) {
-      await checkGuild(guildID, id).catch(e => global.logger.warn(`[LIVE]: Checking ${guildID} failed: ${e.message}`))
-      summarizeArchives(guildID) // not awaited
+    const guildIDs = await watchedGuilds()
+    if (guildIDs.length === 0) return
+    for (const { channel_id: id } of (await youtubeDB.listChannels()).filter(c => !channelID || c.channel_id === channelID)) {
+      await checkChannel(id, guildIDs).catch(e => global.logger.warn(`[LIVE]: Checking ${id} failed: ${e.message}`))
     }
+    for (const guildID of guildIDs) summarizeArchives(guildID) // not awaited
   } catch (e) {
     global.logger.warn(`[LIVE]: Checking streams failed: ${e.message}`)
   } finally {
@@ -296,4 +314,4 @@ function startWatcher () {
   return setInterval(() => checkAll(), seconds * 1000)
 }
 
-module.exports = { startWatcher, checkAll, checkGuild, follow, announceUpload, endUpload, summarizeArchives, eventDescription, STATUS }
+module.exports = { startWatcher, checkAll, checkGuild, checkChannel, follow, announceUpload, endUpload, summarizeArchives, eventDescription, STATUS }

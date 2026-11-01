@@ -213,13 +213,26 @@ describe('checkGuild', () => {
     assert.match(warned.mock.calls[0].arguments[0], /lacks Manage Events/)
   })
 
-  test('checkAll only checks servers that turned it on, and a push checks just its channel', async () => {
+  test('checkAll checks every channel the bot follows for the servers that turned it on; a push just its channel', async () => {
     installBot()
-    store.knowledge[200] = { channel: { channel_id: 'UC' + 'g'.repeat(22), live_events: false }, videos: [] }
-    const calls = fakeYouTube([], [])
+    const other = 'UC' + 'g'.repeat(22)
+    store.knowledge[200] = { channel: { channel_id: other, live_events: false }, videos: [] }
+    const feeds = []
+    global.fetch = async url => {
+      const u = new URL(url)
+      feeds.push(u.searchParams.get('channel_id'))
+      return { ok: true, text: async () => '' }
+    }
     await liveWatcher.checkAll()
-    assert.deepEqual(calls, ['feed'], 'server 200 is not watched')
+    assert.deepEqual(feeds.sort(), [UC, other].sort(), 'both channels, for server 100 (server 200 has it off)')
+    feeds.length = 0
+    await liveWatcher.checkAll(other)
+    assert.deepEqual(feeds, [other], 'a push checks just its channel')
+    feeds.length = 0
     await liveWatcher.checkAll('UC' + 'z'.repeat(22))
-    assert.deepEqual(calls, ['feed'], 'a push for another channel checks nothing')
+    assert.deepEqual(feeds, [], 'a push for a channel the bot does not follow checks nothing')
+    store.knowledge[100].channel.live_events = false
+    await liveWatcher.checkAll()
+    assert.deepEqual(feeds, [], 'no server has it on: nothing is checked')
   })
 })
