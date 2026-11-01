@@ -7,7 +7,7 @@ const DEFAULTS = {
   // twitterKnowledge.js
   TWITTER_ACCOUNTS: 'nobamangames',
   // youtubeSync.js: the channels the bot follows, for every server (のばまんゲームス, のばまん・ロー・エフォート)
-  YOUTUBE_CHANNELS: 'UCTW2tw0Mhho72MojB1L48IQ,@のばまんローエフォート',
+  YOUTUBE_CHANNELS: 'UCTW2tw0Mhho72MojB1L48IQ,UCz7pNw3UkTF9WQjHcYpFD9g',
   // discordKnowledge.js: のばまん's own account
   DISCORD_KNOWLEDGE_USERS: '615170548187791365',
   // webKnowledge.js

@@ -226,7 +226,7 @@ messages straight from Discord when nothing is stored.
 ### YouTube knowledge
 
 The YouTube channels are the bot's, the same for every server: `YOUTUBE_CHANNELS` names them
-(comma-separated `@handle`, channel URL or `UC…` ID; default のばまんゲームス, `UCTW2tw0Mhho72MojB1L48IQ`, and のばまん・ロー・エフォート, `@のばまんローエフォート`).
+(comma-separated `@handle`, channel URL or `UC…` ID; default のばまんゲームス, `UCTW2tw0Mhho72MojB1L48IQ`, and のばまん・ロー・エフォート, `UCz7pNw3UkTF9WQjHcYpFD9g`).
 At startup the worker owning shard 0 resolves every one (if one cannot be, nothing changes) and
 follows exactly those: a channel added is read from the start, one removed goes with its videos.
 That worker also keeps them synced. `/youtube show` shows them in any server, and `/youtube sync`
@@ -529,7 +529,7 @@ the secrets if it leaks, so keep it only on the platform and delete it in the co
 | `LIVE_EVENT_AI_DESCRIPTION` | Optional. `false` stops the AI's line on what a stream is about (from its title, description and thumbnail) at the top of its Discord event |
 | `LIVE_ARCHIVE_SUMMARY` | Optional. `false` stops summarizing a stream's archive once it is over (tried 30 minutes after it ends, then hourly, three times at most) |
 | `VIDEO_SUMMARY_CONCURRENCY` | Optional. How many videos `/youtube summarize` summarizes at once (1-10). Defaults to 3 |
-| `YOUTUBE_CHANNELS` | Optional (default `UCTW2tw0Mhho72MojB1L48IQ,@のばまんローエフォート`, のばまんゲームス and のばまん・ロー・エフォート; empty keeps those followed). The YouTube channels the bot follows for every server, comma-separated `@handle`, channel URL or `UC…` ID |
+| `YOUTUBE_CHANNELS` | Optional (default `UCTW2tw0Mhho72MojB1L48IQ,UCz7pNw3UkTF9WQjHcYpFD9g`, のばまんゲームス and のばまん・ロー・エフォート; empty keeps those followed). The YouTube channels the bot follows for every server, comma-separated `@handle`, channel URL or `UC…` ID |
 | `YOUTUBE_AUTO_SYNC_MINUTES` | Optional. How often to check the bot's YouTube channels for new videos. Defaults to 15; 0 turns it off |
 | `YOUTUBE_LIVE_POLL_SECONDS` | Optional. How often to check for streams on servers with stream events on. Defaults to 60; 0 turns it off |
 | `YOUTUBE_WEBSUB_URL`, `YOUTUBE_WEBSUB_SECRET` | Optional. The service's public HTTPS address and a secret, to receive YouTube pushes (see above). `PORT` sets the port listened on (Railway sets it) |
