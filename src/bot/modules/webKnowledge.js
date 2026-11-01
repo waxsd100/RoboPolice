@@ -32,13 +32,16 @@ function refreshHours () {
   return n > 0 ? n : DEFAULT_REFRESH_HOURS
 }
 
-const urlOf = topic => `${PREFIX}${topic}`
+// A topic's name: what comes before its explanation in （）. Its page is kept under the name, so
+// rewording the explanation does not make a new page.
+const nameOf = topic => topic.split(/[（(]/)[0].trim() || topic
+const urlOf = topic => `${PREFIX}${nameOf(topic)}`
 const dayOf = date => new Intl.DateTimeFormat('sv-SE', { timeZone: 'Asia/Tokyo' }).format(date)
 
 const prompt = (topic, now) => [
   `今日は ${dayOf(now)} です。Google 検索で調べて、次のテーマについて日本語でまとめてください: ${topic}`,
   '- 何か（グループ・ユニット・企画など）、正式名称と略称・読み',
-  '- メンバー（今のメンバーと、卒業・脱退したメンバーがいれば分けて、分かればその時期も）',
+  '- メンバー（今のメンバーと、卒業・脱退したメンバーがいれば分けて、分かればその時期も）。テーマに書かれたメンバーは手がかりなので、今もそうか確かめる',
   '- 結成・開始の時期、主な活動・企画・作品、ファンネームなど',
   '- 公式サイト・公式 X・YouTube チャンネルなどの URL',
   '見出しごとに短くまとめ、最後に「出典」として参考にしたページの URL を並べてください。',
@@ -69,8 +72,8 @@ async function lookUp (topic, now = new Date()) {
   }, { timeoutMs: TIMEOUT_MS }))
   const text = withoutCharCount(content.parts.map(p => p.text || '').join('').trim())
   if (!text) throw new Error(`nothing found about ${topic}`)
-  const title = `「${topic}」について（Web 検索で調べたもの、${dayOf(now)} 時点）`
-  const sections = parts(text).map((t, i) => ({ heading: `${topic} ${i + 1}`, text: t, images: [] }))
+  const title = `「${nameOf(topic)}」について（Web 検索で調べたもの、${dayOf(now)} 時点）`
+  const sections = parts(text).map((t, i) => ({ heading: `${nameOf(topic)} ${i + 1}`, text: t, images: [] }))
   await store.savePage(urlOf(topic), title, sections)
   return sections.length
 }

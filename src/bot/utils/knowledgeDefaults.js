@@ -10,7 +10,11 @@ const DEFAULTS = {
   DISCORD_KNOWLEDGE_USERS: '615170548187791365',
   // webKnowledge.js
   KNOWLEDGE_TOPICS: [
-    'ぽみそしる（ポッキーが主催し、のばまんが所属する実況者グループ）',
+    // The members as found when this was written (2026-11): looked up again every week, so changes
+    // since are found too.
+    'ぽみそしる（ポッキーが主催し、のばまんが所属する実況者グループ。2022年7月結成。' +
+      '結成時のメンバーはポッキー・赤髪のとも・カンタ（水溜りボンド）・まひとくん。・のばまん・ちはやYT・ふうはや・ネフライト・おらふくん・あきピヨの10人。' +
+      'のちに赤髪のとも・おらふくん・カンタ・ちはやYT・まひとくん。が卒業。今のメンバーと、それぞれの卒業の時期も調べる）',
     'トマスコ（トマトスコスコ人生。きりやん・ぐちつぼ・のばまん・やみえんのユニット）'
   ].join(',')
 }

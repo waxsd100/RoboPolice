@@ -19,4 +19,5 @@ test('a setting not set is its default; set, even to nothing, it is what was set
   assert.equal(DEFAULTS.WIKI_URLS, 'https://novamanhikoushiki.memo.wiki/')
   assert.equal(DEFAULTS.DISCORD_KNOWLEDGE_USERS, '615170548187791365')
   assert.match(DEFAULTS.KNOWLEDGE_TOPICS, /^ぽみそしる（.*）,トマスコ（.*）$/)
+  assert.match(DEFAULTS.KNOWLEDGE_TOPICS, /ぽみそしる（[^）]*ポッキー・赤髪のとも・カンタ（水溜りボンド）・まひとくん。・のばまん・ちはやYT・ふうはや・ネフライト・おらふくん・あきピヨ/)
 })
