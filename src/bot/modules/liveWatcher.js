@@ -271,7 +271,7 @@ async function summarizeArchives (guildID) {
   try {
     const [archive] = await youtubeDB.archivesToSummarize(guildID)
     if (!archive) return null
-    await youtubeDB.recordArchiveAttempt(guildID, archive.video_id)
+    await youtubeDB.recordArchiveAttempt(archive.video_id)
     await require('./videoSummary').summarizeVideo(guildID, archive.url)
     global.logger.info(`[LIVE]: Summarized the archive of ${archive.video_id} in ${guildID}`)
     return archive.video_id
