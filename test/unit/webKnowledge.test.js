@@ -6,7 +6,7 @@ const store = require('../../src/db/interfaces/postgres/webKnowledge')
 const web = require('../../src/bot/modules/webKnowledge')
 
 const NOW = new Date('2026-11-01T03:00:00Z')
-afterEach(() => { delete process.env.KNOWLEDGE_TOPICS; delete process.env.WEB_REFRESH_HOURS })
+afterEach(() => { process.env.KNOWLEDGE_TOPICS = ''; delete process.env.WEB_REFRESH_HOURS })
 
 describe('webKnowledge', () => {
   test('looks each topic up with Google Search and stores it as a page with its date', async (t) => {
@@ -38,7 +38,7 @@ describe('webKnowledge', () => {
     assert.equal(await web.refresh({ now: NOW, log: m => logged.push(m) }), 0)
     assert.match(logged[0], /\[WEB\]: Could not look up ぽみそしる/)
     assert.equal(saved.mock.callCount(), 0)
-    delete process.env.KNOWLEDGE_TOPICS
+    process.env.KNOWLEDGE_TOPICS = ''
     assert.equal(web.enabled(), false)
     assert.equal(await web.refresh({ now: NOW }), 0)
   })

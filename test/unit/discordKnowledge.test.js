@@ -29,7 +29,7 @@ beforeEach(() => {
   global.bot = { user: { id: 'BOT' }, guilds: new Map() }
 })
 afterEach(() => {
-  delete process.env.DISCORD_KNOWLEDGE_USERS
+  process.env.DISCORD_KNOWLEDGE_USERS = ''
   delete global.bot
 })
 
@@ -109,7 +109,7 @@ describe('following messages', () => {
   })
 
   test('nothing without DISCORD_KNOWLEDGE_USERS', async (t) => {
-    delete process.env.DISCORD_KNOWLEDGE_USERS
+    process.env.DISCORD_KNOWLEDGE_USERS = ''
     const saved = t.mock.method(store, 'savePosts', async posts => posts)
     await discord.onMessage({ ...message('1', NOBAMAN, 'x'), channel: { ...channel('10'), guild: guild([channel('10')]) } })
     assert.equal(saved.mock.callCount(), 0)

@@ -7,6 +7,7 @@
 //
 // What search finds can be out of date or wrong; the page says when it was looked up and lists
 // its sources, and the model is told not to state it as certain.
+const { knowledgeSetting } = require('../utils/knowledgeDefaults')
 const { callGemini, DEFAULT_GEMINI_MODEL } = require('./eventDrafter')
 const { isGatewayConfigured } = require('../utils/aiGateway')
 const { withoutCharCount } = require('../utils/textClean')
@@ -19,7 +20,7 @@ const PREFIX = 'topic:'
 const TIMEOUT_MS = 2 * 60 * 1000
 
 function topics () {
-  return [...new Set(String(process.env.KNOWLEDGE_TOPICS || '').split(/[,\n]/).map(s => s.trim()).filter(Boolean))]
+  return [...new Set(String(knowledgeSetting('KNOWLEDGE_TOPICS')).split(/[,\n]/).map(s => s.trim()).filter(Boolean))]
 }
 
 function enabled () {

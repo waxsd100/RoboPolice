@@ -7,6 +7,7 @@
 // characters are.
 //
 // Runs on the worker owning shard 0, like the other jobs for every server.
+const { knowledgeSetting } = require('../utils/knowledgeDefaults')
 const crypto = require('crypto')
 const urlFetcher = require('../utils/urlFetcher')
 const { parseWikiPage } = require('../utils/wikiPage')
@@ -33,7 +34,7 @@ const MAX_RESULT_TEXT = 700
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms))
 
 function wikiRoots () {
-  return String(process.env.WIKI_URLS || '').split(',').map(s => s.trim()).filter(Boolean)
+  return String(knowledgeSetting('WIKI_URLS')).split(',').map(s => s.trim()).filter(Boolean)
     .map(u => { try { return new URL(u) } catch (_) { return null } })
     .filter(Boolean)
 }

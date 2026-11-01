@@ -3,6 +3,9 @@
 const http = require('http')
 
 process.env.AES_KEY = process.env.AES_KEY || 'test-aes-key'
+// The knowledge features have defaults for the real community (knowledgeDefaults.js); tests turn
+// them off unless they set one.
+for (const name of ['WIKI_URLS', 'TWITTER_ACCOUNTS', 'DISCORD_KNOWLEDGE_USERS', 'KNOWLEDGE_TOPICS']) process.env[name] ??= ''
 global.logger = global.logger || { info () {}, warn () {}, error () {}, debug () {}, startup () {}, fatal () {} }
 global.webhook = global.webhook || { generic () {}, warn () {}, error () {}, fatal () {} }
 
