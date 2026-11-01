@@ -7,8 +7,15 @@ const { currentUsage } = require('../utils/geminiUsage')
 const DEFAULT_GEMINI_MODEL = 'gemini-flash-latest'
 const GEMINI_TIMEOUT_MS = 60000
 // Each step is one Gemini round trip; a draft normally needs 1-3 lookups (and maybe a question)
-// before submitting.
-const MAX_STEPS = 10
+// before submitting, a chat reply sometimes many more (wiki, X, videos, …). Lookups cost few
+// tokens, so the limit is generous; GEMINI_MAX_STEPS changes it. The last step may only submit,
+// with what was looked up by then.
+const MAX_STEPS = 20
+function maxSteps () {
+  const n = Number(process.env.GEMINI_MAX_STEPS)
+  return Number.isInteger(n) && n >= 1 ? n : MAX_STEPS
+}
+const LAST_STEP_NOTE = '調べられるのはここまでです。これ以上ツールで調べず、ここまでに分かったことだけで提出してください（分からないところは分からないと書く）。'
 // Dates in messages and event pages are written for this community's local time.
 const TIMEZONE = 'Asia/Tokyo'
 
@@ -244,13 +251,14 @@ async function callGemini (model, body, options) {
   return content
 }
 
-function generate (contents, declarations) {
+// allowed: the only functions the model may call this turn (all of them when omitted).
+function generate (contents, declarations, allowed = null) {
   return callGemini(process.env.GEMINI_MODEL || DEFAULT_GEMINI_MODEL, {
     systemInstruction: { parts: [{ text: systemInstruction() }] },
     contents,
     tools: [{ functionDeclarations: declarations }],
     // ANY: every turn must be a tool call, so the loop always ends in a submit_* call.
-    toolConfig: { functionCallingConfig: { mode: 'ANY' } },
+    toolConfig: { functionCallingConfig: { mode: 'ANY', ...(allowed ? { allowedFunctionNames: allowed } : {}) } },
     generationConfig: { temperature: 0.2 }
   })
 }
@@ -259,8 +267,12 @@ function generate (contents, declarations) {
 // `contents` so the conversation can be continued with a correction. Returns the submit call.
 async function runAgent (contents, tools, submits = SUBMIT_DECLARATIONS) {
   const declarations = [...tools.declarations, ...submits]
-  for (let step = 0; step < MAX_STEPS; step++) {
-    const content = await generate(contents, declarations)
+  const steps = maxSteps()
+  for (let step = 0; step < steps; step++) {
+    const last = step === steps - 1
+    // The last step answers with what is known instead of failing: only a submit can be called.
+    if (last && step > 0) contents[contents.length - 1].parts.push({ text: LAST_STEP_NOTE })
+    const content = await generate(contents, declarations, last ? submits.map(d => d.name) : null)
     // Echo the model turn back unchanged: newer models attach thought signatures to it.
     contents.push(content)
     const calls = content.parts.filter(p => p.functionCall).map(p => p.functionCall)
@@ -389,4 +401,4 @@ async function revise (conversation, correction) {
   return check(conversation, await runAgent(conversation.contents, conversation.tools, conversation.submits))
 }
 
-module.exports = { draft, revise, isConfigured, toScheduledEvent, callGemini, geminiRequest, retryTimer, DEFAULT_GEMINI_MODEL, ENTITY_TYPES, GeminiError }
+module.exports = { draft, revise, MAX_STEPS, isConfigured, toScheduledEvent, callGemini, geminiRequest, retryTimer, DEFAULT_GEMINI_MODEL, ENTITY_TYPES, GeminiError }
