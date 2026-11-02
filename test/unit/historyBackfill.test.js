@@ -35,8 +35,8 @@ const channel = { id: 'c1' }
 describe('how far back', () => {
   const daysBack = t => t === -Infinity ? null : Math.round((NOW - t) / DAY)
 
-  test('by days: HISTORY_BACKFILL_DAYS, else 90; 0 for no limit; never past the retention', () => {
-    assert.equal(daysBack(history.startOf(NOW)), 90)
+  test('by days: HISTORY_BACKFILL_DAYS, else everything; 0 for no limit; never past the retention', () => {
+    assert.equal(daysBack(history.startOf(NOW)), null, 'everything by default')
     process.env.HISTORY_BACKFILL_DAYS = '365'
     assert.equal(daysBack(history.startOf(NOW)), 365)
     process.env.HISTORY_BACKFILL_DAYS = '0'
@@ -47,7 +47,7 @@ describe('how far back', () => {
 
   test('by date: HISTORY_BACKFILL_SINCE (the start of that day in Japan); with days too, whichever is later', () => {
     process.env.HISTORY_BACKFILL_SINCE = '2026-01-01'
-    assert.equal(history.startOf(NOW), Date.parse('2025-12-31T15:00:00Z'), 'no 90-day default when a date is given')
+    assert.equal(history.startOf(NOW), Date.parse('2025-12-31T15:00:00Z'), 'from the date given')
     process.env.HISTORY_BACKFILL_DAYS = '30'
     assert.equal(daysBack(history.startOf(NOW)), 30)
     process.env.HISTORY_BACKFILL_SINCE = '2026-10-30'

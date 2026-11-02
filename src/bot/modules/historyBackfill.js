@@ -6,7 +6,7 @@
 //
 // How far back, whichever comes first:
 // - a date: HISTORY_BACKFILL_SINCE (YYYY-MM-DD, Asia/Tokyo), and/or a number of days:
-//   HISTORY_BACKFILL_DAYS (0 for no limit). With neither, MESSAGE_HISTORY_DAYS or else 90 days.
+//   HISTORY_BACKFILL_DAYS (0 for no limit). With neither, everything.
 //   Never further than MESSAGE_HISTORY_DAYS: older ones would be pruned at once.
 // - a number of messages per channel: HISTORY_BACKFILL_MAX_MESSAGES (unset or 0 for no limit).
 // A channel that stopped at the limits is read on from where it stopped when they are widened later
@@ -20,7 +20,6 @@ const store = require('../../db/interfaces/postgres/messageHistory')
 const cacheGuild = require('../utils/cacheGuild')
 
 const PAGE_SIZE = 100
-const DEFAULT_DAYS = 90
 const DEFAULT_DELAY_MS = 1000
 const MAX_IMAGES = 10
 const FIRST_RUN_MS = 2 * 60 * 1000
@@ -55,12 +54,8 @@ function startOf (now = Date.now()) {
   const limits = []
   const since = sinceDate()
   if (since !== null) limits.push(since)
-  const own = setting('HISTORY_BACKFILL_DAYS')
-  if (own !== null) {
-    if (own > 0) limits.push(now - own * DAY_MS)
-  } else if (since === null) {
-    limits.push(now - DEFAULT_DAYS * DAY_MS)
-  }
+  const days = setting('HISTORY_BACKFILL_DAYS')
+  if (days) limits.push(now - days * DAY_MS)
   const retention = setting('MESSAGE_HISTORY_DAYS')
   if (retention) limits.push(now - retention * DAY_MS)
   return limits.length ? Math.max(...limits) : -Infinity
