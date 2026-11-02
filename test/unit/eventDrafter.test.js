@@ -181,7 +181,7 @@ describe('draft', () => {
     delete process.env.GEMINI_API_KEY
     const requests = installGemini([[submit({ name: 'A', start: '2026-11-03T19:00:00+09:00' })]])
     await draft({ request: 'A', channelName: 'general', guild, tools, now: NOW })
-    assert.match(requests[0].url, /models\/gemini-flash-latest:generateContent$/)
+    assert.match(requests[0].url, /models\/gemini-3.8-flash:generateContent$/)
     assert.equal(requests[0].headers['x-goog-api-key'], undefined)
     assert.equal(requests[0].headers['cf-aig-authorization'], undefined)
     assert.equal(requests[0].headers['cf-aig-byok-alias'], undefined)
@@ -285,7 +285,7 @@ describe('draft', () => {
     await draft({ request: 'こんにちは', channelName: 'general', guild, tools, recentReplies: ['ご安心を！\n今日も元気', '前の返事'], now: NOW })
     const prompt = requests[0].body.contents[0].parts[0].text
     assert.match(prompt, /## 最近の返事[^\n]*\n- ご安心を！ 今日も元気\n- 前の返事/)
-    assert.equal(requests[0].body.generationConfig.temperature, 0.7)
+    assert.equal(requests[0].body.generationConfig.temperature, 1)
     process.env.GEMINI_TEMPERATURE = '1.2'
     t.after(() => { delete process.env.GEMINI_TEMPERATURE })
     const again = installGemini([[call('submit_chat_reply', { text: 'やあ' })]])
@@ -295,7 +295,7 @@ describe('draft', () => {
     process.env.GEMINI_TEMPERATURE = '9'
     const outOfRange = installGemini([[call('submit_chat_reply', { text: 'やあ' })]])
     await draft({ request: 'こんにちは', channelName: 'general', guild, tools, now: NOW })
-    assert.equal(outOfRange[0].body.generationConfig.temperature, 0.7)
+    assert.equal(outOfRange[0].body.generationConfig.temperature, 1)
   })
 
   test('tells the model what the channels a message names are', async () => {
@@ -448,7 +448,7 @@ describe('token cost', () => {
 
   test('background work uses the lighter model unless GEMINI_LIGHT_MODEL says otherwise', () => {
     configureGateway()
-    assert.equal(lightModel(), 'gemini-flash-lite-latest')
+    assert.equal(lightModel(), 'gemini-3.5-flash-lite')
     process.env.GEMINI_LIGHT_MODEL = 'gemini-2.5-flash-lite'
     assert.equal(lightModel(), 'gemini-2.5-flash-lite')
     process.env.GEMINI_LIGHT_MODEL = ''
@@ -462,11 +462,95 @@ describe('token cost', () => {
     logTokens()
     global.fetch = async () => ({ ok: true, json: async () => ({ candidates: [{ content: { parts: [call('submit_chat_reply', { text: 'やあ' })] } }], usageMetadata: { promptTokenCount: 1200, cachedContentTokenCount: 1000, candidatesTokenCount: 30, thoughtsTokenCount: 200 } }) })
     await draft({ request: 'こんにちは', channelName: 'general', guild, tools: { declarations: [], call: async () => ({}) }, now: NOW })
-    assert.deepEqual(tokenCounts()['mention (gemini-flash-latest)'], { calls: 1, prompt: 1200, cached: 1000, output: 30, thoughts: 200 })
+    assert.deepEqual(tokenCounts()['mention (gemini-3.8-flash)'], { calls: 1, prompt: 1200, cached: 1000, output: 30, thoughts: 200 })
     const logged = []
     t.mock.method(global.logger, 'info', m => logged.push(m))
     logTokens()
-    assert.match(logged[0], /mention \(gemini-flash-latest\): 1 call\(s\), in 1200 \(cached 1000\), out 30, thinking 200/)
+    assert.match(logged[0], /mention \(gemini-3.8-flash\): 1 call\(s\), in 1200 \(cached 1000\), out 30, thinking 200/)
     assert.deepEqual(tokenCounts(), {}, 'counted again from zero')
+  })
+})
+
+describe('explicit cache and thinking', () => {
+  const { caches, thinkingConfig } = require('../../src/bot/modules/eventDrafter')
+  const reply = { candidates: [{ content: { role: 'model', parts: [call('submit_chat_reply', { text: 'やあ' })] } }] }
+  const quietTools = { declarations: [], call: async () => ({}) }
+
+  // A fake Gemini that also answers cachedContents: { requests, made }.
+  function installCachingGemini ({ createFails = false, goneOnce = false } = {}) {
+    const requests = []
+    let gone = goneOnce
+    global.fetch = async (url, init) => {
+      const body = JSON.parse(init.body)
+      requests.push({ url, body })
+      if (url.endsWith('/cachedContents')) {
+        if (createFails) return { ok: false, status: 400, text: async () => 'Cached content is too small' }
+        return { ok: true, json: async () => ({ name: `cachedContents/c${requests.length}`, expireTime: new Date(Date.now() + 3600e3).toISOString() }) }
+      }
+      if (body.cachedContent && gone) {
+        gone = false
+        return { ok: false, status: 404, text: async () => 'CachedContent not found (or permission denied)' }
+      }
+      return { ok: true, json: async () => reply }
+    }
+    return requests
+  }
+
+  beforeEach(() => {
+    configureGateway()
+    delete process.env.GEMINI_EXPLICIT_CACHE
+    caches.clear()
+  })
+
+  test('the instructions and tools are cached once and referred to by name', async () => {
+    const requests = installCachingGemini()
+    await draft({ request: 'やあ', channelName: 'general', guild, tools: quietTools, now: NOW })
+    await draft({ request: 'また', channelName: 'general', guild, tools: quietTools, now: NOW })
+    const made = requests.filter(r => r.url.endsWith('/cachedContents'))
+    assert.equal(made.length, 1, 'made once for both')
+    assert.equal(made[0].body.model, 'models/gemini-3.8-flash')
+    assert.equal(made[0].body.ttl, '3600s')
+    assert.ok(made[0].body.systemInstruction && made[0].body.tools && made[0].body.toolConfig)
+    const asked = requests.filter(r => r.url.endsWith(':generateContent'))
+    assert.equal(asked.length, 2)
+    for (const r of asked) {
+      assert.equal(r.body.cachedContent, made[0].body && 'cachedContents/c1')
+      assert.equal(r.body.systemInstruction, undefined)
+      assert.equal(r.body.tools, undefined)
+      assert.equal(r.body.toolConfig, undefined)
+    }
+  })
+
+  test('without a cache (too small, turned off) the request goes in full, and making one is not tried again soon', async () => {
+    const requests = installCachingGemini({ createFails: true })
+    await draft({ request: 'やあ', channelName: 'general', guild, tools: quietTools, now: NOW })
+    await draft({ request: 'また', channelName: 'general', guild, tools: quietTools, now: NOW })
+    assert.equal(requests.filter(r => r.url.endsWith('/cachedContents')).length, 1)
+    const asked = requests.filter(r => r.url.endsWith(':generateContent'))
+    assert.ok(asked.every(r => !r.body.cachedContent && r.body.systemInstruction && r.body.tools))
+    process.env.GEMINI_EXPLICIT_CACHE = 'false'
+    caches.clear()
+    const off = installCachingGemini()
+    await draft({ request: 'やあ', channelName: 'general', guild, tools: quietTools, now: NOW })
+    assert.equal(off.filter(r => r.url.endsWith('/cachedContents')).length, 0)
+  })
+
+  test('a cache Gemini no longer has: asked again in full', async () => {
+    const requests = installCachingGemini({ goneOnce: true })
+    const result = await draft({ request: 'やあ', channelName: 'general', guild, tools: quietTools, now: NOW })
+    assert.equal(result.kind, 'chat')
+    const asked = requests.filter(r => r.url.endsWith(':generateContent'))
+    assert.equal(asked.length, 2)
+    assert.ok(asked[1].body.systemInstruction && !asked[1].body.cachedContent)
+  })
+
+  test('Gemini 3 thinks at low unless told; older models are not sent the setting', () => {
+    assert.deepEqual(thinkingConfig('gemini-3.8-flash'), { thinkingConfig: { thinkingLevel: 'low' } })
+    process.env.GEMINI_THINKING_LEVEL = 'minimal'
+    assert.deepEqual(thinkingConfig('gemini-3.8-flash'), { thinkingConfig: { thinkingLevel: 'minimal' } })
+    process.env.GEMINI_THINKING_LEVEL = 'huge'
+    assert.deepEqual(thinkingConfig('gemini-3.8-flash'), {})
+    delete process.env.GEMINI_THINKING_LEVEL
+    assert.deepEqual(thinkingConfig('gemini-2.5-flash'), {})
   })
 })

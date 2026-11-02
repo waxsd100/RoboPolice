@@ -1,10 +1,13 @@
+const crypto = require('crypto')
 const { SUBMIT_FORUM_DECLARATION, IMAGE_INSTRUCTION_PROPERTY, toForumPost, imageUrlsOf, imageInstructionOf, MAX_IMAGE_CANDIDATES } = require('./forumPost')
 const { withoutCharCount } = require('../utils/textClean')
 const { Agent } = require('undici')
 const { gatewayURL, gatewayAuthHeaders, isGatewayConfigured } = require('../utils/aiGateway')
 const { currentUsage, recordTokens, addTokens } = require('../utils/geminiUsage')
 
-const DEFAULT_GEMINI_MODEL = 'gemini-flash-latest'
+// A fixed model, not an alias such as gemini-flash-latest: an explicit cache (below) is made for one
+// model, and a change of model should be a choice, not a surprise.
+const DEFAULT_GEMINI_MODEL = 'gemini-3.8-flash'
 const GEMINI_TIMEOUT_MS = 60000
 // Each step is one Gemini round trip; a draft normally needs 1-3 lookups (and maybe a question)
 // before submitting, a chat reply sometimes many more (wiki, X, videos, …). Lookups cost few
@@ -64,7 +67,8 @@ const SUBMIT_DECLARATIONS = [SUBMIT_EVENT_DECLARATION, SUBMIT_FORUM_DECLARATION,
 
 // How varied the answers are (GEMINI_TEMPERATURE, 0-2). Chat replies want some variety; drafts
 // are checked field by field (toScheduledEvent, toForumPost) whatever the model writes.
-const DEFAULT_TEMPERATURE = 0.7
+// Gemini 3 is tuned for 1.0 and may loop below it.
+const DEFAULT_TEMPERATURE = 1
 function temperature () {
   const t = Number(process.env.GEMINI_TEMPERATURE)
   return process.env.GEMINI_TEMPERATURE && t >= 0 && t <= 2 ? t : DEFAULT_TEMPERATURE
@@ -233,8 +237,13 @@ function rateLimitHint (body) {
 
 // One Gemini API call through the gateway (`method` such as "generateContent"), retrying HTTP 429.
 // Returns the response body. purpose: what it is for, to count its tokens by (geminiUsage.js).
-async function geminiRequest (model, method, body, { timeoutMs = GEMINI_TIMEOUT_MS, purpose = 'other' } = {}) {
-  const url = gatewayURL(`google-ai-studio/v1beta/models/${encodeURIComponent(model)}:${method}`)
+async function geminiRequest (model, method, body, options = {}) {
+  return geminiPost(`models/${encodeURIComponent(model)}:${method}`, body, { ...options, model })
+}
+
+// One POST to the Gemini API (`path` under v1beta) through the gateway, retrying HTTP 429.
+async function geminiPost (path, body, { timeoutMs = GEMINI_TIMEOUT_MS, purpose = 'other', model = '' } = {}) {
+  const url = gatewayURL(`google-ai-studio/v1beta/${path}`)
   const headers = { 'Content-Type': 'application/json', ...gatewayAuthHeaders() }
   // Optional: the Gemini key can be stored in the gateway (BYOK) instead.
   if (process.env.GEMINI_API_KEY) headers['x-goog-api-key'] = process.env.GEMINI_API_KEY
@@ -273,9 +282,9 @@ async function geminiRequest (model, method, body, { timeoutMs = GEMINI_TIMEOUT_
 }
 
 // The lighter, cheaper model for work in the background (taking knowledge out of pages, describing
-// emojis, short blurbs): GEMINI_LIGHT_MODEL, by default gemini-flash-lite-latest; empty to use
+// emojis, short blurbs): GEMINI_LIGHT_MODEL, by default gemini-3.5-flash-lite; empty to use
 // GEMINI_MODEL for everything.
-const DEFAULT_LIGHT_MODEL = 'gemini-flash-lite-latest'
+const DEFAULT_LIGHT_MODEL = 'gemini-3.5-flash-lite'
 function lightModel () {
   const light = process.env.GEMINI_LIGHT_MODEL ?? DEFAULT_LIGHT_MODEL
   return light || process.env.GEMINI_MODEL || DEFAULT_GEMINI_MODEL
@@ -294,15 +303,76 @@ async function callGemini (model, body, options) {
 }
 
 // allowed: the only functions the model may call this turn (all of them when omitted).
-function generate (contents, declarations, allowed = null) {
-  return callGemini(process.env.GEMINI_MODEL || DEFAULT_GEMINI_MODEL, {
+// How much Gemini 3 thinks before answering (GEMINI_THINKING_LEVEL: minimal, low, medium or high).
+// Unset, Gemini thinks at high, billed as answer tokens; a chat reply or a draft needs little.
+// Only sent to Gemini 3 models (older ones refuse the setting).
+const DEFAULT_THINKING_LEVEL = 'low'
+function thinkingConfig (model) {
+  if (!/gemini-[3-9]/.test(model)) return {}
+  const level = String(process.env.GEMINI_THINKING_LEVEL || DEFAULT_THINKING_LEVEL).toLowerCase()
+  return ['minimal', 'low', 'medium', 'high'].includes(level) ? { thinkingConfig: { thinkingLevel: level } } : {}
+}
+
+// The system instructions and the tools, the same for every request of a kind, are kept in an
+// explicit cache (cachedContents) for an hour at a time and referred to by name, so they are billed
+// at the cached rate instead of in full every round trip; Gemini's own (implicit) cache only takes
+// prompts that start with at least 4,096 identical tokens, which these are about. A cache that
+// cannot be made (too small for the model, or GEMINI_EXPLICIT_CACHE=false) leaves requests as they
+// were. Per worker, one cache per model and set of tools.
+const CACHE_TTL_SECONDS = 3600
+const CACHE_RENEW_BEFORE_MS = 5 * 60 * 1000
+const CACHE_RETRY_AFTER_MS = 60 * 60 * 1000
+const caches = new Map()
+
+function explicitCacheEnabled () {
+  return process.env.GEMINI_EXPLICIT_CACHE !== 'false'
+}
+
+// The name of a cache holding `prefix` (systemInstruction, tools, toolConfig) for `model`, made if
+// needed; null when there is none to use.
+async function cachedPrefix (model, prefix, now = Date.now()) {
+  if (!explicitCacheEnabled()) return null
+  const key = crypto.createHash('sha256').update(`${model}\n${JSON.stringify(prefix)}`).digest('hex')
+  const known = caches.get(key)
+  if (known?.failedAt && now - known.failedAt < CACHE_RETRY_AFTER_MS) return null
+  if (known?.name && known.expiresAt - now > CACHE_RENEW_BEFORE_MS) return known.name
+  try {
+    const made = await geminiPost('cachedContents', { model: `models/${model}`, ...prefix, ttl: `${CACHE_TTL_SECONDS}s` }, { purpose: 'cache', model, timeoutMs: 30 * 1000 })
+    caches.set(key, { name: made.name, expiresAt: made.expireTime ? Date.parse(made.expireTime) : now + CACHE_TTL_SECONDS * 1000 })
+    return made.name
+  } catch (e) {
+    caches.set(key, { failedAt: now })
+    global.logger?.info(`[GEMINI]: Not caching the instructions for ${model}, sending them in full: ${e.message.slice(0, 200)}`)
+    return null
+  }
+}
+
+// Forgets a cache Gemini no longer has (expired early, or deleted).
+function forgetCache (name) {
+  for (const [key, c] of caches) if (c.name === name) caches.delete(key)
+}
+
+async function generate (contents, declarations, allowed = null) {
+  const model = process.env.GEMINI_MODEL || DEFAULT_GEMINI_MODEL
+  const prefix = {
     systemInstruction: { parts: [{ text: systemInstruction() }] },
-    contents,
     tools: [{ functionDeclarations: declarations }],
     // ANY: every turn must be a tool call, so the loop always ends in a submit_* call.
-    toolConfig: { functionCallingConfig: { mode: 'ANY', ...(allowed ? { allowedFunctionNames: allowed } : {}) } },
-    generationConfig: { temperature: temperature() }
-  }, { purpose: 'mention' })
+    toolConfig: { functionCallingConfig: { mode: 'ANY', ...(allowed ? { allowedFunctionNames: allowed } : {}) } }
+  }
+  const generationConfig = { temperature: temperature(), ...thinkingConfig(model) }
+  // The last step, limited to submitting (allowed), has its own toolConfig: sent in full, since a
+  // request that uses a cache cannot set one.
+  const cache = allowed ? null : await cachedPrefix(model, prefix)
+  if (cache) {
+    try {
+      return await callGemini(model, { cachedContent: cache, contents, generationConfig }, { purpose: 'mention' })
+    } catch (e) {
+      if (!/cachedContent|CachedContent|cached content/i.test(e.message) || e.blocked) throw e
+      forgetCache(cache) // gone on Gemini's side: once more in full
+    }
+  }
+  return callGemini(model, { ...prefix, contents, generationConfig }, { purpose: 'mention' })
 }
 
 // Runs the model with the read-only tools until it submits a draft, appending every turn to
@@ -447,4 +517,4 @@ async function revise (conversation, correction) {
   return check(conversation, await runAgent(conversation.contents, conversation.tools, conversation.submits))
 }
 
-module.exports = { lightModel, draft, revise, MAX_STEPS, isConfigured, toScheduledEvent, callGemini, geminiRequest, retryTimer, DEFAULT_GEMINI_MODEL, ENTITY_TYPES, GeminiError }
+module.exports = { thinkingConfig, cachedPrefix, caches, lightModel, draft, revise, MAX_STEPS, isConfigured, toScheduledEvent, callGemini, geminiRequest, retryTimer, DEFAULT_GEMINI_MODEL, ENTITY_TYPES, GeminiError }
