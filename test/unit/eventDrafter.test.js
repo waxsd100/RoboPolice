@@ -525,17 +525,25 @@ describe('token cost', () => {
 })
 
 describe('explicit cache and thinking', () => {
-  const { caches, thinkingConfig } = require('../../src/bot/modules/eventDrafter')
+  const { caches, purgedFor, promptVersion, thinkingConfig } = require('../../src/bot/modules/eventDrafter')
   const reply = { candidates: [{ content: { role: 'model', parts: [call('submit_chat_reply', { text: 'やあ' })] } }] }
   const quietTools = { declarations: [], call: async () => ({}) }
 
-  // A fake Gemini that also answers cachedContents: { requests, made }.
-  function installCachingGemini ({ createFails = false, createStatus = 400, goneOnce = false } = {}) {
+  // A fake Gemini that also answers cachedContents: { requests, made }. `stored`: the caches it
+  // lists ({ name, displayName }), listed `perPage` at a time.
+  function installCachingGemini ({ createFails = false, createStatus = 400, goneOnce = false, stored = [], perPage = 100 } = {}) {
     const requests = []
     let gone = goneOnce
     global.fetch = async (url, init) => {
-      const body = JSON.parse(init.body)
-      requests.push({ url, body })
+      const method = init.method || 'GET'
+      const body = init.body ? JSON.parse(init.body) : null
+      requests.push({ url, method, body })
+      if (method === 'GET' && /\/cachedContents\?/.test(url)) {
+        const from = Number(new URL(url).searchParams.get('pageToken') || 0)
+        const next = from + perPage < stored.length ? String(from + perPage) : undefined
+        return { ok: true, json: async () => ({ cachedContents: stored.slice(from, from + perPage), nextPageToken: next }) }
+      }
+      if (method === 'DELETE') return { ok: true, json: async () => ({}) }
       if (url.endsWith('/cachedContents')) {
         if (createFails) return { ok: false, status: createStatus, text: async () => createStatus === 400 ? 'Cached content is too small' : 'Missing or invalid access token' }
         return { ok: true, json: async () => ({ name: `cachedContents/c${requests.length}`, expireTime: new Date(Date.now() + 3600e3).toISOString() }) }
@@ -553,6 +561,43 @@ describe('explicit cache and thinking', () => {
     configureGateway()
     delete process.env.GEMINI_EXPLICIT_CACHE
     caches.clear()
+    purgedFor.clear()
+  })
+
+  test('the first cache of changed instructions deletes the caches of the earlier ones, once', async () => {
+    const { cachedPrefix } = require('../../src/bot/modules/eventDrafter')
+    const prefix = { systemInstruction: { parts: [{ text: '新しい指示' }] } }
+    const current = `robopolice-mention:${promptVersion(prefix)}`
+    assert.notEqual(promptVersion(prefix), promptVersion({ systemInstruction: { parts: [{ text: '前の指示' }] } }))
+    const requests = installCachingGemini({
+      perPage: 2,
+      stored: [
+        { name: 'cachedContents/old1', displayName: 'robopolice-mention:0123456789abcdef' },
+        { name: 'cachedContents/same', displayName: current },
+        { name: 'cachedContents/other-app', displayName: 'someone-else' },
+        { name: 'cachedContents/unlabelled' },
+        { name: 'cachedContents/old2', displayName: 'robopolice-mention:fedcba9876543210' }
+      ]
+    })
+    assert.match(await cachedPrefix('gemini-3.8-flash', prefix), /^cachedContents\//)
+    const made = requests.find(r => r.method === 'POST')
+    assert.equal(made.body.displayName, current)
+    assert.equal(requests.filter(r => r.method === 'GET').length, 3, 'every page is read')
+    assert.deepEqual(requests.filter(r => r.method === 'DELETE').map(r => r.url.split('/v1beta/')[1]), ['cachedContents/old1', 'cachedContents/old2'])
+
+    // Another set of tools with the same instructions: no second clean-up.
+    const before = requests.length
+    await cachedPrefix('gemini-3.8-flash', { ...prefix, tools: [{ functionDeclarations: [] }] })
+    assert.deepEqual(requests.slice(before).map(r => r.method), ['POST'])
+  })
+
+  test('a clean-up that fails does not stop the cache from being used', async () => {
+    const { cachedPrefix } = require('../../src/bot/modules/eventDrafter')
+    const requests = installCachingGemini()
+    const fake = global.fetch
+    global.fetch = async (url, init) => (init.method || 'GET') === 'GET' ? { ok: false, status: 403, text: async () => 'denied' } : fake(url, init)
+    assert.match(await cachedPrefix('gemini-3.8-flash', { systemInstruction: { parts: [{ text: 'x' }] } }), /^cachedContents\//)
+    assert.equal(requests.filter(r => r.method === 'POST').length, 1)
   })
 
   test('the instructions and tools are cached once and referred to by name', async () => {

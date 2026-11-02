@@ -391,6 +391,12 @@ round trip bills them at the cached rate; Gemini's own implicit cache only takes
 the model, an old model) requests go in full as before. The last step, limited to submitting, has its
 own tool settings and always goes in full.
 
+A cache is made for exactly the instructions and tools it holds, so changed instructions always get a
+new one. Each is labelled with the version of the instructions (`robopolice-mention:<hash>`), and the
+first cache a worker makes for a new version deletes this bot's caches of every other version on
+Gemini's side rather than leaving them until they expire. Caches without that label (other apps on the
+same key, or made before the label existed) are not touched.
+
 Every Gemini call goes through Cloudflare AI Gateway. The tokens each kind of call uses (prompt, of it served from Gemini's cache, answer and thinking, by purpose and model) are logged once an hour (`[GEMINI]: Tokens in the last hour`), to see where the cost goes. YouTube Data API calls can too: in the
 dashboard, add a custom provider (AI Gateway → Custom Providers) with base URL
 `https://www.googleapis.com` and a slug such as `youtube`, then set `YOUTUBE_GATEWAY_PROVIDER=youtube`.

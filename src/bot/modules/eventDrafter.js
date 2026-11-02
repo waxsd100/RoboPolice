@@ -284,14 +284,35 @@ async function geminiRequest (model, method, body, options = {}) {
   return geminiPost(`models/${encodeURIComponent(model)}:${method}`, body, { ...options, model })
 }
 
-// One POST to the Gemini API (`path` under v1beta) through the gateway, retrying HTTP 429.
-async function geminiPost (path, body, { timeoutMs = GEMINI_TIMEOUT_MS, purpose = 'other', model = '' } = {}) {
-  const url = gatewayURL(`google-ai-studio/v1beta/${path}`)
+// The headers of every Gemini call through the gateway.
+function geminiHeaders () {
   const headers = { 'Content-Type': 'application/json', ...gatewayAuthHeaders() }
   // Optional: the Gemini key can be stored in the gateway (BYOK) instead.
   if (process.env.GEMINI_API_KEY) headers['x-goog-api-key'] = process.env.GEMINI_API_KEY
   // Which stored (BYOK) key to use. Without it the gateway looks for one named "default".
   if (process.env.CLOUDFLARE_AI_GATEWAY_BYOK_ALIAS) headers['cf-aig-byok-alias'] = process.env.CLOUDFLARE_AI_GATEWAY_BYOK_ALIAS
+  return headers
+}
+
+// A GET or DELETE to the Gemini API (`path` under v1beta) through the gateway, without retries.
+// Returns the response body (empty for DELETE).
+async function geminiSend (method, path, { timeoutMs = 30 * 1000 } = {}) {
+  const res = await fetch(gatewayURL(`google-ai-studio/v1beta/${path}`), {
+    method,
+    headers: geminiHeaders(),
+    signal: AbortSignal.timeout(timeoutMs)
+  })
+  if (!res.ok) {
+    const text = (await res.text()).slice(0, 300)
+    throw new GeminiError(`Gemini ${method} ${path} failed: HTTP ${res.status} ${text}`, `AI の呼び出しに失敗しました（HTTP ${res.status}）`, null, res.status)
+  }
+  return method === 'DELETE' ? {} : res.json()
+}
+
+// One POST to the Gemini API (`path` under v1beta) through the gateway, retrying HTTP 429.
+async function geminiPost (path, body, { timeoutMs = GEMINI_TIMEOUT_MS, purpose = 'other', model = '' } = {}) {
+  const url = gatewayURL(`google-ai-studio/v1beta/${path}`)
+  const headers = geminiHeaders()
 
   const usage = currentUsage()
   let res
@@ -377,23 +398,67 @@ const CACHE_RENEW_BEFORE_MS = 5 * 60 * 1000
 // in a few minutes, so caching comes back soon after that is fixed.
 const CACHE_RETRY_AFTER_MS = 60 * 60 * 1000
 const CACHE_RETRY_AFTER_ERROR_MS = 5 * 60 * 1000
+const CACHE_LABEL = 'robopolice-mention'
+const MAX_CACHE_LIST_PAGES = 10
 const caches = new Map()
+// Versions whose older caches this worker has already deleted.
+const purgedFor = new Set()
 
 function explicitCacheEnabled () {
   return process.env.GEMINI_EXPLICIT_CACHE !== 'false'
+}
+
+const hashOf = text => crypto.createHash('sha256').update(text).digest('hex')
+
+// The version of the system instructions in `prefix`: changes whenever the prompt does.
+function promptVersion (prefix) {
+  return hashOf(JSON.stringify(prefix.systemInstruction || null)).slice(0, 16)
+}
+
+function deleteCache (name) {
+  return geminiSend('DELETE', name).catch(e => {
+    // Already gone (expired, or deleted by another worker) is what was wanted.
+    if (e.status !== 404) throw e
+  })
+}
+
+// Deletes this bot's caches made for other versions of the instructions. Resolves to how many.
+async function purgeStaleCaches (version) {
+  const stale = []
+  let pageToken = ''
+  for (let page = 0; page < MAX_CACHE_LIST_PAGES; page++) {
+    const list = await geminiSend('GET', `cachedContents?pageSize=100${pageToken ? `&pageToken=${encodeURIComponent(pageToken)}` : ''}`)
+    for (const c of list.cachedContents || []) {
+      const label = String(c.displayName || '')
+      if (label.startsWith(`${CACHE_LABEL}:`) && label !== `${CACHE_LABEL}:${version}`) stale.push(c.name)
+    }
+    pageToken = list.nextPageToken
+    if (!pageToken) break
+  }
+  for (const name of stale) await deleteCache(name)
+  return stale.length
 }
 
 // The name of a cache holding `prefix` (systemInstruction, tools, toolConfig) for `model`, made if
 // needed; null when there is none to use.
 async function cachedPrefix (model, prefix, now = Date.now()) {
   if (!explicitCacheEnabled()) return null
-  const key = crypto.createHash('sha256').update(`${model}\n${JSON.stringify(prefix)}`).digest('hex')
+  const key = hashOf(`${model}\n${JSON.stringify(prefix)}`)
+  const version = promptVersion(prefix)
   const known = caches.get(key)
   if (known?.failedAt && now - known.failedAt < known.retryAfter) return null
   if (known?.name && known.expiresAt - now > CACHE_RENEW_BEFORE_MS) return known.name
   try {
-    const made = await geminiPost('cachedContents', { model: `models/${model}`, ...prefix, ttl: `${CACHE_TTL_SECONDS}s` }, { purpose: 'cache', model, timeoutMs: 30 * 1000 })
+    const made = await geminiPost('cachedContents', { model: `models/${model}`, displayName: `${CACHE_LABEL}:${version}`, ...prefix, ttl: `${CACHE_TTL_SECONDS}s` }, { purpose: 'cache', model, timeoutMs: 30 * 1000 })
     caches.set(key, { name: made.name, expiresAt: made.expireTime ? Date.parse(made.expireTime) : now + CACHE_TTL_SECONDS * 1000 })
+    if (!purgedFor.has(version)) {
+      purgedFor.add(version)
+      const purged = await purgeStaleCaches(version).catch(e => {
+        global.logger?.warn(`[GEMINI]: Could not delete the caches of earlier instructions: ${e.message.slice(0, 200)}`)
+        return 0
+      })
+      if (purged) global.logger?.info(`[GEMINI]: Deleted ${purged} cache(s) of earlier instructions`)
+    }
     return made.name
   } catch (e) {
     const retryAfter = e.status === 400 ? CACHE_RETRY_AFTER_MS : CACHE_RETRY_AFTER_ERROR_MS
@@ -573,4 +638,4 @@ async function revise (conversation, correction) {
   return check(conversation, await runAgent(conversation.contents, conversation.tools, conversation.submits))
 }
 
-module.exports = { REPLY_LENGTHS, DEFAULT_REPLY_LENGTH, PERSONAS, thinkingConfig, cachedPrefix, caches, lightModel, draft, revise, MAX_STEPS, isConfigured, toScheduledEvent, callGemini, geminiRequest, retryTimer, DEFAULT_GEMINI_MODEL, ENTITY_TYPES, GeminiError }
+module.exports = { REPLY_LENGTHS, DEFAULT_REPLY_LENGTH, PERSONAS, thinkingConfig, cachedPrefix, caches, purgedFor, promptVersion, lightModel, draft, revise, MAX_STEPS, isConfigured, toScheduledEvent, callGemini, geminiRequest, retryTimer, DEFAULT_GEMINI_MODEL, ENTITY_TYPES, GeminiError }
