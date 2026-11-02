@@ -126,6 +126,7 @@ function isAddressed (message) {
 
 let warnedUnconfigured = false
 function missingSettings () {
+  if (process.env.CLOUDFLARE_AI_GATEWAY_URL) return []
   return ['CLOUDFLARE_ACCOUNT_ID', 'CLOUDFLARE_AI_GATEWAY_ID'].filter(name => !process.env[name])
 }
 
