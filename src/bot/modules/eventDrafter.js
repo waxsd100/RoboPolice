@@ -199,10 +199,11 @@ function buildPrompt ({ request, referenced, channelName, channelID, channelInfo
 // or a safety finishReason), null for any other failure. Asking again with the same input is
 // refused again.
 class GeminiError extends Error {
-  constructor (message, hint, blocked = null) {
+  constructor (message, hint, blocked = null, status = null) {
     super(message)
     this.hint = hint
     this.blocked = blocked
+    this.status = status // the HTTP status of a failed request
   }
 }
 
@@ -279,7 +280,7 @@ async function geminiPost (path, body, { timeoutMs = GEMINI_TIMEOUT_MS, purpose 
   if (!res.ok) {
     const text = (await res.text()).slice(0, 1000)
     const hint = res.status === 429 ? rateLimitHint(text) : `AI の呼び出しに失敗しました（HTTP ${res.status}）`
-    throw new GeminiError(`Gemini request failed: HTTP ${res.status} ${text}`, hint)
+    throw new GeminiError(`Gemini request failed: HTTP ${res.status} ${text}`, hint, null, res.status)
   }
   const data = await res.json()
   recordTokens(purpose, model, data?.usageMetadata)
@@ -335,7 +336,11 @@ function thinkingConfig (model, { setting = 'GEMINI_THINKING_LEVEL', fallback = 
 // were. Per worker, one cache per model and set of tools.
 const CACHE_TTL_SECONDS = 3600
 const CACHE_RENEW_BEFORE_MS = 5 * 60 * 1000
+// After a cache Gemini would not make (HTTP 400: too small for the model, say) it is tried again an
+// hour later; after any other failure (the gateway or Access refusing, a network error, an outage)
+// in a few minutes, so caching comes back soon after that is fixed.
 const CACHE_RETRY_AFTER_MS = 60 * 60 * 1000
+const CACHE_RETRY_AFTER_ERROR_MS = 5 * 60 * 1000
 const caches = new Map()
 
 function explicitCacheEnabled () {
@@ -348,15 +353,16 @@ async function cachedPrefix (model, prefix, now = Date.now()) {
   if (!explicitCacheEnabled()) return null
   const key = crypto.createHash('sha256').update(`${model}\n${JSON.stringify(prefix)}`).digest('hex')
   const known = caches.get(key)
-  if (known?.failedAt && now - known.failedAt < CACHE_RETRY_AFTER_MS) return null
+  if (known?.failedAt && now - known.failedAt < known.retryAfter) return null
   if (known?.name && known.expiresAt - now > CACHE_RENEW_BEFORE_MS) return known.name
   try {
     const made = await geminiPost('cachedContents', { model: `models/${model}`, ...prefix, ttl: `${CACHE_TTL_SECONDS}s` }, { purpose: 'cache', model, timeoutMs: 30 * 1000 })
     caches.set(key, { name: made.name, expiresAt: made.expireTime ? Date.parse(made.expireTime) : now + CACHE_TTL_SECONDS * 1000 })
     return made.name
   } catch (e) {
-    caches.set(key, { failedAt: now })
-    global.logger?.info(`[GEMINI]: Not caching the instructions for ${model}, sending them in full: ${e.message.slice(0, 200)}`)
+    const retryAfter = e.status === 400 ? CACHE_RETRY_AFTER_MS : CACHE_RETRY_AFTER_ERROR_MS
+    caches.set(key, { failedAt: now, retryAfter })
+    global.logger?.info(`[GEMINI]: Not caching the instructions for ${model} for ${retryAfter / 60000} minutes, sending them in full: ${e.message.slice(0, 200)}`)
     return null
   }
 }
