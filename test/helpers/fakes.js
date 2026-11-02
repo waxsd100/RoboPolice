@@ -106,6 +106,48 @@ function installEmbeddingStore ({ videos = {}, messages = [], pending = [] } = {
   return saved
 }
 
+// Replaces the server knowledge store (serverLore.js) with an in-memory one, so no test reaches a
+// real database. Installed when this file loads; a test can install it again with its own data.
+// facts: { guildID: [{ kind, name, content, week, embedding }] }, styles: { guildID: text },
+// messages: [{ guild_id, channel_id, author_id, ts, content }] (stored messages, newest last).
+const realLoreStore = { ...require('../../src/db/interfaces/postgres/serverLore') }
+// Puts the real store back, for the tests on a real database.
+function restoreLoreStore () {
+  Object.assign(require('../../src/db/interfaces/postgres/serverLore'), realLoreStore)
+}
+function installLoreStore ({ facts = {}, styles = {}, messages = [] } = {}) {
+  const store = require('../../src/db/interfaces/postgres/serverLore')
+  const { similarity, fromBase64 } = require('../../src/bot/utils/embeddings')
+  const chunks = {}
+  const saved = { chunks, styles: { ...styles } }
+  store.channelMessages = async (guildID, channelID, since) => messages
+    .filter(m => m.guild_id === guildID && m.channel_id === channelID && new Date(m.ts) >= since)
+  store.chunkHashes = async guildID => Object.fromEntries(Object.entries(chunks[guildID] || {}).map(([k, c]) => [k, c.hash]))
+  store.saveChunk = async (guildID, channelID, week, hash, list) => {
+    chunks[guildID] = chunks[guildID] || {}
+    chunks[guildID][`${channelID}|${week}`] = { hash, facts: list }
+  }
+  store.deleteChunksExcept = async (guildID, keys) => {
+    let n = 0
+    for (const k of Object.keys(chunks[guildID] || {})) if (!keys.includes(k)) { delete chunks[guildID][k]; n++ }
+    return n
+  }
+  store.factsToEmbed = async () => []
+  store.saveFactEmbedding = async () => {}
+  store.nearestFacts = async (guildID, q, model, limit) => (facts[guildID] || [])
+    .map(f => ({ ...f, score: f.embedding ? similarity(q, fromBase64(f.embedding)) : 0 }))
+    .sort((a, b) => b.score - a.score).slice(0, limit)
+  store.hasFacts = async guildID => (facts[guildID] || []).some(f => f.embedding)
+  store.getStyle = async guildID => saved.styles[guildID] ? { style: saved.styles[guildID], source_hash: 'x', updated_at: new Date() } : null
+  store.saveStyle = async (guildID, style) => { saved.styles[guildID] = style }
+  store.deleteStyle = async guildID => { delete saved.styles[guildID] }
+  store.memberMessages = async (guildID, authorID, channelIDs, limit) => messages
+    .filter(m => m.guild_id === guildID && m.author_id === authorID && channelIDs.includes(m.channel_id))
+    .reverse().slice(0, limit)
+  return saved
+}
+installLoreStore()
+
 // Replaces the Redis counter behind the daily mention limit with an in-memory one.
 function installQuotaStore () {
   const counts = new Map()
@@ -265,7 +307,7 @@ async function startServer (handler) {
 }
 
 module.exports = {
-  perms, createGuild, createMember, installBot, installYouTubeStore, installQuotaStore, installEmbeddingStore, configureGateway, installGemini, call, submit, lastToolResponses, startServer
+  perms, createGuild, createMember, installBot, installYouTubeStore, installQuotaStore, installEmbeddingStore, configureGateway, installGemini, call, submit, lastToolResponses, startServer, installLoreStore, restoreLoreStore
 }
 
 // A fake embedding model: each text points along the axis of the first topic it mentions, so
