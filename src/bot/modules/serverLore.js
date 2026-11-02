@@ -16,7 +16,7 @@
 const crypto = require('crypto')
 const { embed, model } = require('../utils/embeddings')
 const { isGatewayConfigured } = require('../utils/aiGateway')
-const { callGemini, DEFAULT_GEMINI_MODEL } = require('./eventDrafter')
+const { callGemini, lightModel } = require('./eventDrafter')
 const { withoutCharCount } = require('../utils/textClean')
 const { publicChannels } = require('./discordKnowledge')
 const { fromStoredContent } = require('../../db/interfaces/postgres/create')
@@ -129,10 +129,10 @@ const FACT_SCHEMA = {
 }
 
 async function generate (text, config) {
-  const content = await callGemini(process.env.GEMINI_MODEL || DEFAULT_GEMINI_MODEL, {
+  const content = await callGemini(lightModel(), {
     contents: [{ role: 'user', parts: [{ text }] }],
     generationConfig: config
-  }, { timeoutMs: 90 * 1000 })
+  }, { timeoutMs: 90 * 1000, purpose: 'serverLore' })
   return content.parts.map(p => p.text || '').join('')
 }
 

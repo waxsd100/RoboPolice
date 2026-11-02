@@ -3,7 +3,7 @@
 // Nintendo, Xbox or app store page). A link is only given once the page has been read: a guessed
 // URL that does not open is left out. GAME_LINKS=false turns this off.
 const urlFetcher = require('../utils/urlFetcher')
-const { callGemini, DEFAULT_GEMINI_MODEL } = require('./eventDrafter')
+const { callGemini, lightModel } = require('./eventDrafter')
 
 const STEAM_SEARCH = 'https://store.steampowered.com/api/storesearch/'
 const TIMEOUT_MS = 15 * 1000
@@ -29,14 +29,14 @@ async function steamPage (name, { fetchImpl = fetch } = {}) {
 
 // An official page of the game found with Google Search through Gemini, or null.
 async function officialPage (name) {
-  const content = await callGemini(process.env.GEMINI_MODEL || DEFAULT_GEMINI_MODEL, {
+  const content = await callGemini(lightModel(), {
     contents: [{
       role: 'user',
       parts: [{ text: `ゲーム「${name}」の公式サイト、または公式のストアページ（PlayStation Store、Nintendo、Xbox、App Store、Google Play など）の URL を1つだけ、URL のみで答えてください。見つからなければ「なし」とだけ答えてください。` }]
     }],
     tools: [{ google_search: {} }],
     generationConfig: { temperature: 0 }
-  }, { timeoutMs: 30 * 1000 })
+  }, { timeoutMs: 30 * 1000, purpose: 'gameLinks' })
   const url = content.parts.map(p => p.text || '').join('').match(/https?:\/\/[^\s)」"'<>]+/)?.[0]
   if (!url) return null
   // Only a page that opens: a model can name a URL that does not exist.

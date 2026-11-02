@@ -8,7 +8,7 @@
 // What search finds can be out of date or wrong; the page says when it was looked up and lists
 // its sources, and the model is told not to state it as certain.
 const { knowledgeSetting } = require('../utils/knowledgeDefaults')
-const { callGemini, DEFAULT_GEMINI_MODEL } = require('./eventDrafter')
+const { callGemini, lightModel } = require('./eventDrafter')
 const { isGatewayConfigured } = require('../utils/aiGateway')
 const { withoutCharCount } = require('../utils/textClean')
 const backgroundQueue = require('../utils/backgroundQueue')
@@ -65,11 +65,11 @@ function parts (text) {
 
 // Looks the topic up and stores what was found. Resolves to how many parts were written.
 async function lookUp (topic, now = new Date()) {
-  const content = await backgroundQueue.run(null, () => callGemini(process.env.GEMINI_MODEL || DEFAULT_GEMINI_MODEL, {
+  const content = await backgroundQueue.run(null, () => callGemini(lightModel(), {
     contents: [{ role: 'user', parts: [{ text: prompt(topic, now) }] }],
     tools: [{ google_search: {} }],
     generationConfig: { temperature: 0.2 }
-  }, { timeoutMs: TIMEOUT_MS }))
+  }, { timeoutMs: TIMEOUT_MS, purpose: 'webKnowledge' }))
   const text = withoutCharCount(content.parts.map(p => p.text || '').join('').trim())
   if (!text) throw new Error(`nothing found about ${topic}`)
   const title = `「${nameOf(topic)}」について（Web 検索で調べたもの、${dayOf(now)} 時点）`
