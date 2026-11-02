@@ -270,6 +270,8 @@ function configureGateway () {
   delete process.env.GEMINI_TEMPERATURE
   delete process.env.GEMINI_LIGHT_MODEL
   delete process.env.GEMINI_THINKING_LEVEL
+  delete process.env.VIDEO_SUMMARY_THINKING_LEVEL
+  delete process.env.GEMINI_LIGHT_THINKING_LEVEL
   // Tests script each Gemini call; the explicit cache is tested on its own (eventDrafter.test.js).
   process.env.GEMINI_EXPLICIT_CACHE = 'false'
   delete process.env.VIDEO_SUMMARY_FPS

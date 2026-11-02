@@ -544,13 +544,25 @@ describe('explicit cache and thinking', () => {
     assert.ok(asked[1].body.systemInstruction && !asked[1].body.cachedContent)
   })
 
-  test('Gemini 3 thinks at low unless told; older models are not sent the setting', () => {
-    assert.deepEqual(thinkingConfig('gemini-3.8-flash'), { thinkingConfig: { thinkingLevel: 'low' } })
+  test('replies think at high, video summaries at low, unless told; older models are not sent the setting', () => {
+    assert.deepEqual(thinkingConfig('gemini-3.8-flash'), { thinkingConfig: { thinkingLevel: 'high' } })
+    assert.deepEqual(thinkingConfig('gemini-3.8-flash', { setting: 'VIDEO_SUMMARY_THINKING_LEVEL', fallback: 'low' }), { thinkingConfig: { thinkingLevel: 'low' } })
     process.env.GEMINI_THINKING_LEVEL = 'minimal'
     assert.deepEqual(thinkingConfig('gemini-3.8-flash'), { thinkingConfig: { thinkingLevel: 'minimal' } })
     process.env.GEMINI_THINKING_LEVEL = 'huge'
     assert.deepEqual(thinkingConfig('gemini-3.8-flash'), {})
     delete process.env.GEMINI_THINKING_LEVEL
     assert.deepEqual(thinkingConfig('gemini-2.5-flash'), {})
+  })
+
+  test('a call that says nothing of thinking (background work) thinks at low; image models are left alone', async () => {
+    const { callGemini } = require('../../src/bot/modules/eventDrafter')
+    const requests = installGemini([[{ text: 'a' }], [{ text: 'b' }], [{ text: 'c' }]])
+    await callGemini('gemini-3.5-flash-lite', { contents: [], generationConfig: { temperature: 0 } })
+    assert.deepEqual(requests[0].body.generationConfig, { temperature: 0, thinkingConfig: { thinkingLevel: 'low' } })
+    await callGemini('gemini-3.8-flash', { contents: [], generationConfig: { thinkingConfig: { thinkingLevel: 'high' } } })
+    assert.deepEqual(requests[1].body.generationConfig.thinkingConfig, { thinkingLevel: 'high' }, 'kept as asked')
+    await callGemini('gemini-3.1-flash-image', { contents: [] })
+    assert.equal(requests[2].body.generationConfig, undefined)
   })
 })

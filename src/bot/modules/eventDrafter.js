@@ -290,8 +290,14 @@ function lightModel () {
   return light || process.env.GEMINI_MODEL || DEFAULT_GEMINI_MODEL
 }
 
-// One generateContent call through the gateway. Returns the first candidate's content.
+// One generateContent call through the gateway. Returns the first candidate's content. A call that
+// says nothing of thinking (background work: knowledge, emojis, blurbs, …) thinks at low
+// (GEMINI_LIGHT_THINKING_LEVEL); image models are left as they are.
 async function callGemini (model, body, options) {
+  if (!body.generationConfig?.thinkingConfig && !/image/i.test(model)) {
+    const thinking = thinkingConfig(model, { setting: 'GEMINI_LIGHT_THINKING_LEVEL', fallback: 'low' })
+    if (thinking.thinkingConfig) body = { ...body, generationConfig: { ...body.generationConfig, ...thinking } }
+  }
   const data = await geminiRequest(model, 'generateContent', body, options)
   const content = data.candidates?.[0]?.content
   if (!content?.parts?.length) {
@@ -302,16 +308,18 @@ async function callGemini (model, body, options) {
   return content
 }
 
-// allowed: the only functions the model may call this turn (all of them when omitted).
-// How much Gemini 3 thinks before answering (GEMINI_THINKING_LEVEL: minimal, low, medium or high).
-// Unset, Gemini thinks at high, billed as answer tokens; a chat reply or a draft needs little.
-// Only sent to Gemini 3 models (older ones refuse the setting).
-const DEFAULT_THINKING_LEVEL = 'low'
-function thinkingConfig (model) {
+// How much Gemini 3 thinks before answering (minimal, low, medium or high), billed as answer
+// tokens: `setting` names the environment variable, `fallback` the level without it. Mention
+// replies and drafts think at high (GEMINI_THINKING_LEVEL), video summaries at low
+// (VIDEO_SUMMARY_THINKING_LEVEL), and everything else at low (GEMINI_LIGHT_THINKING_LEVEL). Only sent to Gemini 3 models (older ones refuse the setting).
+const THINKING_LEVELS = ['minimal', 'low', 'medium', 'high']
+function thinkingConfig (model, { setting = 'GEMINI_THINKING_LEVEL', fallback = 'high' } = {}) {
   if (!/gemini-[3-9]/.test(model)) return {}
-  const level = String(process.env.GEMINI_THINKING_LEVEL || DEFAULT_THINKING_LEVEL).toLowerCase()
-  return ['minimal', 'low', 'medium', 'high'].includes(level) ? { thinkingConfig: { thinkingLevel: level } } : {}
+  const level = String(process.env[setting] || fallback).toLowerCase()
+  return THINKING_LEVELS.includes(level) ? { thinkingConfig: { thinkingLevel: level } } : {}
 }
+
+// allowed: the only functions the model may call this turn (all of them when omitted).
 
 // The system instructions and the tools, the same for every request of a kind, are kept in an
 // explicit cache (cachedContents) for an hour at a time and referred to by name, so they are billed

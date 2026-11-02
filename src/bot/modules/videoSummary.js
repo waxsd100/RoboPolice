@@ -68,8 +68,8 @@ function askVideo (videoID, prompt, clip = null) {
       ]
     }],
     // Fewer tokens per frame: the summary is about what is said and roughly shown, not fine detail.
-    // Gemini 3 thinks at high unless told: a summary needs little (GEMINI_THINKING_LEVEL).
-    generationConfig: { temperature: 0.2, mediaResolution: 'MEDIA_RESOLUTION_LOW', ...thinkingConfig(model) }
+    // Gemini 3 thinks at high unless told: a summary needs little (VIDEO_SUMMARY_THINKING_LEVEL).
+    generationConfig: { temperature: 0.2, mediaResolution: 'MEDIA_RESOLUTION_LOW', ...thinkingConfig(model, { setting: 'VIDEO_SUMMARY_THINKING_LEVEL', fallback: 'low' }) }
   }, { timeoutMs: summaryTimeoutMs(), purpose: 'videoSummary' })
 }
 

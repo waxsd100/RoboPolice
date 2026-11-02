@@ -563,7 +563,9 @@ the secrets if it leaks, so keep it only on the platform and delete it in the co
 | `CLOUDFLARE_AI_GATEWAY_BYOK_ALIAS` | Optional. Name of the Gemini key stored in the gateway (BYOK), sent as `cf-aig-byok-alias`. Unset uses the key named `default` |
 | `GEMINI_API_KEY` | Optional when the key is stored in the gateway (BYOK); otherwise required for drafting from mentions |
 | `GEMINI_MODEL` | Optional. Defaults to `gemini-3.8-flash` (a fixed model rather than the `gemini-flash-latest` alias, so a cache is made for a known model and a new model is a choice) |
-| `GEMINI_THINKING_LEVEL` | Optional (default `low`; `minimal`, `low`, `medium` or `high`). How much Gemini 3 thinks before a mention reply, draft or video summary. Unset in the request, Gemini thinks at `high`, billed as answer tokens. Not sent to older models |
+| `GEMINI_THINKING_LEVEL` | Optional (default `high`; `minimal`, `low`, `medium` or `high`). How much Gemini 3 thinks before a mention reply or draft, billed as answer tokens. Not sent to older models |
+| `VIDEO_SUMMARY_THINKING_LEVEL` | Optional (default `low`). The same for video summaries, which need little thinking |
+| `GEMINI_LIGHT_THINKING_LEVEL` | Optional (default `low`). The same for work in the background (knowledge, emoji descriptions, blurbs, game links, server knowledge) |
 | `GEMINI_EXPLICIT_CACHE` | Optional. `false` stops caching the system instructions and tools (see below) |
 | `GEMINI_LIGHT_MODEL` | Optional (default `gemini-3.5-flash-lite`). The cheaper model for work in the background: taking knowledge out of the wiki, X and web pages and the servers' messages (`SERVER_LORE`), describing emojis, stream blurbs, game links, and putting a long video's parts together. Empty to use `GEMINI_MODEL` for everything. Mention replies and video summaries use `GEMINI_MODEL` |
 | `VIDEO_SUMMARY_FPS` | Optional (default `0.2`, one frame every 5 seconds; Gemini's own default is 1). Frames a second Gemini looks at when summarizing a video. Each frame costs tokens while the sound is heard throughout, so fewer frames cost much less |
