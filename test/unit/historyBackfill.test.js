@@ -13,7 +13,9 @@ beforeEach(() => {
   saved = []
   states = {}
   store.backfillState = async id => states[id] || null
-  store.saveBackfill = async (guildID, channelID, before, done, readCount) => { states[channelID] = { before_id: before, done, read_count: readCount } }
+  store.saveBackfill = async (guildID, channelID, o) => {
+    states[channelID] = { before_id: o.beforeID, done: o.done, read_count: o.readCount, reached_start: o.reachedStart, limit_start: o.limitStart, limit_max: o.limitMax }
+  }
   store.saveHistory = async rows => { saved.push(...rows); return rows.length }
   global.bot = { user: { id: 'BOT' }, guilds: new Map(), guildSettingsCache: {} }
   clearSettings()
@@ -73,7 +75,7 @@ describe('readChannel', () => {
     assert.deepEqual(asked, [undefined, '901'])
     assert.equal(saved[0].ts, new Date(NOW).toISOString())
     assert.deepEqual({ id: saved[0].id, channelID: saved[0].channelID, guildID: saved[0].guildID, content: saved[0].content }, { id: '1000', channelID: 'c1', guildID: 'g1', content: 'm1000' })
-    assert.deepEqual(states.c1, { before_id: '871', done: true, read_count: 130 })
+    assert.deepEqual(states.c1, { before_id: '871', done: true, read_count: 130, reached_start: true, limit_start: null, limit_max: null })
     // Done: not read again.
     assert.equal(await history.readChannel(guild, channel, { wait: 0, now: NOW, getMessages: async () => { throw new Error('read again') } }), 0)
   })
@@ -95,7 +97,7 @@ describe('readChannel', () => {
     const limits = []
     await history.readChannel(guild, channel, { wait: 0, now: NOW, getMessages: async (id, o) => { limits.push(o.limit); return page(Number(o.before) - 1, o.limit) } })
     assert.deepEqual(limits, [100], 'the 100 left')
-    assert.deepEqual(states.c1, { before_id: '851', done: true, read_count: 150 })
+    assert.deepEqual(states.c1, { before_id: '851', done: true, read_count: 150, reached_start: false, limit_start: null, limit_max: 150 })
     assert.equal(saved.length, 100)
   })
 
@@ -105,6 +107,51 @@ describe('readChannel', () => {
     await history.readChannel(guild, channel, { wait: 0, now: NOW, getMessages: async (id, o) => page(1000, o.limit) })
     assert.equal(saved.length, 11)
     assert.equal(states.c1.done, true)
+  })
+
+  test('wider limits later read on from where it stopped; narrower or the same do not', async () => {
+    // A channel with 1000 messages, one a day: message n was sent 1000 - n days before NOW.
+    const channelHistory = async (id, o) => {
+      const from = o.before ? Number(o.before) - 1 : 1000
+      return page(from, Math.max(0, Math.min(o.limit, from)))
+    }
+    const read = () => history.readChannel(guild, channel, { wait: 0, now: NOW, getMessages: channelHistory })
+    process.env.HISTORY_BACKFILL_DAYS = '30'
+    await read()
+    assert.equal(saved.length, 31)
+    assert.equal(states.c1.before_id, '970')
+    assert.equal(await read(), 0, 'the same limits: not read again')
+    process.env.HISTORY_BACKFILL_DAYS = '20'
+    assert.equal(await read(), 0, 'narrower: not read again')
+
+    // More days: on from message 970, not from the newest.
+    process.env.HISTORY_BACKFILL_DAYS = '60'
+    saved.length = 0
+    await read()
+    assert.deepEqual([saved[0].id, saved.at(-1).id, saved.length], ['969', '940', 30])
+    // An earlier date.
+    process.env.HISTORY_BACKFILL_DAYS = '0'
+    process.env.HISTORY_BACKFILL_SINCE = new Date(NOW - 100 * DAY + 9 * 60 * 60 * 1000).toISOString().slice(0, 10)
+    saved.length = 0
+    await read()
+    assert.equal(saved.at(-1).id, '900')
+    // A count limit, then a higher one.
+    delete process.env.HISTORY_BACKFILL_SINCE
+    process.env.HISTORY_BACKFILL_MAX_MESSAGES = '150'
+    saved.length = 0
+    await read()
+    assert.equal(states.c1.read_count, 150)
+    process.env.HISTORY_BACKFILL_MAX_MESSAGES = '200'
+    saved.length = 0
+    await read()
+    assert.deepEqual([saved[0].id, saved.length, states.c1.read_count], ['850', 50, 200])
+    // No limit at all: to the start of the channel, then never again.
+    delete process.env.HISTORY_BACKFILL_MAX_MESSAGES
+    await read()
+    assert.equal(states.c1.reached_start, true)
+    assert.equal(states.c1.read_count, 1000)
+    process.env.HISTORY_BACKFILL_MAX_MESSAGES = '5000'
+    assert.equal(await history.readChannel(guild, channel, { wait: 0, now: NOW, getMessages: async () => { throw new Error('read again') } }), 0)
   })
 
   test('leaves out bots, the bot itself and automod notices; keeps image URLs', async () => {

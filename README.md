@@ -66,8 +66,9 @@ stored is left as it is, and image URLs go with it. How far back, whichever come
 `HISTORY_BACKFILL_DAYS` (`0` for no limit; with neither set, 90 days); and a number of messages per
 channel, `HISTORY_BACKFILL_MAX_MESSAGES`. Never further than `MESSAGE_HISTORY_DAYS`: anything older
 would be pruned at once. 100 messages a request, one request every `HISTORY_BACKFILL_DELAY_MS` (default 1000); where each
-channel got to is kept in `message_backfill`, so a restart goes on from there, and a channel read to
-the start of the window is not read again. Every worker does the servers it hosts, checking hourly for
+channel got to is kept in `message_backfill`, so a restart goes on from there. A channel that stopped
+at the limits is read on from where it stopped when they are widened later (an earlier date, more
+days or more messages); one read to its very start is not read again. Every worker does the servers it hosts, checking hourly for
 new channels and servers that set a message log. `HISTORY_BACKFILL=false` turns it off. A large
 server's history takes disk space: with no retention set, 90 days is read unless told otherwise.
 

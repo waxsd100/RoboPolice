@@ -9,6 +9,8 @@
 //   HISTORY_BACKFILL_DAYS (0 for no limit). With neither, MESSAGE_HISTORY_DAYS or else 90 days.
 //   Never further than MESSAGE_HISTORY_DAYS: older ones would be pruned at once.
 // - a number of messages per channel: HISTORY_BACKFILL_MAX_MESSAGES (unset or 0 for no limit).
+// A channel that stopped at the limits is read on from where it stopped when they are widened later
+// (an earlier date, more days or more messages); one read to its start is not read again.
 // 100 messages a request, one request every
 // HISTORY_BACKFILL_DELAY_MS; where each channel got to is kept (message_backfill), so a restart goes
 // on from there. Every worker does the servers it hosts, checking hourly for new channels and
@@ -96,20 +98,31 @@ function toRow (message, guild, channel) {
   }
 }
 
+// Whether the limits now reach further than those a finished channel was read with: an older start
+// (or none) or more messages (or no limit).
+function widened (state, since, max) {
+  const wasStart = state.limit_start === null || state.limit_start === undefined ? -Infinity : new Date(state.limit_start).getTime()
+  const wasMax = state.limit_max ?? null
+  return since < wasStart || (wasMax !== null && (max === null || max > wasMax))
+}
+
 // Reads the channel's history back to the start of the window, from where the last read stopped.
 // Resolves to how many messages were new.
 async function readChannel (guild, channel, { wait = delay(), now = Date.now(), getMessages = (id, options) => global.bot.getMessages(id, options) } = {}) {
   const state = await store.backfillState(channel.id)
-  if (state?.done) return 0
   const since = startOf(now)
   const max = maxMessages()
+  if (state?.done && (state.reached_start || !widened(state, since, max))) return 0
   let before = state?.before_id || undefined
   let read = state?.read_count || 0
   let added = 0
+  const save = (done, reachedStart = false) => store.saveBackfill(guild.id, channel.id, {
+    beforeID: before || null, done, readCount: read, reachedStart, limitStart: since === -Infinity ? null : new Date(since), limitMax: max
+  })
   for (;;) {
     const left = max === null ? PAGE_SIZE : Math.min(PAGE_SIZE, max - read)
     if (left <= 0) {
-      await store.saveBackfill(guild.id, channel.id, before || null, true, read)
+      await save(true)
       return added
     }
     // Newest first, as Discord returns them.
@@ -118,10 +131,21 @@ async function readChannel (guild, channel, { wait = delay(), now = Date.now(), 
     const inWindow = batch.filter(m => m.timestamp >= since)
     added += await store.saveHistory(inWindow.map(m => toRow(m, guild, channel)).filter(Boolean))
     read += inWindow.length
-    const done = batch.length < left || inWindow.length < batch.length || (max !== null && read >= max)
-    if (batch.length) before = batch[batch.length - 1].id
-    await store.saveBackfill(guild.id, channel.id, before || null, done, read)
-    if (done) return added
+    // Only as far as what was in the window: a wider window later reads on from there.
+    if (inWindow.length) before = inWindow[inWindow.length - 1].id
+    if (inWindow.length < batch.length) {
+      await save(true)
+      return added
+    }
+    if (batch.length < left) {
+      await save(true, true) // the start of the channel
+      return added
+    }
+    if (max !== null && read >= max) {
+      await save(true)
+      return added
+    }
+    await save(false)
     await sleep(wait)
   }
 }

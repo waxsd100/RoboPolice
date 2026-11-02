@@ -3,18 +3,22 @@
 const format = require('pg-format')
 const pool = require('../../clients/postgres')
 
-// { before_id, read_count, done } for the channel, or null when it was never read.
+// { before_id, read_count, done, reached_start, limit_start, limit_max } for the channel, or null
+// when it was never read.
 async function backfillState (channelID) {
-  const rows = await pool.query('SELECT before_id, read_count, done FROM message_backfill WHERE channel_id = $1', [channelID])
+  const rows = await pool.query('SELECT before_id, read_count, done, reached_start, limit_start, limit_max FROM message_backfill WHERE channel_id = $1', [channelID])
   return rows.rows[0] || null
 }
 
-// readCount: how many messages of the channel's history have been read so far.
-async function saveBackfill (guildID, channelID, beforeID, done, readCount = 0) {
+// beforeID: the oldest message read; readCount: how many were read so far; done: stopped, at the
+// start of the channel (reachedStart) or at the limits read with (limitStart, a Date or null;
+// limitMax, a number or null).
+async function saveBackfill (guildID, channelID, { beforeID = null, done = false, readCount = 0, reachedStart = false, limitStart = null, limitMax = null } = {}) {
   await pool.query(
-    `INSERT INTO message_backfill (channel_id, guild_id, before_id, done, read_count, updated_at) VALUES ($1, $2, $3, $4, $5, now())
-     ON CONFLICT (channel_id) DO UPDATE SET before_id = $3, done = $4, read_count = $5, updated_at = now()`,
-    [channelID, guildID, beforeID, done, readCount])
+    `INSERT INTO message_backfill (channel_id, guild_id, before_id, done, read_count, reached_start, limit_start, limit_max, updated_at)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, now())
+     ON CONFLICT (channel_id) DO UPDATE SET before_id = $3, done = $4, read_count = $5, reached_start = $6, limit_start = $7, limit_max = $8, updated_at = now()`,
+    [channelID, guildID, beforeID, done, readCount, reachedStart, limitStart, limitMax])
 }
 
 // Stores messages read from history: [{ id, authorID, content, imageUrls, ts, channelID, guildID }]
