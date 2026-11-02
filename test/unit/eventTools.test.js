@@ -349,9 +349,6 @@ describe('describeServer', () => {
       '### サーバー絵文字（返事で使うときは、この書き方のまま書く）',
       '<:nobaman_wave:31> <a:party:32>',
       '',
-      '### 登録済みのイベント',
-      '定例会: 2026-11-03T10:00:00Z〜 渋谷',
-      '',
       '### YouTube',
       '設定なし'
     ].join('\n'))
@@ -363,14 +360,22 @@ describe('describeServer', () => {
     assert.match(text, /### YouTube\nのばまんch（動画 2 件を保存、取得 2026-10-29T12:00:00\.000Z）\n詳しくは search_youtube で調べる/)
   })
 
-  test('still describes the server when events or YouTube cannot be read', async () => {
+  test('scheduled events are not read for the profile: the model asks for them when it needs them', async () => {
+    const g = createGuild()
+    const calls = installBot({ guilds: [g], scheduledEvents: [{ name: '定例会', scheduled_start_time: '2026-11-03T10:00:00Z' }] })
+    installYouTubeStore()
+    const text = await describeServer(g, member, '1')
+    assert.doesNotMatch(text, /定例会|登録済みのイベント/)
+    assert.deepEqual(calls.filter(c => c.method === 'GET'), [])
+  })
+
+  test('still describes the server when YouTube cannot be read', async () => {
     const store = require('../../src/db/interfaces/postgres/youtube')
     store.getOverview = async () => { throw new Error('db down') }
     const g = createGuild()
     installBot({ guilds: [g] })
     global.bot.requestHandler.request = async () => { throw new Error('503') }
     const text = await describeServer(g, member, '1')
-    assert.match(text, /### 登録済みのイベント\n（取得できませんでした: 503）/)
     assert.match(text, /### YouTube\n設定なし/)
   })
 })
@@ -507,6 +512,15 @@ describe('requestChannelInfo', () => {
     assert.equal(requestChannelInfo('11', g), '#general（ID: 11、text、カテゴリ「雑談部屋」）\n  チャンネルの説明: なんでも 話す場所')
     assert.equal(requestChannelInfo('13', g), '#金曜の募集（ID: 13、thread、<#12>（#募集）の中のスレッド）\n  親チャンネルの説明: 一緒に遊ぶ人を募集')
     assert.equal(requestChannelInfo('999', g), null)
+  })
+})
+
+describe('worthSearching', () => {
+  const { worthSearching } = require('../../src/bot/modules/eventTools')
+
+  test('a greeting, emojis, mentions or a link alone are not looked up by meaning', () => {
+    for (const text of ['おはよう', 'w', '<@123> <:kusa:45> ！！', 'https://example.com/a/very/long/path', '草草草']) assert.equal(worthSearching(text), false, text)
+    for (const text of ['よつろんって何色？', '面白すぎて草', 'マイクラの話して']) assert.equal(worthSearching(text), true, text)
   })
 })
 
