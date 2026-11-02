@@ -122,8 +122,16 @@ describe('stores', { skip: !database.available && 'needs PGHOST' }, () => {
       assert.deepEqual(await store.nearestMessages('g1', ['c2'], axis(0), { model: 'A' }), [], 'only the asked channels')
       assert.deepEqual((await store.nearestMessages('g1', ['c1'], axis(0), { model: 'A', limit: 1 })).map(r => r.message_id), ['m8'])
       assert.deepEqual((await q('SELECT name FROM embedding_models ORDER BY name')).map(r => r.name), ['A', 'B'], 'one row per model')
-      const indexes = (await q("SELECT indexname FROM pg_indexes WHERE tablename IN ('message_embeddings', 'youtube_video_embeddings') AND indexdef LIKE '%hnsw%' ORDER BY indexname")).map(r => r.indexname)
-      assert.deepEqual(indexes, ['message_embeddings_hnsw', 'youtube_video_embeddings_hnsw'])
+      const indexes = (await q("SELECT indexname FROM pg_indexes WHERE indexdef LIKE '%hnsw%' ORDER BY indexname")).map(r => r.indexname)
+      assert.deepEqual(indexes, ['messages_embedding_hnsw'])
+      // Handled with nothing to embed: not pending, not found.
+      await store.saveMessageEmbeddings([], ['m5'], 'A')
+      assert.ok(!(await store.pendingMessages(10)).some(m => m.id === 'm5'))
+      assert.deepEqual(await q("SELECT embedding FROM messages WHERE id = 'm5'"), [{ embedding: null }])
+      // An edit sends it back.
+      await store.invalidateMessage('m8')
+      assert.ok((await store.pendingMessages(10)).some(m => m.id === 'm8'))
+      await store.saveMessageEmbeddings([{ id: 'm8', embedding: axis(0), model: 'A' }], ['m8'])
       assert.equal(await store.resetStaleMessageEmbeddings('A', 10), 1)
       assert.deepEqual((await store.pendingMessages(10)).map(m => m.id).slice(0, 1), ['m7'])
     })
@@ -262,9 +270,9 @@ describe('stores', { skip: !database.available && 'needs PGHOST' }, () => {
     await q("INSERT INTO messages (id, author_id, content, ts, channel_id, guild_id) VALUES ('hb1', 'u1', '編集後', '2026-10-01T00:00:00Z', 'hc1', 'g1')")
     const row = (id, extra = {}) => ({ id, authorID: 'u1', content: `古い ${id}`, imageUrls: [], ts: '2026-09-01T00:00:00.000Z', channelID: 'hc1', guildID: 'g1', ...extra })
     assert.equal(await history.saveHistory([row('hb1'), row('hb2', { imageUrls: ['https://cdn/a.png', 'https://cdn/b.png'] }), row('hb3', { guildID: 'gone' })]), 1)
-    assert.deepEqual(await q("SELECT id, content, ts, embedded FROM messages WHERE id LIKE 'hb%' ORDER BY id"), [
-      { id: 'hb1', content: '編集後', ts: new Date('2026-10-01T00:00:00Z'), embedded: false },
-      { id: 'hb2', content: '古い hb2', ts: new Date('2026-09-01T00:00:00Z'), embedded: false }
+    assert.deepEqual(await q("SELECT id, content, ts, embedding_model_id FROM messages WHERE id LIKE 'hb%' ORDER BY id"), [
+      { id: 'hb1', content: '編集後', ts: new Date('2026-10-01T00:00:00Z'), embedding_model_id: null },
+      { id: 'hb2', content: '古い hb2', ts: new Date('2026-09-01T00:00:00Z'), embedding_model_id: null }
     ])
     assert.deepEqual((await q("SELECT url FROM message_attachments WHERE message_id = 'hb2' ORDER BY position")).map(r => r.url), ['https://cdn/a.png', 'https://cdn/b.png'])
     assert.equal(await history.saveHistory([]), 0)
@@ -425,7 +433,7 @@ describe('stores', { skip: !database.available && 'needs PGHOST' }, () => {
       await store().setBotChannels([{ ref: '@other', id: 'UC2' }])
       assert.deepEqual(await q('SELECT channel_id FROM youtube_channels'), [{ channel_id: 'UC2' }])
       assert.deepEqual(await q('SELECT * FROM youtube_videos'), [])
-      assert.deepEqual(await q('SELECT * FROM youtube_video_embeddings'), [])
+      assert.deepEqual(await q('SELECT * FROM youtube_videos'), [])
       assert.deepEqual(await store().getLiveEvents('g1'), {})
       assert.equal(await store().isKnownChannel('UC1'), false)
 

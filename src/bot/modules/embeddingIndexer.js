@@ -62,7 +62,8 @@ async function indexMessages () {
   const vectors = wanted.length ? await embed(wanted.map(m => m.text)) : []
   await store.saveMessageEmbeddings(
     wanted.map((m, i) => ({ id: m.id, embedding: vectors[i], model: model() })),
-    pending.map(m => m.id))
+    pending.map(m => m.id),
+    model())
   return wanted.length
 }
 

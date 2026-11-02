@@ -89,7 +89,7 @@ async function backfill ({ pool, get, log = () => {} }) {
         const found = ids.filter(id => pending.has(id))
         if (found.length === 0) continue
         // Embedding skipped them for having no channel; now they can be embedded.
-        await pool.query('UPDATE messages SET channel_id = $1, guild_id = $2, embedded = false WHERE id = ANY($3) AND channel_id IS NULL', [channel.id, guildID, found])
+        await pool.query('UPDATE messages SET channel_id = $1, guild_id = $2, embedding = NULL, embedding_model_id = NULL WHERE id = ANY($3) AND channel_id IS NULL', [channel.id, guildID, found])
         for (const id of found) pending.delete(id)
         inChannel += found.length
         if (pending.size === 0) break
