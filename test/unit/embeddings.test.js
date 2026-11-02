@@ -106,6 +106,27 @@ describe('embeddingIndexer', () => {
     }
   })
 
+  test('drops the embeddings of noise embedded before it was left out, once, batch by batch', async (t) => {
+    t.mock.method(global.logger, 'info', () => {})
+    installEmbeddingModel()
+    const embedding = 'AAAA'
+    const saved = installEmbeddingStore({
+      messages: [
+        { message_id: '01', content: '明日の配信何時から？', embedding },
+        { message_id: '02', content: 'wwwwww', embedding },
+        { message_id: '03', content: 'https://youtu.be/abcdefghijk', embedding },
+        { message_id: '04', content: '草', embedding: null }
+      ]
+    })
+    Object.assign(indexer.cleanse, { after: '', cleansed: false, dropped: 0 })
+    assert.equal(await indexer.cleanseMessages(), 2)
+    assert.deepEqual(saved.dropped, ['02', '03'], 'only noise, and only what has an embedding')
+    assert.equal(await indexer.cleanseMessages(), 0)
+    assert.equal(indexer.cleanse.cleansed, true)
+    assert.equal(await indexer.cleanseMessages(), 0, 'done once')
+    assert.equal(saved.dropped.length, 2)
+  })
+
   test('a failure is logged and tried again next time', async (t) => {
     const warned = t.mock.method(global.logger, 'warn', () => {})
     installEmbeddingStore()

@@ -96,6 +96,14 @@ function installEmbeddingStore ({ videos = {}, messages = [], pending = [] } = {
     saved.handled.push(...handled)
   }
   store.invalidateMessage = async id => saved.invalidated.push(id)
+  // Embedded messages for cleansing: `messages` with an embedding, by ID.
+  saved.dropped = []
+  store.embeddedMessagesAfter = async (after, limit) => messages.filter(m => m.embedding && m.message_id > after)
+    .sort((a, b) => (a.message_id < b.message_id ? -1 : 1)).slice(0, limit).map(m => ({ id: m.message_id, content: m.content }))
+  store.dropMessageEmbeddings = async ids => {
+    saved.dropped.push(...ids)
+    return ids.length
+  }
   store.nearestMessages = async (guildID, channelIDs, q, { limit = 60 } = {}) => messages
     .filter(m => m.guild_id === guildID && channelIDs.includes(m.channel_id))
     .map(m => ({ message_id: m.message_id, score: similarity(q, fromBase64(m.embedding)) }))
