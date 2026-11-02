@@ -8,7 +8,7 @@
 // them again. EMOJI_DESCRIPTIONS=false turns it off.
 const store = require('../../db/interfaces/postgres/emojis')
 const urlFetcher = require('../utils/urlFetcher')
-const { callGemini, DEFAULT_GEMINI_MODEL } = require('./eventDrafter')
+const { callGemini, lightModel } = require('./eventDrafter')
 const { embed, model } = require('../utils/embeddings')
 const { isGatewayConfigured } = require('../utils/aiGateway')
 const { withoutCharCount } = require('../utils/textClean')
@@ -71,11 +71,11 @@ async function describeEmoji (emoji, context = {}) {
     for (const r of references) parts.push({ text: `参考: wiki の「${r.name}」の画像` }, inline(r.buffer, r.contentType))
   }
   parts.push({ text: `説明する絵文字「:${emoji.name}:」の画像` }, inline(buffer, contentType))
-  const content = await callGemini(process.env.GEMINI_MODEL || DEFAULT_GEMINI_MODEL, {
+  const content = await callGemini(lightModel(), {
     contents: [{ role: 'user', parts }],
     // Fewer tokens per image: emojis and the pictures they are compared with are small.
     generationConfig: { temperature: 0.2, mediaResolution: 'MEDIA_RESOLUTION_LOW' }
-  }, { timeoutMs: 30 * 1000 })
+  }, { timeoutMs: 30 * 1000, purpose: 'emoji' })
   const text = withoutCharCount(content.parts.map(p => p.text || '').join('').replace(/\s+/g, ' ').trim())
   if (!text) throw new Error('Gemini returned no description')
   return text.slice(0, MAX_DESCRIPTION)

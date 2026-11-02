@@ -256,6 +256,61 @@ describe('stores', { skip: !database.available && 'needs PGHOST' }, () => {
     assert.deepEqual((await q('SELECT url FROM web_sections')).map(r => r.url), ['topic:ぽみそしる'])
   })
 
+  test('past messages read back: stored with their own time and images, a message stored live is left as it is; progress kept', async () => {
+    const history = require('../../src/db/interfaces/postgres/messageHistory')
+    await require('../../src/db/interfaces/postgres/create').createGuild({ id: 'g1', ownerID: 'o1' })
+    await q("INSERT INTO messages (id, author_id, content, ts, channel_id, guild_id) VALUES ('hb1', 'u1', '編集後', '2026-10-01T00:00:00Z', 'hc1', 'g1')")
+    const row = (id, extra = {}) => ({ id, authorID: 'u1', content: `古い ${id}`, imageUrls: [], ts: '2026-09-01T00:00:00.000Z', channelID: 'hc1', guildID: 'g1', ...extra })
+    assert.equal(await history.saveHistory([row('hb1'), row('hb2', { imageUrls: ['https://cdn/a.png', 'https://cdn/b.png'] }), row('hb3', { guildID: 'gone' })]), 1)
+    assert.deepEqual(await q("SELECT id, content, ts, embedded FROM messages WHERE id LIKE 'hb%' ORDER BY id"), [
+      { id: 'hb1', content: '編集後', ts: new Date('2026-10-01T00:00:00Z'), embedded: false },
+      { id: 'hb2', content: '古い hb2', ts: new Date('2026-09-01T00:00:00Z'), embedded: false }
+    ])
+    assert.deepEqual((await q("SELECT url FROM message_attachments WHERE message_id = 'hb2' ORDER BY position")).map(r => r.url), ['https://cdn/a.png', 'https://cdn/b.png'])
+    assert.equal(await history.saveHistory([]), 0)
+
+    assert.equal(await history.backfillState('hc1'), null)
+    await history.saveBackfill('g1', 'hc1', { beforeID: '700' })
+    await history.saveBackfill('g1', 'hc1', { beforeID: '500', done: true, readCount: 200, limitStart: new Date('2026-08-01T00:00:00Z'), limitMax: 200 })
+    assert.deepEqual(await history.backfillState('hc1'), { before_id: '500', read_count: 200, done: true, reached_start: false, limit_start: new Date('2026-08-01T00:00:00Z'), limit_max: 200 })
+    await q("DELETE FROM messages WHERE id LIKE 'hb%'")
+  })
+
+  test('what a server is like: chunks replaced when they change, kept to the window, knowledge searched by meaning; a member\'s messages read back', async () => {
+    require('../helpers/fakes').restoreLoreStore()
+    const lore = require('../../src/db/interfaces/postgres/serverLore')
+    await require('../../src/db/interfaces/postgres/create').createGuild({ id: 'g1', ownerID: 'o1' })
+    await lore.saveChunk('g1', 'c1', '2026-11-02', 'h1', [{ kind: 'joke', name: '寝坊ネタ', content: '誰かが寝坊する' }, { kind: 'term', name: 'ねむ', content: '眠いの意' }])
+    await lore.saveChunk('g1', 'c1', '2026-10-26', 'h0', [{ kind: 'event', name: '大会', content: '先週の大会' }])
+    assert.deepEqual(await lore.chunkHashes('g1'), { 'c1|2026-11-02': 'h1', 'c1|2026-10-26': 'h0' })
+    await lore.saveChunk('g1', 'c1', '2026-11-02', 'h2', [{ kind: 'joke', name: '寝坊ネタ', content: '今週も寝坊' }])
+    assert.deepEqual((await q("SELECT name, content FROM guild_lore_facts WHERE week = '2026-11-02'")), [{ name: '寝坊ネタ', content: '今週も寝坊' }])
+    assert.equal(await lore.deleteChunksExcept('g1', ['c1|2026-11-02']), 1)
+    assert.deepEqual((await q('SELECT name FROM guild_lore_facts')).map(r => r.name), ['寝坊ネタ'], 'the old week\'s knowledge went with it')
+
+    const axis = i => { const v = new Int8Array(512); v[i] = 127; return v }
+    assert.equal(await lore.hasFacts('g1'), false)
+    const [pending] = await lore.factsToEmbed('A', 10)
+    await lore.saveFactEmbedding(pending.id, axis(0), 'A')
+    assert.equal(await lore.hasFacts('g1'), true)
+    assert.deepEqual((await lore.nearestFacts('g1', axis(0), 'A', 3)).map(f => [f.name, f.week, Math.round(f.score)]), [['寝坊ネタ', '2026-11-02', 1]])
+    assert.deepEqual(await lore.nearestFacts('g2', axis(0), 'A', 3), [])
+
+    await lore.saveStyle('g1', 'ゆるい', 's1')
+    assert.equal((await lore.getStyle('g1')).style, 'ゆるい')
+    await lore.deleteStyle('g1')
+    assert.equal(await lore.getStyle('g1'), null)
+
+    await q(`INSERT INTO messages (id, author_id, content, ts, channel_id, guild_id) VALUES
+      ('lm1', 'lore-u1', 'おはよう', '2026-11-01T01:00:00Z', 'lore-c1', 'g1'), ('lm2', 'lore-u1', 'ねむ', '2026-11-02T01:00:00Z', 'lore-c1', 'g1'),
+      ('lm3', 'lore-u1', '秘密', '2026-11-02T02:00:00Z', 'lore-c9', 'g1'), ('lm4', 'lore-u2', 'やあ', '2026-11-02T03:00:00Z', 'lore-c1', 'g1')`)
+    assert.deepEqual((await lore.memberMessages('g1', 'lore-u1', ['lore-c1'], 10)).map(m => m.content), ['ねむ', 'おはよう'])
+    assert.deepEqual((await lore.channelMessages('g1', 'lore-c1', new Date('2026-11-01T12:00:00Z'))).map(m => m.content), ['ねむ', 'やあ'])
+    await q("DELETE FROM messages WHERE id LIKE 'lm%'")
+    await lore.saveChunk('g1', 'c1', '2026-11-02', 'h3', [])
+    await q("DELETE FROM guild_lore_chunks WHERE guild_id = 'g1'")
+  })
+
   describe('YouTube', () => {
     const store = () => require('../../src/db/interfaces/postgres/youtube')
     const video = (id, extra = {}) => ({ id, title: `動画 ${id}`, description: '', publishedAt: `2026-10-0${id.slice(1)}T00:00:00Z`, liveStatus: 'none', scheduledStart: null, duration: 'PT1H', ...extra })

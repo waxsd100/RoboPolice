@@ -32,7 +32,7 @@ describe('summarizeVideo', () => {
     assert.deepEqual(result, { videoID: 'dQw4w9WgXcQ', summary: '・11/3 に記念配信\n・場所は渋谷', cached: false })
     const [{ url, body }] = requests
     assert.match(url, /models\/gemini-flash-latest:generateContent$/)
-    assert.deepEqual(body.contents[0].parts[0], { fileData: { fileUri: 'https://www.youtube.com/watch?v=dQw4w9WgXcQ' } })
+    assert.deepEqual(body.contents[0].parts[0], { fileData: { fileUri: 'https://www.youtube.com/watch?v=dQw4w9WgXcQ' }, videoMetadata: { fps: 0.2 } })
     assert.match(body.contents[0].parts[1].text, /要約してください/)
     assert.equal(body.generationConfig.mediaResolution, 'MEDIA_RESOLUTION_LOW')
     assert.deepEqual(store.writes, [{ saveSummary: ['100', 'dQw4w9WgXcQ'] }])
@@ -71,10 +71,21 @@ describe('videos too long for one request', () => {
     ])
     const { summary } = await summarizeVideo('100', 'https://youtu.be/longStream1')
     const clips = requests.slice(1, 4).map(r => r.body.contents[0].parts[0].videoMetadata)
-    assert.deepEqual(clips, [{ startOffset: '0s', endOffset: '7200s' }, { startOffset: '7200s', endOffset: '14400s' }, { startOffset: '14400s', endOffset: '16200s' }])
+    assert.deepEqual(clips, [{ fps: 0.2, startOffset: '0s', endOffset: '7200s' }, { fps: 0.2, startOffset: '7200s', endOffset: '14400s' }, { fps: 0.2, startOffset: '14400s', endOffset: '16200s' }])
     assert.match(requests[2].body.contents[0].parts[1].text, /2:00:00〜4:00:00 の部分だけ/)
+    assert.match(requests[1].url, /gemini-flash-latest:generateContent/)
+    assert.match(requests.at(-1).url, /gemini-flash-lite-latest:generateContent/, 'putting the parts together needs no video model')
     assert.equal(summary, '[0:00] 挨拶\n[1:05:00] 告知\n[2:10:00] ゲーム開始\n[4:00:30] 締め')
     assert.equal(store.summaries[100].longStream1, summary)
+  })
+
+  test('VIDEO_SUMMARY_FPS sets the frames a second; the parts are put together by the lighter model', async () => {
+    process.env.VIDEO_SUMMARY_FPS = '1'
+    const requests = installGemini([[{ text: '要約' }]])
+    await summarizeVideo('100', 'https://youtu.be/fpsCheck001')
+    assert.deepEqual(requests[0].body.contents[0].parts[0].videoMetadata, { fps: 1 })
+    assert.match(requests[0].url, /gemini-flash-latest:generateContent/)
+    delete process.env.VIDEO_SUMMARY_FPS
   })
 
   test('say so when the length is not known', async (t) => {

@@ -193,7 +193,9 @@ describe('draft', () => {
     const prompt = requests[0].body.contents[0].parts[0].text
     assert.match(prompt, /現在日時: 2026年10月29日木曜日 15:00（Asia\/Tokyo）/)
     assert.match(prompt, /依頼されたチャンネル: #general/)
-    assert.match(prompt, /## 依頼メッセージ\n交流会/)
+    assert.match(prompt, /## 依頼メッセージ（\d+文字）\n交流会/)
+    assert.match(prompt, /## 依頼メッセージ（3文字）/, 'its length, to choose how long to answer')
+    assert.match(requests[0].body.systemInstruction.parts[0].text, /返事の長さは毎回、依頼の中身と長さを見て決める/)
     assert.match(prompt, /## 依頼メッセージの返信先\n告知文/)
   })
 
@@ -437,5 +439,34 @@ describe('rate limits (HTTP 429)', () => {
     scriptedFetch([200])
     await callGemini('m', {})
     assert.equal(require('../../src/bot/utils/geminiUsage').currentUsage(), null)
+  })
+})
+
+describe('token cost', () => {
+  const { lightModel } = require('../../src/bot/modules/eventDrafter')
+  const { tokenCounts, logTokens } = require('../../src/bot/utils/geminiUsage')
+
+  test('background work uses the lighter model unless GEMINI_LIGHT_MODEL says otherwise', () => {
+    configureGateway()
+    assert.equal(lightModel(), 'gemini-flash-lite-latest')
+    process.env.GEMINI_LIGHT_MODEL = 'gemini-2.5-flash-lite'
+    assert.equal(lightModel(), 'gemini-2.5-flash-lite')
+    process.env.GEMINI_LIGHT_MODEL = ''
+    process.env.GEMINI_MODEL = 'gemini-2.5-pro'
+    assert.equal(lightModel(), 'gemini-2.5-pro', 'empty: the main model for everything')
+    configureGateway()
+  })
+
+  test('tokens are counted by purpose and model, and logged', async (t) => {
+    configureGateway()
+    logTokens()
+    global.fetch = async () => ({ ok: true, json: async () => ({ candidates: [{ content: { parts: [call('submit_chat_reply', { text: 'やあ' })] } }], usageMetadata: { promptTokenCount: 1200, cachedContentTokenCount: 1000, candidatesTokenCount: 30, thoughtsTokenCount: 200 } }) })
+    await draft({ request: 'こんにちは', channelName: 'general', guild, tools: { declarations: [], call: async () => ({}) }, now: NOW })
+    assert.deepEqual(tokenCounts()['mention (gemini-flash-latest)'], { calls: 1, prompt: 1200, cached: 1000, output: 30, thoughts: 200 })
+    const logged = []
+    t.mock.method(global.logger, 'info', m => logged.push(m))
+    logTokens()
+    assert.match(logged[0], /mention \(gemini-flash-latest\): 1 call\(s\), in 1200 \(cached 1000\), out 30, thinking 200/)
+    assert.deepEqual(tokenCounts(), {}, 'counted again from zero')
   })
 })

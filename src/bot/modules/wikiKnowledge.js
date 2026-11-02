@@ -13,7 +13,7 @@ const urlFetcher = require('../utils/urlFetcher')
 const { parseWikiPage } = require('../utils/wikiPage')
 const { embed, embedQuery, model } = require('../utils/embeddings')
 const { isGatewayConfigured } = require('../utils/aiGateway')
-const { callGemini, DEFAULT_GEMINI_MODEL } = require('./eventDrafter')
+const { callGemini, lightModel } = require('./eventDrafter')
 const { withoutCharCount } = require('../utils/textClean')
 const store = require('../../db/interfaces/postgres/wiki')
 const xStore = require('../../db/interfaces/postgres/xKnowledge')
@@ -103,10 +103,10 @@ const FACT_SCHEMA = {
 
 // The knowledge in one part: [{ kind, name, aliases, content }].
 async function extractFacts (section) {
-  const content = await callGemini(process.env.GEMINI_MODEL || DEFAULT_GEMINI_MODEL, {
+  const content = await callGemini(lightModel(), {
     contents: [{ role: 'user', parts: [{ text: `${EXTRACT_PROMPT}\n\nページ: ${section.title}\n見出し: ${section.heading}\n本文:\n${section.text}` }] }],
     generationConfig: { temperature: 0, responseMimeType: 'application/json', responseSchema: FACT_SCHEMA }
-  }, { timeoutMs: 60 * 1000 })
+  }, { timeoutMs: 60 * 1000, purpose: 'wikiFacts' })
   const raw = JSON.parse(content.parts.map(p => p.text || '').join('') || '[]')
   return (Array.isArray(raw) ? raw : [])
     .filter(f => KINDS.includes(f?.kind) && String(f.name || '').trim() && String(f.content || '').trim())

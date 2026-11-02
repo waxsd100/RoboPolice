@@ -43,9 +43,10 @@ Short version; the Privacy Policy is authoritative.
 
 | Data | Where | Retention |
 |---|---|---|
-| Message ID, author ID, channel ID, server ID, timestamp, content and image URLs (not encrypted by the app; see below) | PostgreSQL `messages`, `message_attachments` | `MESSAGE_HISTORY_DAYS` days, or forever if unset; all of a server's go when the app leaves it |
+| Message ID, author ID, channel ID, server ID, timestamp, content and image URLs, as received and as read back from channel history (not encrypted by the app; see below) | PostgreSQL `messages`, `message_attachments` (and `message_backfill`, how far back each channel was read) | `MESSAGE_HISTORY_DAYS` days, or forever if unset; all of a server's go when the app leaves it |
 | Per-server settings (log channels, ignored channels, disabled events), and the server's name, icon URL, member count and when the app joined | PostgreSQL `guilds`, `guild_emojis` (custom emojis with an AI description), `guild_event_logs`, `guild_ignored_channels`, `guild_disabled_events` | Until the app leaves the server |
 | Invite counters, webhook handles, guild settings | Redis | 3 hours |
+| With `SERVER_LORE=true` only: what each server is like, taken out of its stored messages in `@everyone` channels (running jokes, words, happenings, topics, and how it talks; nothing about a single member) | PostgreSQL `guild_lore_chunks`, `guild_lore_facts`, `guild_lore_style` | The last `SERVER_LORE_WEEKS` weeks (default 8), taken out again when the messages change; all of a server's go when the app leaves it |
 | The YouTube channels the bot follows (`YOUTUBE_CHANNELS`), their descriptions and every video read from them, each server's event setting, plus summaries of linked videos' contents (public YouTube data) | PostgreSQL `youtube_channels`, `youtube_videos`, `youtube_summaries`, `guild_youtube_summaries`, `guilds.youtube_live_events` | Channels and videos until the bot no longer follows the channel; summaries while their video is stored, or else until no server that asked for them remains |
 
 Message content, image URLs and message embeddings are stored as they are: the app no longer
@@ -56,6 +57,21 @@ that still has encrypted rows.
 
 Message rows are written **only for servers that have a message deletion or edit log channel
 configured** — a server with none never has message content stored, since nothing could read it back.
+
+Messages sent before the app stored them (before it joined, before the server set a message log, or
+in channels quiet since) are **read back from each channel's history** (`historyBackfill.js`), under
+the same rules: text, voice, announcement and stage channels and active threads the app can read back,
+not ignored channels, not bots or automod notices. Each is stored with its own time, a message already
+stored is left as it is, and image URLs go with it. How far back, whichever comes first: a date,
+`HISTORY_BACKFILL_SINCE` (`YYYY-MM-DD`, from the start of that day in Japan), and/or a number of days,
+`HISTORY_BACKFILL_DAYS` (`0` for no limit; with neither set, 90 days); and a number of messages per
+channel, `HISTORY_BACKFILL_MAX_MESSAGES`. Never further than `MESSAGE_HISTORY_DAYS`: anything older
+would be pruned at once. 100 messages a request, one request every `HISTORY_BACKFILL_DELAY_MS` (default 1000); where each
+channel got to is kept in `message_backfill`, so a restart goes on from there. A channel that stopped
+at the limits is read on from where it stopped when they are widened later (an earlier date, more
+days or more messages); one read to its very start is not read again. Every worker does the servers it hosts, checking hourly for
+new channels and servers that set a message log. `HISTORY_BACKFILL=false` turns it off. A large
+server's history takes disk space: with no retention set, 90 days is read unless told otherwise.
 
 ## コマンド一覧
 
@@ -223,6 +239,35 @@ with such a log channel, only messages stored since the channel/server columns w
 have no channel), and only within `MESSAGE_HISTORY_DAYS`. `get_recent_messages` still reads the latest
 messages straight from Discord when nothing is stored.
 
+### What each server is like (`SERVER_LORE`)
+
+Off by default. With `SERVER_LORE=true` the assistant learns each server it is in, so it talks as one
+of its own there:
+
+- **Running jokes, words and happenings.** Once a day, the worker hosting the server reads its stored
+  messages (the same `messages` table the logs use, so only servers with a message log) in text and
+  announcement channels `@everyone` can read, one chunk per channel and week for the last
+  `SERVER_LORE_WEEKS` weeks (default 8; weeks with fewer than 15 messages are skipped, bots' messages
+  are left out). Gemini takes out running jokes, words and nicknames, happenings and topics, told to
+  leave out personal information and judgements of anyone. A chunk is read again only when its
+  messages changed (an edit, a deletion, `/clearmydata`), and a chunk out of the window goes, so
+  what is kept follows what is stored. Stored in `guild_lore_chunks` / `guild_lore_facts`, embedded.
+- **How the server talks.** From the latest messages of those channels, a short description of the
+  server's tone (wording, endings, how hard the jokes land), refreshed weekly at most, in
+  `guild_lore_style`. Nothing about a single member is written.
+- In the server profile sent with a request: the style, and up to five pieces of the server's
+  knowledge close in meaning to the request (drawn at random among the close ones). With
+  `MESSAGE_EMBEDDINGS=true` also up to five past messages close to the request, from channels the
+  requester and the app can read.
+- **Members are looked up only when asked about**, with the `about_member` tool: display name, roles,
+  join date, and their latest stored messages (up to 30) in channels the requester and the app can
+  read. Nothing is kept from it. Without `SERVER_LORE` the tool returns only what Discord shows (no
+  messages).
+
+This uses the stored log messages for something the Privacy Policy and the privileged intent answers
+do not declare yet. Update them before turning it on
+(see [`docs/discord/privileged-intent-review.md`](docs/discord/privileged-intent-review.md) §9).
+
 ### YouTube knowledge
 
 The YouTube channels are the bot's, the same for every server: `YOUTUBE_CHANNELS` names them
@@ -336,7 +381,7 @@ that contains every word of the query still comes first.
 - With message embeddings on, **every stored message is sent to Google Gemini** to be embedded, not
   only mentions. Update the Privacy Policy and the privileged intent answers before turning it on.
 
-Every Gemini call goes through Cloudflare AI Gateway. YouTube Data API calls can too: in the
+Every Gemini call goes through Cloudflare AI Gateway. The tokens each kind of call uses (prompt, of it served from Gemini's cache, answer and thinking, by purpose and model) are logged once an hour (`[GEMINI]: Tokens in the last hour`), to see where the cost goes. YouTube Data API calls can too: in the
 dashboard, add a custom provider (AI Gateway → Custom Providers) with base URL
 `https://www.googleapis.com` and a slug such as `youtube`, then set `YOUTUBE_GATEWAY_PROVIDER=youtube`.
 Requests then go to `…/custom-youtube/youtube/v3/…` with the gateway token. Either way the API key is
@@ -510,6 +555,8 @@ the secrets if it leaks, so keep it only on the platform and delete it in the co
 | `CLOUDFLARE_AI_GATEWAY_BYOK_ALIAS` | Optional. Name of the Gemini key stored in the gateway (BYOK), sent as `cf-aig-byok-alias`. Unset uses the key named `default` |
 | `GEMINI_API_KEY` | Optional when the key is stored in the gateway (BYOK); otherwise required for drafting from mentions |
 | `GEMINI_MODEL` | Optional. Defaults to `gemini-flash-latest` |
+| `GEMINI_LIGHT_MODEL` | Optional (default `gemini-flash-lite-latest`). The cheaper model for work in the background: taking knowledge out of the wiki, X and web pages and the servers' messages (`SERVER_LORE`), describing emojis, stream blurbs, game links, and putting a long video's parts together. Empty to use `GEMINI_MODEL` for everything. Mention replies and video summaries use `GEMINI_MODEL` |
+| `VIDEO_SUMMARY_FPS` | Optional (default `0.2`, one frame every 5 seconds; Gemini's own default is 1). Frames a second Gemini looks at when summarizing a video. Each frame costs tokens while the sound is heard throughout, so fewer frames cost much less |
 | `MENTION_TOKEN_FOOTER` | Optional. Chat replies end with the Gemini tokens they used in Discord's small grey text (`-# tokens: in … (cached …) · out … · thinking … · N Gemini calls`); `false` leaves it out |
 | `GEMINI_TEMPERATURE` | Optional (default `0.7`, 0–2). How varied mention replies and drafts are; higher is more varied. Drafts are checked field by field either way |
 | `GEMINI_MAX_STEPS` | Optional (default `20`). How many Gemini round trips a reply or draft may take (each lookup is one); the last one may only answer with what was found |
@@ -536,6 +583,13 @@ the secrets if it leaks, so keep it only on the platform and delete it in the co
 | `YOUTUBE_AUTO_SYNC_MINUTES` | Optional. How often to check the bot's YouTube channels for new videos. Defaults to 15; 0 turns it off |
 | `YOUTUBE_LIVE_POLL_SECONDS` | Optional. How often to check for streams on servers with stream events on. Defaults to 60; 0 turns it off |
 | `YOUTUBE_WEBSUB_URL`, `YOUTUBE_WEBSUB_SECRET` | Optional. The service's public HTTPS address and a secret, to receive YouTube pushes (see above). `PORT` sets the port listened on (Railway sets it) |
+| `HISTORY_BACKFILL` | Optional. `false` stops reading channels' past messages back (see "What is stored"). On by default |
+| `HISTORY_BACKFILL_DAYS` | Optional. How many days of past messages to read back; `0` for no day limit. Default 90 when `HISTORY_BACKFILL_SINCE` is not set either. Never past `MESSAGE_HISTORY_DAYS` |
+| `HISTORY_BACKFILL_SINCE` | Optional. Read past messages back only to this date (`YYYY-MM-DD`, Japan time). With `HISTORY_BACKFILL_DAYS` too, the later of the two |
+| `HISTORY_BACKFILL_MAX_MESSAGES` | Optional. At most this many past messages per channel (newest first); unset or `0` for no limit |
+| `HISTORY_BACKFILL_DELAY_MS` | Optional (default `1000`). Wait between two history requests (100 messages each) |
+| `SERVER_LORE` | Optional. `true` learns each server's running jokes, words and tone from its stored messages in `@everyone` channels, and lets `about_member` read a member's recent messages when asked (see "What each server is like"). Off by default: update the Privacy Policy and the intent answers first |
+| `SERVER_LORE_WEEKS` | Optional (default `8`). How many recent weeks of messages `SERVER_LORE` learns from; older knowledge is dropped |
 | `MESSAGE_EMBEDDINGS` | Optional. `true` embeds every stored message for search by meaning (sends them to Gemini; see above). Off by default |
 | `EMBEDDING_INTERVAL_MINUTES` | Optional. How often to embed new videos and messages. Defaults to 5; 0 turns it off |
 | `GEMINI_EMBEDDING_MODEL` | Optional. Defaults to `gemini-embedding-001` |
