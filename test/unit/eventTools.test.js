@@ -252,6 +252,11 @@ describe('readThread', () => {
       'me (1)（依頼者）: それの続編は？',
       'あなた（BOT）: 続編は△△だよ'
     ])
+    // What knowledge is looked up by: the members' side only.
+    assert.deepEqual(thread.othersText.split('\n').map(l => l.replace(/^\[[^\]]+\] /, '')), [
+      'me (1)（依頼者）: おすすめの動画は？',
+      'me (1)（依頼者）: それの続編は？'
+    ])
   })
 
   test('stops at 10 messages and at a deleted one', async () => {

@@ -226,9 +226,9 @@ describe('draft', () => {
 
   test('what changes least comes first and the request last, so a prompt cache covers more', async () => {
     const requests = installGemini([[call('submit_chat_reply', { text: 'x' })]])
-    await draft({ request: 'やあ', referenced: { text: '前の話', count: 1 }, channelName: 'general', server: 'サーバーの説明', recentReplies: ['前の返事'], guild, tools, now: NOW })
+    await draft({ request: 'やあ', referenced: { text: '前の話', count: 1 }, channelName: 'general', server: 'サーバーの説明', guild, tools, now: NOW })
     const prompt = requests[0].body.contents[0].parts[0].text
-    const order = ['## 話し方', '## 返事の長さ', '## このサーバーの情報', '## 最近の返事', '依頼されたチャンネル:', '## 依頼メッセージの返信先', '現在日時:', '## 依頼メッセージ（'].map(h => prompt.indexOf(h))
+    const order = ['## 話し方', '## 返事の長さ', '## このサーバーの情報', '依頼されたチャンネル:', '## 依頼メッセージの返信先', '現在日時:', '## 依頼メッセージ（'].map(h => prompt.indexOf(h))
     assert.ok(order.every(i => i >= 0), 'every part is there')
     assert.deepEqual(order, [...order].sort((a, b) => a - b))
     assert.ok(prompt.trimEnd().endsWith('</untrusted>'), 'the request is last')
@@ -256,7 +256,8 @@ describe('draft', () => {
     const requests = installGemini([[call('submit_chat_reply', { text: 'x' })]])
     await draft({ request: 'それの続編は？', referenced: { text: 'me: おすすめは？\nあなた（BOT）: 〇〇！', count: 2 }, channelName: 'general', guild, tools, now: NOW })
     assert.match(requests[0].body.contents[0].parts[0].text, /## 依頼メッセージの返信先（返信をたどった会話。古い順で、最後が直接の返信先。依頼メッセージはこの続き）\n<untrusted source="conversation">\nme: おすすめは？\nあなた（BOT）: 〇〇！/)
-    assert.match(requests[0].body.systemInstruction.parts[0].text, /「あなた（BOT）」は、あなた自身がこれまでに送ったメッセージです。必ずその会話の続きとして/)
+    assert.match(requests[0].body.systemInstruction.parts[0].text, /「あなた（BOT）」は、あなた自身がこれまでに送ったメッセージです。答えるのは最後の依頼メッセージ/)
+    assert.match(requests[0].body.systemInstruction.parts[0].text, /前の自分の発言の話題・ネタ・口調・言い回しを引きずったり/)
   })
 
   test('lists attached images and the named forum in the prompt', async () => {
@@ -333,18 +334,20 @@ describe('draft', () => {
     assert.match(last.contents.at(-1).parts.at(-1).text, /これ以上ツールで調べず/)
   })
 
-  test('shows the bot\'s recent replies so it does not repeat itself, and answers with some variety', async (t) => {
+  test('without a reply, brings in no conversation; speaks the same in every channel; answers with some variety', async (t) => {
     const requests = installGemini([[call('submit_chat_reply', { text: 'やあ' })]])
-    await draft({ request: 'こんにちは', channelName: 'general', guild, tools, recentReplies: ['ご安心を！\n今日も元気', '前の返事'], now: NOW })
+    await draft({ request: 'こんにちは', channelName: 'general', guild, tools, now: NOW })
     const prompt = requests[0].body.contents[0].parts[0].text
-    assert.match(prompt, /## 最近の返事[^\n]*\n<untrusted source="recent_replies">\n- ご安心を！ 今日も元気\n- 前の返事/)
+    assert.doesNotMatch(prompt, /最近の返事|返信先/)
+    const system = requests[0].body.systemInstruction.parts[0].text
+    assert.match(system, /依頼メッセージが返信のときだけ、返信をたどった会話を渡している/)
+    assert.match(system, /返事の長さは、どのチャンネルでも同じに/)
     assert.equal(requests[0].body.generationConfig.temperature, 1)
     process.env.GEMINI_TEMPERATURE = '1.2'
     t.after(() => { delete process.env.GEMINI_TEMPERATURE })
     const again = installGemini([[call('submit_chat_reply', { text: 'やあ' })]])
     await draft({ request: 'こんにちは', channelName: 'general', guild, tools, now: NOW })
     assert.equal(again[0].body.generationConfig.temperature, 1.2)
-    assert.doesNotMatch(again[0].body.contents[0].parts[0].text, /最近の返事/)
     process.env.GEMINI_TEMPERATURE = '9'
     const outOfRange = installGemini([[call('submit_chat_reply', { text: 'やあ' })]])
     await draft({ request: 'こんにちは', channelName: 'general', guild, tools, now: NOW })

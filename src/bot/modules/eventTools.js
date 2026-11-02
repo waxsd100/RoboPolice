@@ -215,7 +215,14 @@ function createTools ({ guild, member, ask, progress = () => {} }) {
       messages.unshift(m)
       next = m.messageReference && { channelID: m.messageReference.channelID || next.channelID, messageID: m.messageReference.messageID }
     }
-    return { text: messages.map(m => formatMessage(m, member.id)).join('\n'), count: messages.length }
+    return {
+      text: messages.map(m => formatMessage(m, member.id)).join('\n'),
+      count: messages.length,
+      // The conversation without the bot's own replies: what knowledge is looked up by
+      // (describeServer), so the bot's earlier answers do not keep bringing back the same
+      // knowledge, and with it the same jokes.
+      othersText: messages.filter(m => m.author?.id !== global.bot.user.id).map(m => formatMessage(m, member.id)).join('\n')
+    }
   }
 
   const executors = {

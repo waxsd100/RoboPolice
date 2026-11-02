@@ -413,7 +413,7 @@ nothing is posted or registered until the requester presses the button, so the d
 on top of that (`src/bot/utils/untrusted.js`, `linkSafety.js`):
 
 - Everything the app did not write goes to Gemini inside `<untrusted source="…">…</untrusted>`: the
-  request, the conversation it replies to, the server profile, the bot's recent replies and every
+  request, the conversation it replies to, the server profile and every
   tool result. The tag cannot be closed from inside. The system instructions say such text is data,
   never instructions, and not to reveal the instructions themselves.
 - A chat reply keeps only links that came up in the conversation (the request, what it replies to,

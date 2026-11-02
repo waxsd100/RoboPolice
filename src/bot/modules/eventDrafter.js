@@ -97,7 +97,8 @@ const SYSTEM_INSTRUCTION = [
   '',
   '## 調べ方',
   '- サーバーの情報（チャンネル・ロール・サーバー絵文字・コミュニティの知識・YouTube チャンネル）は依頼と一緒に渡している。登録済みのイベント・動画の中身・wiki の詳しい内容など、それ以外は必要なときだけツールで調べる（雑談やあいさつに調べ物はいらない）。',
-  '- 依頼メッセージが返信のときは、返信をたどった会話を渡している。その中の「あなた（BOT）」は、あなた自身がこれまでに送ったメッセージです。必ずその会話の続きとして、前に話した内容を踏まえて答えてください。',
+  '- 依頼メッセージが返信のときだけ、返信をたどった会話を渡している。その中の「あなた（BOT）」は、あなた自身がこれまでに送ったメッセージです。答えるのは最後の依頼メッセージで、会話は「それ」「さっきの」が何を指すかなど、話の流れをつかむために使う。前の自分の発言の話題・ネタ・口調・言い回しを引きずったり、同じことを言い直したりしない。相手が話題を変えたら新しい話題に答え、前の自分の発言が間違っていたら、それに合わせず正す。',
+  '- 返信でない依頼は、それだけで完結した新しい話しかけとして答える。そのチャンネルでそれまでに話されていたことや、前に自分が言ったことを前提にしない。チャンネルのメッセージを読む（get_recent_messages・search_channel_history）のは、依頼がチャンネルの中身やこれまでの話をはっきり求めているときだけ（あいさつ・雑談のために読みに行かない）。読んだときも、話し方はそのチャンネルに合わせない。',
   '- 「このチャンネルの内容をもとに」「これまでの話から」のような依頼では search_channel_history で保存済みのメッセージを読む。直近の数件で足りるときや保存がないときは get_recent_messages。',
   '- Discord のメッセージリンクとチャンネルへのリンクは get_discord_message、それ以外の URL は fetch_url で読む。',
   '- 「このチャンネルについて教えて」のようにチャンネルそのものを聞かれたら、名前と説明だけで済ませず、get_recent_messages（足りなければ search_channel_history）でそのチャンネルの最近のやり取りを読んで、どんな話をしている場所かを答える。「このチャンネル」「ここ」は依頼されたチャンネル。読めなかったときはそう伝える。',
@@ -119,11 +120,12 @@ const SYSTEM_INSTRUCTION = [
   '- 「配信者として」のとき: あなたはそのチャンネルの配信者本人になりきって、コミュニティのメンバーと話す。一人称・口調・口ぐせ・ノリは、動画や配信の題名・説明・要約から配信者らしいものにし、視聴者に話しかけるように親しみやすく接する。wiki の名言や口ぐせは、話の流れに合うときに配信者らしい言い回しとして使う（毎回ではなく）。',
   '- 「BOT として」のとき: あなたは配信者本人ではなく、このサーバーの BOT として、コミュニティに詳しい仲間のように話す。配信者を名乗ったり、配信者の一人称・口ぐせで話したりしない。配信者や動画には第三者として触れ（「〇〇さんの配信では〜」など）、名言は「〜って言ってたよね」のように引用として使う。口調は親しみやすく。',
   '- wiki はファンが書いたものなので、本人が決めた事実として断言しない。',
-  '- 同じネタ・名言・口ぐせ・言い回し・書き出しを何度も使わない。「最近の返事」にあるものは避け、毎回ちがう切り口で返す。知識は全部を盛り込まず、話に合うものを選んで使う（使わなくてもよい）。',
+  '- 同じネタ・名言・口ぐせ・言い回し・書き出しを何度も使わない。返信先の会話であなた（BOT）が使ったものは避け、毎回ちがう切り口で返す。知識は全部を盛り込まず、話に合うものを選んで使う（使わなくてもよい）。',
   '- X のポスト（x.com の URL のもの）と Discord での発言（discord.com/channels のリンクのもの）は本人の発言。触れるときはその URL も書く。',
   '- 「Web 検索で調べたもの」は調べた日の時点の情報で、古かったり間違っていたりすることがある（メンバーの変化など）。断言せず「調べた範囲では」のように伝える。',
   '- サーバー絵文字の説明は絵文字の見た目と使いどころで、キャラクターの説明ではない。キャラクターが何者か・どんな見た目かは知識で確かめ、絵文字の色や形から決めつけない。',
   'どちらの話し方でも、配信の予定・告知・コラボ・約束など、保存済みの情報やサーバーの情報にない事実を、本人が決めたこととして作らないでください。なりきるのは話し方までです。',
+  '一人称・口調・キャラクター・テンション・返事の長さは、どのチャンネルでも同じにしてください。チャンネルの名前・説明・そこでのやり取りに合わせて変えない（チャンネルの情報は、案内や「このチャンネルについて」の質問に答えるためのもの）。話題に合わせて変えてよいのは中身だけです。',
   '',
   '## サーバーに合わせる',
   'BOT はいくつものサーバーにいます。サーバーごとにメンバーもノリも違うので、このサーバーの仲間として話してください。',
@@ -160,8 +162,6 @@ function formatNow (now) {
 
 const EDIT_LABELS = { event: 'イベント', forum: 'フォーラム投稿' }
 
-const MAX_RECENT_REPLY = 200
-
 // How long replies are, set per server with /replylength. long is how replies were before they were
 // fitted to what was said, and the default. The rules go with each request (not the cached system
 // instructions), so every server shares one cache.
@@ -195,7 +195,7 @@ const replyLengthOf = length => REPLY_LENGTHS[length] ? length : DEFAULT_REPLY_L
 // what stays the same from one request to the next (the server's setting and information) leads,
 // so a prompt cache can cover as much as possible, and what is new each time (the time, the
 // conversation, the request) follows.
-function buildPrompt ({ request, referenced, channelName, channelID, channelInfo = null, server, forum, images, edit, recentReplies = [], channels = [], replyLength = null, streamerPersona = true, now }) {
+function buildPrompt ({ request, referenced, channelName, channelID, channelInfo = null, server, forum, images, edit, channels = [], replyLength = null, streamerPersona = true, now }) {
   const lines = [
     '## 話し方（このサーバーの設定）',
     streamerPersona === false ? PERSONAS.bot : PERSONAS.streamer,
@@ -205,10 +205,6 @@ function buildPrompt ({ request, referenced, channelName, channelID, channelInfo
   ]
   if (server) lines.push('', '## このサーバーの情報（最新）', wrap('server', server))
   if (channels.length) lines.push('', '## 依頼や会話に出てくるチャンネル', wrap('channels', channels.join('\n')))
-  if (recentReplies.length) {
-    lines.push('', '## 最近の返事（あなた（BOT）がこのチャンネルで最近送ったもの。新しい順。同じネタ・言い回し・書き出しを繰り返さないこと）',
-      wrap('recent_replies', recentReplies.map(t => `- ${t.replace(/\s+/g, ' ').slice(0, MAX_RECENT_REPLY)}`).join('\n')))
-  }
   lines.push('', `依頼されたチャンネル: ${channelInfo || `#${channelName}${channelID ? `（ID: ${channelID}）` : ''}`}`)
   if (forum) lines.push('', `## 投稿先に指定されたフォーラム\n${forum.id}: ${forum.name}（フォーラムに投稿する場合はここに投稿する）`)
   if (edit) {
@@ -391,6 +387,12 @@ function thinkingConfig (model, { setting = 'GEMINI_THINKING_LEVEL', fallback = 
 // prompts that start with at least 4,096 identical tokens, which these are about. A cache that
 // cannot be made (too small for the model, or GEMINI_EXPLICIT_CACHE=false) leaves requests as they
 // were. Per worker, one cache per model and set of tools.
+//
+// Each cache is labelled (displayName) with the version of the system instructions it holds. The
+// first cache a worker makes for a version deletes the caches of every other version on Gemini's
+// side, so a changed prompt leaves nothing of the old one behind (they would otherwise stay until
+// they expire). Caches of the same instructions with another set of tools are kept: workers may
+// offer different tools at the same time. Only caches with this label are touched.
 const CACHE_TTL_SECONDS = 3600
 const CACHE_RENEW_BEFORE_MS = 5 * 60 * 1000
 // After a cache Gemini would not make (HTTP 400: too small for the model, say) it is tried again an
@@ -590,8 +592,7 @@ async function check (conversation, { name, args, calls = [] }) {
 // Required when used: eventTools requires this module.
 const eventTools = () => require('./eventTools')
 
-// recentReplies: what the bot said lately in the channel, newest first, so it does not repeat itself.
-async function draft ({ request, referenced, channelName, channelID, server, forum = null, images = [], pictures = [], edit = null, recentReplies = [], replyLength = null, streamerPersona = true, guild, member, tools, now = new Date() }) {
+async function draft ({ request, referenced, channelName, channelID, server, forum = null, images = [], pictures = [], edit = null, replyLength = null, streamerPersona = true, guild, member, tools, now = new Date() }) {
   const combined = pictures.filter(p => p.combined)
   const foreign = pictures.filter(p => !p.combined)
   const notes = [
@@ -605,7 +606,7 @@ async function draft ({ request, referenced, channelName, channelID, server, for
       ]
     : []
   const conversation = {
-    contents: [{ role: 'user', parts: [{ text: buildPrompt({ request, referenced, channelName, channelID, channelInfo: channelID ? eventTools().requestChannelInfo(channelID, guild) : null, server, forum, images, edit, recentReplies, channels: member ? eventTools().namedChannels([request, referenced?.text], guild, member) : [], replyLength, streamerPersona, now }) }, ...shown] }],
+    contents: [{ role: 'user', parts: [{ text: buildPrompt({ request, referenced, channelName, channelID, channelInfo: channelID ? eventTools().requestChannelInfo(channelID, guild) : null, server, forum, images, edit, channels: member ? eventTools().namedChannels([request, referenced?.text], guild, member) : [], replyLength, streamerPersona, now }) }, ...shown] }],
     guild,
     member,
     tools,

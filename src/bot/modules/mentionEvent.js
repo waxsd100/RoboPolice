@@ -92,18 +92,6 @@ function repliesToBot (message) {
   return !!(message.messageReference && ref && ref.author?.id === global.bot.user.id && !ref.webhookID && ref.messageReference)
 }
 
-// What the bot answered lately in the channel (its own replies, newest first), so it does not tell
-// the same jokes again. Empty when the channel cannot be read.
-const RECENT_MESSAGES_READ = 50
-const MAX_RECENT_REPLIES = 8
-async function recentBotReplies (channelID, exceptID = null) {
-  const messages = await global.bot.getMessages(channelID, { limit: RECENT_MESSAGES_READ }).catch(() => [])
-  return messages
-    .filter(m => m.id !== exceptID && m.author?.id === global.bot.user.id && !m.webhookID && m.messageReference && m.content?.trim())
-    .slice(0, MAX_RECENT_REPLIES)
-    .map(m => m.content)
-}
-
 // The reply with a footer line under it, cut so that both fit in one message.
 const MAX_MESSAGE = 2000
 function withFooter (content, footer) {
@@ -451,21 +439,22 @@ async function handle (message) {
       reportInjection(`a mention by ${message.author.id} in ${guild.id}`, request)
       if (referenced) reportInjection(`the conversation a mention in ${guild.id} replies to`, referenced.text)
       // Fetched fresh for every request. Without it the draft still works, just with less context.
-      const server = await describeServer(guild, member, message.channel.id, { query: request, context: referenced?.text }).catch(e => {
+      // Knowledge is looked up by what the members said, not the bot's own earlier replies.
+      const server = await describeServer(guild, member, message.channel.id, { query: request, context: referenced?.othersText }).catch(e => {
         global.logger.warn(`Could not describe server ${guild.id}: ${e.message}`)
         return null
       })
       // Combined emojis and other servers' emojis in what was said are shown to the model as
       // images, for this request only.
       const pictures = await picturesFor([request, referenced?.text], guild).catch(() => [])
-      const recentReplies = edit ? [] : await recentBotReplies(message.channel.id, reply.id)
+      // Only a reply brings a conversation in (`referenced`): what was said before in the channel
+      // is not, so the bot is the same in every channel.
       // /replylength and /persona; without them (or the database) replies are as by default.
       const { replyLength, streamerPersona } = await replySettingsStore.getReplySettings(guild.id)
         .catch(() => ({ replyLength: null, streamerPersona: true }))
       let result = await draft({
         request,
         referenced,
-        recentReplies,
         replyLength,
         streamerPersona,
         channelName: message.channel.name,
@@ -626,4 +615,4 @@ async function handle (message) {
   })
 }
 
-module.exports = { handle, extractRequest, recentBotReplies }
+module.exports = { handle, extractRequest }
