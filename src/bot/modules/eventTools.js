@@ -352,7 +352,7 @@ function createTools ({ guild, member, ask, progress = () => {} }) {
           : serverLore.enabled()
             ? '保存されている発言はありません（このサーバーではメッセージを保存していないか、読めるチャンネルでの発言がありません）'
             : '（発言は参照しない設定です。分かるのは上の情報だけです）',
-        '（その場で読んだもので、保存されません。人柄を決めつけないこと）'
+        '（その場で読んだもので、保存されません）'
       ].filter(l => l !== '').join('\n')
     },
     async summarize_youtube_video ({ url }) {
