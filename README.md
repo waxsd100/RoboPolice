@@ -43,7 +43,7 @@ Short version; the Privacy Policy is authoritative.
 
 | Data | Where | Retention |
 |---|---|---|
-| Message ID, author ID, channel ID, server ID, timestamp, content and image URLs (not encrypted by the app; see below) | PostgreSQL `messages`, `message_attachments` | `MESSAGE_HISTORY_DAYS` days, or forever if unset; all of a server's go when the app leaves it |
+| Message ID, author ID, channel ID, server ID, timestamp, content and image URLs, as received and as read back from channel history (not encrypted by the app; see below) | PostgreSQL `messages`, `message_attachments` (and `message_backfill`, how far back each channel was read) | `MESSAGE_HISTORY_DAYS` days, or forever if unset; all of a server's go when the app leaves it |
 | Per-server settings (log channels, ignored channels, disabled events), and the server's name, icon URL, member count and when the app joined | PostgreSQL `guilds`, `guild_emojis` (custom emojis with an AI description), `guild_event_logs`, `guild_ignored_channels`, `guild_disabled_events` | Until the app leaves the server |
 | Invite counters, webhook handles, guild settings | Redis | 3 hours |
 | With `SERVER_LORE=true` only: what each server is like, taken out of its stored messages in `@everyone` channels (running jokes, words, happenings, topics, and how it talks; nothing about a single member) | PostgreSQL `guild_lore_chunks`, `guild_lore_facts`, `guild_lore_style` | The last `SERVER_LORE_WEEKS` weeks (default 8), taken out again when the messages change; all of a server's go when the app leaves it |
@@ -57,6 +57,21 @@ that still has encrypted rows.
 
 Message rows are written **only for servers that have a message deletion or edit log channel
 configured** — a server with none never has message content stored, since nothing could read it back.
+
+Messages sent before the app stored them (before it joined, before the server set a message log, or
+in channels quiet since) are **read back from each channel's history** (`historyBackfill.js`), under
+the same rules: text, voice, announcement and stage channels and active threads the app can read back,
+not ignored channels, not bots or automod notices. Each is stored with its own time, a message already
+stored is left as it is, and image URLs go with it. How far back, whichever comes first: a date,
+`HISTORY_BACKFILL_SINCE` (`YYYY-MM-DD`, from the start of that day in Japan), and/or a number of days,
+`HISTORY_BACKFILL_DAYS` (`0` for no limit; with neither set, 90 days); and a number of messages per
+channel, `HISTORY_BACKFILL_MAX_MESSAGES`. Never further than `MESSAGE_HISTORY_DAYS`: anything older
+would be pruned at once. 100 messages a request, one request every `HISTORY_BACKFILL_DELAY_MS` (default 1000); where each
+channel got to is kept in `message_backfill`, so a restart goes on from there. A channel that stopped
+at the limits is read on from where it stopped when they are widened later (an earlier date, more
+days or more messages); one read to its very start is not read again. Every worker does the servers it hosts, checking hourly for
+new channels and servers that set a message log. `HISTORY_BACKFILL=false` turns it off. A large
+server's history takes disk space: with no retention set, 90 days is read unless told otherwise.
 
 ## コマンド一覧
 
@@ -565,6 +580,11 @@ the secrets if it leaks, so keep it only on the platform and delete it in the co
 | `YOUTUBE_AUTO_SYNC_MINUTES` | Optional. How often to check the bot's YouTube channels for new videos. Defaults to 15; 0 turns it off |
 | `YOUTUBE_LIVE_POLL_SECONDS` | Optional. How often to check for streams on servers with stream events on. Defaults to 60; 0 turns it off |
 | `YOUTUBE_WEBSUB_URL`, `YOUTUBE_WEBSUB_SECRET` | Optional. The service's public HTTPS address and a secret, to receive YouTube pushes (see above). `PORT` sets the port listened on (Railway sets it) |
+| `HISTORY_BACKFILL` | Optional. `false` stops reading channels' past messages back (see "What is stored"). On by default |
+| `HISTORY_BACKFILL_DAYS` | Optional. How many days of past messages to read back; `0` for no day limit. Default 90 when `HISTORY_BACKFILL_SINCE` is not set either. Never past `MESSAGE_HISTORY_DAYS` |
+| `HISTORY_BACKFILL_SINCE` | Optional. Read past messages back only to this date (`YYYY-MM-DD`, Japan time). With `HISTORY_BACKFILL_DAYS` too, the later of the two |
+| `HISTORY_BACKFILL_MAX_MESSAGES` | Optional. At most this many past messages per channel (newest first); unset or `0` for no limit |
+| `HISTORY_BACKFILL_DELAY_MS` | Optional (default `1000`). Wait between two history requests (100 messages each) |
 | `SERVER_LORE` | Optional. `true` learns each server's running jokes, words and tone from its stored messages in `@everyone` channels, and lets `about_member` read a member's recent messages when asked (see "What each server is like"). Off by default: update the Privacy Policy and the intent answers first |
 | `SERVER_LORE_WEEKS` | Optional (default `8`). How many recent weeks of messages `SERVER_LORE` learns from; older knowledge is dropped |
 | `MESSAGE_EMBEDDINGS` | Optional. `true` embeds every stored message for search by meaning (sends them to Gemini; see above). Off by default |
