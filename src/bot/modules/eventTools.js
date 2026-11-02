@@ -13,6 +13,9 @@ const { embed, blend, model: embeddingModel } = require('../utils/embeddings')
 const { fromStoredContent } = require('../../db/interfaces/postgres/create')
 const semanticSearch = require('./semanticSearch')
 const { messageEmbeddingsEnabled } = require('./embeddingIndexer')
+const serverLore = require('./serverLore')
+const loreStore = require('../../db/interfaces/postgres/serverLore')
+const embeddingStore = require('../../db/interfaces/postgres/embeddings')
 
 const MAX_RECENT_MESSAGES = 50
 const MAX_QUESTIONS = 3
@@ -32,6 +35,14 @@ const SEARCH_SERVER_MESSAGES = {
   description: 'このサーバーで依頼者が読めるすべてのチャンネルの保存済みメッセージから、query と意味が近いものを探す（言い回しが違っても見つかる）。どのチャンネルの話か分からないときや、サーバー全体の話題を調べるときに使う。',
   parameters: { type: 'OBJECT', properties: { query: { type: 'STRING', description: '探したい内容（文章でよい）' } }, required: ['query'] }
 }
+
+const ABOUT_MEMBER = {
+  name: 'about_member',
+  description: 'このサーバーのメンバーについて聞かれたときに使う。名前・ニックネーム・メンション（<@数字>）・ID でメンバーを探し、表示名・ロール・参加日と、（設定されていれば）依頼者が読めるチャンネルでの最近の発言を返す（その場で読むだけで保存しない）。',
+  parameters: { type: 'OBJECT', properties: { member: { type: 'STRING', description: '名前・ニックネーム・<@ID>・ID のどれか' } }, required: ['member'] }
+}
+const MAX_MEMBER_MESSAGES = 30
+const MAX_MEMBER_MATCHES = 5
 
 const FIND_GAME = {
   name: 'find_game',
@@ -319,6 +330,29 @@ function createTools ({ guild, member, ask, progress = () => {} }) {
     async search_wiki ({ query }) {
       return wikiKnowledge.searchWiki(String(query || ''))
     },
+    async about_member ({ member: who }) {
+      const found = findMembers(guild, who)
+      if (found.length === 0) throw new Error(`「${who}」に当てはまるメンバーが見つかりません`)
+      if (found.length > 1) return `「${who}」に当てはまるメンバーが複数います。どの人か依頼者に確かめてください:\n${found.slice(0, MAX_MEMBER_MATCHES).map(m => `- ${displayName(m)}（@${m.username}、ID: ${m.id}）`).join('\n')}`
+      const [m] = found
+      const roles = (m.roles || []).map(id => guild.roles.get(id)).filter(r => r && !r.managed).sort((a, b) => (b.position ?? 0) - (a.position ?? 0)).map(r => r.name)
+      const channels = [...guild.channels.values()].filter(c => canRead(c, member.id) && canRead(c, global.bot.user.id))
+      // The stored messages only where reading them for this is declared (SERVER_LORE, serverLore.js).
+      const messages = serverLore.enabled() && channels.length ? await loreStore.memberMessages(guild.id, m.id, channels.map(c => c.id), MAX_MEMBER_MESSAGES) : []
+      const channelName = id => guild.channels.get(id)?.name || id
+      return [
+        `表示名: ${displayName(m)}（@${m.username}、ID: ${m.id}）${m.bot ? '（BOT）' : ''}`,
+        `ロール: ${roles.join(', ') || 'なし'}`,
+        m.joinedAt ? `サーバーに参加: ${new Date(m.joinedAt).toISOString().slice(0, 10)}` : '',
+        '',
+        messages.length
+          ? [`最近の発言（新しい順、依頼者が読めるチャンネルのもの ${messages.length} 件）:`, ...messages.map(r => `[${new Date(r.ts).toISOString().slice(0, 10)}] #${channelName(r.channel_id)}: ${fromStoredContent(r.content).replace(/\s+/g, ' ').slice(0, MAX_HISTORY_TEXT / 2)}`)].join('\n')
+          : serverLore.enabled()
+            ? '保存されている発言はありません（このサーバーではメッセージを保存していないか、読めるチャンネルでの発言がありません）'
+            : '（発言は参照しない設定です。分かるのは上の情報だけです）',
+        '（その場で読んだもので、保存されません。人柄を決めつけないこと）'
+      ].filter(l => l !== '').join('\n')
+    },
     async summarize_youtube_video ({ url }) {
       const { videoID, summary, cached } = await videoSummary.summarizeVideo(guild.id, url, {
         onStart: timeoutMs => progress(`動画の内容を読み取っています…（長い動画は数分かかります。最大 ${Math.round(timeoutMs / 60000)} 分）`)
@@ -342,7 +376,7 @@ function createTools ({ guild, member, ask, progress = () => {} }) {
     }
   }
 
-  const declarations = [...DECLARATIONS, FIND_GAME, ...(messageEmbeddingsEnabled() ? [SEARCH_SERVER_MESSAGES] : []), ...(wikiKnowledge.searchable() ? [SEARCH_WIKI] : [])]
+  const declarations = [...DECLARATIONS, FIND_GAME, ABOUT_MEMBER, ...(messageEmbeddingsEnabled() ? [SEARCH_SERVER_MESSAGES] : []), ...(wikiKnowledge.searchable() ? [SEARCH_WIKI] : [])]
   return { declarations, call, sources, readMessage, readThread }
 }
 
@@ -400,6 +434,22 @@ async function searchYouTube (guildID, query) {
     ...(!ranked && matches.length > MAX_YOUTUBE_RESULTS ? [`…ほか ${matches.length - MAX_YOUTUBE_RESULTS} 件（query で絞り込めます）`] : []),
     ...otherLines
   ].filter(Boolean).join('\n')
+}
+
+const displayName = m => m.nick || m.user?.globalName || m.globalName || m.username
+
+// The members `who` names: a mention or ID, else those whose name, nickname or user name is it (or,
+// when none is, contains it).
+function findMembers (guild, who) {
+  const text = String(who || '').trim()
+  const id = text.match(/^<@!?(\d+)>$/)?.[1] || (/^\d{15,}$/.test(text) ? text : null)
+  if (id) return guild.members.get(id) ? [guild.members.get(id)] : []
+  const q = text.replace(/^@/, '').toLowerCase()
+  if (!q) return []
+  const names = m => [m.nick, m.user?.globalName, m.globalName, m.username].filter(Boolean).map(n => n.toLowerCase())
+  const members = [...guild.members.values()]
+  const exact = members.filter(m => names(m).includes(q))
+  return exact.length ? exact : members.filter(m => names(m).some(n => n.includes(q)))
 }
 
 function channelLine (c, requestChannelID) {
@@ -518,6 +568,29 @@ function worthSearching (text) {
   return [...words].length >= MIN_SEARCH_CHARS
 }
 
+// Messages of the server close in meaning to the request (`vector`), in channels the requester and
+// the bot can read, for the server profile: lines. Only when stored messages are embedded
+// (`vectorOf()` is asked for only then).
+const MAX_RELATED_MESSAGES = 5
+const MIN_MESSAGE_SCORE = 0.6
+async function relatedMessages (guild, member, vectorOf) {
+  if (!messageEmbeddingsEnabled()) return []
+  const channels = [...guild.channels.values()].filter(c => canRead(c, member.id) && canRead(c, global.bot.user.id))
+  if (!channels.length) return []
+  const vector = await vectorOf()
+  if (!vector) return []
+  const near = (await embeddingStore.nearestMessages(guild.id, channels.map(c => c.id), vector, { model: embeddingModel(), limit: MAX_RELATED_MESSAGES * 2 }))
+    .filter(r => r.score >= MIN_MESSAGE_SCORE)
+  const byID = new Map((await embeddingStore.getMessages(near.map(r => r.message_id))).map(m => [m.id, m]))
+  return near.map(r => byID.get(r.message_id))
+    .filter(m => m && m.author_id !== global.bot.user.id)
+    .slice(0, MAX_RELATED_MESSAGES)
+    .map(m => {
+      const who = guild.members.get(m.author_id)
+      return `- ${new Date(m.ts).toISOString().slice(0, 10)} #${guild.channels.get(m.channel_id)?.name || m.channel_id} ${who ? displayName(who) : 'メンバー'}: ${fromStoredContent(m.content).replace(/\s+/g, ' ').slice(0, 150)}`
+    })
+}
+
 // The server as the requester can see it. Sent with every request, fresh each time, so questions
 // about "this server" need no lookups. query: what was asked; context: the conversation it replies
 // to (readThread), if any. Both choose the knowledge and the emojis put first.
@@ -572,6 +645,12 @@ async function describeServer (guild, member, requestChannelID, { query = '', co
     lines.push('', '### コミュニティの知識（wiki と配信者の X より。依頼に関係しそうなもの）',
       'キャラクターが何者かはここ（と search_wiki）で確かめ、絵文字の説明（見た目）から決めつけないこと。', ...known)
   }
+
+  const lore = await serverLore.relatedLore(guild.id, vectorOf).catch(() => ({ facts: [], style: null }))
+  if (lore.style) lines.push('', '### このサーバーのノリ（メンバーの会話から）', lore.style)
+  if (lore.facts.length) lines.push('', '### このサーバーのこと（メンバーの会話から。身内ネタ・用語・出来事など）', ...lore.facts)
+  const said = await relatedMessages(guild, member, vectorOf).catch(() => [])
+  if (said.length) lines.push('', '### このサーバーで前に出た、依頼に近い発言', ...said)
 
   const emojiLines = await emojiSection(guild, vectorOf)
   if (emojiLines.length) lines.push('', ...emojiLines)

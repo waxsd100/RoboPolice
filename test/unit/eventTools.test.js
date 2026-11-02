@@ -523,3 +523,65 @@ describe('worthSearching', () => {
     for (const text of ['よつろんって何色？', '面白すぎて草', 'マイクラの話して']) assert.equal(worthSearching(text), true, text)
   })
 })
+
+describe('about_member', () => {
+  const { installLoreStore } = require('../helpers/fakes')
+  function withMembers () {
+    guild.members.set('2', { id: '2', username: 'alice', nick: 'アリス', roles: ['r1'], joinedAt: Date.parse('2025-04-01T00:00:00Z') })
+    guild.members.set('3', { id: '3', username: 'alicia', roles: [] })
+    guild.roles.set('r1', { id: 'r1', name: '常連', position: 2 })
+  }
+
+  test('finds a member by nickname, mention or ID, with roles and recent messages the requester can read; nothing kept', async (t) => {
+    withMembers()
+    require('../helpers/fakes').configureGateway()
+    process.env.SERVER_LORE = 'true'
+    t.after(() => { delete process.env.SERVER_LORE })
+    installLoreStore({
+      messages: [
+        { guild_id: '100', channel_id: '201', author_id: '2', ts: '2026-10-30T10:00:00Z', content: 'マイクラやろう' },
+        { guild_id: '100', channel_id: '202', author_id: '2', ts: '2026-10-31T10:00:00Z', content: 'スタッフだけの話' },
+        { guild_id: '100', channel_id: '201', author_id: '2', ts: '2026-11-01T10:00:00Z', content: '昨日のボス強かった' }
+      ]
+    })
+    for (const who of ['アリス', '<@2>', '<@!2>']) {
+      const { result } = await tools().call('about_member', { member: who })
+      assert.match(result, /表示名: アリス（@alice、ID: 2）/, who)
+      assert.match(result, /ロール: 常連/)
+      assert.match(result, /サーバーに参加: 2025-04-01/)
+      assert.match(result, /\[2026-11-01\] #general: 昨日のボス強かった\n\[2026-10-30\] #general: マイクラやろう/)
+      assert.doesNotMatch(result, /スタッフだけの話/)
+    }
+  })
+
+  test('without SERVER_LORE, only what Discord shows: no messages are read', async () => {
+    withMembers()
+    installLoreStore({ messages: [{ guild_id: '100', channel_id: '201', author_id: '2', ts: '2026-11-01T10:00:00Z', content: '昨日のボス強かった' }] })
+    const { result } = await tools().call('about_member', { member: 'アリス' })
+    assert.match(result, /ロール: 常連/)
+    assert.doesNotMatch(result, /ボス/)
+    assert.match(result, /発言は参照しない設定/)
+  })
+
+  test('several matches are listed to be asked about; none is an error', async () => {
+    withMembers()
+    assert.match((await tools().call('about_member', { member: 'ali' })).result, /複数います[\s\S]*アリス[\s\S]*alicia/)
+    assert.match((await tools().call('about_member', { member: 'ぼぶ' })).error, /見つかりません/)
+  })
+})
+
+describe('describeServer: what the server is like', () => {
+  const { describeServer } = require('../../src/bot/modules/eventTools')
+  const { installYouTubeStore, installLoreStore, configureGateway } = require('../helpers/fakes')
+
+  test('the server\'s style and knowledge go into the profile', async (t) => {
+    configureGateway()
+    process.env.SERVER_LORE = 'true'
+    t.after(() => { delete process.env.SERVER_LORE })
+    installYouTubeStore()
+    installLoreStore({ styles: { 100: 'ゆるくて、ツッコミが多い' } })
+    const text = await describeServer(guild, member, '201')
+    assert.match(text, /### このサーバーのノリ（メンバーの会話から）\nゆるくて、ツッコミが多い/)
+    installLoreStore()
+  })
+})
