@@ -831,6 +831,24 @@ describe('mention → event / forum post (integration)', () => {
     assert.doesNotMatch(replies[0].state.content, /⚠️/)
   })
 
+  test('chat: the tokens the reply used go under it in small grey text', async () => {
+    const { channel, replies } = createChannel()
+    let i = 0
+    const turns = [[call('lookup_nothing')], [call('submit_chat_reply', { text: 'やあ' })]]
+    global.fetch = async () => ({
+      ok: true,
+      json: async () => ({ candidates: [{ content: { role: 'model', parts: turns[i++] } }], usageMetadata: { promptTokenCount: 1200, cachedContentTokenCount: 1000, candidatesTokenCount: 15, thoughtsTokenCount: 40 } })
+    })
+    await mentionEvent.handle(mention(channel, '<@BOT> やあ'))
+    assert.equal(replies[0].state.content, 'やあ\n-# トークン: 入力 2,400（うちキャッシュ 2,000）・出力 30・思考 80（Gemini 2 回）')
+    process.env.MENTION_TOKEN_FOOTER = 'false'
+    const again = createChannel()
+    installGemini([[call('submit_chat_reply', { text: 'やあ' })]])
+    await mentionEvent.handle(mention(again.channel, '<@BOT> やあ'))
+    assert.equal(again.replies[0].state.content, 'やあ')
+    delete process.env.MENTION_TOKEN_FOOTER
+  })
+
   test('chat: server emojis are offered to the model, and :name: becomes the emoji', async () => {
     guild.emojis = [{ id: '950', name: 'nobaman_wave' }]
     try {

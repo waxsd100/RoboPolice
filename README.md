@@ -510,6 +510,7 @@ the secrets if it leaks, so keep it only on the platform and delete it in the co
 | `CLOUDFLARE_AI_GATEWAY_BYOK_ALIAS` | Optional. Name of the Gemini key stored in the gateway (BYOK), sent as `cf-aig-byok-alias`. Unset uses the key named `default` |
 | `GEMINI_API_KEY` | Optional when the key is stored in the gateway (BYOK); otherwise required for drafting from mentions |
 | `GEMINI_MODEL` | Optional. Defaults to `gemini-flash-latest` |
+| `MENTION_TOKEN_FOOTER` | Optional. Chat replies end with the Gemini tokens they used in Discord's small grey text (`-# トークン: 入力 …（うちキャッシュ …）・出力 …・思考 …`); `false` leaves it out |
 | `GEMINI_TEMPERATURE` | Optional (default `0.7`, 0–2). How varied mention replies and drafts are; higher is more varied. Drafts are checked field by field either way |
 | `GEMINI_MAX_STEPS` | Optional (default `20`). How many Gemini round trips a reply or draft may take (each lookup is one); the last one may only answer with what was found |
 | `YOUTUBE_API_KEY` | Optional. YouTube Data API v3 key for `/youtube`. Unset disables the command |

@@ -2,7 +2,7 @@ const { SUBMIT_FORUM_DECLARATION, IMAGE_INSTRUCTION_PROPERTY, toForumPost, image
 const { withoutCharCount } = require('../utils/textClean')
 const { Agent } = require('undici')
 const { gatewayURL, gatewayAuthHeaders, isGatewayConfigured } = require('../utils/aiGateway')
-const { currentUsage } = require('../utils/geminiUsage')
+const { currentUsage, addTokens } = require('../utils/geminiUsage')
 
 const DEFAULT_GEMINI_MODEL = 'gemini-flash-latest'
 const GEMINI_TIMEOUT_MS = 60000
@@ -255,7 +255,9 @@ async function geminiRequest (model, method, body, { timeoutMs = GEMINI_TIMEOUT_
     const hint = res.status === 429 ? rateLimitHint(text) : `AI の呼び出しに失敗しました（HTTP ${res.status}）`
     throw new GeminiError(`Gemini request failed: HTTP ${res.status} ${text}`, hint)
   }
-  return res.json()
+  const data = await res.json()
+  addTokens(data?.usageMetadata)
+  return data
 }
 
 // One generateContent call through the gateway. Returns the first candidate's content.
