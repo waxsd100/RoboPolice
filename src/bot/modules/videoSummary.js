@@ -2,7 +2,7 @@
 // keeps the summary so the same video is never summarized twice. Only run when the
 // model decides it needs a video's contents (a video was linked, or a question is about what a
 // video says): it is far costlier than reading titles and descriptions.
-const { callGemini, DEFAULT_GEMINI_MODEL, GeminiError, lightModel } = require('./eventDrafter')
+const { callGemini, DEFAULT_GEMINI_MODEL, GeminiError, lightModel, thinkingConfig } = require('./eventDrafter')
 const youtubeDB = require('../../db/interfaces/postgres/youtube')
 const youtube = require('../utils/youtube')
 const { parseVideoId, durationSeconds } = youtube
@@ -58,7 +58,8 @@ function fps () {
 const textOf = content => content.parts.map(p => p.text || '').join('').trim()
 
 function askVideo (videoID, prompt, clip = null) {
-  return callGemini(process.env.GEMINI_MODEL || DEFAULT_GEMINI_MODEL, {
+  const model = process.env.GEMINI_MODEL || DEFAULT_GEMINI_MODEL
+  return callGemini(model, {
     contents: [{
       role: 'user',
       parts: [
@@ -67,7 +68,8 @@ function askVideo (videoID, prompt, clip = null) {
       ]
     }],
     // Fewer tokens per frame: the summary is about what is said and roughly shown, not fine detail.
-    generationConfig: { temperature: 0.2, mediaResolution: 'MEDIA_RESOLUTION_LOW' }
+    // Gemini 3 thinks at high unless told: a summary needs little (VIDEO_SUMMARY_THINKING_LEVEL).
+    generationConfig: { temperature: 0.2, mediaResolution: 'MEDIA_RESOLUTION_LOW', ...thinkingConfig(model, { setting: 'VIDEO_SUMMARY_THINKING_LEVEL', fallback: 'low' }) }
   }, { timeoutMs: summaryTimeoutMs(), purpose: 'videoSummary' })
 }
 
