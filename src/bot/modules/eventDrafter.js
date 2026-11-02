@@ -58,7 +58,7 @@ const SUBMIT_CHAT_DECLARATION = {
   parameters: {
     type: 'OBJECT',
     properties: {
-      text: { type: 'STRING', description: '返事の本文（日本語、Discord の Markdown 可）。長さは依頼に合わせる（あいさつ・雑談なら1〜2文）' }
+      text: { type: 'STRING', description: '返事の本文（日本語、Discord の Markdown 可）。長さは依頼の「返事の長さ」に従う' }
     },
     required: ['text']
   }
@@ -129,11 +129,7 @@ const SYSTEM_INSTRUCTION = [
   '- メンバーについて聞かれたら about_member で調べてから答える。分かったこと（ロール・最近よく話していること）だけを、親しみをこめて軽く伝える。性格の決めつけ・悪口・個人情報（本名・住所・年齢など）の推測はしない。',
   '',
   '## 返事の書き方',
-  '- 返事の長さは毎回、依頼の中身と長さを見て決める。会話はテンポが大事なので、短い方を選ぶ。',
-  '  - あいさつ・雑談・ノリやボケへの反応・一言の感想: 1〜2文（50文字前後）。',
-  '  - ちょっとした質問（〜って何？ いつ？ どこ？）: 答えだけを2〜3文で。',
-  '  - 説明・まとめ・手順・おすすめを頼まれたとき: 必要なだけ。それでも400文字程度まで。箇条書きは本当に項目が並ぶときだけ。',
-  '  - 相手のメッセージより大幅に長くしない。聞かれていないことの付け足し、前置き、最後のまとめ直し、「何かあれば聞いてね」のような締めはしない。',
+  '- 返事の長さは、依頼に書いてある「返事の長さ」（サーバーの設定）に従う。',
   '- Discord のメッセージとして読みやすく。返事・説明・本文に文字数（「（120文字）」など）は書かない。',
   '- 動画や配信・ページに触れるときは、長い URL を本文に並べず、[題名](URL) の形のリンクで書く（URL は必ず入れる。動画のサムネイル付きのカードは BOT が返事の下に付ける）。要約の時間が [12:34](…&t=754s) のようなリンクになっていれば、話題に合う場面のリンクをそのまま書く。時間やリンクは自分で作らない。',
   '- チャンネルに触れるとき（「〜は <#ID> でどうぞ」など、案内に役立つとき）は <#チャンネルID> の形で書く（Discord でリンクになる）。ID はサーバーの情報の一覧にあるものだけ使い、作らない。',
@@ -163,15 +159,44 @@ const EDIT_LABELS = { event: 'イベント', forum: 'フォーラム投稿' }
 
 const MAX_RECENT_REPLY = 200
 
-function buildPrompt ({ request, referenced, channelName, channelID, channelInfo = null, server, forum, images, edit, recentReplies = [], channels = [], now }) {
-  const lines = [
-    `現在日時: ${formatNow(now)}（${TIMEZONE}）`,
-    `依頼されたチャンネル: ${channelInfo || `#${channelName}${channelID ? `（ID: ${channelID}）` : ''}`}`,
-    '',
-    `## 依頼メッセージ（${[...String(request || '')].length}文字）`,
-    request ? wrap('request', request) : '（本文なし。返信先のメッセージから作成）'
+// How long replies are, set per server with /replylength. long is how replies were before they were
+// fitted to what was said, and the default. The rules go with each request (not the cached system
+// instructions), so every server shares one cache.
+const REPLY_LENGTHS = {
+  long: [
+    '- Discord のメッセージとして読みやすく、長くても500文字程度。'
+  ],
+  normal: [
+    '- 毎回、依頼の中身と長さを見て決める。会話はテンポが大事なので、短い方を選ぶ。',
+    '  - あいさつ・雑談・ノリやボケへの反応・一言の感想: 1〜2文（50文字前後）。',
+    '  - ちょっとした質問（〜って何？ いつ？ どこ？）: 答えだけを2〜3文で。',
+    '  - 説明・まとめ・手順・おすすめを頼まれたとき: 必要なだけ。それでも400文字程度まで。箇条書きは本当に項目が並ぶときだけ。',
+    '  - 相手のメッセージより大幅に長くしない。聞かれていないことの付け足し、前置き、最後のまとめ直し、「何かあれば聞いてね」のような締めはしない。'
+  ],
+  short: [
+    '- できるだけ短く。あいさつ・雑談・反応は1文、質問には答えだけを1〜2文（100文字程度まで）。',
+    '- 説明・まとめを頼まれても要点だけを200文字程度まで。前置き・まとめ直し・締めの一言はしない。'
   ]
-  if (images.length !== 0) lines.push('', '## 依頼メッセージの添付画像', ...images.map(url => `- ${url}`))
+}
+const DEFAULT_REPLY_LENGTH = 'long'
+const replyLengthOf = length => REPLY_LENGTHS[length] ? length : DEFAULT_REPLY_LENGTH
+
+// The request as the model gets it, the parts that change least first and the request itself last:
+// what stays the same from one request to the next (the server's setting and information) leads,
+// so a prompt cache can cover as much as possible, and what is new each time (the time, the
+// conversation, the request) follows.
+function buildPrompt ({ request, referenced, channelName, channelID, channelInfo = null, server, forum, images, edit, recentReplies = [], channels = [], replyLength = null, now }) {
+  const lines = [
+    '## 返事の長さ（このサーバーの設定）',
+    ...REPLY_LENGTHS[replyLengthOf(replyLength)]
+  ]
+  if (server) lines.push('', '## このサーバーの情報（最新）', wrap('server', server))
+  if (channels.length) lines.push('', '## 依頼や会話に出てくるチャンネル', wrap('channels', channels.join('\n')))
+  if (recentReplies.length) {
+    lines.push('', '## 最近の返事（あなた（BOT）がこのチャンネルで最近送ったもの。新しい順。同じネタ・言い回し・書き出しを繰り返さないこと）',
+      wrap('recent_replies', recentReplies.map(t => `- ${t.replace(/\s+/g, ' ').slice(0, MAX_RECENT_REPLY)}`).join('\n')))
+  }
+  lines.push('', `依頼されたチャンネル: ${channelInfo || `#${channelName}${channelID ? `（ID: ${channelID}）` : ''}`}`)
   if (forum) lines.push('', `## 投稿先に指定されたフォーラム\n${forum.id}: ${forum.name}（フォーラムに投稿する場合はここに投稿する）`)
   if (edit) {
     const submit = edit.kind === 'event' ? SUBMIT_EVENT_DECLARATION.name : SUBMIT_FORUM_DECLARATION.name
@@ -184,12 +209,10 @@ function buildPrompt ({ request, referenced, channelName, channelID, channelInfo
   } else if (referenced) {
     lines.push('', '## 依頼メッセージの返信先', wrap('conversation', referenced.text))
   }
-  if (channels.length) lines.push('', '## 依頼や会話に出てくるチャンネル', wrap('channels', channels.join('\n')))
-  if (server) lines.push('', '## このサーバーの情報（最新）', wrap('server', server))
-  if (recentReplies.length) {
-    lines.push('', '## 最近の返事（あなた（BOT）がこのチャンネルで最近送ったもの。新しい順。同じネタ・言い回し・書き出しを繰り返さないこと）',
-      wrap('recent_replies', recentReplies.map(t => `- ${t.replace(/\s+/g, ' ').slice(0, MAX_RECENT_REPLY)}`).join('\n')))
-  }
+  lines.push('', `現在日時: ${formatNow(now)}（${TIMEZONE}）`,
+    '', `## 依頼メッセージ（${[...String(request || '')].length}文字）`,
+    request ? wrap('request', request) : '（本文なし。返信先のメッセージから作成）')
+  if (images.length !== 0) lines.push('', '## 依頼メッセージの添付画像', ...images.map(url => `- ${url}`))
   return lines.join('\n')
 }
 
@@ -484,7 +507,7 @@ async function check (conversation, { name, args, calls = [] }) {
 const eventTools = () => require('./eventTools')
 
 // recentReplies: what the bot said lately in the channel, newest first, so it does not repeat itself.
-async function draft ({ request, referenced, channelName, channelID, server, forum = null, images = [], pictures = [], edit = null, recentReplies = [], guild, member, tools, now = new Date() }) {
+async function draft ({ request, referenced, channelName, channelID, server, forum = null, images = [], pictures = [], edit = null, recentReplies = [], replyLength = null, guild, member, tools, now = new Date() }) {
   const combined = pictures.filter(p => p.combined)
   const foreign = pictures.filter(p => !p.combined)
   const notes = [
@@ -498,7 +521,7 @@ async function draft ({ request, referenced, channelName, channelID, server, for
       ]
     : []
   const conversation = {
-    contents: [{ role: 'user', parts: [{ text: buildPrompt({ request, referenced, channelName, channelID, channelInfo: channelID ? eventTools().requestChannelInfo(channelID, guild) : null, server, forum, images, edit, recentReplies, channels: member ? eventTools().namedChannels([request, referenced?.text], guild, member) : [], now }) }, ...shown] }],
+    contents: [{ role: 'user', parts: [{ text: buildPrompt({ request, referenced, channelName, channelID, channelInfo: channelID ? eventTools().requestChannelInfo(channelID, guild) : null, server, forum, images, edit, recentReplies, channels: member ? eventTools().namedChannels([request, referenced?.text], guild, member) : [], replyLength, now }) }, ...shown] }],
     guild,
     member,
     tools,
@@ -531,4 +554,4 @@ async function revise (conversation, correction) {
   return check(conversation, await runAgent(conversation.contents, conversation.tools, conversation.submits))
 }
 
-module.exports = { thinkingConfig, cachedPrefix, caches, lightModel, draft, revise, MAX_STEPS, isConfigured, toScheduledEvent, callGemini, geminiRequest, retryTimer, DEFAULT_GEMINI_MODEL, ENTITY_TYPES, GeminiError }
+module.exports = { REPLY_LENGTHS, DEFAULT_REPLY_LENGTH, thinkingConfig, cachedPrefix, caches, lightModel, draft, revise, MAX_STEPS, isConfigured, toScheduledEvent, callGemini, geminiRequest, retryTimer, DEFAULT_GEMINI_MODEL, ENTITY_TYPES, GeminiError }

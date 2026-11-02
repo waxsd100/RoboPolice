@@ -195,8 +195,35 @@ describe('draft', () => {
     assert.match(prompt, /依頼されたチャンネル: #general/)
     assert.match(prompt, /## 依頼メッセージ（\d+文字）\n<untrusted source="request">\n交流会/)
     assert.match(prompt, /## 依頼メッセージ（3文字）/, 'its length, to choose how long to answer')
-    assert.match(requests[0].body.systemInstruction.parts[0].text, /返事の長さは毎回、依頼の中身と長さを見て決める/)
+    assert.match(requests[0].body.systemInstruction.parts[0].text, /返事の長さは、依頼に書いてある「返事の長さ」（サーバーの設定）に従う/)
+    assert.match(prompt, /## 返事の長さ（このサーバーの設定）\n- Discord のメッセージとして読みやすく、長くても500文字程度。/, 'long by default')
     assert.match(prompt, /## 依頼メッセージの返信先\n<untrusted source="conversation">\n告知文/)
+  })
+
+  test('the reply length set for the server goes with the request; the system instructions stay the same', async () => {
+    const { REPLY_LENGTHS } = require('../../src/bot/modules/eventDrafter')
+    const prompts = []
+    const systems = []
+    for (const replyLength of ['short', 'normal', 'long', 'unknown', null]) {
+      const requests = installGemini([[call('submit_chat_reply', { text: 'x' })]])
+      await draft({ request: 'やあ', channelName: 'general', guild, tools, replyLength, now: NOW })
+      prompts.push(requests[0].body.contents[0].parts[0].text)
+      systems.push(requests[0].body.systemInstruction.parts[0].text)
+    }
+    assert.ok(prompts[0].includes(REPLY_LENGTHS.short.join('\n')))
+    assert.ok(prompts[1].includes(REPLY_LENGTHS.normal.join('\n')))
+    for (const p of prompts.slice(2)) assert.ok(p.includes(REPLY_LENGTHS.long.join('\n')), 'long, also for an unknown or no setting')
+    assert.equal(new Set(systems).size, 1, 'one cache for every server')
+  })
+
+  test('what changes least comes first and the request last, so a prompt cache covers more', async () => {
+    const requests = installGemini([[call('submit_chat_reply', { text: 'x' })]])
+    await draft({ request: 'やあ', referenced: { text: '前の話', count: 1 }, channelName: 'general', server: 'サーバーの説明', recentReplies: ['前の返事'], guild, tools, now: NOW })
+    const prompt = requests[0].body.contents[0].parts[0].text
+    const order = ['## 返事の長さ', '## このサーバーの情報', '## 最近の返事', '依頼されたチャンネル:', '## 依頼メッセージの返信先', '現在日時:', '## 依頼メッセージ（'].map(h => prompt.indexOf(h))
+    assert.ok(order.every(i => i >= 0), 'every part is there')
+    assert.deepEqual(order, [...order].sort((a, b) => a - b))
+    assert.ok(prompt.trimEnd().endsWith('</untrusted>'), 'the request is last')
   })
 
   test('a reply chain goes in as the conversation the request continues', async () => {

@@ -8,7 +8,8 @@ describe('messageNoise', () => {
   test('leaves out laughter, reactions and bare links, emojis or mentions', () => {
     for (const text of ['', 'w', 'wwwwwwww', 'ｗｗｗｗ', '草', '草草草草草草', '笑笑', 'おk', 'それな', '😂😂😂',
       '<:kusa:123456789012345678>', '<a:dance:123456789012345678> <@123456789012345678>',
-      'https://youtu.be/abcdefghijk', '<#123456789012345678>', 'ーーーーーー', '!!!???']) {
+      'https://youtu.be/abcdefghijk', '<#123456789012345678>', 'ーーーーーー', '!!!???',
+      '<@308674858781245440>', '<@!308674858781245440> <@308674858781245440>', '<@&801234567890123456>', '<@308674858781245440> おはよう', 'None', ' None ']) {
       assert.equal(embeddableText(text), '', JSON.stringify(text))
     }
   })
@@ -29,5 +30,6 @@ describe('messageNoise', () => {
     process.env.MESSAGE_EMBEDDING_MIN_CHARS = '2'
     assert.equal(embeddableText('それな'), 'それな')
     assert.equal(embeddableText('草草'), '', 'laughter stays out whatever the length')
+    assert.equal(embeddableText('None'), '', 'a message stored without text, whatever the length')
   })
 })

@@ -288,7 +288,7 @@ describe('mention → event / forum post (integration)', () => {
     const done = mentionEvent.handle(mention(channel, '<@BOT> これを募集フォーラムに立てて', { messageReference: { messageID: '401', channelID: '201' } }))
     const [reply] = replies
     await waitForButtons(reply, '投稿する')
-    assert.match(requests[0].body.contents[0].parts[0].text, /これを募集フォーラムに立てて[\s\S]*返信先\n<untrusted source="conversation">\n.*【告知】/)
+    assert.match(requests[0].body.contents[0].parts[0].text, /返信先\n<untrusted source="conversation">\n.*【告知】[\s\S]*これを募集フォーラムに立てて/)
     const [preview] = reply.state.embeds
     assert.equal(preview.title, '11/3 交流会 参加者募集')
     assert.equal(preview.fields.find(f => f.name === '投稿先').value, '<#206>')
@@ -599,7 +599,7 @@ describe('mention → event / forum post (integration)', () => {
     const [reply] = replies
     await waitForButtons(reply, '投稿する')
     const prompt = requests[0].body.contents[0].parts[0].text
-    assert.match(prompt, /## 依頼メッセージの添付画像\n- http:\/\/127\.0\.0\.1:\d+\/poster\.png\n\n/)
+    assert.match(prompt, /## 依頼メッセージの添付画像\n- http:\/\/127\.0\.0\.1:\d+\/poster\.png($|\n)/)
     assert.match(prompt, /## 投稿先に指定されたフォーラム\n206: 募集/)
     assert.equal(reply.state.embeds[0].fields.find(f => f.name === '投稿先').value, '<#206>')
     await press(reply, '投稿する')
@@ -831,6 +831,20 @@ describe('mention → event / forum post (integration)', () => {
     assert.doesNotMatch(replies[0].state.content, /⚠️/)
   })
 
+  test('chat: the reply length set for the server with /replylength goes with the request', async () => {
+    const { installReplyLengthStore } = require('../helpers/fakes')
+    const { REPLY_LENGTHS } = require('../../src/bot/modules/eventDrafter')
+    const { channel } = createChannel()
+    installReplyLengthStore({ [channel.guild.id]: 'short' })
+    try {
+      const requests = installGemini([[call('submit_chat_reply', { text: 'やあ' })]])
+      await mentionEvent.handle(mention(channel, '<@BOT> やあ'))
+      assert.ok(requests[0].body.contents[0].parts[0].text.includes(`## 返事の長さ（このサーバーの設定）\n${REPLY_LENGTHS.short.join('\n')}`))
+    } finally {
+      installReplyLengthStore()
+    }
+  })
+
   test('chat: the tokens the reply used go under it in small grey text', async () => {
     const { channel, replies } = createChannel()
     let i = 0
@@ -908,7 +922,7 @@ describe('mention → event / forum post (integration)', () => {
     try {
       const { channel, replies } = createChannel()
       const requests = installGemini([body => {
-        assert.match(body.contents[0].parts[0].text, /## 依頼メッセージの返信先（返信をたどった会話[^\n]*\n<untrusted source="conversation">\n.*user1 \(1\)（依頼者）: <@BOT> おすすめの動画ある？\n.*あなた（BOT）: マイクラ実況の最新回がおすすめ！\n<\/untrusted>\n\n## /)
+        assert.match(body.contents[0].parts[0].text, /## 依頼メッセージの返信先（返信をたどった会話[^\n]*\n<untrusted source="conversation">\n.*user1 \(1\)（依頼者）: <@BOT> おすすめの動画ある？\n.*あなた（BOT）: マイクラ実況の最新回がおすすめ！\n<\/untrusted>\n\n現在日時: /)
         return [call('submit_chat_reply', { text: '続きは来週の配信でやる予定はまだ決まってないよ！' })]
       }])
       await mentionEvent.handle(mention(channel, '<@BOT> それの続きは？', { messageReference: { messageID: '611', channelID: '201' } }))
