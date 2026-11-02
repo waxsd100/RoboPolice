@@ -226,6 +226,8 @@ function configureGateway () {
   delete process.env.GEMINI_MODEL
   delete process.env.GEMINI_MAX_STEPS
   delete process.env.GEMINI_TEMPERATURE
+  delete process.env.GEMINI_LIGHT_MODEL
+  delete process.env.VIDEO_SUMMARY_FPS
 }
 
 // A fake Gemini. `turns` is a list of model turns; each is an array of parts, or a function that

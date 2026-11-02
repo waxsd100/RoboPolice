@@ -2,7 +2,7 @@ const { SUBMIT_FORUM_DECLARATION, IMAGE_INSTRUCTION_PROPERTY, toForumPost, image
 const { withoutCharCount } = require('../utils/textClean')
 const { Agent } = require('undici')
 const { gatewayURL, gatewayAuthHeaders, isGatewayConfigured } = require('../utils/aiGateway')
-const { currentUsage } = require('../utils/geminiUsage')
+const { currentUsage, recordTokens } = require('../utils/geminiUsage')
 
 const DEFAULT_GEMINI_MODEL = 'gemini-flash-latest'
 const GEMINI_TIMEOUT_MS = 60000
@@ -221,8 +221,8 @@ function rateLimitHint (body) {
 }
 
 // One Gemini API call through the gateway (`method` such as "generateContent"), retrying HTTP 429.
-// Returns the response body.
-async function geminiRequest (model, method, body, { timeoutMs = GEMINI_TIMEOUT_MS } = {}) {
+// Returns the response body. purpose: what it is for, to count its tokens by (geminiUsage.js).
+async function geminiRequest (model, method, body, { timeoutMs = GEMINI_TIMEOUT_MS, purpose = 'other' } = {}) {
   const url = gatewayURL(`google-ai-studio/v1beta/models/${encodeURIComponent(model)}:${method}`)
   const headers = { 'Content-Type': 'application/json', ...gatewayAuthHeaders() }
   // Optional: the Gemini key can be stored in the gateway (BYOK) instead.
@@ -255,7 +255,18 @@ async function geminiRequest (model, method, body, { timeoutMs = GEMINI_TIMEOUT_
     const hint = res.status === 429 ? rateLimitHint(text) : `AI の呼び出しに失敗しました（HTTP ${res.status}）`
     throw new GeminiError(`Gemini request failed: HTTP ${res.status} ${text}`, hint)
   }
-  return res.json()
+  const data = await res.json()
+  recordTokens(purpose, model, data?.usageMetadata)
+  return data
+}
+
+// The lighter, cheaper model for work in the background (taking knowledge out of pages, describing
+// emojis, short blurbs): GEMINI_LIGHT_MODEL, by default gemini-flash-lite-latest; empty to use
+// GEMINI_MODEL for everything.
+const DEFAULT_LIGHT_MODEL = 'gemini-flash-lite-latest'
+function lightModel () {
+  const light = process.env.GEMINI_LIGHT_MODEL ?? DEFAULT_LIGHT_MODEL
+  return light || process.env.GEMINI_MODEL || DEFAULT_GEMINI_MODEL
 }
 
 // One generateContent call through the gateway. Returns the first candidate's content.
@@ -279,7 +290,7 @@ function generate (contents, declarations, allowed = null) {
     // ANY: every turn must be a tool call, so the loop always ends in a submit_* call.
     toolConfig: { functionCallingConfig: { mode: 'ANY', ...(allowed ? { allowedFunctionNames: allowed } : {}) } },
     generationConfig: { temperature: temperature() }
-  })
+  }, { purpose: 'mention' })
 }
 
 // Runs the model with the read-only tools until it submits a draft, appending every turn to
@@ -424,4 +435,4 @@ async function revise (conversation, correction) {
   return check(conversation, await runAgent(conversation.contents, conversation.tools, conversation.submits))
 }
 
-module.exports = { draft, revise, MAX_STEPS, isConfigured, toScheduledEvent, callGemini, geminiRequest, retryTimer, DEFAULT_GEMINI_MODEL, ENTITY_TYPES, GeminiError }
+module.exports = { lightModel, draft, revise, MAX_STEPS, isConfigured, toScheduledEvent, callGemini, geminiRequest, retryTimer, DEFAULT_GEMINI_MODEL, ENTITY_TYPES, GeminiError }

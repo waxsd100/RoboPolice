@@ -44,7 +44,7 @@ async function callImageModel (prompt, source, size) {
       responseModalities: ['IMAGE'],
       imageConfig: { aspectRatio: ASPECT_RATIOS.get(size) }
     }
-  })
+  }, { purpose: 'image' })
   const image = content.parts.map(p => p.inlineData || p.inline_data).find(d => /^image\//.test(d?.mimeType || d?.mime_type || ''))
   if (!image) throw new GeminiError(`Gemini returned no image: ${JSON.stringify(content).slice(0, 500)}`, 'AI が画像を作れませんでした')
   return cropTo(Buffer.from(image.data, 'base64'), size)

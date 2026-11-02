@@ -2,7 +2,7 @@
 // keeps the summary so the same video is never summarized twice. Only run when the
 // model decides it needs a video's contents (a video was linked, or a question is about what a
 // video says): it is far costlier than reading titles and descriptions.
-const { callGemini, DEFAULT_GEMINI_MODEL, GeminiError } = require('./eventDrafter')
+const { callGemini, DEFAULT_GEMINI_MODEL, GeminiError, lightModel } = require('./eventDrafter')
 const youtubeDB = require('../../db/interfaces/postgres/youtube')
 const youtube = require('../utils/youtube')
 const { parseVideoId, durationSeconds } = youtube
@@ -46,6 +46,15 @@ function shiftTimestamps (text, offset) {
   return text.replace(/\[(?:(\d{1,2}):)?(\d{1,2}):(\d{2})\]/g, (whole, h, m, s) => `[${fmt(offset + Number(h || 0) * 3600 + Number(m) * 60 + Number(s))}]`)
 }
 
+// Frames a second Gemini looks at (VIDEO_SUMMARY_FPS, default 0.2: one every 5 seconds; Gemini's
+// own default is 1). Each frame costs tokens while the sound is heard throughout, and a summary is
+// mostly about what is said, so fewer frames cost much less for about the same summary.
+const DEFAULT_FPS = 0.2
+function fps () {
+  const n = Number(process.env.VIDEO_SUMMARY_FPS)
+  return process.env.VIDEO_SUMMARY_FPS && n > 0 && n <= 24 ? n : DEFAULT_FPS
+}
+
 const textOf = content => content.parts.map(p => p.text || '').join('').trim()
 
 function askVideo (videoID, prompt, clip = null) {
@@ -53,13 +62,13 @@ function askVideo (videoID, prompt, clip = null) {
     contents: [{
       role: 'user',
       parts: [
-        { fileData: { fileUri: `https://www.youtube.com/watch?v=${videoID}` }, ...(clip ? { videoMetadata: { startOffset: `${clip.start}s`, endOffset: `${clip.end}s` } } : {}) },
+        { fileData: { fileUri: `https://www.youtube.com/watch?v=${videoID}` }, videoMetadata: { fps: fps(), ...(clip ? { startOffset: `${clip.start}s`, endOffset: `${clip.end}s` } : {}) } },
         { text: prompt }
       ]
     }],
     // Fewer tokens per frame: the summary is about what is said and roughly shown, not fine detail.
     generationConfig: { temperature: 0.2, mediaResolution: 'MEDIA_RESOLUTION_LOW' }
-  }, { timeoutMs: summaryTimeoutMs() })
+  }, { timeoutMs: summaryTimeoutMs(), purpose: 'videoSummary' })
 }
 
 // The video's length in seconds: as stored, or from the YouTube API. Null when unknown.
@@ -92,10 +101,11 @@ async function summarizeParts (guildID, videoID, seconds, partSeconds) {
     parts.push(`### ${fmt(start)}〜${fmt(end)}\n${shiftTimestamps(textOf(content), start)}`)
   }
   if (parts.length === 1) return parts[0].split('\n').slice(1).join('\n')
-  const merged = await backgroundQueue.run(guildID, () => callGemini(process.env.GEMINI_MODEL || DEFAULT_GEMINI_MODEL, {
+  // Putting text together needs no video model: the lighter one does.
+  const merged = await backgroundQueue.run(guildID, () => callGemini(lightModel(), {
     contents: [{ role: 'user', parts: [{ text: `次は1本の長い動画を時間で分けて要約したものです。これを1つの要約にまとめてください（長くても1500文字程度まで。文字数は書かない）。話題の順に箇条書きにし、各項目の先頭の [時間] は書き換えずにそのまま残してください。告知・日時・出演者・URL など具体的な情報は残してください。\n\n${parts.join('\n\n')}` }] }],
     generationConfig: { temperature: 0.2 }
-  }, { timeoutMs: 2 * 60 * 1000 }))
+  }, { timeoutMs: 2 * 60 * 1000, purpose: 'videoSummary' }))
   return textOf(merged)
 }
 

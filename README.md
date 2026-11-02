@@ -336,7 +336,7 @@ that contains every word of the query still comes first.
 - With message embeddings on, **every stored message is sent to Google Gemini** to be embedded, not
   only mentions. Update the Privacy Policy and the privileged intent answers before turning it on.
 
-Every Gemini call goes through Cloudflare AI Gateway. YouTube Data API calls can too: in the
+Every Gemini call goes through Cloudflare AI Gateway. The tokens each kind of call uses (prompt, of it served from Gemini's cache, answer and thinking, by purpose and model) are logged once an hour (`[GEMINI]: Tokens in the last hour`), to see where the cost goes. YouTube Data API calls can too: in the
 dashboard, add a custom provider (AI Gateway → Custom Providers) with base URL
 `https://www.googleapis.com` and a slug such as `youtube`, then set `YOUTUBE_GATEWAY_PROVIDER=youtube`.
 Requests then go to `…/custom-youtube/youtube/v3/…` with the gateway token. Either way the API key is
@@ -510,6 +510,8 @@ the secrets if it leaks, so keep it only on the platform and delete it in the co
 | `CLOUDFLARE_AI_GATEWAY_BYOK_ALIAS` | Optional. Name of the Gemini key stored in the gateway (BYOK), sent as `cf-aig-byok-alias`. Unset uses the key named `default` |
 | `GEMINI_API_KEY` | Optional when the key is stored in the gateway (BYOK); otherwise required for drafting from mentions |
 | `GEMINI_MODEL` | Optional. Defaults to `gemini-flash-latest` |
+| `GEMINI_LIGHT_MODEL` | Optional (default `gemini-flash-lite-latest`). The cheaper model for work in the background: taking knowledge out of the wiki, X and web pages, describing emojis, stream blurbs, game links, and putting a long video's parts together. Empty to use `GEMINI_MODEL` for everything. Mention replies and video summaries use `GEMINI_MODEL` |
+| `VIDEO_SUMMARY_FPS` | Optional (default `0.2`, one frame every 5 seconds; Gemini's own default is 1). Frames a second Gemini looks at when summarizing a video. Each frame costs tokens while the sound is heard throughout, so fewer frames cost much less |
 | `GEMINI_TEMPERATURE` | Optional (default `0.7`, 0–2). How varied mention replies and drafts are; higher is more varied. Drafts are checked field by field either way |
 | `GEMINI_MAX_STEPS` | Optional (default `20`). How many Gemini round trips a reply or draft may take (each lookup is one); the last one may only answer with what was found |
 | `YOUTUBE_API_KEY` | Optional. YouTube Data API v3 key for `/youtube`. Unset disables the command |

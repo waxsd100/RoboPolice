@@ -2,7 +2,7 @@
 // Made from what is known before it starts: its title, its description and its thumbnail. Gemini
 // can't watch a stream that is still live, so the contents themselves are summarized once its
 // archive is up (summarizeArchives in liveWatcher.js).
-const { callGemini, DEFAULT_GEMINI_MODEL } = require('./eventDrafter')
+const { callGemini, lightModel } = require('./eventDrafter')
 const { isGatewayConfigured } = require('../utils/aiGateway')
 const { withoutCharCount } = require('../utils/textClean')
 const backgroundQueue = require('../utils/backgroundQueue')
@@ -64,10 +64,10 @@ async function describeStream (video, thumbnail = null, guildID = null) {
 async function askGemini (video, thumbnail) {
   const parts = [{ text: `${PROMPT}\n\nタイトル: ${video.title}\n概要欄:\n${(video.description || '（なし）').slice(0, 3000)}` }]
   if (thumbnail) parts.push({ inlineData: { mimeType: thumbnail.mimeType || 'image/jpeg', data: thumbnail.buffer.toString('base64') } })
-  const content = await callGemini(process.env.GEMINI_MODEL || DEFAULT_GEMINI_MODEL, {
+  const content = await callGemini(lightModel(), {
     contents: [{ role: 'user', parts }],
     generationConfig: { temperature: 0.3, responseMimeType: 'application/json', responseSchema: SCHEMA }
-  }, { timeoutMs: TIMEOUT_MS })
+  }, { timeoutMs: TIMEOUT_MS, purpose: 'streamBlurb' })
   const answer = JSON.parse(content.parts.map(p => p.text || '').join('') || '{}')
   const blurb = withoutCharCount(String(answer.blurb || '').trim()).slice(0, MAX_BLURB) || null
   const named = (Array.isArray(answer.games) ? answer.games : [])

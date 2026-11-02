@@ -41,7 +41,7 @@ async function embed (texts, taskType = 'RETRIEVAL_DOCUMENT') {
   for (let i = 0; i < texts.length; i += BATCH_SIZE) {
     const data = await geminiRequest(model(), 'batchEmbedContents', {
       requests: texts.slice(i, i + BATCH_SIZE).map(text => request(name, text, taskType))
-    })
+    }, { purpose: 'embedding' })
     vectors.push(...(data.embeddings || []).map(e => quantize(e.values)))
   }
   if (vectors.length !== texts.length) throw new Error(`Embedding returned ${vectors.length} vectors for ${texts.length} texts`)
