@@ -504,14 +504,14 @@ describe('explicit cache and thinking', () => {
   const quietTools = { declarations: [], call: async () => ({}) }
 
   // A fake Gemini that also answers cachedContents: { requests, made }.
-  function installCachingGemini ({ createFails = false, goneOnce = false } = {}) {
+  function installCachingGemini ({ createFails = false, createStatus = 400, goneOnce = false } = {}) {
     const requests = []
     let gone = goneOnce
     global.fetch = async (url, init) => {
       const body = JSON.parse(init.body)
       requests.push({ url, body })
       if (url.endsWith('/cachedContents')) {
-        if (createFails) return { ok: false, status: 400, text: async () => 'Cached content is too small' }
+        if (createFails) return { ok: false, status: createStatus, text: async () => createStatus === 400 ? 'Cached content is too small' : 'Missing or invalid access token' }
         return { ok: true, json: async () => ({ name: `cachedContents/c${requests.length}`, expireTime: new Date(Date.now() + 3600e3).toISOString() }) }
       }
       if (body.cachedContent && gone) {
@@ -560,6 +560,23 @@ describe('explicit cache and thinking', () => {
     const off = installCachingGemini()
     await draft({ request: 'やあ', channelName: 'general', guild, tools: quietTools, now: NOW })
     assert.equal(off.filter(r => r.url.endsWith('/cachedContents')).length, 0)
+  })
+
+  test('a cache that could not be made for another reason (the gateway refusing) is tried again after minutes, not an hour', async () => {
+    const { cachedPrefix } = require('../../src/bot/modules/eventDrafter')
+    const prefix = { systemInstruction: { parts: [{ text: 'x' }] } }
+    let requests = installCachingGemini({ createFails: true, createStatus: 401 })
+    const t0 = Date.parse('2026-11-02T18:00:00Z')
+    assert.equal(await cachedPrefix('gemini-3.8-flash', prefix, t0), null)
+    assert.equal(await cachedPrefix('gemini-3.8-flash', prefix, t0 + 4 * 60e3), null)
+    assert.equal(requests.length, 1, 'not tried again within 5 minutes')
+    requests = installCachingGemini()
+    assert.match(await cachedPrefix('gemini-3.8-flash', prefix, t0 + 6 * 60e3), /^cachedContents\//, 'made once it works again')
+    caches.clear()
+    requests = installCachingGemini({ createFails: true })
+    await cachedPrefix('gemini-3.8-flash', prefix, t0)
+    installCachingGemini()
+    assert.equal(await cachedPrefix('gemini-3.8-flash', prefix, t0 + 30 * 60e3), null, 'too small: an hour before trying again')
   })
 
   test('a cache Gemini no longer has: asked again in full', async () => {
