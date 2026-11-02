@@ -557,6 +557,7 @@ the secrets if it leaks, so keep it only on the platform and delete it in the co
 | `GEMINI_MODEL` | Optional. Defaults to `gemini-flash-latest` |
 | `GEMINI_LIGHT_MODEL` | Optional (default `gemini-flash-lite-latest`). The cheaper model for work in the background: taking knowledge out of the wiki, X and web pages and the servers' messages (`SERVER_LORE`), describing emojis, stream blurbs, game links, and putting a long video's parts together. Empty to use `GEMINI_MODEL` for everything. Mention replies and video summaries use `GEMINI_MODEL` |
 | `VIDEO_SUMMARY_FPS` | Optional (default `0.2`, one frame every 5 seconds; Gemini's own default is 1). Frames a second Gemini looks at when summarizing a video. Each frame costs tokens while the sound is heard throughout, so fewer frames cost much less |
+| `MENTION_TOKEN_FOOTER` | Optional. Chat replies end with the Gemini tokens they used in Discord's small grey text (`-# tokens: in … (cached …) · out … · thinking … · N Gemini calls`); `false` leaves it out |
 | `GEMINI_TEMPERATURE` | Optional (default `0.7`, 0–2). How varied mention replies and drafts are; higher is more varied. Drafts are checked field by field either way |
 | `GEMINI_MAX_STEPS` | Optional (default `20`). How many Gemini round trips a reply or draft may take (each lookup is one); the last one may only answer with what was found |
 | `YOUTUBE_API_KEY` | Optional. YouTube Data API v3 key for `/youtube`. Unset disables the command |

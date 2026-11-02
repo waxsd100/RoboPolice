@@ -2,7 +2,7 @@ const { SUBMIT_FORUM_DECLARATION, IMAGE_INSTRUCTION_PROPERTY, toForumPost, image
 const { withoutCharCount } = require('../utils/textClean')
 const { Agent } = require('undici')
 const { gatewayURL, gatewayAuthHeaders, isGatewayConfigured } = require('../utils/aiGateway')
-const { currentUsage, recordTokens } = require('../utils/geminiUsage')
+const { currentUsage, recordTokens, addTokens } = require('../utils/geminiUsage')
 
 const DEFAULT_GEMINI_MODEL = 'gemini-flash-latest'
 const GEMINI_TIMEOUT_MS = 60000
@@ -268,6 +268,7 @@ async function geminiRequest (model, method, body, { timeoutMs = GEMINI_TIMEOUT_
   }
   const data = await res.json()
   recordTokens(purpose, model, data?.usageMetadata)
+  addTokens(data?.usageMetadata)
   return data
 }
 

@@ -7,7 +7,7 @@ const { picturesFor } = require('../utils/foreignEmojis')
 const { EMBED_COLORS } = require('../utils/constants')
 const { hasStaffAccess } = require('../utils/staffAccess')
 const { redact } = require('../utils/redact')
-const { trackUsage } = require('../utils/geminiUsage')
+const { trackUsage, tokenFooter } = require('../utils/geminiUsage')
 const mentionQuota = require('../utils/mentionQuota')
 const { SIZES } = require('../utils/imageCrop')
 const { CoverImage, MODES } = require('./coverImage')
@@ -99,6 +99,14 @@ async function recentBotReplies (channelID, exceptID = null) {
     .filter(m => m.id !== exceptID && m.author?.id === global.bot.user.id && !m.webhookID && m.messageReference && m.content?.trim())
     .slice(0, MAX_RECENT_REPLIES)
     .map(m => m.content)
+}
+
+// The reply with a footer line under it, cut so that both fit in one message.
+const MAX_MESSAGE = 2000
+function withFooter (content, footer) {
+  if (!footer) return content
+  const room = MAX_MESSAGE - footer.length - 1
+  return `${content.length > room ? `${content.slice(0, room - 1)}…` : content}\n${footer}`
 }
 
 // Talking to the bot: mentioning it, or replying to its answer.
@@ -463,7 +471,7 @@ async function handle (message) {
         if (result.kind === 'chat') {
           if (!previous) {
             const { content, embeds } = await withLinkCards(withServerChannels(withServerEmojis(result.text, guild), guild, message.member))
-            await reply.edit({ content, embeds, components: [], allowedMentions: NO_MENTIONS })
+            await reply.edit({ content: withFooter(content, tokenFooter(usage)), embeds, components: [], allowedMentions: NO_MENTIONS })
             return
           }
           // The requester asked something about the draft instead of correcting it: answer, and
