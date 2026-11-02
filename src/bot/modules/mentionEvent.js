@@ -3,6 +3,8 @@ const { v4: uuidv4 } = require('uuid')
 const { draft, revise, isConfigured, ENTITY_TYPES } = require('./eventDrafter')
 const { createTools, describeServer, withServerEmojis, withServerChannels, StopDrafting } = require('./eventTools')
 const { withLinkCards } = require('../utils/linkCards')
+const { safeLinks } = require('../utils/linkSafety')
+const { reportInjection } = require('../utils/untrusted')
 const { picturesFor } = require('../utils/foreignEmojis')
 const { EMBED_COLORS } = require('../utils/constants')
 const { hasStaffAccess } = require('../utils/staffAccess')
@@ -107,6 +109,14 @@ function withFooter (content, footer) {
   if (!footer) return content
   const room = MAX_MESSAGE - footer.length - 1
   return `${content.length > room ? `${content.slice(0, room - 1)}…` : content}\n${footer}`
+}
+
+// A chat reply's text with only the links that came up in the conversation (the request, what it
+// replies to, what the tools read): linkSafety.js. Links left out are logged.
+function checkedLinks (result, guild) {
+  const { text, removed } = safeLinks(result.text, result.conversation?.contents)
+  if (removed.length) global.logger.warn(`[INJECTION]: Left out link(s) that came from nowhere in a reply in ${guild.id}: ${removed.join(' ').slice(0, 300)}`)
+  return text
 }
 
 // Talking to the bot: mentioning it, or replying to its answer.
@@ -435,6 +445,9 @@ async function handle (message) {
       const referenced = repliedTo && !edit
         ? await tools.readThread(message.messageReference.channelID || message.channel.id, repliedTo).catch(e => ({ text: `（読めませんでした: ${e.message}）`, count: 1 }))
         : null
+      // Attempts to take over the model are only logged: the prompt marks all of this as data.
+      reportInjection(`a mention by ${message.author.id} in ${guild.id}`, request)
+      if (referenced) reportInjection(`the conversation a mention in ${guild.id} replies to`, referenced.text)
       // Fetched fresh for every request. Without it the draft still works, just with less context.
       const server = await describeServer(guild, member, message.channel.id, { query: request, context: referenced?.text }).catch(e => {
         global.logger.warn(`Could not describe server ${guild.id}: ${e.message}`)
@@ -470,13 +483,13 @@ async function handle (message) {
       for (;;) {
         if (result.kind === 'chat') {
           if (!previous) {
-            const { content, embeds } = await withLinkCards(withServerChannels(withServerEmojis(result.text, guild), guild, message.member))
+            const { content, embeds } = await withLinkCards(withServerChannels(withServerEmojis(checkedLinks(result, guild), guild), guild, message.member))
             await reply.edit({ content: withFooter(content, tokenFooter(usage)), embeds, components: [], allowedMentions: NO_MENTIONS })
             return
           }
           // The requester asked something about the draft instead of correcting it: answer, and
           // show the draft again.
-          note = withServerChannels(withServerEmojis(result.text, guild), guild, message.member)
+          note = withServerChannels(withServerEmojis(checkedLinks(result, guild), guild), guild, message.member)
           result = { ...previous, conversation: result.conversation }
           continue
         }

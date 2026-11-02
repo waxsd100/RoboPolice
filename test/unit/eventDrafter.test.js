@@ -193,16 +193,16 @@ describe('draft', () => {
     const prompt = requests[0].body.contents[0].parts[0].text
     assert.match(prompt, /現在日時: 2026年10月29日木曜日 15:00（Asia\/Tokyo）/)
     assert.match(prompt, /依頼されたチャンネル: #general/)
-    assert.match(prompt, /## 依頼メッセージ（\d+文字）\n交流会/)
+    assert.match(prompt, /## 依頼メッセージ（\d+文字）\n<untrusted source="request">\n交流会/)
     assert.match(prompt, /## 依頼メッセージ（3文字）/, 'its length, to choose how long to answer')
     assert.match(requests[0].body.systemInstruction.parts[0].text, /返事の長さは毎回、依頼の中身と長さを見て決める/)
-    assert.match(prompt, /## 依頼メッセージの返信先\n告知文/)
+    assert.match(prompt, /## 依頼メッセージの返信先\n<untrusted source="conversation">\n告知文/)
   })
 
   test('a reply chain goes in as the conversation the request continues', async () => {
     const requests = installGemini([[call('submit_chat_reply', { text: 'x' })]])
     await draft({ request: 'それの続編は？', referenced: { text: 'me: おすすめは？\nあなた（BOT）: 〇〇！', count: 2 }, channelName: 'general', guild, tools, now: NOW })
-    assert.match(requests[0].body.contents[0].parts[0].text, /## 依頼メッセージの返信先（返信をたどった会話。古い順で、最後が直接の返信先。依頼メッセージはこの続き）\nme: おすすめは？\nあなた（BOT）: 〇〇！/)
+    assert.match(requests[0].body.contents[0].parts[0].text, /## 依頼メッセージの返信先（返信をたどった会話。古い順で、最後が直接の返信先。依頼メッセージはこの続き）\n<untrusted source="conversation">\nme: おすすめは？\nあなた（BOT）: 〇〇！/)
     assert.match(requests[0].body.systemInstruction.parts[0].text, /「あなた（BOT）」は、あなた自身がこれまでに送ったメッセージです。必ずその会話の続きとして/)
   })
 
@@ -284,7 +284,7 @@ describe('draft', () => {
     const requests = installGemini([[call('submit_chat_reply', { text: 'やあ' })]])
     await draft({ request: 'こんにちは', channelName: 'general', guild, tools, recentReplies: ['ご安心を！\n今日も元気', '前の返事'], now: NOW })
     const prompt = requests[0].body.contents[0].parts[0].text
-    assert.match(prompt, /## 最近の返事[^\n]*\n- ご安心を！ 今日も元気\n- 前の返事/)
+    assert.match(prompt, /## 最近の返事[^\n]*\n<untrusted source="recent_replies">\n- ご安心を！ 今日も元気\n- 前の返事/)
     assert.equal(requests[0].body.generationConfig.temperature, 0.7)
     process.env.GEMINI_TEMPERATURE = '1.2'
     t.after(() => { delete process.env.GEMINI_TEMPERATURE })
@@ -303,7 +303,7 @@ describe('draft', () => {
     const seen = createGuild({ channels: [{ id: '202', name: 'ボイス', type: 2, readers: ['1'] }] })
     const requests = installGemini([[call('submit_chat_reply', { text: 'やあ' })]])
     await draft({ request: '<#202> って何するところ？', channelName: 'general', guild: seen, member: createMember({ id: '1' }), tools, now: NOW })
-    assert.match(requests[0].body.contents[0].parts[0].text, /## 依頼や会話に出てくるチャンネル\n- <#202>: #ボイス（voice）/)
+    assert.match(requests[0].body.contents[0].parts[0].text, /## 依頼や会話に出てくるチャンネル\n<untrusted source="channels">\n- <#202>: #ボイス（voice）/)
   })
 
   test('GEMINI_MAX_STEPS changes the limit', async (t) => {

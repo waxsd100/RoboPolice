@@ -200,7 +200,7 @@ describe('mention → event / forum post (integration)', () => {
     const done = mentionEvent.handle(mention(channel, '<@BOT>', { messageReference: { messageID: '401', channelID: '201' } }))
     const [reply] = replies
     await waitForButtons(reply, '登録する')
-    assert.match(requests[0].body.contents[0].parts[0].text, /## 依頼メッセージの返信先\n.*organizer \(3\): 【告知】11\/3/)
+    assert.match(requests[0].body.contents[0].parts[0].text, /## 依頼メッセージの返信先\n<untrusted source="conversation">\n.*organizer \(3\): 【告知】11\/3/)
     assert.equal(reply.state.embeds[0].fields.find(f => f.name === '場所').value, '<#204>')
     await press(reply, '登録する')
     await done
@@ -288,7 +288,7 @@ describe('mention → event / forum post (integration)', () => {
     const done = mentionEvent.handle(mention(channel, '<@BOT> これを募集フォーラムに立てて', { messageReference: { messageID: '401', channelID: '201' } }))
     const [reply] = replies
     await waitForButtons(reply, '投稿する')
-    assert.match(requests[0].body.contents[0].parts[0].text, /これを募集フォーラムに立てて[\s\S]*返信先\n.*【告知】/)
+    assert.match(requests[0].body.contents[0].parts[0].text, /これを募集フォーラムに立てて[\s\S]*返信先\n<untrusted source="conversation">\n.*【告知】/)
     const [preview] = reply.state.embeds
     assert.equal(preview.title, '11/3 交流会 参加者募集')
     assert.equal(preview.fields.find(f => f.name === '投稿先').value, '<#206>')
@@ -618,7 +618,7 @@ describe('mention → event / forum post (integration)', () => {
     await mentionEvent.handle(mention(channel, '<@BOT> このチャンネルの内容でイベントを作って'))
     const prompt = requests[0].body.contents[0].parts[0].text
     assert.match(prompt, /依頼されたチャンネル: #general（ID: 201、text）/)
-    assert.match(prompt, /## このサーバーの情報（最新）\nサーバー名: テストサーバー/)
+    assert.match(prompt, /## このサーバーの情報（最新）\n<untrusted source="server">\nサーバー名: テストサーバー/)
     assert.match(prompt, /- 201: #general（text） ← 依頼されたチャンネル/)
     assert.doesNotMatch(prompt, /#staff/, 'channels the requester cannot see are left out')
     assert.match(prompt, /### YouTube\n設定なし/)
@@ -908,7 +908,7 @@ describe('mention → event / forum post (integration)', () => {
     try {
       const { channel, replies } = createChannel()
       const requests = installGemini([body => {
-        assert.match(body.contents[0].parts[0].text, /## 依頼メッセージの返信先（返信をたどった会話[^\n]*\n.*user1 \(1\)（依頼者）: <@BOT> おすすめの動画ある？\n.*あなた（BOT）: マイクラ実況の最新回がおすすめ！\n\n## /)
+        assert.match(body.contents[0].parts[0].text, /## 依頼メッセージの返信先（返信をたどった会話[^\n]*\n<untrusted source="conversation">\n.*user1 \(1\)（依頼者）: <@BOT> おすすめの動画ある？\n.*あなた（BOT）: マイクラ実況の最新回がおすすめ！\n<\/untrusted>\n\n## /)
         return [call('submit_chat_reply', { text: '続きは来週の配信でやる予定はまだ決まってないよ！' })]
       }])
       await mentionEvent.handle(mention(channel, '<@BOT> それの続きは？', { messageReference: { messageID: '611', channelID: '201' } }))
@@ -1121,7 +1121,7 @@ describe('mention → event / forum post (integration)', () => {
     test('an image attached to the reply replaces the posted image, even without any text', async () => {
       const { channel, replies } = createChannel()
       const requests = installGemini([body => {
-        assert.match(body.contents[0].parts[0].text, /## 依頼メッセージ（\d+文字）\n画像を添付の画像に差し替えて/)
+        assert.match(body.contents[0].parts[0].text, /## 依頼メッセージ（\d+文字）\n<untrusted source="request">\n画像を添付の画像に差し替えて/)
         // The model may well list the attachment and describe the change; the image is replaced once, without AI.
         return [call('submit_forum_post_draft', { found: true, channel_id: '206', title: '11/3 交流会', content: '参加したい人は書き込んでください', tags: ['募集中'], image_urls: [`${site.url}/poster.png`], image_instruction: '添付の画像に差し替える' })]
       }])
@@ -1217,7 +1217,7 @@ describe('mention → event / forum post (integration)', () => {
       await mentionEvent.handle(mention(channel, '<@&800> 交流会 <@&801> と相談'))
       assert.equal(replies[0].state.content, '⚠️ **作成できませんでした**\nなし')
       // The bot's role is stripped from the request; other role mentions are kept as written.
-      assert.match(requests[0].body.contents[0].parts[0].text, /## 依頼メッセージ（\d+文字）\n交流会 <@&801> と相談/)
+      assert.match(requests[0].body.contents[0].parts[0].text, /## 依頼メッセージ（\d+文字）\n<untrusted source="request">\n交流会 <@&801> と相談/)
     })
 
     test('ignores a mention of some other role', async () => {
