@@ -216,6 +216,16 @@ describe('draft', () => {
     assert.equal(new Set(systems).size, 1, 'one cache for every server')
   })
 
+  test('what changes least comes first and the request last, so a prompt cache covers more', async () => {
+    const requests = installGemini([[call('submit_chat_reply', { text: 'x' })]])
+    await draft({ request: 'やあ', referenced: { text: '前の話', count: 1 }, channelName: 'general', server: 'サーバーの説明', recentReplies: ['前の返事'], guild, tools, now: NOW })
+    const prompt = requests[0].body.contents[0].parts[0].text
+    const order = ['## 返事の長さ', '## このサーバーの情報', '## 最近の返事', '依頼されたチャンネル:', '## 依頼メッセージの返信先', '現在日時:', '## 依頼メッセージ（'].map(h => prompt.indexOf(h))
+    assert.ok(order.every(i => i >= 0), 'every part is there')
+    assert.deepEqual(order, [...order].sort((a, b) => a - b))
+    assert.ok(prompt.trimEnd().endsWith('</untrusted>'), 'the request is last')
+  })
+
   test('a reply chain goes in as the conversation the request continues', async () => {
     const requests = installGemini([[call('submit_chat_reply', { text: 'x' })]])
     await draft({ request: 'それの続編は？', referenced: { text: 'me: おすすめは？\nあなた（BOT）: 〇〇！', count: 2 }, channelName: 'general', guild, tools, now: NOW })

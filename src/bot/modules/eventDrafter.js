@@ -181,18 +181,22 @@ const REPLY_LENGTHS = {
 const DEFAULT_REPLY_LENGTH = 'long'
 const replyLengthOf = length => REPLY_LENGTHS[length] ? length : DEFAULT_REPLY_LENGTH
 
+// The request as the model gets it, the parts that change least first and the request itself last:
+// what stays the same from one request to the next (the server's setting and information) leads,
+// so a prompt cache can cover as much as possible, and what is new each time (the time, the
+// conversation, the request) follows.
 function buildPrompt ({ request, referenced, channelName, channelID, channelInfo = null, server, forum, images, edit, recentReplies = [], channels = [], replyLength = null, now }) {
   const lines = [
-    `現在日時: ${formatNow(now)}（${TIMEZONE}）`,
-    `依頼されたチャンネル: ${channelInfo || `#${channelName}${channelID ? `（ID: ${channelID}）` : ''}`}`,
-    '',
     '## 返事の長さ（このサーバーの設定）',
-    ...REPLY_LENGTHS[replyLengthOf(replyLength)],
-    '',
-    `## 依頼メッセージ（${[...String(request || '')].length}文字）`,
-    request ? wrap('request', request) : '（本文なし。返信先のメッセージから作成）'
+    ...REPLY_LENGTHS[replyLengthOf(replyLength)]
   ]
-  if (images.length !== 0) lines.push('', '## 依頼メッセージの添付画像', ...images.map(url => `- ${url}`))
+  if (server) lines.push('', '## このサーバーの情報（最新）', wrap('server', server))
+  if (channels.length) lines.push('', '## 依頼や会話に出てくるチャンネル', wrap('channels', channels.join('\n')))
+  if (recentReplies.length) {
+    lines.push('', '## 最近の返事（あなた（BOT）がこのチャンネルで最近送ったもの。新しい順。同じネタ・言い回し・書き出しを繰り返さないこと）',
+      wrap('recent_replies', recentReplies.map(t => `- ${t.replace(/\s+/g, ' ').slice(0, MAX_RECENT_REPLY)}`).join('\n')))
+  }
+  lines.push('', `依頼されたチャンネル: ${channelInfo || `#${channelName}${channelID ? `（ID: ${channelID}）` : ''}`}`)
   if (forum) lines.push('', `## 投稿先に指定されたフォーラム\n${forum.id}: ${forum.name}（フォーラムに投稿する場合はここに投稿する）`)
   if (edit) {
     const submit = edit.kind === 'event' ? SUBMIT_EVENT_DECLARATION.name : SUBMIT_FORUM_DECLARATION.name
@@ -205,12 +209,10 @@ function buildPrompt ({ request, referenced, channelName, channelID, channelInfo
   } else if (referenced) {
     lines.push('', '## 依頼メッセージの返信先', wrap('conversation', referenced.text))
   }
-  if (channels.length) lines.push('', '## 依頼や会話に出てくるチャンネル', wrap('channels', channels.join('\n')))
-  if (server) lines.push('', '## このサーバーの情報（最新）', wrap('server', server))
-  if (recentReplies.length) {
-    lines.push('', '## 最近の返事（あなた（BOT）がこのチャンネルで最近送ったもの。新しい順。同じネタ・言い回し・書き出しを繰り返さないこと）',
-      wrap('recent_replies', recentReplies.map(t => `- ${t.replace(/\s+/g, ' ').slice(0, MAX_RECENT_REPLY)}`).join('\n')))
-  }
+  lines.push('', `現在日時: ${formatNow(now)}（${TIMEZONE}）`,
+    '', `## 依頼メッセージ（${[...String(request || '')].length}文字）`,
+    request ? wrap('request', request) : '（本文なし。返信先のメッセージから作成）')
+  if (images.length !== 0) lines.push('', '## 依頼メッセージの添付画像', ...images.map(url => `- ${url}`))
   return lines.join('\n')
 }
 

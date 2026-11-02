@@ -115,16 +115,18 @@ describe('embeddingIndexer', () => {
         { message_id: '01', content: '明日の配信何時から？', embedding },
         { message_id: '02', content: 'wwwwww', embedding },
         { message_id: '03', content: 'https://youtu.be/abcdefghijk', embedding },
-        { message_id: '04', content: '草', embedding: null }
+        { message_id: '04', content: '草', embedding: null },
+        { message_id: '05', content: 'None', embedding },
+        { message_id: '06', content: '<@308674858781245440>', embedding }
       ]
     })
     Object.assign(indexer.cleanse, { after: '', cleansed: false, dropped: 0 })
-    assert.equal(await indexer.cleanseMessages(), 2)
-    assert.deepEqual(saved.dropped, ['02', '03'], 'only noise, and only what has an embedding')
+    assert.equal(await indexer.cleanseMessages(), 4)
+    assert.deepEqual(saved.dropped, ['02', '03', '05', '06'], 'only noise (also no text, or only a mention), and only what has an embedding')
     assert.equal(await indexer.cleanseMessages(), 0)
     assert.equal(indexer.cleanse.cleansed, true)
     assert.equal(await indexer.cleanseMessages(), 0, 'done once')
-    assert.equal(saved.dropped.length, 2)
+    assert.equal(saved.dropped.length, 4)
   })
 
   test('a failure is logged and tried again next time', async (t) => {

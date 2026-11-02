@@ -15,6 +15,8 @@ const LAUGHTER = /^[wWｗＷ草笑]+$/u
 
 // The text of a message as it is embedded, or '' for one not worth embedding.
 function embeddableText (text) {
+  // 'None' is how a message with no text (only images, a sticker or an embed) is stored.
+  if (String(text || '').trim() === 'None') return ''
   const s = String(text || '')
     .replace(/https?:\/\/\S+/g, ' ') // links
     .replace(/<a?:\w+:\d+>/g, ' ') // custom emojis
