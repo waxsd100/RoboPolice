@@ -35,6 +35,8 @@ module.exports = {
     require('../modules/discordKnowledge').startDiscordKnowledge()
     // Every worker reads back the past messages of the servers it hosts that keep messages.
     require('../modules/historyBackfill').startHistoryBackfill()
+    // Every worker learns what the servers it hosts are like (SERVER_LORE=true).
+    require('../modules/serverLore').startServerLore()
     // Every worker checks the servers it hosts for new YouTube videos.
     youtubeSync.startAutoSync()
     // ...and follows their streams, for those that turned stream events on.
