@@ -8,7 +8,7 @@ const UC = 'UC' + 'f'.repeat(22)
 const NOW = new Date('2026-11-01T10:00:00Z')
 
 // The bot as far as events go: records every REST call and answers like Discord.
-function installBot ({ canManageEvents = true, gone = [] } = {}) {
+function installBot ({ canManageEvents = true, gone = [], finished = [] } = {}) {
   const calls = []
   const guild = { id: '100', members: new Map([['BOT', { permissions: { has: p => p === 'manageEvents' && canManageEvents } }]]) }
   global.bot = {
@@ -18,6 +18,7 @@ function installBot ({ canManageEvents = true, gone = [] } = {}) {
       async request (method, url, auth, body) {
         calls.push({ method, url, body })
         if (gone.some(id => url.endsWith(`/${id}`))) throw new Error('DiscordRESTError [10070]: Unknown Guild Scheduled Event')
+        if (finished.some(id => url.endsWith(`/${id}`))) throw new Error('DiscordRESTError [180000]: Cannot update a finished event')
         return method === 'POST' ? { id: `EV${calls.length}` } : {}
       }
     }
@@ -202,6 +203,20 @@ describe('checkGuild', () => {
     fakeYouTube([], [apiVideo('stream00001', 'live', { liveStreamingDetails: {} })])
     await liveWatcher.checkGuild('100', UC)
     assert.equal(store.liveEvents[100].stream00001.status, 'gone')
+  })
+
+  test('an event someone ended by hand is left as it is: completed once the stream is over, gone while it is live', async (t) => {
+    t.mock.method(global.logger, 'info', () => {})
+    const warned = t.mock.method(global.logger, 'warn', () => {})
+    const youtube = require('../../src/db/interfaces/postgres/youtube')
+    installBot({ finished: ['EV7', 'EV8'] })
+    await youtube.saveLiveEvent('100', 'stream00001', { eventID: 'EV7', status: 'active', scheduledStart: null, scheduledEnd: '2000-01-01T00:00:00Z' })
+    await youtube.saveLiveEvent('100', 'stream00002', { eventID: 'EV8', status: 'active', scheduledStart: null, scheduledEnd: '2000-01-01T00:00:00Z' })
+    fakeYouTube([], [apiVideo('stream00001', 'none', { liveStreamingDetails: { actualEndTime: '2026-11-01T09:00:00Z' } }), apiVideo('stream00002', 'live', { liveStreamingDetails: {} })])
+    await liveWatcher.checkGuild('100', UC)
+    assert.equal(store.liveEvents[100].stream00001.status, 'completed')
+    assert.equal(store.liveEvents[100].stream00002.status, 'gone')
+    assert.equal(warned.mock.calls.length, 0, 'not warned about every minute')
   })
 
   test('without Manage Events, nothing is made and it says why', async (t) => {

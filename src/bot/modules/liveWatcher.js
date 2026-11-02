@@ -114,6 +114,8 @@ function setStatus (guild, eventID, status) {
 
 // Discord answers 404 (Unknown Guild Scheduled Event) for an event someone deleted.
 const isGone = e => /404|Unknown Guild Scheduled Event/.test(String(e?.message || e))
+// ...and 400 (Cannot update a finished event, code 180000) for one someone ended or canceled by hand.
+const isFinished = e => /Cannot update a finished event|180000/.test(String(e?.message || e))
 
 // Moves one stream's event along. `record` is what is stored for it (or undefined), `video` its
 // current state from YouTube (or null if it is gone). Resolves to the record to store, or null when
@@ -238,6 +240,12 @@ async function updateGuild (guild, ids, byId, records) {
       if (record && isGone(e)) {
         // Someone deleted the event: leave this video alone from now on.
         await youtubeDB.saveLiveEvent(guild.id, id, { eventID: record.event_id, status: 'gone', scheduledStart: record.scheduled_start, scheduledEnd: record.scheduled_end, kind: record.kind })
+      } else if (record && isFinished(e)) {
+        // Someone ended (or canceled) the event by hand: it is left as they left it. A stream that is
+        // over counts as completed (its archive is still summarized); one still live, as gone.
+        const status = video?.liveStatus === 'live' ? 'gone' : 'completed'
+        await youtubeDB.saveLiveEvent(guild.id, id, { eventID: record.event_id, status, scheduledStart: record.scheduled_start, scheduledEnd: record.scheduled_end, kind: record.kind })
+        global.logger.info(`[LIVE]: The event for ${id} in ${guild.id} was ended by hand; leaving it as it is`)
       } else {
         global.logger.warn(`[LIVE]: Could not update the event for ${id} in ${guild.id}: ${e.message}`)
       }
