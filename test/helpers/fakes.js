@@ -156,13 +156,16 @@ function installLoreStore ({ facts = {}, styles = {}, messages = [] } = {}) {
 }
 installLoreStore()
 
-// The reply length setting (/replylength), in memory: { guildID: 'long' | 'normal' | 'short' }.
-// Installed when this file loads, so no test reaches a real database.
-function installReplyLengthStore (lengths = {}) {
-  const store = require('../../src/db/interfaces/postgres/replyLength')
+// The reply settings (/replylength, /persona), in memory: lengths { guildID: 'long' | 'normal' |
+// 'short' }, personas { guildID: false } for servers that turned the streamer off. Installed when
+// this file loads, so no test reaches a real database.
+function installReplyLengthStore (lengths = {}, personas = {}) {
+  const store = require('../../src/db/interfaces/postgres/replySettings')
+  store.getReplySettings = async guildID => ({ replyLength: lengths[guildID] || null, streamerPersona: personas[guildID] !== false })
   store.getReplyLength = async guildID => lengths[guildID] || null
   store.setReplyLength = async (guildID, length) => { lengths[guildID] = length }
-  return lengths
+  store.setStreamerPersona = async (guildID, enabled) => { personas[guildID] = enabled }
+  return { lengths, personas }
 }
 installReplyLengthStore()
 

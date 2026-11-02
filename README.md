@@ -100,6 +100,7 @@ server's history takes disk space: with no retention set and no limit given, all
 | `/youtube liveevents enabled:<True/False>` | 配信をサーバーのイベントとして自動で登録する（予定の枠で作成、開始で開催中、終了で終了）。説明の先頭に AI が配信内容の紹介を書き、終了後はアーカイブを自動で要約する。新しく投稿された動画も「📺 新着動画」として投稿から24時間イベントにする | サーバーの管理（BOT にイベントの管理） |
 | `/youtube show` | 設定しているチャンネル、保存している動画の数、配信の予定、配信のイベント登録の有無を表示する | サーバーの管理 |
 | `/replylength length:<long/normal/short>` | メンションへの返事の長さをサーバーごとに決める。`long`（初期値）は長くても500文字程度、`normal` は内容に合わせて（あいさつは1〜2文、説明は400文字程度まで）、`short` は答えだけを短く（200文字程度まで）。`length` を省くと今の設定を表示する | サーバーの管理 |
+| `/persona streamer:<True/False>` | メンションへの返事で、YouTube チャンネルの配信者本人になりきるか（`True`、初期値）、配信者にはなりきらずサーバーの BOT として話すか（`False`）をサーバーごとに決める。`streamer` を省くと今の設定を表示する | サーバーの管理 |
 | `/setup via_presets` | よく使うログをまとめて有効にする | Webhook の管理・チャンネルの管理・監査ログの表示 |
 | `/setup via_individual_event` | ログの種類を1つずつ選んで有効にする | 同上 |
 | `/setup list` | ログの出力先チャンネルの一覧を表示する | 同上 |
@@ -113,7 +114,7 @@ server's history takes disk space: with no retention set and no limit given, all
 | `/help event:<イベント> guide:<項目>` | ヘルプを表示する | なし |
 | `/ping` | BOT が動いているか確認する | なし |
 
-`/youtube` の新しいサブコマンドや `/replylength` のような新しいコマンドを追加したときは、下の `%setcmd` でコマンドを登録し直さないと Discord に表示されません。
+`/youtube` の新しいサブコマンドや `/replylength`・`/persona` のような新しいコマンドを追加したときは、下の `%setcmd` でコマンドを登録し直さないと Discord に表示されません。
 
 ### テキストコマンド（`%` は `GLOBAL_BOT_PREFIX`）
 

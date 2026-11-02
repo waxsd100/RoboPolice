@@ -226,10 +226,28 @@ describe('draft', () => {
     const requests = installGemini([[call('submit_chat_reply', { text: 'x' })]])
     await draft({ request: 'やあ', referenced: { text: '前の話', count: 1 }, channelName: 'general', server: 'サーバーの説明', recentReplies: ['前の返事'], guild, tools, now: NOW })
     const prompt = requests[0].body.contents[0].parts[0].text
-    const order = ['## 返事の長さ', '## このサーバーの情報', '## 最近の返事', '依頼されたチャンネル:', '## 依頼メッセージの返信先', '現在日時:', '## 依頼メッセージ（'].map(h => prompt.indexOf(h))
+    const order = ['## 話し方', '## 返事の長さ', '## このサーバーの情報', '## 最近の返事', '依頼されたチャンネル:', '## 依頼メッセージの返信先', '現在日時:', '## 依頼メッセージ（'].map(h => prompt.indexOf(h))
     assert.ok(order.every(i => i >= 0), 'every part is there')
     assert.deepEqual(order, [...order].sort((a, b) => a - b))
     assert.ok(prompt.trimEnd().endsWith('</untrusted>'), 'the request is last')
+  })
+
+  test('whether replies speak as the streamer goes with the request; the system instructions describe both ways', async () => {
+    const { PERSONAS } = require('../../src/bot/modules/eventDrafter')
+    const prompts = []
+    const systems = []
+    for (const streamerPersona of [true, false, undefined]) {
+      const requests = installGemini([[call('submit_chat_reply', { text: 'x' })]])
+      await draft({ request: 'やあ', channelName: 'general', guild, tools, streamerPersona, now: NOW })
+      prompts.push(requests[0].body.contents[0].parts[0].text)
+      systems.push(requests[0].body.systemInstruction.parts[0].text)
+    }
+    assert.ok(prompts[0].startsWith(`## 話し方（このサーバーの設定）\n${PERSONAS.streamer}\n`))
+    assert.ok(prompts[1].startsWith(`## 話し方（このサーバーの設定）\n${PERSONAS.bot}\n`))
+    assert.ok(prompts[2].includes(PERSONAS.streamer), 'the streamer by default')
+    assert.equal(new Set(systems).size, 1, 'one cache for every server')
+    assert.match(systems[0], /「配信者として」のとき: あなたはそのチャンネルの配信者本人になりきって/)
+    assert.match(systems[0], /「BOT として」のとき: あなたは配信者本人ではなく、このサーバーの BOT として[\s\S]*配信者を名乗ったり/)
   })
 
   test('a reply chain goes in as the conversation the request continues', async () => {

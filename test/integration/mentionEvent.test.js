@@ -845,6 +845,20 @@ describe('mention → event / forum post (integration)', () => {
     }
   })
 
+  test('chat: a server that turned the streamer off with /persona gets replies as the bot', async () => {
+    const { installReplyLengthStore } = require('../helpers/fakes')
+    const { PERSONAS } = require('../../src/bot/modules/eventDrafter')
+    const { channel } = createChannel()
+    installReplyLengthStore({}, { [channel.guild.id]: false })
+    try {
+      const requests = installGemini([[call('submit_chat_reply', { text: 'やあ' })]])
+      await mentionEvent.handle(mention(channel, '<@BOT> やあ'))
+      assert.ok(requests[0].body.contents[0].parts[0].text.startsWith(`## 話し方（このサーバーの設定）\n${PERSONAS.bot}\n`))
+    } finally {
+      installReplyLengthStore()
+    }
+  })
+
   test('chat: the tokens the reply used go under it in small grey text', async () => {
     const { channel, replies } = createChannel()
     let i = 0
