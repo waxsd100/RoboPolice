@@ -1,9 +1,10 @@
 // Embeddings of stored messages and YouTube videos, for searching by meaning.
 //
-// A message's embedding goes with its message: the foreign key deletes it when the message is deleted for any reason (retention,
-// /clearmydata, the bot leaving), and an edit drops it to be made again. messages.embedded marks
-// what has been handled, so finding new messages uses a small partial index, not a table scan.
-// Videos have one vector each.
+// A message's embedding is a column of its row (migrations/024_inline_embeddings.sql), so it goes
+// with the message whenever that is deleted (retention, /clearmydata, the bot leaving), and an edit
+// clears it to be made again. embedding_model_id marks what has been handled (with the embedding
+// NULL when there was nothing to embed), so finding new messages uses a small partial index.
+// Videos have one vector each, on their row too.
 const pool = require('../../clients/postgres')
 const { toVectorLiteral } = require('../../../bot/utils/embeddings')
 const { ownerGuildIDs } = require('../../../bot/utils/priority')
@@ -25,42 +26,39 @@ async function modelId (name) {
 // [{ id, guild_id, channel_id, ts, content }].
 async function pendingMessages (limit) {
   const rows = await pool.query(
-    'SELECT id, guild_id, channel_id, ts, content FROM messages WHERE NOT embedded ORDER BY (guild_id = ANY($2)) DESC NULLS LAST, ts DESC LIMIT $1',
+    'SELECT id, guild_id, channel_id, ts, content FROM messages WHERE embedding_model_id IS NULL ORDER BY (guild_id = ANY($2)) DESC NULLS LAST, ts DESC LIMIT $1',
     [limit, ownerGuildIDs()])
   return rows.rows
 }
 
-// Stores [{ id, embedding (an Int8Array from embed()), model }] and marks `handledIds` (which also covers messages that get no
-// embedding, such as empty ones or ones from before channels were recorded).
-async function saveMessageEmbeddings (rows, handledIds) {
+// Stores [{ id, embedding (an Int8Array from embed()), model }] and marks `handledIds` as handled by
+// `model` (which also covers messages that get no embedding, such as empty ones or ones from before
+// channels were recorded). A message deleted meanwhile is simply not there to update.
+async function saveMessageEmbeddings (rows, handledIds, model = rows[0]?.model) {
   for (const r of rows) {
-    // The message may have been deleted meanwhile; its embedding is then not wanted either.
-    await pool.query(
-      `INSERT INTO message_embeddings (message_id, embedding, model_id)
-       SELECT $1, $2, $3 WHERE EXISTS (SELECT 1 FROM messages WHERE id = $1)
-       ON CONFLICT (message_id) DO UPDATE SET embedding = EXCLUDED.embedding, model_id = EXCLUDED.model_id`,
+    await pool.query('UPDATE messages SET embedding = $2, embedding_model_id = $3 WHERE id = $1',
       [r.id, toVectorLiteral(r.embedding), await modelId(r.model)])
   }
-  if (handledIds.length) await pool.query('UPDATE messages SET embedded = true WHERE id = ANY($1)', [handledIds])
+  const embedded = new Set(rows.map(r => r.id))
+  const rest = handledIds.filter(id => !embedded.has(id))
+  if (rest.length && model) {
+    await pool.query('UPDATE messages SET embedding = NULL, embedding_model_id = $2 WHERE id = ANY($1)', [rest, await modelId(model)])
+  }
 }
 
 // Drops up to `limit` message embeddings made by another model and marks their messages to be
 // embedded again. Resolves to how many were dropped.
 async function resetStaleMessageEmbeddings (model, limit) {
   const result = await pool.query(
-    `WITH stale AS (
-       DELETE FROM message_embeddings WHERE message_id IN (SELECT message_id FROM message_embeddings WHERE model_id <> $1 LIMIT $2)
-       RETURNING message_id
-     )
-     UPDATE messages SET embedded = false WHERE id IN (SELECT message_id FROM stale)`,
+    `UPDATE messages SET embedding = NULL, embedding_model_id = NULL
+     WHERE id IN (SELECT id FROM messages WHERE embedding_model_id <> $1 LIMIT $2)`,
     [await modelId(model), limit])
   return result.rowCount || 0
 }
 
 // An edited message is embedded again.
 async function invalidateMessage (messageID) {
-  await pool.query('DELETE FROM message_embeddings WHERE message_id = $1', [messageID])
-  await pool.query('UPDATE messages SET embedded = false WHERE id = $1', [messageID])
+  await pool.query('UPDATE messages SET embedding = NULL, embedding_model_id = NULL WHERE id = $1', [messageID])
 }
 
 // Settings for one nearest-neighbour query, run inside its transaction. The HNSW index finds
@@ -90,10 +88,9 @@ async function nearestMessages (guildID, channelIDs, query, { model, limit = 60 
     await client.query('BEGIN')
     await prepareSearch(client, limit)
     const rows = (await client.query(
-      `SELECT e.message_id, 1 - (e.embedding <=> $4::halfvec) AS score FROM message_embeddings e
-       JOIN messages m ON m.id = e.message_id
-       WHERE m.guild_id = $1 AND m.channel_id = ANY($2) AND e.model_id = $3
-       ORDER BY e.embedding <=> $4::halfvec LIMIT $5`,
+      `SELECT id AS message_id, 1 - (embedding <=> $4::halfvec) AS score FROM messages
+       WHERE guild_id = $1 AND channel_id = ANY($2) AND embedding_model_id = $3 AND embedding IS NOT NULL
+       ORDER BY embedding <=> $4::halfvec LIMIT $5`,
       [guildID, channelIDs, await modelId(model), toVectorLiteral(query), limit])).rows
     await client.query('COMMIT')
     return rows.map(r => ({ message_id: r.message_id, score: Number(r.score) }))
@@ -116,19 +113,16 @@ async function getMessages (ids) {
 // [{ video_id, title, description, summary, text_hash }].
 async function videosForEmbedding () {
   const rows = await pool.query(
-    `SELECT v.video_id, v.title, v.description, s.summary, e.text_hash FROM youtube_videos v
+    `SELECT v.video_id, v.title, v.description, s.summary, v.embedding_hash AS text_hash FROM youtube_videos v
      LEFT JOIN youtube_summaries s ON s.video_id = v.video_id
-     LEFT JOIN youtube_video_embeddings e ON e.video_id = v.video_id
      ORDER BY v.published_at DESC NULLS LAST`)
   return rows.rows
 }
 
 async function saveVideoEmbedding (videoID, embedding, hash, model) {
-  // The video may have gone meanwhile (its channel was unset).
+  // A video gone meanwhile (its channel was unset) is simply not there to update.
   await pool.query(
-    `INSERT INTO youtube_video_embeddings (video_id, embedding, text_hash, model_id)
-     SELECT $1, $2, $3, $4 WHERE EXISTS (SELECT 1 FROM youtube_videos WHERE video_id = $1)
-     ON CONFLICT (video_id) DO UPDATE SET embedding = $2, text_hash = $3, model_id = $4`,
+    'UPDATE youtube_videos SET embedding = $2, embedding_hash = $3, embedding_model_id = $4 WHERE video_id = $1',
     [videoID, toVectorLiteral(embedding), hash, await modelId(model)])
 }
 
@@ -136,7 +130,7 @@ async function saveVideoEmbedding (videoID, embedding, hash, model) {
 // same for every server; guildID is kept for the callers).
 async function hasVideoEmbeddings (guildID, model) {
   const rows = await pool.query(
-    'SELECT 1 FROM youtube_video_embeddings WHERE model_id = $1 LIMIT 1',
+    'SELECT 1 FROM youtube_videos WHERE embedding_model_id = $1 AND embedding IS NOT NULL LIMIT 1',
     [await modelId(model)])
   return rows.rows.length !== 0
 }
@@ -146,7 +140,7 @@ async function hasVideoEmbeddings (guildID, model) {
 // videos each, so all are scored.
 async function videoScores (guildID, query, model) {
   const rows = await pool.query(
-    'SELECT video_id, 1 - (embedding <=> $2::halfvec) AS score FROM youtube_video_embeddings WHERE model_id = $1',
+    'SELECT video_id, 1 - (embedding <=> $2::halfvec) AS score FROM youtube_videos WHERE embedding_model_id = $1 AND embedding IS NOT NULL',
     [await modelId(model), toVectorLiteral(query)])
   return Object.fromEntries(rows.rows.map(r => [r.video_id, Number(r.score)]))
 }

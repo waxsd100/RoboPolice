@@ -375,9 +375,10 @@ that contains every word of the query still comes first.
 - Each vector records the model that made it, and only vectors of the current model are compared.
   Changing `GEMINI_EMBEDDING_MODEL` makes everything again on the following runs (videos at once,
   messages up to 1000 a run); meanwhile search uses what has been redone.
-- A message's embedding goes with its message: a foreign key
-  deletes it when the message is deleted (retention, `/clearmydata`, leaving a server), and an edit
-  drops it to be made again. Messages stored before channels were recorded are not embedded.
+- A message's embedding is a column of its row (`messages.embedding`, with the model in
+  `embedding_model_id`; a video's likewise on `youtube_videos`), so it goes whenever the message is
+  deleted (retention, `/clearmydata`, leaving a server), and an edit clears it to be made again.
+  Messages stored before channels were recorded are not embedded.
 - With message embeddings on, **every stored message is sent to Google Gemini** to be embedded, not
   only mentions. Update the Privacy Policy and the privileged intent answers before turning it on.
 

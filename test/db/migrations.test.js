@@ -69,6 +69,8 @@ describe('migrations', { skip: !database.available && 'needs PGHOST' }, () => {
     // Up to 020: a stream's end and archive tries kept on its event, as they were before 021.
     await migrateTo(20)
     await q("UPDATE youtube_live_events SET status = 'completed', ended_at = '2026-10-05', archive_attempts = 2, archive_tried_at = '2026-10-06' WHERE video_id = 'v2'")
+    // Handled with nothing to embed (it has no channel), before 024.
+    await q("UPDATE messages SET embedded = true WHERE id = 'm4'")
 
     await migrate()
   })
@@ -122,16 +124,22 @@ describe('migrations', { skip: !database.available && 'needs PGHOST' }, () => {
     assert.deepEqual((await read.getMessageById('m2')).attachment_urls, [])
   })
 
-  test('message embeddings keep only what is not on the message', async () => {
-    const columns = (await q("SELECT column_name FROM information_schema.columns WHERE table_name = 'message_embeddings' ORDER BY column_name")).map(r => r.column_name)
-    assert.deepEqual(columns, ['embedding', 'message_id', 'model_id'])
-    assert.deepEqual(await q('SELECT e.message_id, m.name AS model FROM message_embeddings e JOIN embedding_models m ON m.id = e.model_id'), [{ message_id: 'm1', model: 'model-a' }])
+  test('a message\'s embedding is on its row: embedded, handled with nothing to embed, or still to do', async () => {
+    const tables = (await q("SELECT tablename FROM pg_tables WHERE schemaname = 'public'")).map(r => r.tablename)
+    assert.ok(!tables.includes('message_embeddings') && !tables.includes('youtube_video_embeddings'))
+    const columns = (await q("SELECT column_name FROM information_schema.columns WHERE table_name = 'messages' AND column_name LIKE 'embed%' ORDER BY column_name")).map(r => r.column_name)
+    assert.deepEqual(columns, ['embedding', 'embedding_model_id'])
+    assert.deepEqual(await q("SELECT m.id, m.embedding IS NOT NULL AS embedded, e.name AS model FROM messages m LEFT JOIN embedding_models e ON e.id = m.embedding_model_id WHERE m.id IN ('m1', 'm2', 'm4') ORDER BY m.id"), [
+      { id: 'm1', embedded: true, model: 'model-a' },
+      { id: 'm2', embedded: false, model: null },
+      { id: 'm4', embedded: false, model: 'model-a' }
+    ])
   })
 
   test('message content, image URLs and embeddings are no longer encrypted in the app', async () => {
     assert.deepEqual(await q("SELECT id, content FROM messages WHERE id IN ('m1', 'm2') ORDER BY id"), [{ id: 'm1', content: 'hi' }, { id: 'm2', content: 'hi' }])
     assert.deepEqual((await q('SELECT url FROM message_attachments ORDER BY position')).map(r => r.url), ['https://cdn/a.png', 'https://cdn/b.png'])
-    assert.deepEqual(await q('SELECT message_id FROM message_embeddings'), [{ message_id: 'm1' }])
+    assert.deepEqual(await q('SELECT id FROM messages WHERE embedding IS NOT NULL'), [{ id: 'm1' }])
   })
 
   test('channels and videos are stored once; the channels servers had set become the bot\'s', async () => {
@@ -148,7 +156,7 @@ describe('migrations', { skip: !database.available && 'needs PGHOST' }, () => {
     assert.deepEqual(await q('SELECT video_id, channel_id FROM youtube_videos ORDER BY video_id'), [
       { video_id: 'v1', channel_id: 'UC1' }, { video_id: 'v2', channel_id: 'UC1' }
     ])
-    assert.deepEqual(await q('SELECT e.video_id, e.text_hash, m.name AS model FROM youtube_video_embeddings e JOIN embedding_models m ON m.id = e.model_id'), [{ video_id: 'v1', text_hash: 'h1', model: 'model-a' }])
+    assert.deepEqual(await q('SELECT v.video_id, v.embedding_hash, m.name AS model FROM youtube_videos v JOIN embedding_models m ON m.id = v.embedding_model_id'), [{ video_id: 'v1', embedding_hash: 'h1', model: 'model-a' }])
   })
 
   test('summaries are kept once (the newest), and who asked is kept per server', async () => {
@@ -173,14 +181,14 @@ describe('migrations', { skip: !database.available && 'needs PGHOST' }, () => {
   })
 
   test('embeddings are pgvector halfvecs with an HNSW index; broken ones are made again', async () => {
-    const [row] = await q("SELECT format_type(atttypid, atttypmod) AS type FROM pg_attribute WHERE attrelid = 'message_embeddings'::regclass AND attname = 'embedding'")
+    const [row] = await q("SELECT format_type(atttypid, atttypmod) AS type FROM pg_attribute WHERE attrelid = 'messages'::regclass AND attname = 'embedding'")
     assert.equal(row.type, 'halfvec(512)')
-    const [m1] = await q("SELECT 1 - (embedding <=> $1::halfvec) AS score FROM message_embeddings WHERE message_id = 'm1'", [`[${['1', ...Array(511).fill('0')].join(',')}]`])
+    const [m1] = await q("SELECT 1 - (embedding <=> $1::halfvec) AS score FROM messages WHERE id = 'm1'", [`[${['1', ...Array(511).fill('0')].join(',')}]`])
     assert.ok(Math.abs(Number(m1.score) - 1) < 0.001, 'the vector survived the conversion')
-    assert.deepEqual((await q("SELECT embedded FROM messages WHERE id = 'm2'")), [{ embedded: false }])
-    assert.deepEqual((await q('SELECT video_id FROM youtube_video_embeddings')), [{ video_id: 'v1' }])
+    assert.deepEqual((await q("SELECT embedding_model_id FROM messages WHERE id = 'm2'")), [{ embedding_model_id: null }])
+    assert.deepEqual((await q('SELECT video_id FROM youtube_videos WHERE embedding IS NOT NULL')), [{ video_id: 'v1' }])
     const indexes = (await q("SELECT indexname FROM pg_indexes WHERE indexdef LIKE '%hnsw%' ORDER BY indexname")).map(r => r.indexname)
-    assert.deepEqual(indexes, ['message_embeddings_hnsw', 'youtube_video_embeddings_hnsw'])
+    assert.deepEqual(indexes, ['messages_embedding_hnsw'])
   })
 
   test('what a server stores refers to it; rows of servers the bot left are dropped', async () => {

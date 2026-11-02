@@ -24,10 +24,12 @@ describe('backfillChannels', { skip: !database.available && 'needs PGHOST' }, ()
     const inThread = idAt('2026-02-01T00:00:00Z')
     const gone = idAt('2026-03-01T00:00:00Z')
     const known = idAt('2026-04-01T00:00:00Z')
+    // Handled before (with nothing to embed, having no channel): marked with a model.
+    const [{ id: model }] = await q("INSERT INTO embedding_models (name) VALUES ('backfill-test') RETURNING id")
     for (const [id, ts] of [[general[3], '2026-01-01'], [general[140], '2026-01-01'], [inThread, '2026-02-01'], [gone, '2026-03-01']]) {
-      await q('INSERT INTO messages (id, author_id, content, ts, embedded) VALUES ($1, $2, $3, $4, true)', [id, 'u', 'x', ts])
+      await q('INSERT INTO messages (id, author_id, content, ts, embedding_model_id) VALUES ($1, $2, $3, $4, $5)', [id, 'u', 'x', ts, model])
     }
-    await q("INSERT INTO messages (id, author_id, content, ts, channel_id, guild_id, embedded) VALUES ($1, 'u', 'x', '2026-04-01', 'c9', 'g1', true)", [known])
+    await q("INSERT INTO messages (id, author_id, content, ts, channel_id, guild_id, embedding_model_id) VALUES ($1, 'u', 'x', '2026-04-01', 'c9', 'g1', $2)", [known, model])
 
     // Newest first, 100 a page, as Discord answers.
     const history = { c1: [...general].reverse(), t1: [inThread], v1: [] }
@@ -55,7 +57,7 @@ describe('backfillChannels', { skip: !database.available && 'needs PGHOST' }, ()
     assert.deepEqual(rows.map(r => [r.id, r.channel_id, r.guild_id]), [
       [general[3], 'c1', 'g1'], [general[140], 'c1', 'g1'], [inThread, 't1', 'g1'], [gone, null, null], [known, 'c9', 'g1']
     ])
-    assert.deepEqual((await q('SELECT id FROM messages WHERE NOT embedded ORDER BY ts, id::numeric')).map(r => r.id), [general[3], general[140], inThread], 'filled ones are embedded again')
+    assert.deepEqual((await q('SELECT id FROM messages WHERE embedding_model_id IS NULL ORDER BY ts, id::numeric')).map(r => r.id), [general[3], general[140], inThread], 'filled ones are embedded again')
     assert.equal(requests.filter(p => p.startsWith('/channels/c1/messages')).length, 2, 'two pages of 100 cover the 150 messages')
     assert.equal(waited, 0)
     // Run again: nothing left that Discord still has.
