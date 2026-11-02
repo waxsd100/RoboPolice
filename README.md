@@ -498,6 +498,13 @@ A change to the schema is a new file (`NNN_name.sql`, or `NNN_name.js` exporting
 `npm run test:db` runs the migrations and the stores against a scratch database on the Postgres
 that `PGHOST`, `PGUSER` and `PGPASSWORD` point at.
 
+## Cloudflare: AI Gateway and Access
+
+The Terraform in `infra/cloudflare` manages the AI Gateway and the Cloudflare Access application
+and policies in front of its custom domain (only the bot's service token, and the people listed,
+get through). The service token and the custom domain are made in the dashboard; see
+[`infra/cloudflare/README.md`](infra/cloudflare/README.md).
+
 ## Secrets in Google Cloud Secret Manager
 
 Secrets can live in Secret Manager instead of on the hosting platform, which then holds only a key
@@ -515,7 +522,7 @@ terraform apply
 ```
 
 By default this moves only what would do real damage if it leaked: `BOT_TOKEN`,
-`CLOUDFLARE_AI_GATEWAY_TOKEN` and `YOUTUBE_API_KEY`. Everything else stays on Railway, including the database and Redis
+`CLOUDFLARE_AI_GATEWAY_TOKEN`, `CF_ACCESS_CLIENT_SECRET` and `YOUTUBE_API_KEY`. Everything else stays on Railway, including the database and Redis
 passwords it creates for its own Postgres and Redis; add more to `secret_names` as needed. Secret
 Manager has no folders, so the secrets are named `robopolice-…` (`secret_id_prefix`) and labeled
 `app=robopolice`: `gcloud secrets list --filter="labels.app=robopolice"` lists them.
