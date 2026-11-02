@@ -522,7 +522,7 @@ terraform apply
 ```
 
 By default this moves only what would do real damage if it leaked: `BOT_TOKEN`,
-`CLOUDFLARE_AI_GATEWAY_TOKEN`, `CF_ACCESS_CLIENT_SECRET` and `YOUTUBE_API_KEY`. Everything else stays on Railway, including the database and Redis
+`CLOUDFLARE_AI_GATEWAY_TOKEN`, `CF_ACCESS_CLIENT_ID`, `CF_ACCESS_CLIENT_SECRET` and `YOUTUBE_API_KEY`. Everything else stays on Railway, including the database and Redis
 passwords it creates for its own Postgres and Redis; add more to `secret_names` as needed. Secret
 Manager has no folders, so the secrets are named `robopolice-…` (`secret_id_prefix`) and labeled
 `app=robopolice`: `gcloud secrets list --filter="labels.app=robopolice"` lists them.

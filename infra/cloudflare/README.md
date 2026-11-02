@@ -53,6 +53,17 @@ terraform apply
 | Variable | Value | Where |
 |---|---|---|
 | `CLOUDFLARE_AI_GATEWAY_URL` | `https://ai-gateway.skyblock.jp` | Hosting platform |
-| `CF_ACCESS_CLIENT_ID` | the service token's Client ID | Hosting platform |
+| `CF_ACCESS_CLIENT_ID` | the service token's Client ID | Secret Manager (`../terraform`) |
 | `CF_ACCESS_CLIENT_SECRET` | the service token's Client Secret | Secret Manager (`../terraform`) |
+
+Both secrets are created by `../terraform`, which also lets the bot's service account read them.
+A secret made by hand in the console has no such grant (the bot gets HTTP 403 reading it): bring
+it under Terraform before applying, so it is not created twice:
+
+```bash
+cd ../terraform
+terraform import 'google_secret_manager_secret.env["CF_ACCESS_CLIENT_ID"]' projects/<project>/secrets/robopolice-cf-access-client-id
+terraform import 'google_secret_manager_secret.env["CF_ACCESS_CLIENT_SECRET"]' projects/<project>/secrets/robopolice-cf-access-client-secret
+terraform apply
+```
 | `CLOUDFLARE_AI_GATEWAY_TOKEN` | the gateway's token, while `gateway_authentication` is on | Secret Manager |

@@ -15,7 +15,9 @@ variable "secret_names" {
     "BOT_TOKEN",
     "CLOUDFLARE_AI_GATEWAY_TOKEN",
     "YOUTUBE_API_KEY",
-    # The Cloudflare Access service token's secret, to reach the gateway's domain (../cloudflare).
+    # The Cloudflare Access service token, to reach the gateway's domain (../cloudflare). Its ID is
+    # not secret, but is kept here beside the secret it pairs with.
+    "CF_ACCESS_CLIENT_ID",
     "CF_ACCESS_CLIENT_SECRET",
   ]
 }
