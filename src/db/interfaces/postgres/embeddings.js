@@ -46,6 +46,22 @@ async function saveMessageEmbeddings (rows, handledIds, model = rows[0]?.model) 
   }
 }
 
+// Up to `limit` embedded messages after `afterID` in ID order: [{ id, content }], for going over
+// them all a batch at a time.
+async function embeddedMessagesAfter (afterID, limit) {
+  const rows = await pool.query(
+    'SELECT id, content FROM messages WHERE embedding IS NOT NULL AND id > $1 ORDER BY id LIMIT $2',
+    [afterID, limit])
+  return rows.rows
+}
+
+// Drops the embeddings of `ids`, which stay handled (they are not embedded again).
+async function dropMessageEmbeddings (ids) {
+  if (ids.length === 0) return 0
+  const result = await pool.query('UPDATE messages SET embedding = NULL WHERE id = ANY($1) AND embedding IS NOT NULL', [ids])
+  return result.rowCount || 0
+}
+
 // Drops up to `limit` message embeddings made by another model and marks their messages to be
 // embedded again. Resolves to how many were dropped.
 async function resetStaleMessageEmbeddings (model, limit) {
@@ -145,4 +161,4 @@ async function videoScores (guildID, query, model) {
   return Object.fromEntries(rows.rows.map(r => [r.video_id, Number(r.score)]))
 }
 
-module.exports = { pendingMessages, saveMessageEmbeddings, resetStaleMessageEmbeddings, invalidateMessage, nearestMessages, getMessages, videosForEmbedding, saveVideoEmbedding, hasVideoEmbeddings, videoScores, modelId }
+module.exports = { pendingMessages, saveMessageEmbeddings, embeddedMessagesAfter, dropMessageEmbeddings, resetStaleMessageEmbeddings, invalidateMessage, nearestMessages, getMessages, videosForEmbedding, saveVideoEmbedding, hasVideoEmbeddings, videoScores, modelId }

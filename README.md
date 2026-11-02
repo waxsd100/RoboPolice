@@ -624,6 +624,7 @@ the secrets if it leaks, so keep it only on the platform and delete it in the co
 | `SERVER_LORE` | Optional. `true` learns each server's running jokes, words and tone from its stored messages in `@everyone` channels, and lets `about_member` read a member's recent messages when asked (see "What each server is like"). Off by default: update the Privacy Policy and the intent answers first |
 | `SERVER_LORE_WEEKS` | Optional (default `8`). How many recent weeks of messages `SERVER_LORE` learns from; older knowledge is dropped |
 | `MESSAGE_EMBEDDINGS` | Optional. `true` embeds every stored message for search by meaning (sends them to Gemini; see above). Off by default |
+| `MESSAGE_EMBEDDING_MIN_CHARS` | Optional. Messages with fewer letters or digits than this, once links, emojis and mentions are taken out, are not embedded or found by meaning (nor is laughter such as `www` or `草`). Default 5 |
 | `EMBEDDING_INTERVAL_MINUTES` | Optional. How often to embed new videos and messages. Defaults to 5; 0 turns it off |
 | `GEMINI_EMBEDDING_MODEL` | Optional. Defaults to `gemini-embedding-001` |
 | `YOUTUBE_GATEWAY_PROVIDER` | Optional. Slug of an AI Gateway custom provider (see below). Set, YouTube API calls go through Cloudflare AI Gateway; unset, straight to Google |

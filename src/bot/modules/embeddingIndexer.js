@@ -5,6 +5,7 @@ const crypto = require('crypto')
 const { embed, model } = require('../utils/embeddings')
 const store = require('../../db/interfaces/postgres/embeddings')
 const { isGatewayConfigured } = require('../utils/aiGateway')
+const { embeddableText } = require('../utils/messageNoise')
 
 const DEFAULT_INTERVAL_MINUTES = 5
 // Per run, so a first run over a large history spreads over many runs instead of one long burst.
@@ -56,15 +57,35 @@ async function indexMessages () {
   if (reset) global.logger.info(`[EMBEDDINGS]: ${reset} message(s) were embedded by another model and will be embedded again`)
   const pending = await store.pendingMessages(MESSAGES_PER_RUN)
   if (pending.length === 0) return 0
-  // Messages from before channels were recorded can't be searched by channel; empty ones say
-  // nothing. Both are only marked as handled.
-  const wanted = pending.map(m => ({ ...m, text: plainText(m.content) })).filter(m => m.text && m.channel_id && m.guild_id)
+  // Messages from before channels were recorded can't be searched by channel; empty ones and noise
+  // ("w", a bare link or emoji: messageNoise.js) say nothing. All are only marked as handled.
+  const wanted = pending.map(m => ({ ...m, text: embeddableText(plainText(m.content)) })).filter(m => m.text && m.channel_id && m.guild_id)
   const vectors = wanted.length ? await embed(wanted.map(m => m.text)) : []
   await store.saveMessageEmbeddings(
     wanted.map((m, i) => ({ id: m.id, embedding: vectors[i], model: model() })),
     pending.map(m => m.id),
     model())
   return wanted.length
+}
+
+// Messages embedded before noise was left out (messageNoise.js) are gone over once each time the
+// bot starts, CLEANSE_BATCH at a time, and the embeddings of those that are noise dropped: they
+// stay handled, so they are not embedded again. Only the noise is written to. Resolves to how many
+// were dropped in this batch; `cleansed` is set once the last batch is done.
+const CLEANSE_BATCH = 1000
+const cleanse = { after: '', cleansed: false, dropped: 0 }
+async function cleanseMessages () {
+  if (cleanse.cleansed) return 0
+  const batch = await store.embeddedMessagesAfter(cleanse.after, CLEANSE_BATCH)
+  if (batch.length === 0) {
+    cleanse.cleansed = true
+    if (cleanse.dropped) global.logger.info(`[EMBEDDINGS]: Dropped the embeddings of ${cleanse.dropped} noise message(s)`)
+    return 0
+  }
+  cleanse.after = batch[batch.length - 1].id
+  const dropped = await store.dropMessageEmbeddings(batch.filter(m => !embeddableText(plainText(m.content))).map(m => m.id))
+  cleanse.dropped += dropped
+  return dropped
 }
 
 let running = false
@@ -74,6 +95,8 @@ async function runOnce () {
   try {
     const videos = await indexVideos()
     const messages = messageEmbeddingsEnabled() ? await indexMessages() : 0
+    // A few batches a run, so it is soon done without holding up the rest.
+    if (messageEmbeddingsEnabled()) for (let i = 0; i < 10 && !cleanse.cleansed; i++) await cleanseMessages()
     if (videos || messages) global.logger.info(`[EMBEDDINGS]: Embedded ${videos} video(s) and ${messages} message(s)`)
   } catch (e) {
     global.logger.warn(`[EMBEDDINGS]: Indexing failed, trying again next time: ${e.message}`)
@@ -90,4 +113,4 @@ function startIndexer () {
   return setInterval(runOnce, minutes * 60 * 1000)
 }
 
-module.exports = { startIndexer, runOnce, indexVideos, indexMessages, messageEmbeddingsEnabled, videoText, hashOf }
+module.exports = { startIndexer, runOnce, indexVideos, indexMessages, cleanseMessages, cleanse, messageEmbeddingsEnabled, videoText, hashOf }

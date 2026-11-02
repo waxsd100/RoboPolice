@@ -17,6 +17,7 @@ const { wrap, reportInjection } = require('../utils/untrusted')
 const serverLore = require('./serverLore')
 const loreStore = require('../../db/interfaces/postgres/serverLore')
 const embeddingStore = require('../../db/interfaces/postgres/embeddings')
+const { embeddableText } = require('../utils/messageNoise')
 
 const MAX_RECENT_MESSAGES = 50
 const MAX_QUESTIONS = 3
@@ -586,7 +587,7 @@ async function relatedMessages (guild, member, vectorOf) {
     .filter(r => r.score >= MIN_MESSAGE_SCORE)
   const byID = new Map((await embeddingStore.getMessages(near.map(r => r.message_id))).map(m => [m.id, m]))
   return near.map(r => byID.get(r.message_id))
-    .filter(m => m && m.author_id !== global.bot.user.id)
+    .filter(m => m && m.author_id !== global.bot.user.id && embeddableText(fromStoredContent(m.content)))
     .slice(0, MAX_RELATED_MESSAGES)
     .map(m => {
       const who = guild.members.get(m.author_id)

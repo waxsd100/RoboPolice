@@ -71,19 +71,21 @@ describe('embeddingIndexer', () => {
     assert.equal(indexer.videoText({ title: 'a', description: 'b', summary: 'c' }), 'a\nb\n内容の要約: c')
   })
 
-  test('embeds pending messages as written, and only marks empty or channel-less ones', async () => {
+  test('embeds pending messages as written, and only marks empty, noise or channel-less ones', async () => {
     const batches = installEmbeddingModel()
     const saved = installEmbeddingStore({
       pending: [
         { id: '1', guild_id: '100', channel_id: '201', ts: new Date(), content: '怖い話して\\_ね' },
         { id: '2', guild_id: '100', channel_id: '201', ts: new Date(), content: 'None' },
-        { id: '3', guild_id: null, channel_id: null, ts: new Date(), content: '昔のメッセージ' }
+        { id: '3', guild_id: null, channel_id: null, ts: new Date(), content: '昔のメッセージ' },
+        { id: '4', guild_id: '100', channel_id: '201', ts: new Date(), content: 'wwwwww' },
+        { id: '5', guild_id: '100', channel_id: '201', ts: new Date(), content: 'https://youtu.be/abcdefghijk' }
       ]
     })
     assert.equal(await indexer.indexMessages(), 1)
     assert.equal(batches[0].requests[0].content.parts[0].text, '怖い話して_ね')
     assert.deepEqual(saved.messages.map(m => m.id), ['1'])
-    assert.deepEqual(saved.handled, ['1', '2', '3'])
+    assert.deepEqual(saved.handled, ['1', '2', '3', '4', '5'])
     assert.equal(saved.resetFor, 'gemini-embedding-001', 'messages embedded by another model are sent back first')
     assert.equal(saved.messages[0].model, 'gemini-embedding-001')
   })
@@ -91,7 +93,7 @@ describe('embeddingIndexer', () => {
   test('embeds messages only when MESSAGE_EMBEDDINGS=true', async (t) => {
     t.mock.method(global.logger, 'info', () => {})
     installEmbeddingModel()
-    const saved = installEmbeddingStore({ pending: [{ id: '1', guild_id: '100', channel_id: '201', ts: new Date(), content: '歌' }] })
+    const saved = installEmbeddingStore({ pending: [{ id: '1', guild_id: '100', channel_id: '201', ts: new Date(), content: '歌枠のアーカイブ' }] })
     delete process.env.MESSAGE_EMBEDDINGS
     await indexer.runOnce()
     assert.equal(saved.messages.length, 0)
@@ -102,6 +104,27 @@ describe('embeddingIndexer', () => {
     } finally {
       delete process.env.MESSAGE_EMBEDDINGS
     }
+  })
+
+  test('drops the embeddings of noise embedded before it was left out, once, batch by batch', async (t) => {
+    t.mock.method(global.logger, 'info', () => {})
+    installEmbeddingModel()
+    const embedding = 'AAAA'
+    const saved = installEmbeddingStore({
+      messages: [
+        { message_id: '01', content: '明日の配信何時から？', embedding },
+        { message_id: '02', content: 'wwwwww', embedding },
+        { message_id: '03', content: 'https://youtu.be/abcdefghijk', embedding },
+        { message_id: '04', content: '草', embedding: null }
+      ]
+    })
+    Object.assign(indexer.cleanse, { after: '', cleansed: false, dropped: 0 })
+    assert.equal(await indexer.cleanseMessages(), 2)
+    assert.deepEqual(saved.dropped, ['02', '03'], 'only noise, and only what has an embedding')
+    assert.equal(await indexer.cleanseMessages(), 0)
+    assert.equal(indexer.cleanse.cleansed, true)
+    assert.equal(await indexer.cleanseMessages(), 0, 'done once')
+    assert.equal(saved.dropped.length, 2)
   })
 
   test('a failure is logged and tried again next time', async (t) => {
