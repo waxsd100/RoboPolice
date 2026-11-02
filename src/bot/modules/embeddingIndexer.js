@@ -5,6 +5,7 @@ const crypto = require('crypto')
 const { embed, model } = require('../utils/embeddings')
 const store = require('../../db/interfaces/postgres/embeddings')
 const { isGatewayConfigured } = require('../utils/aiGateway')
+const { embeddableText } = require('../utils/messageNoise')
 
 const DEFAULT_INTERVAL_MINUTES = 5
 // Per run, so a first run over a large history spreads over many runs instead of one long burst.
@@ -56,9 +57,9 @@ async function indexMessages () {
   if (reset) global.logger.info(`[EMBEDDINGS]: ${reset} message(s) were embedded by another model and will be embedded again`)
   const pending = await store.pendingMessages(MESSAGES_PER_RUN)
   if (pending.length === 0) return 0
-  // Messages from before channels were recorded can't be searched by channel; empty ones say
-  // nothing. Both are only marked as handled.
-  const wanted = pending.map(m => ({ ...m, text: plainText(m.content) })).filter(m => m.text && m.channel_id && m.guild_id)
+  // Messages from before channels were recorded can't be searched by channel; empty ones and noise
+  // ("w", a bare link or emoji: messageNoise.js) say nothing. All are only marked as handled.
+  const wanted = pending.map(m => ({ ...m, text: embeddableText(plainText(m.content)) })).filter(m => m.text && m.channel_id && m.guild_id)
   const vectors = wanted.length ? await embed(wanted.map(m => m.text)) : []
   await store.saveMessageEmbeddings(
     wanted.map((m, i) => ({ id: m.id, embedding: vectors[i], model: model() })),

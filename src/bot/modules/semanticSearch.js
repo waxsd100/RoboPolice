@@ -4,6 +4,7 @@
 const { embedQuery, model } = require('../utils/embeddings')
 const store = require('../../db/interfaces/postgres/embeddings')
 const { fromStoredContent } = require('../../db/interfaces/postgres/create')
+const { embeddableText } = require('../utils/messageNoise')
 
 const KEYWORD_BONUS = 0.15
 
@@ -23,6 +24,8 @@ async function searchMessages (guildID, channelIDs, query, { limit = 30 } = {}) 
       const content = fromStoredContent(m.content)
       return { ...m, content, score: scores.get(m.id) + (matchesAll(words, content) ? KEYWORD_BONUS : 0) }
     })
+    // Noise embedded before it was left out (messageNoise.js).
+    .filter(m => embeddableText(m.content))
     .sort((a, b) => b.score - a.score)
     .slice(0, limit)
 }
