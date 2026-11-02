@@ -31,6 +31,10 @@ async function migrate ({ pool = require('./clients/postgres'), dir = DIR, log =
   const client = await pool.getPostgresClient()
   try {
     await client.query('SELECT pg_advisory_lock($1)', [LOCK_ID])
+    // Index builds one process at a time: a parallel build shares its memory through /dev/shm, which
+    // a container keeps small (64 MB on Railway), and fails there with "could not resize shared
+    // memory segment … No space left on device".
+    await client.query('SET max_parallel_maintenance_workers = 0')
     await client.query(`CREATE TABLE IF NOT EXISTS schema_migrations (
       version INTEGER PRIMARY KEY,
       name TEXT NOT NULL,
@@ -53,6 +57,7 @@ async function migrate ({ pool = require('./clients/postgres'), dir = DIR, log =
     }
     return done
   } finally {
+    await client.query('RESET max_parallel_maintenance_workers').catch(() => {})
     await client.query('SELECT pg_advisory_unlock($1)', [LOCK_ID]).catch(() => {})
     client.release()
   }
