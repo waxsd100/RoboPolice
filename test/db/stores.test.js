@@ -256,6 +256,26 @@ describe('stores', { skip: !database.available && 'needs PGHOST' }, () => {
     assert.deepEqual((await q('SELECT url FROM web_sections')).map(r => r.url), ['topic:ぽみそしる'])
   })
 
+  test('past messages read back: stored with their own time and images, a message stored live is left as it is; progress kept', async () => {
+    const history = require('../../src/db/interfaces/postgres/messageHistory')
+    await require('../../src/db/interfaces/postgres/create').createGuild({ id: 'g1', ownerID: 'o1' })
+    await q("INSERT INTO messages (id, author_id, content, ts, channel_id, guild_id) VALUES ('hb1', 'u1', '編集後', '2026-10-01T00:00:00Z', 'hc1', 'g1')")
+    const row = (id, extra = {}) => ({ id, authorID: 'u1', content: `古い ${id}`, imageUrls: [], ts: '2026-09-01T00:00:00.000Z', channelID: 'hc1', guildID: 'g1', ...extra })
+    assert.equal(await history.saveHistory([row('hb1'), row('hb2', { imageUrls: ['https://cdn/a.png', 'https://cdn/b.png'] }), row('hb3', { guildID: 'gone' })]), 1)
+    assert.deepEqual(await q("SELECT id, content, ts, embedded FROM messages WHERE id LIKE 'hb%' ORDER BY id"), [
+      { id: 'hb1', content: '編集後', ts: new Date('2026-10-01T00:00:00Z'), embedded: false },
+      { id: 'hb2', content: '古い hb2', ts: new Date('2026-09-01T00:00:00Z'), embedded: false }
+    ])
+    assert.deepEqual((await q("SELECT url FROM message_attachments WHERE message_id = 'hb2' ORDER BY position")).map(r => r.url), ['https://cdn/a.png', 'https://cdn/b.png'])
+    assert.equal(await history.saveHistory([]), 0)
+
+    assert.equal(await history.backfillState('hc1'), null)
+    await history.saveBackfill('g1', 'hc1', '700', false)
+    await history.saveBackfill('g1', 'hc1', '500', true)
+    assert.deepEqual(await history.backfillState('hc1'), { before_id: '500', done: true })
+    await q("DELETE FROM messages WHERE id LIKE 'hb%'")
+  })
+
   describe('YouTube', () => {
     const store = () => require('../../src/db/interfaces/postgres/youtube')
     const video = (id, extra = {}) => ({ id, title: `動画 ${id}`, description: '', publishedAt: `2026-10-0${id.slice(1)}T00:00:00Z`, liveStatus: 'none', scheduledStart: null, duration: 'PT1H', ...extra })

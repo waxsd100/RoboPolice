@@ -43,7 +43,7 @@ Short version; the Privacy Policy is authoritative.
 
 | Data | Where | Retention |
 |---|---|---|
-| Message ID, author ID, channel ID, server ID, timestamp, content and image URLs (not encrypted by the app; see below) | PostgreSQL `messages`, `message_attachments` | `MESSAGE_HISTORY_DAYS` days, or forever if unset; all of a server's go when the app leaves it |
+| Message ID, author ID, channel ID, server ID, timestamp, content and image URLs, as received and as read back from channel history (not encrypted by the app; see below) | PostgreSQL `messages`, `message_attachments` (and `message_backfill`, how far back each channel was read) | `MESSAGE_HISTORY_DAYS` days, or forever if unset; all of a server's go when the app leaves it |
 | Per-server settings (log channels, ignored channels, disabled events), and the server's name, icon URL, member count and when the app joined | PostgreSQL `guilds`, `guild_emojis` (custom emojis with an AI description), `guild_event_logs`, `guild_ignored_channels`, `guild_disabled_events` | Until the app leaves the server |
 | Invite counters, webhook handles, guild settings | Redis | 3 hours |
 | The YouTube channels the bot follows (`YOUTUBE_CHANNELS`), their descriptions and every video read from them, each server's event setting, plus summaries of linked videos' contents (public YouTube data) | PostgreSQL `youtube_channels`, `youtube_videos`, `youtube_summaries`, `guild_youtube_summaries`, `guilds.youtube_live_events` | Channels and videos until the bot no longer follows the channel; summaries while their video is stored, or else until no server that asked for them remains |
@@ -56,6 +56,18 @@ that still has encrypted rows.
 
 Message rows are written **only for servers that have a message deletion or edit log channel
 configured** — a server with none never has message content stored, since nothing could read it back.
+
+Messages sent before the app stored them (before it joined, before the server set a message log, or
+in channels quiet since) are **read back from each channel's history** (`historyBackfill.js`), under
+the same rules: text, voice, announcement and stage channels and active threads the app can read back,
+not ignored channels, not bots or automod notices. Each is stored with its own time, a message already
+stored is left as it is, and image URLs go with it. How far back: `HISTORY_BACKFILL_DAYS` days (`0`
+for everything), by default `MESSAGE_HISTORY_DAYS` (anything older would be pruned at once) or else 90.
+100 messages a request, one request every `HISTORY_BACKFILL_DELAY_MS` (default 1000); where each
+channel got to is kept in `message_backfill`, so a restart goes on from there, and a channel read to
+the start of the window is not read again. Every worker does the servers it hosts, checking hourly for
+new channels and servers that set a message log. `HISTORY_BACKFILL=false` turns it off. A large
+server's history takes disk space: with no retention set, 90 days is read unless told otherwise.
 
 ## コマンド一覧
 
@@ -535,6 +547,9 @@ the secrets if it leaks, so keep it only on the platform and delete it in the co
 | `YOUTUBE_AUTO_SYNC_MINUTES` | Optional. How often to check the bot's YouTube channels for new videos. Defaults to 15; 0 turns it off |
 | `YOUTUBE_LIVE_POLL_SECONDS` | Optional. How often to check for streams on servers with stream events on. Defaults to 60; 0 turns it off |
 | `YOUTUBE_WEBSUB_URL`, `YOUTUBE_WEBSUB_SECRET` | Optional. The service's public HTTPS address and a secret, to receive YouTube pushes (see above). `PORT` sets the port listened on (Railway sets it) |
+| `HISTORY_BACKFILL` | Optional. `false` stops reading channels' past messages back (see "What is stored"). On by default |
+| `HISTORY_BACKFILL_DAYS` | Optional. How many days of past messages to read back; `0` for everything. Default `MESSAGE_HISTORY_DAYS`, or 90 when that is unset |
+| `HISTORY_BACKFILL_DELAY_MS` | Optional (default `1000`). Wait between two history requests (100 messages each) |
 | `MESSAGE_EMBEDDINGS` | Optional. `true` embeds every stored message for search by meaning (sends them to Gemini; see above). Off by default |
 | `EMBEDDING_INTERVAL_MINUTES` | Optional. How often to embed new videos and messages. Defaults to 5; 0 turns it off |
 | `GEMINI_EMBEDDING_MODEL` | Optional. Defaults to `gemini-embedding-001` |
