@@ -69,6 +69,21 @@ module.exports = {
         ]
       },
       {
+        name: 'replylength',
+        description: 'How long the assistant\'s replies are in this server (shows the setting without a choice)',
+        options: [{
+          type: ERIS_CONSTANTS.ApplicationCommandOptionTypes.STRING,
+          name: 'length',
+          description: 'long: up to about 500 characters (default), normal: fitted to what was said, short: brief',
+          required: false,
+          choices: [
+            { name: 'long (default, up to ~500 characters)', value: 'long' },
+            { name: 'normal (fitted to what was said)', value: 'normal' },
+            { name: 'short (brief)', value: 'short' }
+          ]
+        }]
+      },
+      {
         name: 'serverinfo',
         description: 'Shows you information about the server (role count, member count, features)'
       },

@@ -15,6 +15,7 @@ const { SIZES } = require('../utils/imageCrop')
 const { CoverImage, MODES } = require('./coverImage')
 const { FORUM_TYPES } = require('./forumPost')
 const postedEdit = require('./postedEdit')
+const replyLengthStore = require('../../db/interfaces/postgres/replyLength')
 const { EDIT_HINT } = postedEdit
 
 const ANSWER_TIMEOUT_MS = 5 * 60 * 1000
@@ -458,10 +459,13 @@ async function handle (message) {
       // images, for this request only.
       const pictures = await picturesFor([request, referenced?.text], guild).catch(() => [])
       const recentReplies = edit ? [] : await recentBotReplies(message.channel.id, reply.id)
+      // /replylength; without it (or the database) replies are as long as by default.
+      const replyLength = await replyLengthStore.getReplyLength(guild.id).catch(() => null)
       let result = await draft({
         request,
         referenced,
         recentReplies,
+        replyLength,
         channelName: message.channel.name,
         channelID: message.channel.id,
         server,

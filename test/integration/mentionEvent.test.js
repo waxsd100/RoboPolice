@@ -831,6 +831,20 @@ describe('mention → event / forum post (integration)', () => {
     assert.doesNotMatch(replies[0].state.content, /⚠️/)
   })
 
+  test('chat: the reply length set for the server with /replylength goes with the request', async () => {
+    const { installReplyLengthStore } = require('../helpers/fakes')
+    const { REPLY_LENGTHS } = require('../../src/bot/modules/eventDrafter')
+    const { channel } = createChannel()
+    installReplyLengthStore({ [channel.guild.id]: 'short' })
+    try {
+      const requests = installGemini([[call('submit_chat_reply', { text: 'やあ' })]])
+      await mentionEvent.handle(mention(channel, '<@BOT> やあ'))
+      assert.ok(requests[0].body.contents[0].parts[0].text.includes(`## 返事の長さ（このサーバーの設定）\n${REPLY_LENGTHS.short.join('\n')}`))
+    } finally {
+      installReplyLengthStore()
+    }
+  })
+
   test('chat: the tokens the reply used go under it in small grey text', async () => {
     const { channel, replies } = createChannel()
     let i = 0
