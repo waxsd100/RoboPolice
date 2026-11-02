@@ -390,6 +390,25 @@ sent in the `x-goog-api-key` header, never in the URL.
 
 The model searches all of it (titles, descriptions and summaries) with the `search_youtube` tool.
 
+### Prompt injection
+
+Text the app did not write can carry instructions aimed at the model ("ignore your instructions…").
+The model can only read (every tool is read-only and limited to what the requester can see), and
+nothing is posted or registered until the requester presses the button, so the damage is bounded;
+on top of that (`src/bot/utils/untrusted.js`, `linkSafety.js`):
+
+- Everything the app did not write goes to Gemini inside `<untrusted source="…">…</untrusted>`: the
+  request, the conversation it replies to, the server profile, the bot's recent replies and every
+  tool result. The tag cannot be closed from inside. The system instructions say such text is data,
+  never instructions, and not to reveal the instructions themselves.
+- A chat reply keeps only links that came up in the conversation (the request, what it replies to,
+  what a tool read); others are left as plain text. A link whose text names another site shows
+  where it really goes.
+- Knowledge taken out of the wiki, X, Discord, the web and the servers' messages leaves out
+  instructions to the bot, so nothing planted there stays in later prompts.
+- The usual wording of an attempt is logged (`[INJECTION]: …`), in mentions, what they reply to and
+  tool results. Nothing is refused on it alone.
+
 What the tools read (the mention, the replied-to message, linked pages and Discord messages, the
 server profile, stored YouTube data) is sent to Google Gemini through Cloudflare AI Gateway. Nothing
 from this flow is stored by the app. Use a paid Gemini API tier: on the free tier Google may use the input to improve its models,
