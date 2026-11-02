@@ -1,6 +1,6 @@
 // How long the mention assistant's replies are in this server: long (the default, up to about 500
 // characters), normal (fitted to what was said) or short. Without a choice, shows the setting.
-const { setReplyLength, getReplyLength } = require('../../db/interfaces/postgres/replyLength')
+const { setReplyLength, getReplyLength } = require('../../db/interfaces/postgres/replySettings')
 const { DEFAULT_REPLY_LENGTH } = require('../modules/eventDrafter')
 
 const LABELS = {

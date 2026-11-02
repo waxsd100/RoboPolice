@@ -56,6 +56,16 @@ exports.commands = [
     ]
   },
   {
+    name: 'persona',
+    description: 'Whether the assistant speaks as the streamer in this server (shows the setting without a choice)',
+    options: [{
+      type: ERIS_CONSTANTS.ApplicationCommandOptionTypes.BOOLEAN,
+      name: 'streamer',
+      description: 'True: speak as the streamer (default), False: speak as the server\'s bot',
+      required: false
+    }]
+  },
+  {
     name: 'replylength',
     description: 'How long the assistant\'s replies are in this server (shows the setting without a choice)',
     options: [{
