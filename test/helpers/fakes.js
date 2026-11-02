@@ -299,10 +299,22 @@ function installGemini (turns) {
 const call = (name, args = {}) => ({ functionCall: { name, args } })
 const submit = args => call('submit_event_draft', { found: true, ...args })
 
+// Tools whose results come back without the <untrusted> wrapper (untrusted.js), for tests about
+// what a tool says rather than how it is marked.
+function stripUntrusted (text) {
+  return typeof text === 'string' ? text.replace(/^<untrusted source="[^"]*">\n/, '').replace(/\n<\/untrusted>$/, '') : text
+}
+function unwrapTools (tools) {
+  const call = tools.call
+  return Object.assign(tools, { call: async (...args) => { const res = await call(...args); return res.result === undefined ? res : { ...res, result: stripUntrusted(res.result) } } })
+}
+
 // Tool responses the model received in the last request.
 function lastToolResponses (body) {
   const last = body.contents[body.contents.length - 1]
+  // Without the <untrusted> wrapper around each result (untrusted.js).
   return last.parts.filter(p => p.functionResponse).map(p => p.functionResponse)
+    .map(r => r.response?.result === undefined ? r : { ...r, response: { ...r.response, result: stripUntrusted(r.response.result) } })
 }
 
 async function startServer (handler) {
@@ -312,7 +324,7 @@ async function startServer (handler) {
 }
 
 module.exports = {
-  perms, createGuild, createMember, installBot, installYouTubeStore, installQuotaStore, installEmbeddingStore, configureGateway, installGemini, call, submit, lastToolResponses, startServer, installLoreStore, restoreLoreStore
+  perms, createGuild, createMember, installBot, installYouTubeStore, installQuotaStore, installEmbeddingStore, configureGateway, installGemini, call, submit, lastToolResponses, startServer, installLoreStore, restoreLoreStore, stripUntrusted, unwrapTools
 }
 
 // A fake embedding model: each text points along the axis of the first topic it mentions, so

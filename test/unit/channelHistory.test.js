@@ -4,7 +4,8 @@ const { createGuild, createMember, installBot } = require('../helpers/fakes')
 const pool = require('../../src/db/clients/postgres')
 const batcher = require('../../src/db/messageBatcher')
 const read = require('../../src/db/interfaces/postgres/read')
-const { createTools } = require('../../src/bot/modules/eventTools')
+const { unwrapTools } = require('../helpers/fakes')
+const createTools = opts => unwrapTools(require('../../src/bot/modules/eventTools').createTools(opts))
 
 global.webhook = global.webhook || { generic () {}, warn () {}, error () {} }
 

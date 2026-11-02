@@ -3,7 +3,9 @@ const assert = require('node:assert/strict')
 // Load first: it sets the environment the bot modules read when they are required.
 const { createGuild, createMember, installBot } = require('../helpers/fakes')
 const urlFetcher = require('../../src/bot/utils/urlFetcher')
-const { createTools, formatMessage, withServerEmojis, withServerChannels, namedChannels, requestChannelInfo, StopDrafting } = require('../../src/bot/modules/eventTools')
+const { unwrapTools } = require('../helpers/fakes')
+const { createTools: rawCreateTools, formatMessage, withServerEmojis, withServerChannels, namedChannels, requestChannelInfo, StopDrafting } = require('../../src/bot/modules/eventTools')
+const createTools = opts => unwrapTools(rawCreateTools(opts))
 
 const REQUESTER = '1'
 const guild = createGuild({

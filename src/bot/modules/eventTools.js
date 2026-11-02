@@ -13,6 +13,7 @@ const { embed, blend, model: embeddingModel } = require('../utils/embeddings')
 const { fromStoredContent } = require('../../db/interfaces/postgres/create')
 const semanticSearch = require('./semanticSearch')
 const { messageEmbeddingsEnabled } = require('./embeddingIndexer')
+const { wrap, reportInjection } = require('../utils/untrusted')
 const serverLore = require('./serverLore')
 const loreStore = require('../../db/interfaces/postgres/serverLore')
 const embeddingStore = require('../../db/interfaces/postgres/embeddings')
@@ -368,8 +369,10 @@ function createTools ({ guild, member, ask, progress = () => {} }) {
   async function call (name, args) {
     if (!executors[name]) return { error: `不明なツールです: ${name}` }
     try {
-      const result = await executors[name](args || {})
-      return { result: String(result).slice(0, MAX_RESULT_CHARS) }
+      const result = String(await executors[name](args || {})).slice(0, MAX_RESULT_CHARS)
+      reportInjection(`the ${name} result in ${guild.id}`, result)
+      // Whatever a tool read was written by someone else: marked off as data (untrusted.js).
+      return { result: wrap(name, result) }
     } catch (e) {
       if (e instanceof StopDrafting) throw e
       return { error: e.message }
