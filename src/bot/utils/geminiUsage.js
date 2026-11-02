@@ -34,7 +34,7 @@ const n = x => x.toLocaleString('en-US')
 function tokenFooter (usage) {
   const t = usage?.tokens
   if (process.env.MENTION_TOKEN_FOOTER === 'false' || !t || !(t.prompt + t.output + t.thoughts)) return ''
-  return `-# トークン: 入力 ${n(t.prompt)}（うちキャッシュ ${n(t.cached)}）・出力 ${n(t.output)}${t.thoughts ? `・思考 ${n(t.thoughts)}` : ''}（Gemini ${usage.requests} 回）`
+  return `-# tokens: in ${n(t.prompt)} (cached ${n(t.cached)}) · out ${n(t.output)}${t.thoughts ? ` · thinking ${n(t.thoughts)}` : ''} · ${usage.requests} Gemini call${usage.requests === 1 ? '' : 's'}`
 }
 
 module.exports = { trackUsage, currentUsage, addTokens, tokenFooter }

@@ -840,7 +840,7 @@ describe('mention → event / forum post (integration)', () => {
       json: async () => ({ candidates: [{ content: { role: 'model', parts: turns[i++] } }], usageMetadata: { promptTokenCount: 1200, cachedContentTokenCount: 1000, candidatesTokenCount: 15, thoughtsTokenCount: 40 } })
     })
     await mentionEvent.handle(mention(channel, '<@BOT> やあ'))
-    assert.equal(replies[0].state.content, 'やあ\n-# トークン: 入力 2,400（うちキャッシュ 2,000）・出力 30・思考 80（Gemini 2 回）')
+    assert.equal(replies[0].state.content, 'やあ\n-# tokens: in 2,400 (cached 2,000) · out 30 · thinking 80 · 2 Gemini calls')
     process.env.MENTION_TOKEN_FOOTER = 'false'
     const again = createChannel()
     installGemini([[call('submit_chat_reply', { text: 'やあ' })]])
