@@ -271,8 +271,8 @@ describe('stores', { skip: !database.available && 'needs PGHOST' }, () => {
 
     assert.equal(await history.backfillState('hc1'), null)
     await history.saveBackfill('g1', 'hc1', '700', false)
-    await history.saveBackfill('g1', 'hc1', '500', true)
-    assert.deepEqual(await history.backfillState('hc1'), { before_id: '500', done: true })
+    await history.saveBackfill('g1', 'hc1', '500', true, 200)
+    assert.deepEqual(await history.backfillState('hc1'), { before_id: '500', read_count: 200, done: true })
     await q("DELETE FROM messages WHERE id LIKE 'hb%'")
   })
 

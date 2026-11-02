@@ -13,16 +13,15 @@ beforeEach(() => {
   saved = []
   states = {}
   store.backfillState = async id => states[id] || null
-  store.saveBackfill = async (guildID, channelID, before, done) => { states[channelID] = { before_id: before, done } }
+  store.saveBackfill = async (guildID, channelID, before, done, readCount) => { states[channelID] = { before_id: before, done, read_count: readCount } }
   store.saveHistory = async rows => { saved.push(...rows); return rows.length }
   global.bot = { user: { id: 'BOT' }, guilds: new Map(), guildSettingsCache: {} }
-  delete process.env.HISTORY_BACKFILL_DAYS
-  delete process.env.MESSAGE_HISTORY_DAYS
+  clearSettings()
 })
-afterEach(() => {
-  delete process.env.HISTORY_BACKFILL_DAYS
-  delete process.env.MESSAGE_HISTORY_DAYS
-})
+afterEach(clearSettings)
+function clearSettings () {
+  for (const name of ['HISTORY_BACKFILL_DAYS', 'HISTORY_BACKFILL_SINCE', 'HISTORY_BACKFILL_MAX_MESSAGES', 'MESSAGE_HISTORY_DAYS']) delete process.env[name]
+}
 
 // Messages with IDs from `from` down, one a day back from NOW.
 const page = (from, n, extra = () => ({})) => Array.from({ length: n }, (_, i) => ({
@@ -32,14 +31,35 @@ const guild = { id: 'g1' }
 const channel = { id: 'c1' }
 
 describe('how far back', () => {
-  test('HISTORY_BACKFILL_DAYS, else the retention, else 90 days; 0 for everything', () => {
-    assert.equal(history.days(), 90)
-    process.env.MESSAGE_HISTORY_DAYS = '30'
-    assert.equal(history.days(), 30)
+  const daysBack = t => t === -Infinity ? null : Math.round((NOW - t) / DAY)
+
+  test('by days: HISTORY_BACKFILL_DAYS, else 90; 0 for no limit; never past the retention', () => {
+    assert.equal(daysBack(history.startOf(NOW)), 90)
     process.env.HISTORY_BACKFILL_DAYS = '365'
-    assert.equal(history.days(), 365)
+    assert.equal(daysBack(history.startOf(NOW)), 365)
     process.env.HISTORY_BACKFILL_DAYS = '0'
-    assert.equal(history.days(), null)
+    assert.equal(daysBack(history.startOf(NOW)), null)
+    process.env.MESSAGE_HISTORY_DAYS = '30'
+    assert.equal(daysBack(history.startOf(NOW)), 30, 'older ones would be pruned at once')
+  })
+
+  test('by date: HISTORY_BACKFILL_SINCE (the start of that day in Japan); with days too, whichever is later', () => {
+    process.env.HISTORY_BACKFILL_SINCE = '2026-01-01'
+    assert.equal(history.startOf(NOW), Date.parse('2025-12-31T15:00:00Z'), 'no 90-day default when a date is given')
+    process.env.HISTORY_BACKFILL_DAYS = '30'
+    assert.equal(daysBack(history.startOf(NOW)), 30)
+    process.env.HISTORY_BACKFILL_SINCE = '2026-10-30'
+    assert.equal(history.startOf(NOW), Date.parse('2026-10-29T15:00:00Z'))
+    process.env.HISTORY_BACKFILL_SINCE = '2026/10/30'
+    assert.equal(daysBack(history.startOf(NOW)), 30, 'a date not written YYYY-MM-DD is ignored')
+  })
+
+  test('by count: HISTORY_BACKFILL_MAX_MESSAGES per channel; unset or 0 for no limit', () => {
+    assert.equal(history.maxMessages(), null)
+    process.env.HISTORY_BACKFILL_MAX_MESSAGES = '0'
+    assert.equal(history.maxMessages(), null)
+    process.env.HISTORY_BACKFILL_MAX_MESSAGES = '5000'
+    assert.equal(history.maxMessages(), 5000)
   })
 })
 
@@ -53,7 +73,7 @@ describe('readChannel', () => {
     assert.deepEqual(asked, [undefined, '901'])
     assert.equal(saved[0].ts, new Date(NOW).toISOString())
     assert.deepEqual({ id: saved[0].id, channelID: saved[0].channelID, guildID: saved[0].guildID, content: saved[0].content }, { id: '1000', channelID: 'c1', guildID: 'g1', content: 'm1000' })
-    assert.deepEqual(states.c1, { before_id: '871', done: true })
+    assert.deepEqual(states.c1, { before_id: '871', done: true, read_count: 130 })
     // Done: not read again.
     assert.equal(await history.readChannel(guild, channel, { wait: 0, now: NOW, getMessages: async () => { throw new Error('read again') } }), 0)
   })
@@ -65,6 +85,25 @@ describe('readChannel', () => {
     await history.readChannel(guild, channel, { wait: 0, now: NOW, getMessages: async (id, o) => { asked.push(o.before); return page(980, 100) } })
     assert.deepEqual(asked, ['981'])
     assert.deepEqual(saved.map(r => r.id), Array.from({ length: 31 }, (_, i) => String(980 - i)), 'only the last 50 days')
+    assert.equal(states.c1.done, true)
+  })
+
+  test('stops after HISTORY_BACKFILL_MAX_MESSAGES of the channel, counting across restarts', async () => {
+    process.env.HISTORY_BACKFILL_DAYS = '0'
+    process.env.HISTORY_BACKFILL_MAX_MESSAGES = '150'
+    states.c1 = { before_id: '951', read_count: 50, done: false }
+    const limits = []
+    await history.readChannel(guild, channel, { wait: 0, now: NOW, getMessages: async (id, o) => { limits.push(o.limit); return page(Number(o.before) - 1, o.limit) } })
+    assert.deepEqual(limits, [100], 'the 100 left')
+    assert.deepEqual(states.c1, { before_id: '851', done: true, read_count: 150 })
+    assert.equal(saved.length, 100)
+  })
+
+  test('the date limit with a count: whichever comes first', async () => {
+    process.env.HISTORY_BACKFILL_SINCE = '2026-10-23' // messages 0 to 10 days back are on or after it
+    process.env.HISTORY_BACKFILL_MAX_MESSAGES = '1000'
+    await history.readChannel(guild, channel, { wait: 0, now: NOW, getMessages: async (id, o) => page(1000, o.limit) })
+    assert.equal(saved.length, 11)
     assert.equal(states.c1.done, true)
   })
 

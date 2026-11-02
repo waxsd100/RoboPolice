@@ -3,17 +3,18 @@
 const format = require('pg-format')
 const pool = require('../../clients/postgres')
 
-// { before_id, done } for the channel, or null when it was never read.
+// { before_id, read_count, done } for the channel, or null when it was never read.
 async function backfillState (channelID) {
-  const rows = await pool.query('SELECT before_id, done FROM message_backfill WHERE channel_id = $1', [channelID])
+  const rows = await pool.query('SELECT before_id, read_count, done FROM message_backfill WHERE channel_id = $1', [channelID])
   return rows.rows[0] || null
 }
 
-async function saveBackfill (guildID, channelID, beforeID, done) {
+// readCount: how many messages of the channel's history have been read so far.
+async function saveBackfill (guildID, channelID, beforeID, done, readCount = 0) {
   await pool.query(
-    `INSERT INTO message_backfill (channel_id, guild_id, before_id, done, updated_at) VALUES ($1, $2, $3, $4, now())
-     ON CONFLICT (channel_id) DO UPDATE SET before_id = $3, done = $4, updated_at = now()`,
-    [channelID, guildID, beforeID, done])
+    `INSERT INTO message_backfill (channel_id, guild_id, before_id, done, read_count, updated_at) VALUES ($1, $2, $3, $4, $5, now())
+     ON CONFLICT (channel_id) DO UPDATE SET before_id = $3, done = $4, read_count = $5, updated_at = now()`,
+    [channelID, guildID, beforeID, done, readCount])
 }
 
 // Stores messages read from history: [{ id, authorID, content, imageUrls, ts, channelID, guildID }]

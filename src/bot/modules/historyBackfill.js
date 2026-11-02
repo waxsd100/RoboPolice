@@ -4,8 +4,12 @@
 // under the same rules: only servers with a message deletion or edit log, not ignored channels, not
 // bots, not automod notices.
 //
-// How far back: HISTORY_BACKFILL_DAYS days (0 for everything), by default MESSAGE_HISTORY_DAYS
-// (older ones would be pruned at once) or else 90. 100 messages a request, one request every
+// How far back, whichever comes first:
+// - a date: HISTORY_BACKFILL_SINCE (YYYY-MM-DD, Asia/Tokyo), and/or a number of days:
+//   HISTORY_BACKFILL_DAYS (0 for no limit). With neither, MESSAGE_HISTORY_DAYS or else 90 days.
+//   Never further than MESSAGE_HISTORY_DAYS: older ones would be pruned at once.
+// - a number of messages per channel: HISTORY_BACKFILL_MAX_MESSAGES (unset or 0 for no limit).
+// 100 messages a request, one request every
 // HISTORY_BACKFILL_DELAY_MS; where each channel got to is kept (message_backfill), so a restart goes
 // on from there. Every worker does the servers it hosts, checking hourly for new channels and
 // servers that turned a message log on. HISTORY_BACKFILL=false turns it off.
@@ -34,12 +38,35 @@ function setting (name) {
   return process.env[name] !== undefined && process.env[name] !== '' && Number.isFinite(n) && n >= 0 ? n : null
 }
 
-// How many days back to read; null for everything.
-function days () {
+const DAY_MS = 24 * 60 * 60 * 1000
+
+// HISTORY_BACKFILL_SINCE as a time (the start of that day in Asia/Tokyo), or null.
+function sinceDate () {
+  const raw = String(process.env.HISTORY_BACKFILL_SINCE || '').trim()
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(raw)) return null
+  const t = Date.parse(`${raw}T00:00:00+09:00`)
+  return Number.isFinite(t) ? t : null
+}
+
+// The oldest time to read back to (ms), or -Infinity for no limit.
+function startOf (now = Date.now()) {
+  const limits = []
+  const since = sinceDate()
+  if (since !== null) limits.push(since)
   const own = setting('HISTORY_BACKFILL_DAYS')
-  if (own !== null) return own === 0 ? null : own
+  if (own !== null) {
+    if (own > 0) limits.push(now - own * DAY_MS)
+  } else if (since === null) {
+    limits.push(now - DEFAULT_DAYS * DAY_MS)
+  }
   const retention = setting('MESSAGE_HISTORY_DAYS')
-  return retention || DEFAULT_DAYS
+  if (retention) limits.push(now - retention * DAY_MS)
+  return limits.length ? Math.max(...limits) : -Infinity
+}
+
+// How many messages of a channel to read back at most; null for no limit.
+function maxMessages () {
+  return setting('HISTORY_BACKFILL_MAX_MESSAGES') || null
 }
 
 function delay () {
@@ -74,17 +101,26 @@ function toRow (message, guild, channel) {
 async function readChannel (guild, channel, { wait = delay(), now = Date.now(), getMessages = (id, options) => global.bot.getMessages(id, options) } = {}) {
   const state = await store.backfillState(channel.id)
   if (state?.done) return 0
-  const window = days()
-  const since = window === null ? -Infinity : now - window * 24 * 60 * 60 * 1000
+  const since = startOf(now)
+  const max = maxMessages()
   let before = state?.before_id || undefined
+  let read = state?.read_count || 0
   let added = 0
   for (;;) {
-    const batch = await getMessages(channel.id, { limit: PAGE_SIZE, ...(before ? { before } : {}) })
+    const left = max === null ? PAGE_SIZE : Math.min(PAGE_SIZE, max - read)
+    if (left <= 0) {
+      await store.saveBackfill(guild.id, channel.id, before || null, true, read)
+      return added
+    }
+    // Newest first, as Discord returns them.
+    const batch = (await getMessages(channel.id, { limit: left, ...(before ? { before } : {}) }))
+      .sort((a, b) => (BigInt(b.id) > BigInt(a.id) ? 1 : -1))
     const inWindow = batch.filter(m => m.timestamp >= since)
     added += await store.saveHistory(inWindow.map(m => toRow(m, guild, channel)).filter(Boolean))
-    const done = batch.length < PAGE_SIZE || inWindow.length < batch.length
-    if (batch.length) before = batch.reduce((oldest, m) => BigInt(m.id) < BigInt(oldest) ? m.id : oldest, batch[0].id)
-    await store.saveBackfill(guild.id, channel.id, before || null, done)
+    read += inWindow.length
+    const done = batch.length < left || inWindow.length < batch.length || (max !== null && read >= max)
+    if (batch.length) before = batch[batch.length - 1].id
+    await store.saveBackfill(guild.id, channel.id, before || null, done, read)
     if (done) return added
     await sleep(wait)
   }
@@ -131,4 +167,4 @@ function startHistoryBackfill () {
   setInterval(runAll, RUN_EVERY_MS)
 }
 
-module.exports = { startHistoryBackfill, runAll, backfillGuild, readChannel, channelsOf, toRow, days, enabled }
+module.exports = { startHistoryBackfill, runAll, backfillGuild, readChannel, channelsOf, toRow, startOf, maxMessages, enabled }

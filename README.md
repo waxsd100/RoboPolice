@@ -61,9 +61,11 @@ Messages sent before the app stored them (before it joined, before the server se
 in channels quiet since) are **read back from each channel's history** (`historyBackfill.js`), under
 the same rules: text, voice, announcement and stage channels and active threads the app can read back,
 not ignored channels, not bots or automod notices. Each is stored with its own time, a message already
-stored is left as it is, and image URLs go with it. How far back: `HISTORY_BACKFILL_DAYS` days (`0`
-for everything), by default `MESSAGE_HISTORY_DAYS` (anything older would be pruned at once) or else 90.
-100 messages a request, one request every `HISTORY_BACKFILL_DELAY_MS` (default 1000); where each
+stored is left as it is, and image URLs go with it. How far back, whichever comes first: a date,
+`HISTORY_BACKFILL_SINCE` (`YYYY-MM-DD`, from the start of that day in Japan), and/or a number of days,
+`HISTORY_BACKFILL_DAYS` (`0` for no limit; with neither set, 90 days); and a number of messages per
+channel, `HISTORY_BACKFILL_MAX_MESSAGES`. Never further than `MESSAGE_HISTORY_DAYS`: anything older
+would be pruned at once. 100 messages a request, one request every `HISTORY_BACKFILL_DELAY_MS` (default 1000); where each
 channel got to is kept in `message_backfill`, so a restart goes on from there, and a channel read to
 the start of the window is not read again. Every worker does the servers it hosts, checking hourly for
 new channels and servers that set a message log. `HISTORY_BACKFILL=false` turns it off. A large
@@ -548,7 +550,9 @@ the secrets if it leaks, so keep it only on the platform and delete it in the co
 | `YOUTUBE_LIVE_POLL_SECONDS` | Optional. How often to check for streams on servers with stream events on. Defaults to 60; 0 turns it off |
 | `YOUTUBE_WEBSUB_URL`, `YOUTUBE_WEBSUB_SECRET` | Optional. The service's public HTTPS address and a secret, to receive YouTube pushes (see above). `PORT` sets the port listened on (Railway sets it) |
 | `HISTORY_BACKFILL` | Optional. `false` stops reading channels' past messages back (see "What is stored"). On by default |
-| `HISTORY_BACKFILL_DAYS` | Optional. How many days of past messages to read back; `0` for everything. Default `MESSAGE_HISTORY_DAYS`, or 90 when that is unset |
+| `HISTORY_BACKFILL_DAYS` | Optional. How many days of past messages to read back; `0` for no day limit. Default 90 when `HISTORY_BACKFILL_SINCE` is not set either. Never past `MESSAGE_HISTORY_DAYS` |
+| `HISTORY_BACKFILL_SINCE` | Optional. Read past messages back only to this date (`YYYY-MM-DD`, Japan time). With `HISTORY_BACKFILL_DAYS` too, the later of the two |
+| `HISTORY_BACKFILL_MAX_MESSAGES` | Optional. At most this many past messages per channel (newest first); unset or `0` for no limit |
 | `HISTORY_BACKFILL_DELAY_MS` | Optional (default `1000`). Wait between two history requests (100 messages each) |
 | `MESSAGE_EMBEDDINGS` | Optional. `true` embeds every stored message for search by meaning (sends them to Gemini; see above). Off by default |
 | `EMBEDDING_INTERVAL_MINUTES` | Optional. How often to embed new videos and messages. Defaults to 5; 0 turns it off |
