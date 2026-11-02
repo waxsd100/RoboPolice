@@ -193,7 +193,9 @@ describe('draft', () => {
     const prompt = requests[0].body.contents[0].parts[0].text
     assert.match(prompt, /現在日時: 2026年10月29日木曜日 15:00（Asia\/Tokyo）/)
     assert.match(prompt, /依頼されたチャンネル: #general/)
-    assert.match(prompt, /## 依頼メッセージ\n交流会/)
+    assert.match(prompt, /## 依頼メッセージ（\d+文字）\n交流会/)
+    assert.match(prompt, /## 依頼メッセージ（3文字）/, 'its length, to choose how long to answer')
+    assert.match(requests[0].body.systemInstruction.parts[0].text, /返事の長さは毎回、依頼の中身と長さを見て決める/)
     assert.match(prompt, /## 依頼メッセージの返信先\n告知文/)
   })
 

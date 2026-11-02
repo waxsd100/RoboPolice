@@ -1103,7 +1103,7 @@ describe('mention → event / forum post (integration)', () => {
     test('an image attached to the reply replaces the posted image, even without any text', async () => {
       const { channel, replies } = createChannel()
       const requests = installGemini([body => {
-        assert.match(body.contents[0].parts[0].text, /## 依頼メッセージ\n画像を添付の画像に差し替えて/)
+        assert.match(body.contents[0].parts[0].text, /## 依頼メッセージ（\d+文字）\n画像を添付の画像に差し替えて/)
         // The model may well list the attachment and describe the change; the image is replaced once, without AI.
         return [call('submit_forum_post_draft', { found: true, channel_id: '206', title: '11/3 交流会', content: '参加したい人は書き込んでください', tags: ['募集中'], image_urls: [`${site.url}/poster.png`], image_instruction: '添付の画像に差し替える' })]
       }])
@@ -1199,7 +1199,7 @@ describe('mention → event / forum post (integration)', () => {
       await mentionEvent.handle(mention(channel, '<@&800> 交流会 <@&801> と相談'))
       assert.equal(replies[0].state.content, '⚠️ **作成できませんでした**\nなし')
       // The bot's role is stripped from the request; other role mentions are kept as written.
-      assert.match(requests[0].body.contents[0].parts[0].text, /## 依頼メッセージ\n交流会 <@&801> と相談/)
+      assert.match(requests[0].body.contents[0].parts[0].text, /## 依頼メッセージ（\d+文字）\n交流会 <@&801> と相談/)
     })
 
     test('ignores a mention of some other role', async () => {
