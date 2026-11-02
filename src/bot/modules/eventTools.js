@@ -114,7 +114,7 @@ const DECLARATIONS = [
   },
   {
     name: 'list_scheduled_events',
-    description: 'このサーバーに登録済みのスケジュールイベントの一覧を得る。同じイベントの重複登録を避けるために使う。'
+    description: 'このサーバーに登録済みのスケジュールイベントの一覧を得る。サーバーの予定やイベントを聞かれたとき、イベント登録で重複を避けるときに使う。'
   },
   {
     name: 'search_youtube',
@@ -508,6 +508,16 @@ async function emojiSection (guild, vectorOf) {
 const MAX_CONTEXT_FOR_SEARCH = 1500
 const CONTEXT_WEIGHT = 0.6
 
+// Whether a request (with its conversation) says enough to look anything up by meaning: at least
+// MIN_SEARCH_CHARS characters once mentions, emojis, URLs, spaces and symbols are left out.
+const MIN_SEARCH_CHARS = 5
+function worthSearching (text) {
+  const words = String(text || '')
+    .replace(/<a?:\w+:\d+>|<[@#][!&]?\d+>|https?:\/\/\S+|:\w+:/g, '')
+    .replace(/[\s\p{P}\p{S}]/gu, '')
+  return [...words].length >= MIN_SEARCH_CHARS
+}
+
 // The server as the requester can see it. Sent with every request, fresh each time, so questions
 // about "this server" need no lookups. query: what was asked; context: the conversation it replies
 // to (readThread), if any. Both choose the knowledge and the emojis put first.
@@ -540,12 +550,13 @@ async function describeServer (guild, member, requestChannelID, { query = '', co
 
   // What the knowledge and the emojis are chosen for: the request, and the conversation it replies
   // to, which counts more (a reply such as "それの続きは？" is about what came before). The latest
-  // part of the conversation is used. Embedded once, when first needed.
+  // part of the conversation is used. Embedded once, when first needed, and only when there is
+  // something to search with: a bare greeting or a few emojis ("おはよう", "w") need no lookup.
   const recent = String(context || '').slice(-MAX_CONTEXT_FOR_SEARCH)
   const texts = [recent, query].filter(t => t.trim())
   let embedding = null
   const vectorOf = () => {
-    if (!texts.length) return Promise.resolve(null)
+    if (!worthSearching(texts.join('\n'))) return Promise.resolve(null)
     if (!embedding) {
       embedding = embed(texts, 'RETRIEVAL_QUERY')
         .then(vectors => vectors.length === 1 ? vectors[0] : blend(vectors, [CONTEXT_WEIGHT, 1 - CONTEXT_WEIGHT]))
@@ -565,8 +576,6 @@ async function describeServer (guild, member, requestChannelID, { query = '', co
   const emojiLines = await emojiSection(guild, vectorOf)
   if (emojiLines.length) lines.push('', ...emojiLines)
 
-  lines.push('', '### 登録済みのイベント', await scheduledEvents(guild).catch(e => `（取得できませんでした: ${e.message}）`))
-
   const youtube = await youtubeDB.getOverview(guild.id).catch(() => null)
   const synced = (youtube?.channels || []).filter(c => c.synced_at)
   lines.push('', '### YouTube', synced.length
@@ -578,4 +587,4 @@ async function describeServer (guild, member, requestChannelID, { query = '', co
   return lines.join('\n')
 }
 
-module.exports = { createTools, formatMessage, describeServer, withServerEmojis, withServerChannels, namedChannels, requestChannelInfo, searchYouTube, MESSAGE_LINK, CHANNEL_LINK, StopDrafting }
+module.exports = { worthSearching, createTools, formatMessage, describeServer, withServerEmojis, withServerChannels, namedChannels, requestChannelInfo, searchYouTube, MESSAGE_LINK, CHANNEL_LINK, StopDrafting }

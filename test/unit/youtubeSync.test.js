@@ -62,12 +62,12 @@ describe('syncIfChanged', () => {
     assert.ok(store.knowledge[100].videos.some(v => v.video_id === id(2)))
   })
 
-  test('syncs while a stream is live or upcoming, or older videos are left to read, without the feed', async (t) => {
+  test('while a stream is live or upcoming, only those videos are read again, not the channel; older videos left are read', async (t) => {
     t.mock.method(global.logger, 'info', () => {})
     store.knowledge[100].videos = [video(1, { live_status: 'upcoming' })]
-    let calls = fakeYouTube()
-    await youtubeSync.syncIfChanged(await firstChannel())
-    assert.equal(calls[0], 'channels')
+    let calls = fakeYouTube({ feed: [id(1)] })
+    assert.equal(await youtubeSync.syncIfChanged(await firstChannel()), 0)
+    assert.deepEqual(calls, ['feed', 'videos'])
 
     store.knowledge[100].videos = [video(1)]
     store.knowledge[100].channel.backfill_token = 'p3'

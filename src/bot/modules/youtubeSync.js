@@ -1,7 +1,7 @@
 // Keeping the YouTube knowledge current: the channels the bot follows (YOUTUBE_CHANNELS, one list
 // for every server), the sync /youtube runs, the same sync run automatically when a channel has
 // something new, and summaries of the newest videos in bulk.
-const { parseChannelRef, resolveChannel, fetchChannelKnowledge, durationSeconds } = require('../utils/youtube')
+const { parseChannelRef, resolveChannel, fetchChannelKnowledge, fetchVideos, durationSeconds } = require('../utils/youtube')
 const youtubeDB = require('../../db/interfaces/postgres/youtube')
 const videoSummary = require('./videoSummary')
 const { knowledgeSetting } = require('../utils/knowledgeDefaults')
@@ -67,12 +67,20 @@ async function feedVideoIds (channelID) {
 // feed), a live or upcoming stream whose state may have changed, or older videos left from a first
 // read. Resolves to the number of videos added, or null when nothing needed doing.
 async function syncIfChanged (channel) {
-  let reason = channel.backfill_token ? 'backfill' : (await youtubeDB.getLiveVideoIds(channel.channel_id)).length ? 'live' : null
+  let reason = channel.backfill_token ? 'backfill' : null
   if (!reason) {
     const known = await youtubeDB.getVideoIds(channel.channel_id)
     if ((await feedVideoIds(channel.channel_id)).some(id => !known.has(id))) reason = 'new video'
   }
-  if (!reason) return null
+  if (!reason) {
+    // Only live and upcoming streams may have changed: those videos alone are read again (one
+    // request), not the channel. A stream announced days ahead would otherwise read the channel
+    // every time.
+    const liveIds = await youtubeDB.getLiveVideoIds(channel.channel_id)
+    if (!liveIds.length) return null
+    await youtubeDB.upsertVideos(channel.channel_id, await fetchVideos(liveIds, process.env.YOUTUBE_API_KEY))
+    return 0
+  }
   const { added } = await syncChannel(channel)
   global.logger.info(`[YOUTUBE]: Synced ${channel.title || channel.channel_id} automatically (${reason}), ${added} new video(s)`)
   return added
