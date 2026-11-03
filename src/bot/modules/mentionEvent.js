@@ -8,6 +8,7 @@ const { reportInjection } = require('../utils/untrusted')
 const { picturesFor } = require('../utils/foreignEmojis')
 const { EMBED_COLORS } = require('../utils/constants')
 const { hasStaffAccess } = require('../utils/staffAccess')
+const { isCreator } = require('../utils/creatorIds')
 const { redact } = require('../utils/redact')
 const { trackUsage, tokenFooter } = require('../utils/geminiUsage')
 const mentionQuota = require('../utils/mentionQuota')
@@ -120,7 +121,7 @@ function missingSettings () {
 }
 
 // Anyone can talk with the bot. What a request makes is checked when it is made: an event needs
-// Manage Events (or the owner, an administrator, or staff), a forum post needs permission to post
+// Manage Events (or the owner, an administrator, staff, or a CREATOR_IDS user), a forum post needs permission to post
 // in that forum (checked in forumPost.js).
 const NO_EVENT_PERMISSION = 'イベントを登録・変更するには「イベントの管理」権限が必要です。'
 
@@ -128,7 +129,8 @@ function canManageEvents (member, guild) {
   return member.id === guild.ownerID ||
     member.permissions.has('manageEvents') ||
     member.permissions.has('administrator') ||
-    hasStaffAccess(member.roles, guild)
+    hasStaffAccess(member.roles, guild) ||
+    isCreator(member.id)
 }
 
 // A forum channel mentioned in the request (<#id>) is where a forum post must go.

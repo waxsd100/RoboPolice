@@ -5,6 +5,7 @@
 // flags. Permissions come from that cache; tags, flags and guidelines are fetched from the API.
 
 const { withoutCharCount } = require('../utils/textClean')
+const { isCreator } = require('../utils/creatorIds')
 
 const FORUM_TYPES = [15, 16] // GUILD_FORUM, GUILD_MEDIA
 const REQUIRE_TAG = 1 << 4
@@ -92,7 +93,7 @@ async function toForumPost (draft, guild, member) {
   if (!draft.found) return { error: draft.reason || '投稿の内容を決められませんでした。' }
   const channel = draft.channel_id && guild.channels.get(draft.channel_id)
   if (!channel || !FORUM_TYPES.includes(channel.type)) return { error: '投稿先のフォーラムが見つかりませんでした。' }
-  if (!canPost(channel, member.id)) return { error: `依頼者が <#${channel.id}> に投稿する権限を持っていません。` }
+  if (!isCreator(member.id) && !canPost(channel, member.id)) return { error: `依頼者が <#${channel.id}> に投稿する権限を持っていません。` }
   if (!canPost(channel, global.bot.user.id)) return { error: `BOTが <#${channel.id}> に投稿する権限を持っていません。` }
 
   const title = (draft.title || '').trim().slice(0, MAX_TITLE)

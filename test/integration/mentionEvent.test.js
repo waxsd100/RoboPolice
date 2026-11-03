@@ -1333,6 +1333,25 @@ describe('mention → event / forum post (integration)', () => {
       assert.equal(replies[1].state.content, '⚠️ **作成できませんでした**\n依頼者が <#207> に投稿する権限を持っていません。')
     })
 
+    test('lets a CREATOR_IDS user make an event and a forum post without the permissions', async () => {
+      process.env.CREATOR_IDS = `9, ${REQUESTER}`
+      try {
+        const { channel, replies } = createChannel()
+        installGemini([[submit({ found: false, reason: 'なし' })]])
+        await mentionEvent.handle(mention(channel, '<@BOT> 交流会', { member: createMember({ id: REQUESTER, permissions: [] }) }))
+        assert.match(replies[0].state.content, /作成できませんでした\*\*\nなし/)
+
+        installGemini([[call('submit_forum_post_draft', { found: true, channel_id: '207', title: '連絡', content: '本文' })]])
+        const done = mentionEvent.handle(mention(channel, '<@BOT> 運営連絡に立てて', { member: createMember({ id: REQUESTER, permissions: [] }) }))
+        await waitForButtons(replies[1], '投稿する')
+        await press(replies[1], '投稿する')
+        await done
+        assert.equal(discord.find(c => c.method === 'POST').url, '/channels/207/threads')
+      } finally {
+        delete process.env.CREATOR_IDS
+      }
+    })
+
     test('lets the server owner through without the permission', async () => {
       const { channel, replies } = createChannel()
       installGemini([[submit({ found: false, reason: 'なし' })]])

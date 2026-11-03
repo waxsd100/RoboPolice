@@ -8,13 +8,19 @@
 // (for example, contained within one of several comma-joined IDs) would incorrectly pass as a
 // creator, unlocking creator-only commands such as /eval. Centralizing the parsing here removes
 // that whole bug class.
-const CREATOR_IDS = (process.env.CREATOR_IDS || '')
-  .split(',')
-  .map(id => id.trim())
-  .filter(Boolean)
-
-function isCreator (userID) {
-  return CREATOR_IDS.includes(userID)
+//
+// A creator bypasses every permission check a member's own permissions could pass: prefix
+// commands, the permissions slash commands ask of the user (userPerms), Manage Events for an event
+// asked for by mention, and the permission to post in a forum. Not what the bot itself needs.
+function creatorIDs () {
+  return (process.env.CREATOR_IDS || '')
+    .split(',')
+    .map(id => id.trim())
+    .filter(Boolean)
 }
 
-module.exports = { CREATOR_IDS, isCreator }
+function isCreator (userID) {
+  return !!userID && creatorIDs().includes(userID)
+}
+
+module.exports = { creatorIDs, isCreator }
