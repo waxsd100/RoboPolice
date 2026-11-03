@@ -10,6 +10,7 @@ const { EMBED_COLORS } = require('../utils/constants')
 const { hasStaffAccess } = require('../utils/staffAccess')
 const { redact } = require('../utils/redact')
 const { trackUsage, tokenFooter } = require('../utils/geminiUsage')
+const { polish } = require('./replyPolish')
 const mentionQuota = require('../utils/mentionQuota')
 const { SIZES } = require('../utils/imageCrop')
 const { CoverImage, MODES } = require('./coverImage')
@@ -479,6 +480,9 @@ async function handle (message) {
       for (;;) {
         if (result.kind === 'chat') {
           if (!previous) {
+            // Rewritten to read less like AI-made Japanese (replyPolish.js), but not what the
+            // stronger model wrote (stories and other long writing).
+            if (!result.conversation?.contents?.deep) result = { ...result, text: await polish(result.text, { guildID: guild.id }) }
             const { content, embeds } = await withLinkCards(withServerChannels(withServerEmojis(checkedLinks(result, guild), guild), guild, message.member))
             await reply.edit({ content: withFooter(content, tokenFooter(usage)), embeds, components: [], allowedMentions: NO_MENTIONS })
             return

@@ -1,0 +1,79 @@
+name: yomiyasu-pocket update
+
+# Mention replies are rewritten by yomiyasu-pocket (src/bot/modules/replyPolish.js), kept in
+# vendor/yomiyasu-pocket. Once a day this looks for a newer release and, when there is one, opens a
+# pull request that replaces it, with the change to the instruction in the description, so what
+# steers every reply is read before it is used. Nothing changes until that pull request is merged.
+#
+# Needs Settings > Actions > General > "Allow GitHub Actions to create and approve pull requests".
+# A pull request opened with GITHUB_TOKEN does not start the test workflow by itself, so the unit
+# test of the instruction runs here first.
+
+on:
+  schedule:
+    - cron: '17 21 * * *' # 06:17 JST
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Look for a newer release
+        id: latest
+        run: |
+          tag=$(git ls-remote --tags --refs https://github.com/nanaism/yomiyasu-pocket.git 'v*' \
+            | awk '{print $2}' | sed 's#refs/tags/##' | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | sort -V | tail -1)
+          current=$(head -1 vendor/yomiyasu-pocket/VERSION)
+          echo "Latest $tag, using $current"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          if [ -n "$tag" ] && [ "$tag" != "$current" ] && \
+             [ "$(printf '%s\n%s\n' "$current" "$tag" | sort -V | tail -1)" = "$tag" ]; then
+            echo "newer=true" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Open a pull request with it
+        if: steps.latest.outputs.newer == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ steps.latest.outputs.tag }}
+        run: |
+          branch="yomiyasu-pocket/$TAG"
+          if git ls-remote --exit-code --heads origin "$branch" > /dev/null; then
+            echo "A pull request for $TAG is already open"; exit 0
+          fi
+          git clone --quiet --depth 1 --branch "$TAG" https://github.com/nanaism/yomiyasu-pocket.git "$RUNNER_TEMP/pocket"
+          commit=$(git -C "$RUNNER_TEMP/pocket" rev-parse HEAD)
+          test -s "$RUNNER_TEMP/pocket/yomiyasu-pocket.txt"
+          cp "$RUNNER_TEMP/pocket/yomiyasu-pocket.txt" "$RUNNER_TEMP/pocket/LICENSE" vendor/yomiyasu-pocket/
+          printf '%s\n%s\n' "$TAG" "$commit" > vendor/yomiyasu-pocket/VERSION
+          npm ci --ignore-scripts --no-audit --no-fund
+          node --test test/unit/replyPolish.test.js
+          {
+            echo "yomiyasu-pocket を $(git show HEAD:vendor/yomiyasu-pocket/VERSION | head -1) から $TAG に更新します。"
+            echo "メンション返信の書き直し（src/bot/modules/replyPolish.js）に使う指示文です。マージすると次のデプロイから反映されます。"
+            echo
+            echo "- リリース: https://github.com/nanaism/yomiyasu-pocket/tree/$TAG"
+            echo "- コミット: $commit"
+            echo
+            echo "## 指示文の変更"
+            echo
+            echo '```diff'
+            git diff --no-color --word-diff=plain -- vendor/yomiyasu-pocket/yomiyasu-pocket.txt | tail -n +6
+            echo '```'
+            echo
+            echo "このワークフローの中で、指示文の形を確かめる単体テスト（test/unit/replyPolish.test.js）は通っています。この PR では test ワークフローが自動で走りません。"
+          } > "$RUNNER_TEMP/body.md"
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git switch -c "$branch"
+          git add vendor/yomiyasu-pocket
+          git commit -m "Update yomiyasu-pocket to $TAG"
+          git push origin "$branch"
+          gh pr create --base master --head "$branch" --title "yomiyasu-pocket を $TAG に更新" --body-file "$RUNNER_TEMP/body.md"

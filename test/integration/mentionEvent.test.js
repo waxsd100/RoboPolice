@@ -151,6 +151,8 @@ describe('mention → event / forum post (integration)', () => {
   })
   after(() => site.close())
   beforeEach(() => {
+    // Rewriting replies (replyPolish.js) is one more Gemini call: off but in its own tests.
+    process.env.REPLY_POLISH = 'false'
     configureGateway()
     installYouTubeStore()
     quota = installQuotaStore()
@@ -1331,6 +1333,35 @@ describe('mention → event / forum post (integration)', () => {
       installGemini([[call('submit_forum_post_draft', { found: true, channel_id: '207', title: '連絡', content: '本文' })]])
       await mentionEvent.handle(mention(channel, '<@BOT> 運営連絡に立てて', { member: createMember({ id: REQUESTER, permissions: [] }) }))
       assert.equal(replies[1].state.content, '⚠️ **作成できませんでした**\n依頼者が <#207> に投稿する権限を持っていません。')
+    })
+
+    test('rewrites a chat reply by yomiyasu-pocket before posting it, keeping it when the rewrite drops a mention', async () => {
+      process.env.REPLY_POLISH = 'true'
+      try {
+        const original = '重要なのは、<@2> さんが言ってたように、このゲームは協力プレイが本質だということ——つまり、みんなで遊ぶのが一番だよ！'
+        const polished = '<@2> さんが言ってたように、このゲームは協力プレイが肝だよ。みんなで遊ぶのが一番！'
+        const { channel, replies } = createChannel()
+        const requests = installGemini([
+          [call('submit_chat_reply', { text: original })],
+          [{ text: polished }]
+        ])
+        await mentionEvent.handle(mention(channel, '<@BOT> このゲームどう？'))
+        assert.equal(replies[0].state.content, polished)
+        const rewrite = requests[1].body
+        assert.match(rewrite.systemInstruction.parts[0].text, /^次の文章を意味を変えずに読みやすく書き直してください。/)
+        assert.match(rewrite.systemInstruction.parts[0].text, /一字も変えずにそのまま残してください/)
+        assert.equal(rewrite.contents[0].parts[0].text, original)
+        assert.equal(rewrite.tools, undefined)
+
+        installGemini([
+          [call('submit_chat_reply', { text: original })],
+          [{ text: 'このゲームは協力プレイが肝だよ。みんなで遊ぶのが一番、という話でした！' }]
+        ])
+        await mentionEvent.handle(mention(channel, '<@BOT> このゲームどう？'))
+        assert.equal(replies[1].state.content, original, 'the mention was lost: kept as it was')
+      } finally {
+        process.env.REPLY_POLISH = 'false'
+      }
     })
 
     test('lets the server owner through without the permission', async () => {
