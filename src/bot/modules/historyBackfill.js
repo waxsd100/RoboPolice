@@ -120,8 +120,10 @@ async function readChannel (guild, channel, { wait = delay(), now = Date.now(), 
       await save(true)
       return added
     }
-    // Newest first, as Discord returns them.
-    const batch = (await getMessages(channel.id, { limit: left, ...(before ? { before } : {}) }))
+    // Newest first, as Discord returns them. A message Eris could not read comes back as null: left
+    // out, but still counted for whether the page was full.
+    const page = await getMessages(channel.id, { limit: left, ...(before ? { before } : {}) })
+    const batch = page.filter(Boolean)
       .sort((a, b) => (BigInt(b.id) > BigInt(a.id) ? 1 : -1))
     const inWindow = batch.filter(m => m.timestamp >= since)
     added += await store.saveHistory(inWindow.map(m => toRow(m, guild, channel)).filter(Boolean))
@@ -132,7 +134,7 @@ async function readChannel (guild, channel, { wait = delay(), now = Date.now(), 
       await save(true)
       return added
     }
-    if (batch.length < left) {
+    if (page.length < left) {
       await save(true, true) // the start of the channel
       return added
     }

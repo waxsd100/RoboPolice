@@ -250,7 +250,7 @@ function createTools ({ guild, member, ask, progress = () => {} }) {
       const count = Math.min(Math.max(parseInt(limit, 10) || 20, 1), MAX_RECENT_MESSAGES)
       const messages = await global.bot.getMessages(channelID, { limit: count })
       sources.push(`<#${channel.id}>`)
-      return messages.map(m => formatMessage(m)).join('\n')
+      return messages.filter(Boolean).map(m => formatMessage(m)).join('\n') // null: one Eris could not read
     },
     async search_channel_history ({ channel_id: channelID, query }) {
       const channel = readableChannel(channelID)

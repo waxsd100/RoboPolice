@@ -66,6 +66,16 @@ describe('how far back', () => {
 })
 
 describe('readChannel', () => {
+  test('a message Eris could not read (null) is left out, and the page still counts as full', async () => {
+    process.env.HISTORY_BACKFILL_DAYS = '0'
+    const first = page(1000, 100)
+    first[50] = null
+    const pages = [first, page(900, 30)]
+    const added = await history.readChannel(guild, channel, { wait: 0, now: NOW, getMessages: async () => pages.shift() })
+    assert.equal(added, 129, 'read on past the full page')
+    assert.equal(states.c1.reached_start, true)
+  })
+
   test('pages back until the history ends, storing each message with its own time; remembers where it got to', async () => {
     process.env.HISTORY_BACKFILL_DAYS = '0'
     const pages = [page(1000, 100), page(900, 30)]
