@@ -3,7 +3,7 @@
 //
 // Vectors are DIMENSIONS long (the model is trained so a prefix of its output is a usable
 // embedding), normalized, and handled in the app as signed bytes (each component times 127).
-const { geminiRequest, geminiSend, geminiStream } = require('../modules/eventDrafter')
+const { geminiRequest, geminiStream } = require('../modules/eventDrafter')
 const { forEachArrayItem, textChunks } = require('./jsonItems')
 
 const DEFAULT_EMBEDDING_MODEL = 'gemini-embedding-001'
@@ -100,23 +100,23 @@ async function submitEmbeddingBatch (texts, keys) {
 // The batch's state: 'running', 'succeeded' with { vectors: Map(key -> Int8Array), failed: [key] },
 // or 'failed' (failed, cancelled or expired at Gemini).
 // A finished batch's results are large (20,000 vectors of 512 numbers: over 200 MB of JSON), so the
-// state is asked for alone (`fields`), and only a finished batch's results are read, as they stream
-// in, one at a time (jsonItems.js), with time enough to download them.
-const BATCH_STATE_FIELDS = 'name,state,metadata.state,done,error'
+// batch is read as it streams in (a running one is small: it has no results yet), its results one
+// at a time (jsonItems.js), with time enough to download them; its state is picked up on the way.
 async function embeddingBatchResult (batch) {
-  const data = await geminiSend('GET', `${batch}?fields=${encodeURIComponent(BATCH_STATE_FIELDS)}`)
-  const state = String(data.metadata?.state || data.state || '')
-  if (/FAILED|CANCELLED|EXPIRED/.test(state)) return { state: 'failed', detail: state }
-  if (!/SUCCEEDED/.test(state)) return { state: 'running' }
   const vectors = new Map()
   const failed = []
+  let state = ''
   const res = await geminiStream(batch)
   await forEachArrayItem(textChunks(res), ['inlinedResponses', 'inlinedEmbedContentResponses'], r => {
     const key = r.metadata?.key
     const values = r.response?.embedding?.values || r.response?.embeddings?.[0]?.values
     if (key && values?.length) vectors.set(key, quantize(values))
     else if (key) failed.push(key)
-  })
+  }, { onString: (key, value) => { if (key === 'state' && /_STATE_/.test(value)) state = value } })
+  if (/FAILED|CANCELLED|EXPIRED/.test(state)) return { state: 'failed', detail: state }
+  if (!/SUCCEEDED/.test(state)) return { state: 'running' }
+  // Done, but with no results where they are looked for: sent again rather than marked as handled.
+  if (vectors.size === 0 && failed.length === 0) return { state: 'failed', detail: `${state} without results` }
   return { state: 'succeeded', vectors, failed }
 }
 

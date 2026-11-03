@@ -29,6 +29,18 @@ describe('jsonItems', () => {
     assert.deepEqual(got, [{ b: 2 }])
   })
 
+  test('short string values outside the items are told, such as a batch\'s state', async () => {
+    const text = JSON.stringify({ name: 'batches/x', metadata: { state: 'BATCH_STATE_SUCCEEDED' }, inlinedResponses: [{ state: 'inside an item' }] }, null, 2)
+    const strings = []
+    for (const size of [1, 5, text.length]) {
+      strings.length = 0
+      const chunks = []
+      for (let i = 0; i < text.length; i += size) chunks.push(text.slice(i, i + size))
+      await forEachArrayItem(chunks, 'inlinedResponses', () => {}, { onString: (key, value) => strings.push([key, value]) })
+      assert.deepEqual(strings, [['name', 'batches/x'], ['state', 'BATCH_STATE_SUCCEEDED']], `pieces of ${size}`)
+    }
+  })
+
   test('a response body is read as text, a character cut between pieces included', async () => {
     const bytes = new TextEncoder().encode(JSON.stringify({ inlinedResponses: [{ text: '日本語のテキスト' }] }))
     const body = []
