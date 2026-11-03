@@ -611,6 +611,7 @@ the secrets if it leaks, so keep it only on the platform and delete it in the co
 | `VIDEO_SUMMARY_FPS` | Optional (default `0.2`, one frame every 5 seconds; Gemini's own default is 1). Frames a second Gemini looks at when summarizing a video. Each frame costs tokens while the sound is heard throughout, so fewer frames cost much less |
 | `MENTION_TOKEN_FOOTER` | Optional. Chat replies end with the models that answered and the Gemini tokens they used in Discord's small grey text (`-# model: gemini-3.8-flash → gemini-4-argon (flex) · tokens: in … (cached …) · out … · thinking … · N Gemini calls`), and what fell back (`· fallback: gemini-4-argon refused (SAFETY) → gemini-3.8-flash`, `… Flex full → standard tier`); `false` leaves it out |
 | `GEMINI_TEMPERATURE` | Optional (default `1`, 0–2; Gemini 3 is tuned for 1 and may loop below it). How varied mention replies and drafts are; higher is more varied. Drafts are checked field by field either way |
+| `GEMINI_REPLY_TIMEOUT_SECONDS` | Optional (default `180`). How long one Gemini round trip of a mention reply or draft may take before it is given up (`GEMINI_DEEP_MODEL` has its own 20 minutes) |
 | `GEMINI_MAX_STEPS` | Optional (default `20`). How many Gemini round trips a reply or draft may take (each lookup is one); the last one may only answer with what was found |
 | `YOUTUBE_API_KEY` | Optional. YouTube Data API v3 key for `/youtube`. Unset disables the command |
 | `VIDEO_SUMMARY_TIMEOUT_MINUTES` | Optional. How long a video summary may take. Defaults to 10 |

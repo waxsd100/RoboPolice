@@ -1,6 +1,6 @@
 const { test, describe, beforeEach } = require('node:test')
 const assert = require('node:assert/strict')
-const { draft, revise, toScheduledEvent, isConfigured, ENTITY_TYPES, MAX_STEPS } = require('../../src/bot/modules/eventDrafter')
+const { draft, revise, toScheduledEvent, isConfigured, ENTITY_TYPES, MAX_STEPS, replyTimeoutMs } = require('../../src/bot/modules/eventDrafter')
 const { createGuild, configureGateway, installGemini, call, submit, lastToolResponses } = require('../helpers/fakes')
 
 const NOW = new Date('2026-10-29T15:00:00+09:00')
@@ -258,6 +258,21 @@ describe('draft', () => {
       assert.match(requests[0].body.systemInstruction.parts[0].text, /## 運営者が設定したキャラクター\n語尾は「〜だぜ」$/)
     } finally {
       delete process.env.CHAT_PERSONA
+    }
+  })
+
+  test('gives a reply step three minutes by default, GEMINI_REPLY_TIMEOUT_SECONDS otherwise', () => {
+    const saved = process.env.GEMINI_REPLY_TIMEOUT_SECONDS
+    try {
+      delete process.env.GEMINI_REPLY_TIMEOUT_SECONDS
+      assert.strictEqual(replyTimeoutMs(), 180 * 1000)
+      process.env.GEMINI_REPLY_TIMEOUT_SECONDS = '300'
+      assert.strictEqual(replyTimeoutMs(), 300 * 1000)
+      process.env.GEMINI_REPLY_TIMEOUT_SECONDS = 'abc'
+      assert.strictEqual(replyTimeoutMs(), 180 * 1000)
+    } finally {
+      if (saved === undefined) delete process.env.GEMINI_REPLY_TIMEOUT_SECONDS
+      else process.env.GEMINI_REPLY_TIMEOUT_SECONDS = saved
     }
   })
 

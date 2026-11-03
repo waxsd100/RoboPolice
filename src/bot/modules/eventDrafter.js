@@ -10,6 +10,13 @@ const { currentUsage, recordTokens, addTokens, addModel, addFallback } = require
 // model, and a change of model should be a choice, not a surprise.
 const DEFAULT_GEMINI_MODEL = 'gemini-3.8-flash'
 const GEMINI_TIMEOUT_MS = 60000
+// One step of a mention reply or draft, thinking at high and maybe writing a long answer, can take
+// well over a minute: GEMINI_REPLY_TIMEOUT_SECONDS (default 180) gives it longer.
+const DEFAULT_REPLY_TIMEOUT_SECONDS = 180
+function replyTimeoutMs () {
+  const n = Number(process.env.GEMINI_REPLY_TIMEOUT_SECONDS)
+  return (process.env.GEMINI_REPLY_TIMEOUT_SECONDS && Number.isFinite(n) && n > 0 ? n : DEFAULT_REPLY_TIMEOUT_SECONDS) * 1000
+}
 // Each step is one Gemini round trip; a draft normally needs 1-3 lookups (and maybe a question)
 // before submitting, a chat reply sometimes many more (wiki, X, videos, …). Lookups cost few
 // tokens, so the limit is generous; GEMINI_MAX_STEPS changes it. The last step may only submit,
@@ -567,13 +574,13 @@ async function generate (contents, declarations, allowed = null, { deep = false 
   const cache = allowed ? null : await cachedPrefix(model, prefix)
   if (cache) {
     try {
-      return await callGemini(model, { cachedContent: cache, contents, generationConfig }, { purpose: 'mention' })
+      return await callGemini(model, { cachedContent: cache, contents, generationConfig }, { purpose: 'mention', timeoutMs: replyTimeoutMs() })
     } catch (e) {
       if (!/cachedContent|CachedContent|cached content/i.test(e.message) || e.blocked) throw e
       forgetCache(cache) // gone on Gemini's side: once more in full
     }
   }
-  return callGemini(model, { ...prefix, contents, generationConfig }, { purpose: 'mention' })
+  return callGemini(model, { ...prefix, contents, generationConfig }, { purpose: 'mention', timeoutMs: replyTimeoutMs() })
 }
 
 // Runs the model with the read-only tools until it submits a draft, appending every turn to
@@ -747,4 +754,4 @@ async function revise (conversation, correction) {
   return check(conversation, await runAgent(conversation.contents, conversation.tools, conversation.submits))
 }
 
-module.exports = { SAFETY_SETTINGS, withSafetySettings, THINK_DEEPER_DECLARATION, deepModel, REPLY_LENGTHS, DEFAULT_REPLY_LENGTH, PERSONAS, thinkingConfig, cachedPrefix, caches, purgedFor, promptVersion, lightModel, draft, revise, MAX_STEPS, isConfigured, toScheduledEvent, callGemini, geminiRequest, geminiSend, geminiStream, retryTimer, DEFAULT_GEMINI_MODEL, ENTITY_TYPES, GeminiError }
+module.exports = { replyTimeoutMs, SAFETY_SETTINGS, withSafetySettings, THINK_DEEPER_DECLARATION, deepModel, REPLY_LENGTHS, DEFAULT_REPLY_LENGTH, PERSONAS, thinkingConfig, cachedPrefix, caches, purgedFor, promptVersion, lightModel, draft, revise, MAX_STEPS, isConfigured, toScheduledEvent, callGemini, geminiRequest, geminiSend, geminiStream, retryTimer, DEFAULT_GEMINI_MODEL, ENTITY_TYPES, GeminiError }
