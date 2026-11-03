@@ -19,6 +19,7 @@ module.exports = {
       await checkForMissingSettings()
       prune.startScheduler() // one worker owns the sweep so shards don't duplicate the delete
       embeddingIndexer.startIndexer() // the same worker embeds videos and messages for every server
+      require('../modules/summaryBatch').startBatchWatcher() // ...and watches the video summary batches (/youtube summarize)
       require('../modules/wikiKnowledge').startWiki() // ...and reads the community wiki (WIKI_URLS)
       require('../modules/twitterKnowledge').startTwitter() // ...and the streamer's X posts (TWITTER_ACCOUNTS)
       // ...and, once, finds the channel of messages stored before channels were recorded.

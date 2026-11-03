@@ -176,7 +176,8 @@ function shortestFirst (videos) {
 // Summarizes them, a few at a time, the shortest first. onProgress({ done, total, running }) is
 // called whenever one starts or ends (running: the videos being summarized now); force replaces
 // stored summaries. Resolves to [{ video, error }] in the order of `videos`.
-async function summarizeLatest (guildID, videos, { onProgress = () => {}, force = false, concurrency = summaryConcurrency() } = {}) {
+// flex: on Flex inference (videoSummary.js).
+async function summarizeLatest (guildID, videos, { onProgress = () => {}, force = false, flex = false, concurrency = summaryConcurrency() } = {}) {
   const results = new Array(videos.length)
   const order = shortestFirst(videos)
   const running = new Set()
@@ -190,7 +191,7 @@ async function summarizeLatest (guildID, videos, { onProgress = () => {}, force 
       running.add(video)
       await report()
       try {
-        await videoSummary.summarizeVideo(guildID, video.url, { force })
+        await videoSummary.summarizeVideo(guildID, video.url, { force, flex })
         results[i] = { video, error: null }
       } catch (e) {
         results[i] = { video, error: e.hint || e.message }

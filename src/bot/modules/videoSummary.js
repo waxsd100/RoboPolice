@@ -57,9 +57,10 @@ function fps () {
 
 const textOf = content => content.parts.map(p => p.text || '').join('').trim()
 
-function askVideo (videoID, prompt, clip = null) {
+// The model and generateContent body that summarize a video (or the clip of it) with `prompt`.
+function summaryRequest (videoID, prompt = PROMPT, clip = null) {
   const model = process.env.GEMINI_MODEL || DEFAULT_GEMINI_MODEL
-  return callGemini(model, {
+  const body = {
     contents: [{
       role: 'user',
       parts: [
@@ -70,7 +71,23 @@ function askVideo (videoID, prompt, clip = null) {
     // Fewer tokens per frame: the summary is about what is said and roughly shown, not fine detail.
     // Gemini 3 thinks at high unless told: a summary needs little (VIDEO_SUMMARY_THINKING_LEVEL).
     generationConfig: { temperature: 0.2, mediaResolution: 'MEDIA_RESOLUTION_LOW', ...thinkingConfig(model, { setting: 'VIDEO_SUMMARY_THINKING_LEVEL', fallback: 'low' }) }
-  }, { timeoutMs: summaryTimeoutMs(), purpose: 'videoSummary' })
+  }
+  return { model, body }
+}
+
+// flex: on Flex inference (half the price, queued for up to about 15 minutes more).
+const FLEX_EXTRA_MS = 15 * 60 * 1000
+function askVideo (videoID, prompt, clip = null, { flex = false } = {}) {
+  const { model, body } = summaryRequest(videoID, prompt, clip)
+  return callGemini(model, body, { timeoutMs: summaryTimeoutMs() + (flex ? FLEX_EXTRA_MS : 0), purpose: flex ? 'videoSummary-flex' : 'videoSummary', flex })
+}
+
+// Stores `text` as the video's summary, asked for by the server. Resolves to the summary.
+async function storeSummary (guildID, videoID, text) {
+  const summary = withoutCharCount(text).slice(0, MAX_SUMMARY)
+  if (!summary) throw new GeminiError(`Gemini returned no summary for ${videoID}`, 'AI が動画を要約できませんでした')
+  await youtubeDB.saveSummary(guildID, videoID, summary)
+  return summary
 }
 
 // The video's length in seconds: as stored, or from the YouTube API. Null when unknown.
@@ -113,7 +130,8 @@ async function summarizeParts (guildID, videoID, seconds, partSeconds) {
 
 // onStart is called just before Gemini is asked, i.e. only when the requester will have to wait.
 // force: summarize again even if a summary is stored, replacing it.
-async function summarizeVideo (guildID, url, { onStart = () => {}, force = false } = {}) {
+// flex: asked on Flex inference (a command's newest or short videos: summaryBatch.js).
+async function summarizeVideo (guildID, url, { onStart = () => {}, force = false, flex = false } = {}) {
   const videoID = parseVideoId(url)
   if (!videoID) throw new Error('YouTube の動画リンクではありません')
   const cached = !force && await youtubeDB.getSummary(videoID)
@@ -126,17 +144,15 @@ async function summarizeVideo (guildID, url, { onStart = () => {}, force = false
   try {
     text = textOf(await backgroundQueue.run(guildID, async () => {
       await onStart(summaryTimeoutMs())
-      return askVideo(videoID, PROMPT)
+      return askVideo(videoID, PROMPT, null, { flex })
     }))
   } catch (e) {
     if (!TOO_LONG.test(e.message)) throw e
     global.logger.info(`[SUMMARY]: ${videoID} is too long for one request; summarizing it in parts`)
     text = await summarizeInParts(guildID, videoID)
   }
-  const summary = withoutCharCount(text).slice(0, MAX_SUMMARY)
-  if (!summary) throw new GeminiError(`Gemini returned no summary for ${videoID}`, 'AI が動画を要約できませんでした')
-  await youtubeDB.saveSummary(guildID, videoID, summary)
+  const summary = await storeSummary(guildID, videoID, text)
   return { videoID, summary, cached: false }
 }
 
-module.exports = { summarizeVideo, shiftTimestamps }
+module.exports = { summarizeVideo, lengthOf, summaryRequest, storeSummary, textOf, shiftTimestamps, TOO_LONG, PROMPT }
