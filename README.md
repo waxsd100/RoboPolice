@@ -77,7 +77,7 @@ server's history takes disk space: with no retention set and no limit given, all
 
 ### メンション（BOT に話しかける）
 
-`@ロボポリス` と BOT にメンションして、文章で頼みます。使える量は1人ごとにサーバーをまたいでトークン数（強いモデルほど重く数えます）で決まっていて、5時間あたり30万トークン・1週間あたり200万トークンまで（最初に使った時から数え、上限に達したら戻る時刻を伝えます）。オーナー以外のサーバーでは、サーバー全体で1日30回まで。
+`@ロボポリス` と BOT にメンションして、文章で頼みます。使える量は1人ごとにサーバーをまたいでトークン数（Gemini の料金表どおり、高いモデルほど重く数えます）で決まっていて、5時間あたり30万トークン・1週間あたり200万トークンまで（最初に使った時から数え、上限に達したら戻る時刻を伝えます）。オーナー以外のサーバーでは、サーバー全体で1日30回まで。
 
 | 使い方 | 例 | 必要な権限 |
 |---|---|---|
@@ -212,9 +212,10 @@ How much each user may use mentions is counted in Gemini tokens in Redis
 (`src/bot/utils/mentionQuota.js`), like Claude's usage limits: per user across every server, in a
 five-hour window (`MENTION_TOKEN_LIMIT_5H`, default 300,000) and a week (`MENTION_TOKEN_LIMIT_WEEK`,
 default 2,000,000), each starting with the user's first use. Every Gemini call made for a mention
-counts once it is answered, weighted by what its model costs (a Pro / Argon / Ultra model 4, a Lite
-one 0.25, any other 1, Flex inference half that; `MENTION_TOKEN_WEIGHTS` sets models by name), prompt
-tokens read from the cache at a tenth; at a limit the user is
+counts once it is answered, by what it cost on Gemini's price list (`src/bot/utils/geminiPrices.js`:
+each model's input, cached input, answer and image prices, Flex half), counted in tokens of Gemini
+3.8 Flash's input ($0.75 a million): 300,000 is about $0.23 of Gemini and 2,000,000 about $1.50, so
+a Gemini 4 Argon token ($2 in, $10 out) counts for more than a Flash one; at a limit the user is
 told when it resets. The bot's developers (`CREATOR_IDS`) have none. Outside the owner's servers
 (`OWNER_GUILD_IDS`) the whole server also has 30 mentions a day, Japan time
 (`MENTION_GUILD_DAILY_LIMIT_OTHER`). If Redis is unreachable the mention goes through.
@@ -633,7 +634,7 @@ the secrets if it leaks, so keep it only on the platform and delete it in the co
 | `WEB_REFRESH_HOURS` | Optional. How often each topic is looked up again (default 168) |
 | `OWNER_GUILD_IDS` | Optional. The owner's servers (comma-separated), default `615170683068219393`. They have no per-server mention cap and go first in all background AI work; every other server waits for them |
 | `MENTION_TOKEN_LIMIT_5H`, `MENTION_TOKEN_LIMIT_WEEK` | Optional. Gemini tokens each user may use for mentions across every server, in five hours (default 300,000) and a week (default 2,000,000) from their first use; cached prompt tokens count at a tenth. 0 turns one off |
-| `MENTION_TOKEN_WEIGHTS` | Optional. How much a model's tokens count against those limits, by exact model name: `gemini-4-argon=4,gemini-3.5-flash-lite=0.25`. Models not named count by kind: a Pro / Argon / Ultra model 4, a Lite one 0.25, any other 1; Flex inference halves it |
+| `MENTION_TOKEN_PRICES` | Optional. Prices of models not in `src/bot/utils/geminiPrices.js` (or new prices), in USD per million tokens, as JSON: `{"gemini-5-flash": {"input": 1, "cached": 0.1, "output": 5}}`. A model with no price counts as Gemini 3.8 Flash |
 | `MENTION_GUILD_DAILY_LIMIT_OTHER` | Optional. Mentions a day for a whole server other than the owner's (default 30); 0 turns it off |
 | `AI_BACKGROUND_CONCURRENCY` | Optional. How many background AI jobs (video and archive summaries, emoji descriptions, stream blurbs) run at once on a worker (default 3) |
 | `EVENT_GAME_MENTIONS` | Optional. `true` puts each game's Discord game mention in a stream's event too (off by default: check that your server's events show it as the game) |

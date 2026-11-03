@@ -1063,9 +1063,9 @@ describe('mention → event / forum post (integration)', () => {
     global.fetch = (fetch => async (...args) => { const res = await fetch(...args); const data = await res.json(); return { ok: true, json: async () => ({ ...data, usageMetadata: usage }) } })(global.fetch)
     await mentionEvent.handle(mention(channel, '<@BOT> こんにちは'))
     assert.equal(replies[0].state.content, 'やあ')
-    // 2,000 not cached + 1,000 cached at a tenth + 300 out + 700 thinking.
-    assert.equal(quota.get(`mention-tokens:5h:${REQUESTER}`), 4000)
-    assert.equal(quota.get(`mention-tokens:week:${REQUESTER}`), 4000)
+    // On Gemini 3.8 Flash's prices: 2,000 not cached + 10,000 cached at a tenth + 1,000 answer and thinking at five times.
+    assert.equal(quota.get(`mention-tokens:5h:${REQUESTER}`), 8000)
+    assert.equal(quota.get(`mention-tokens:week:${REQUESTER}`), 8000)
 
     // The five hours are used up: refused, in any server, with when it resets (5 hours after the first use).
     quota.set(`mention-tokens:5h:${REQUESTER}`, WINDOWS[0].fallback)
@@ -1085,7 +1085,7 @@ describe('mention → event / forum post (integration)', () => {
     assert.equal(replies[3].state.content, 'どうも')
   })
 
-  test('the stronger model\'s tokens count for more against the limit, Flex for half', async (t) => {
+  test('the stronger model\'s tokens count by its price against the limit, Flex for half', async (t) => {
     t.mock.method(global.logger, 'info', () => {})
     const { channel, replies } = createChannel()
     const meta = { promptTokenCount: 1000, candidatesTokenCount: 0 }
@@ -1096,8 +1096,8 @@ describe('mention → event / forum post (integration)', () => {
     })
     await mentionEvent.handle(mention(channel, '<@BOT> 長い話を書いて'))
     assert.equal(replies[0].state.content, '書いたよ')
-    // 1,000 from the reply model, 1,000 × 4 (Argon) ÷ 2 (Flex).
-    assert.equal(quota.get(`mention-tokens:5h:${REQUESTER}`), 3000)
+    // 1,000 from the reply model; 1,000 at Argon's $2 (against $0.75), halved for Flex.
+    assert.equal(quota.get(`mention-tokens:5h:${REQUESTER}`), 2333)
   })
 
   test('outside the owner\'s server, the whole server has 30 mentions a day; the bot\'s developers have no token limit', async () => {

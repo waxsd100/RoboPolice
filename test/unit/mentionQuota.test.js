@@ -13,21 +13,19 @@ describe('mentionQuota', () => {
   let counts
   beforeEach(() => { counts = installQuotaStore() })
   afterEach(() => {
-    for (const name of ['MENTION_TOKEN_WEIGHTS', 'MENTION_TOKEN_LIMIT_5H', 'MENTION_TOKEN_LIMIT_WEEK', 'MENTION_GUILD_DAILY_LIMIT_OTHER', 'OWNER_GUILD_IDS', 'CREATOR_IDS']) delete process.env[name]
+    for (const name of ['MENTION_TOKEN_PRICES', 'MENTION_TOKEN_LIMIT_5H', 'MENTION_TOKEN_LIMIT_WEEK', 'MENTION_GUILD_DAILY_LIMIT_OTHER', 'OWNER_GUILD_IDS', 'CREATOR_IDS']) delete process.env[name]
   })
 
-  test('tokens count with cached prompt tokens at a tenth, weighted by what the model costs', () => {
+  test('a response counts by what it cost on Gemini\'s price list, in tokens of the usual model\'s input', () => {
+    const now = new Date('2026-11-03T12:00:00Z')
     const meta = { promptTokenCount: 12000, cachedContentTokenCount: 10000, candidatesTokenCount: 300, thoughtsTokenCount: 700 }
-    assert.equal(mentionQuota.costOf(meta, 'gemini-3.8-flash'), 4000)
-    assert.equal(mentionQuota.costOf(meta, 'gemini-4-argon'), 16000, 'a stronger model counts for more')
-    assert.equal(mentionQuota.costOf(meta, 'gemini-4-argon', { flex: true }), 8000, 'Flex inference for half')
-    assert.equal(mentionQuota.costOf(meta, 'gemini-3.5-flash-lite'), 1000, 'a lighter one for less')
+    // 2,000 × $0.75 + 10,000 × $0.075 (cached) + 1,000 × $3.75 (answer and thinking), in $0.75 tokens.
+    assert.equal(mentionQuota.costOf(meta, 'gemini-3.8-flash', { now }), 8000)
+    assert.equal(mentionQuota.costOf(meta, 'gemini-4-argon', { now }), 20000, '$2 / $0.10 / $10')
+    assert.equal(mentionQuota.costOf(meta, 'gemini-4-argon', { now, flex: true }), 10000, 'Flex inference for half')
+    assert.equal(mentionQuota.costOf(meta, 'gemini-4-argon', { now: new Date('2026-12-01T00:00:00Z') }), 40000, 'from the date its price changes')
+    assert.equal(Math.round(mentionQuota.costOf(meta, 'gemini-3.5-flash-lite', { now })), 4533, 'a cheaper model for less')
     assert.equal(mentionQuota.costOf(null, 'gemini-3.8-flash'), 0)
-    process.env.MENTION_TOKEN_WEIGHTS = 'gemini-4-argon=6, gemini-3.8-flash = 1.5, broken, x=abc'
-    assert.equal(mentionQuota.weightOf('gemini-4-argon'), 6)
-    assert.equal(mentionQuota.weightOf('gemini-3.8-flash'), 1.5)
-    assert.equal(mentionQuota.weightOf('gemini-9-pro'), 4, 'by kind when not named')
-    assert.equal(mentionQuota.weightOf('x'), 1)
   })
 
   test('per user across servers: 300,000 tokens in five hours from the first use, then refused until it resets', async () => {
