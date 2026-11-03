@@ -36,8 +36,13 @@ describe('/youtube', () => {
     process.env.OWNER_GUILD_IDS = '100'
     store = installYouTubeStore()
     global.bot = { user: { id: 'BOT' } }
+    // Summarized right away here; the Batch API has its own tests below.
+    process.env.VIDEO_SUMMARY_BATCH = 'false'
   })
-  afterEach(() => { delete process.env.OWNER_GUILD_IDS })
+  afterEach(() => {
+    delete process.env.OWNER_GUILD_IDS
+    delete process.env.VIDEO_SUMMARY_BATCH
+  })
 
   test('is limited to members who can manage the server', () => {
     assert.deepEqual(command.userPerms, ['manageGuild'])
@@ -245,5 +250,128 @@ describe('/youtube', () => {
     const off = interaction('liveevents', [{ name: 'enabled', value: false }])
     await command.func(off)
     assert.match(off.replies[0].content, /やめました/)
+  })
+
+  describe('summarize with the Batch API', () => {
+    const summaryBatch = require('../../src/bot/modules/summaryBatch')
+    const batchStore = require('../../src/db/interfaces/postgres/summaryBatches')
+    let batches
+    beforeEach(() => {
+      delete process.env.VIDEO_SUMMARY_BATCH
+      require('../helpers/fakes').configureGateway()
+      batches = []
+      batchStore.saveBatch = async b => { batches.push({ name: b.name, guild_id: b.guildID, channel_id: b.channelID, requester_id: b.requesterID, video_ids: b.videoIDs, model: b.model }) }
+      batchStore.runningBatches = async guildID => batches.filter(b => !guildID || b.guild_id === guildID)
+      batchStore.deleteBatch = async name => { batches = batches.filter(b => b.name !== name) }
+    })
+
+    // A fake Gemini that takes a batch, says it is running once, then gives `results`.
+    function fakeBatchApi (results) {
+      const requests = []
+      let polls = 0
+      global.fetch = async (url, init = {}) => {
+        // The YouTube API, for a video's length: an hour.
+        if (url.includes('googleapis.com/youtube')) return { ok: true, json: async () => ({ items: [{ id: 'x', snippet: { title: 't', publishedAt: '2026-01-01T00:00:00Z' }, contentDetails: { duration: 'PT1H' } }] }) }
+        requests.push({ url, method: init.method || 'GET', body: init.body ? JSON.parse(init.body) : null })
+        if (url.endsWith(':generateContent')) return { ok: true, json: async () => ({ candidates: [{ content: { parts: [{ text: `・すぐの要約 ${requests.length}` }] } }] }) }
+        if (url.endsWith(':batchGenerateContent')) return { ok: true, json: async () => ({ name: 'batches/b1', metadata: { state: 'BATCH_STATE_PENDING' } }) }
+        if (url.endsWith('/batches/b1')) {
+          polls++
+          if (polls === 1) return { ok: true, json: async () => ({ name: 'batches/b1', metadata: { state: 'BATCH_STATE_RUNNING' } }) }
+          return { ok: true, json: async () => ({ name: 'batches/b1', metadata: { state: 'BATCH_STATE_SUCCEEDED' }, response: { inlinedResponses: { inlinedResponses: results } } }) }
+        }
+        throw new Error(`unexpected ${url}`)
+      }
+      return requests
+    }
+    const answer = (key, text) => ({ metadata: { key }, response: { candidates: [{ content: { parts: [{ text }] } }], usageMetadata: { promptTokenCount: 10 } } })
+
+    test('the newest and short videos are summarized at once on Flex; the rest go to Gemini as one batch, stored and told when done', async (t) => {
+      t.mock.method(global.logger, 'info', () => {})
+      store.knowledge[100] = {
+        channel: { channel_id: UC, title: 'のばまんch' },
+        videos: [
+          { video_id: 'newestvideo', title: '最新', url: 'https://youtu.be/newestvideo', duration: 'PT40M' },
+          { video_id: 'longvideo01', title: '一', url: 'https://youtu.be/longvideo01', duration: 'PT2H' },
+          { video_id: 'shortvideo1', title: 'ショート', url: 'https://youtu.be/shortvideo1', duration: 'PT45S' },
+          { video_id: 'longvideo02', title: '二', url: 'https://youtu.be/longvideo02', duration: 'PT1H' }
+        ]
+      }
+      const requests = fakeBatchApi([answer('longvideo02', '・二の要約'), { metadata: { key: 'longvideo01' }, error: { message: 'internal' } }])
+      const posted = []
+      global.bot.createMessage = async (channelID, message) => { posted.push({ channelID, ...message }) }
+      const it = interaction('summarize', [{ name: 'count', value: 4 }])
+      it.channel = { id: '201' }
+      it.member = { id: '1', user: { id: '1' } }
+      await command.func(it)
+      const sent = requests.find(r => r.url.endsWith(':batchGenerateContent'))
+      assert.match(sent.url, /models\/gemini-3\.8-flash:batchGenerateContent$/)
+      const inline = sent.body.batch.input_config.requests.requests
+      assert.deepEqual(inline.map(r => r.metadata.key), ['longvideo01', 'longvideo02'], 'only the long, older ones wait')
+      assert.equal(inline[0].request.contents[0].parts[0].fileData.fileUri, 'https://www.youtube.com/watch?v=longvideo01')
+      const quick = requests.filter(r => r.url.endsWith(':generateContent'))
+      assert.deepEqual(quick.map(r => r.body.contents[0].parts[0].fileData.fileUri).sort(), ['https://www.youtube.com/watch?v=newestvideo', 'https://www.youtube.com/watch?v=shortvideo1'])
+      assert.ok(quick.every(r => r.body.serviceTier === 'flex'), 'on Flex')
+      assert.match(it.replies.at(-1).content, /^2 本の動画の要約を、AI にまとめて依頼しました（Batch API[\s\S]*\n2\/2 本の動画を要約しました。/)
+      assert.ok(store.summaries[100].newestvideo && store.summaries[100].shortvideo1)
+      assert.deepEqual(batches.map(b => [b.name, b.channel_id, b.requester_id]), [['batches/b1', '201', '1']])
+
+      const again = interaction('summarize', [{ name: 'count', value: 4 }])
+      again.channel = { id: '201' }
+      await command.func(again)
+      assert.match(again.replies.at(-1).content, /前にまとめて依頼した要約がまだ終わっていません/)
+      assert.equal(requests.filter(r => r.url.endsWith(':batchGenerateContent')).length, 1)
+
+      await summaryBatch.checkAll()
+      assert.equal(posted.length, 0, 'still running')
+      await summaryBatch.checkAll()
+      assert.equal(store.summaries[100].longvideo02, '・二の要約')
+      assert.equal(store.summaries[100].longvideo01, undefined)
+      assert.equal(posted[0].channelID, '201')
+      assert.match(posted[0].content, /^<@1> 1\/2 本の動画を要約しました。[\s\S]*⚠️ https:\/\/youtu\.be\/longvideo01 : [\s\S]*✅ <https:\/\/youtu\.be\/longvideo02>/)
+      assert.deepEqual(posted[0].allowedMentions, { users: ['1'] })
+      assert.equal(batches.length, 0, 'done with')
+    })
+
+    test('one video by its link: a stored summary is shown at once, a new one goes in a batch and is shown when done', async () => {
+      const requests = fakeBatchApi([answer('dQw4w9WgXcQ', '・告知あり')])
+      const posted = []
+      global.bot.createMessage = async (channelID, message) => { posted.push({ channelID, ...message }) }
+      const it = interaction('summarize', [{ name: 'url', value: 'https://youtu.be/dQw4w9WgXcQ' }])
+      it.channel = { id: '201' }
+      await command.func(it)
+      assert.match(it.replies.at(-1).content, /^1 本の動画の要約を、AI にまとめて依頼しました/)
+      assert.equal(requests.length, 1)
+      await summaryBatch.checkAll()
+      await summaryBatch.checkAll()
+      assert.match(posted[0].content, /動画を要約しました。[\s\S]*https:\/\/www\.youtube\.com\/watch\?v=dQw4w9WgXcQ\n・告知あり$/)
+
+      const cached = interaction('summarize', [{ name: 'url', value: 'https://youtu.be/dQw4w9WgXcQ' }])
+      await command.func(cached)
+      assert.match(cached.replies.at(-1).content, /^保存済みの要約です/)
+      assert.equal(requests.length, 3, 'no new batch for a stored summary')
+    })
+
+    test('one short video by its link is summarized at once on Flex', async () => {
+      store.knowledge[100] = { channel: { channel_id: UC, title: 'のばまんch' }, videos: [{ video_id: 'newestvideo', title: '最新', url: 'https://youtu.be/newestvideo', duration: 'PT1H' }, { video_id: 'shrt1234567', title: 'ショート', url: 'https://youtu.be/shrt1234567', duration: 'PT30S' }] }
+      const requests = fakeBatchApi([])
+      const it = interaction('summarize', [{ name: 'url', value: 'https://youtu.be/shrt1234567' }])
+      await command.func(it)
+      assert.equal(requests.length, 1)
+      assert.match(requests[0].url, /:generateContent$/)
+      assert.equal(requests[0].body.serviceTier, 'flex')
+      assert.match(it.replies.at(-1).content, /^要約しました。/)
+    })
+
+    test('a batch that failed at Gemini is reported and dropped', async (t) => {
+      t.mock.method(global.logger, 'warn', () => {})
+      batches.push({ name: 'batches/b9', guild_id: '100', channel_id: '201', requester_id: null, video_ids: ['v1'], model: 'gemini-3.8-flash' })
+      global.fetch = async () => ({ ok: true, json: async () => ({ name: 'batches/b9', metadata: { state: 'BATCH_STATE_EXPIRED' } }) })
+      const posted = []
+      global.bot.createMessage = async (channelID, message) => { posted.push(message) }
+      await summaryBatch.checkAll()
+      assert.match(posted[0].content, /できませんでした: Gemini の処理が expired で終わりました/)
+      assert.equal(batches.length, 0)
+    })
   })
 })
