@@ -877,6 +877,16 @@ describe('mention → event / forum post (integration)', () => {
     }
   })
 
+  test('chat: the request says who asked and who the mentions in it are', async () => {
+    const { channel } = createChannel()
+    const requests = installGemini([[call('submit_chat_reply', { text: 'いい人だよ' })]])
+    await mentionEvent.handle(mention(channel, '<@BOT> <@1> ってどんな人？'))
+    const prompt = requests[0].body.contents[0].parts[0].text
+    // (The fake server has no members to look up; the unit tests cover the names of those named.)
+    assert.match(prompt, /## 依頼した人と、依頼や会話に出てくるメンバー（<@ID> は Discord のメンション）\n<untrusted source="members">\n- 依頼した人（このメッセージを書いた人）: [^\n]*ID: 1）\n<\/untrusted>/)
+    assert.match(requests[0].body.systemInstruction.parts[0].text, /話しかけてきたのは「依頼した人」の欄の人です/)
+  })
+
   test('chat: the tokens the reply used go under it in small grey text', async () => {
     const { channel, replies } = createChannel()
     let i = 0
