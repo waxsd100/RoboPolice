@@ -72,13 +72,19 @@ async function summarizeInBatch (interaction, videoIDs) {
 async function summarizeOne (interaction, url, force) {
   const guildID = interaction.guildID
   if (!parseVideoId(url)) return { content: 'YouTube の動画リンク（https://www.youtube.com/watch?v=… や https://youtu.be/…）を指定してください。' }
-  // A stored summary is shown at once; a new one goes in a batch.
-  if (summaryBatch.enabled() && (force || !await youtubeDB.getSummary(parseVideoId(url)))) return summarizeInBatch(interaction, [parseVideoId(url)])
+  // A stored summary is shown at once; a new one goes in a batch, unless it is a channel's newest or a
+  // short video: those are summarized at once on Flex inference.
+  let flex = false
+  if (summaryBatch.enabled() && (force || !await youtubeDB.getSummary(parseVideoId(url)))) {
+    if (!(await summaryBatch.quickVideoIDs(guildID, [parseVideoId(url)])).has(parseVideoId(url))) return summarizeInBatch(interaction, [parseVideoId(url)])
+    flex = true
+  }
   if (summarizing.has(guildID)) return { content: '別の要約を実行中です。終わってからもう一度お試しください。' }
   summarizing.add(guildID)
   try {
     const { videoID, summary, cached } = await summarizeVideo(guildID, url, {
       force,
+      flex,
       onStart: () => interaction.editOriginalMessage({ content: '動画の内容を要約しています…\n長い動画は数分かかります。' }).catch(() => {})
     })
     const head = cached
@@ -100,15 +106,28 @@ async function summarize (interaction, sub) {
   if (url) return summarizeOne(interaction, url.trim(), force)
   const guildID = interaction.guildID
   if (summarizing.has(guildID)) return { content: '別の要約を実行中です。終わってからもう一度お試しください。' }
-  const videos = await videosToSummarize(guildID, count, { force })
+  let videos = await videosToSummarize(guildID, count, { force })
   if (videos.length === 0) {
     return { content: force ? '要約できる動画がありません（配信中・配信予定のものは除きます）。' : '要約していない動画はありません（配信中・配信予定のものは除きます）。`force:True` で要約し直せます。' }
   }
-  if (summaryBatch.enabled()) return summarizeInBatch(interaction, videos.map(v => v.video_id))
+  // With batches: each channel's newest and short videos are summarized at once on Flex inference,
+  // the rest go in a batch.
+  let flex = false
+  let note = ''
+  if (summaryBatch.enabled()) {
+    const quick = await summaryBatch.quickVideoIDs(guildID, videos.map(v => v.video_id))
+    const later = videos.filter(v => !quick.has(v.video_id))
+    videos = videos.filter(v => quick.has(v.video_id))
+    if (later.length) note = (await summarizeInBatch(interaction, later.map(v => v.video_id))).content
+    if (videos.length === 0) return { content: note }
+    flex = true
+    if (note) await interaction.editOriginalMessage({ content: note }).catch(() => {})
+  }
   summarizing.add(guildID)
   try {
     const results = await summarizeLatest(guildID, videos, {
       force,
+      flex,
       onProgress: ({ done, total, running }) => interaction.editOriginalMessage({
         content: [
           `動画の内容を要約しています（完了 ${done}/${total}、${running.length} 本を同時に処理中）`,
@@ -125,7 +144,7 @@ async function summarize (interaction, sub) {
       ...results.filter(r => r.error).map(({ video, error }) => `⚠️ [${video.title}](<${video.url}>)（ID: \`${video.video_id}\`）: ${error}`),
       ...results.filter(r => !r.error).map(({ video }) => `✅ [${video.title}](<${video.url}>)`)
     ]
-    await finish(interaction, fitLines(head, lines))
+    await finish(interaction, fitLines(note ? `${note}\n${head}` : head, lines))
     return null
   } finally {
     summarizing.delete(guildID)

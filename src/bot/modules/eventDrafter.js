@@ -306,9 +306,13 @@ async function geminiSend (method, path, { timeoutMs = 30 * 1000 } = {}) {
 }
 
 // One POST to the Gemini API (`path` under v1beta) through the gateway, retrying HTTP 429.
-async function geminiPost (path, body, { timeoutMs = GEMINI_TIMEOUT_MS, purpose = 'other', model = '' } = {}) {
+// flex: Flex inference (serviceTier flex, half the price, queued for minutes at most): also retried
+// on HTTP 503 (no Flex capacity), then sent once at the standard tier unless
+// GEMINI_DEEP_FLEX_FALLBACK=false (Gemini does not do that by itself).
+async function geminiPost (path, body, { timeoutMs = GEMINI_TIMEOUT_MS, purpose = 'other', model = '', flex = false } = {}) {
   const url = gatewayURL(`google-ai-studio/v1beta/${path}`)
   const headers = geminiHeaders()
+  if (flex) body = { ...body, serviceTier: 'flex' }
 
   const usage = currentUsage()
   let res
@@ -321,7 +325,7 @@ async function geminiPost (path, body, { timeoutMs = GEMINI_TIMEOUT_MS, purpose 
       dispatcher: dispatcherFor(timeoutMs),
       body: JSON.stringify(body)
     })
-    if (res.status !== 429 || attempt === MAX_RETRIES) break
+    if ((res.status !== 429 && !(flex && res.status === 503)) || attempt === MAX_RETRIES) break
     const wait = retryDelayMs(res.headers?.get?.('retry-after'), attempt)
     await res.text().catch(() => {}) // let the connection be reused
     if (usage) {
@@ -329,6 +333,12 @@ async function geminiPost (path, body, { timeoutMs = GEMINI_TIMEOUT_MS, purpose 
       await usage.onWait(wait)
     }
     await retryTimer.sleep(wait)
+  }
+  if (!res.ok && flex && [429, 503].includes(res.status) && process.env.GEMINI_DEEP_FLEX_FALLBACK !== 'false') {
+    await res.text().catch(() => {})
+    global.logger?.info(`[GEMINI]: No Flex capacity for ${model} (HTTP ${res.status}); asking at the standard tier`)
+    const { serviceTier, ...standard } = body
+    return geminiPost(path, standard, { timeoutMs, purpose, model })
   }
   if (!res.ok) {
     const text = (await res.text()).slice(0, 1000)

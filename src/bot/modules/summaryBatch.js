@@ -6,6 +6,7 @@
 // VIDEO_SUMMARY_BATCH=false summarizes right away instead, as before.
 const { geminiRequest, geminiSend, GeminiError } = require('./eventDrafter')
 const videoSummary = require('./videoSummary')
+const youtubeDB = require('../../db/interfaces/postgres/youtube')
 const store = require('../../db/interfaces/postgres/summaryBatches')
 const { recordTokens } = require('../utils/geminiUsage')
 const { linkTimestamps } = require('../utils/youtube')
@@ -15,6 +16,37 @@ const MAX_SHOWN_SUMMARY = 1500
 
 function enabled () {
   return process.env.VIDEO_SUMMARY_BATCH !== 'false'
+}
+
+// Videos not worth waiting a day for are summarized at once instead, on Flex inference (half the
+// price too, queued for minutes at most): the newest video of each channel, and short ones (at
+// most VIDEO_SUMMARY_FLEX_SECONDS long, default 300: Shorts and clips).
+const DEFAULT_SHORT_SECONDS = 300
+function shortSeconds () {
+  const n = Number(process.env.VIDEO_SUMMARY_FLEX_SECONDS)
+  return process.env.VIDEO_SUMMARY_FLEX_SECONDS && Number.isFinite(n) && n >= 0 ? n : DEFAULT_SHORT_SECONDS
+}
+
+// Which of `videoIDs` are summarized at once (a Set).
+async function quickVideoIDs (guildID, videoIDs) {
+  const knowledge = await youtubeDB.getKnowledge(guildID).catch(() => null)
+  const newest = new Set()
+  const seen = new Set()
+  for (const v of knowledge?.videos || []) { // newest first
+    if (['live', 'upcoming'].includes(v.live_status) || seen.has(v.channel_id)) continue
+    seen.add(v.channel_id)
+    newest.add(v.video_id)
+  }
+  const quick = new Set()
+  for (const id of videoIDs) {
+    if (newest.has(id)) {
+      quick.add(id)
+      continue
+    }
+    const seconds = await videoSummary.lengthOf(id).catch(() => null)
+    if (seconds && seconds <= shortSeconds()) quick.add(id)
+  }
+  return quick
 }
 
 // Sends the videos as one batch. Resolves to the batch's name.
@@ -141,4 +173,4 @@ function running (guildID) {
   return store.runningBatches(guildID)
 }
 
-module.exports = { enabled, submit, running, check, checkAll, collect, report, stateOf, resultsOf, startBatchWatcher }
+module.exports = { enabled, quickVideoIDs, submit, running, check, checkAll, collect, report, stateOf, resultsOf, startBatchWatcher }
