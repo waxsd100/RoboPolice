@@ -2,7 +2,7 @@
 // keeps the summary so the same video is never summarized twice. Only run when the
 // model decides it needs a video's contents (a video was linked, or a question is about what a
 // video says): it is far costlier than reading titles and descriptions.
-const { callGemini, DEFAULT_GEMINI_MODEL, GeminiError, lightModel, thinkingConfig } = require('./eventDrafter')
+const { callGemini, DEFAULT_GEMINI_MODEL, GeminiError, lightModel, thinkingConfig, withSafetySettings } = require('./eventDrafter')
 const youtubeDB = require('../../db/interfaces/postgres/youtube')
 const youtube = require('../utils/youtube')
 const { parseVideoId, durationSeconds } = youtube
@@ -72,7 +72,8 @@ function summaryRequest (videoID, prompt = PROMPT, clip = null) {
     // Gemini 3 thinks at high unless told: a summary needs little (VIDEO_SUMMARY_THINKING_LEVEL).
     generationConfig: { temperature: 0.2, mediaResolution: 'MEDIA_RESOLUTION_LOW', ...thinkingConfig(model, { setting: 'VIDEO_SUMMARY_THINKING_LEVEL', fallback: 'low' }) }
   }
-  return { model, body }
+  // The same safety filters as every other request (also in a batch, which does not go through callGemini).
+  return { model, body: withSafetySettings(model, body) }
 }
 
 // flex: on Flex inference (half the price, queued for up to about 15 minutes more).

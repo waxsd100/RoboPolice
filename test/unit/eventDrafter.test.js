@@ -143,6 +143,26 @@ describe('draft', () => {
     assert.equal(requests[0].dispatcher, undefined, 'ordinary calls keep fetch\'s default limits')
     assert.deepEqual(body.tools[0].functionDeclarations.map(d => d.name), ['lookup', 'think_deeper', 'submit_event_draft', 'submit_forum_post_draft', 'submit_chat_reply'])
     assert.equal(body.serviceTier, undefined, 'the standard tier')
+    assert.deepEqual(body.safetySettings, [
+      { category: 'HARM_CATEGORY_HARASSMENT', threshold: 'OFF' },
+      { category: 'HARM_CATEGORY_HATE_SPEECH', threshold: 'OFF' },
+      { category: 'HARM_CATEGORY_SEXUALLY_EXPLICIT', threshold: 'OFF' },
+      { category: 'HARM_CATEGORY_DANGEROUS_CONTENT', threshold: 'OFF' },
+      { category: 'HARM_CATEGORY_CIVIC_INTEGRITY', threshold: 'BLOCK_MEDIUM_AND_ABOVE' }
+    ], 'filters off but for civic integrity, at medium')
+  })
+
+  test('every request carries the safety settings, but image models and a request that sets its own', async () => {
+    const { callGemini, SAFETY_SETTINGS } = require('../../src/bot/modules/eventDrafter')
+    const { summaryRequest } = require('../../src/bot/modules/videoSummary')
+    const requests = installGemini([[{ text: 'a' }], [{ text: 'b' }], [{ text: 'c' }]])
+    await callGemini('gemini-3.5-flash-lite', { contents: [] })
+    await callGemini('gemini-3-pro-image', { contents: [] })
+    await callGemini('gemini-3.5-flash-lite', { contents: [], safetySettings: [] })
+    assert.deepEqual(requests[0].body.safetySettings, SAFETY_SETTINGS)
+    assert.equal(requests[1].body.safetySettings, undefined)
+    assert.deepEqual(requests[2].body.safetySettings, [])
+    assert.deepEqual(summaryRequest('dQw4w9WgXcQ').body.safetySettings, SAFETY_SETTINGS, 'also in a batch')
   })
 
   test('think_deeper hands the request over to the stronger model on Flex, from the start', async () => {
