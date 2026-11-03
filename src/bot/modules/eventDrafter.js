@@ -97,6 +97,7 @@ const SYSTEM_INSTRUCTION = [
   '',
   '## 調べ方',
   '- 計算・推論が多い依頼（込み入った比較・計算・推理・計画など）や、長い文章（記事・長いまとめ・詳しい解説など）を頼まれたときは、ほかのツールより先に think_deeper を呼ぶ（呼べるときだけ）。あいさつ・雑談・短い質問では呼ばない。',
+  '- 小説・物語・SS・脚本・歌詞・ポエムなどの創作を頼まれたときは、長さの指定がなくても長い文章の依頼として扱い、think_deeper を呼ぶ（一言ネタや短い大喜利は除く）。',
   '- サーバーの情報（チャンネル・ロール・サーバー絵文字・コミュニティの知識・YouTube チャンネル）は依頼と一緒に渡している。登録済みのイベント・動画の中身・wiki の詳しい内容など、それ以外は必要なときだけツールで調べる（雑談やあいさつに調べ物はいらない）。',
   '- 依頼メッセージが返信のときだけ、返信をたどった会話を渡している。その中の「あなた（BOT）」は、あなた自身がこれまでに送ったメッセージです。答えるのは最後の依頼メッセージで、会話は「それ」「さっきの」が何を指すかなど、話の流れをつかむために使う。前の自分の発言の話題・ネタ・口調・言い回しを引きずったり、同じことを言い直したりしない。相手が話題を変えたら新しい話題に答え、前の自分の発言が間違っていたら、それに合わせず正す。',
   '- 返信でない依頼は、それだけで完結した新しい話しかけとして答える。そのチャンネルでそれまでに話されていたことや、前に自分が言ったことを前提にしない。チャンネルのメッセージを読む（get_recent_messages・search_channel_history）のは、依頼がチャンネルの中身やこれまでの話をはっきり求めているときだけ（あいさつ・雑談のために読みに行かない）。読んだときも、話し方はそのチャンネルに合わせない。',
@@ -133,6 +134,7 @@ const SYSTEM_INSTRUCTION = [
   '- サーバーの情報に「このサーバーのノリ」があれば、選ばれた話し方（配信者として／BOT として）は保ちながら、言い回し・語尾・ツッコミの温度感をこのサーバーに合わせる。',
   '- 「このサーバーのこと」と「前に出た、依頼に近い発言」は、仲間として知っていること。話に合うときに身内ネタや出来事を自然に拾う（毎回ではなく、説明しすぎない）。古い出来事は前のこととして話す。',
   '- メンバーについて聞かれたら about_member で調べてから答える（足りなければ search_server_messages などで、その人の発言を探す）。',
+  '- 話しかけてきたのは「依頼した人」の欄の人です（返信の会話では「（依頼者）」の付いた人）。依頼や会話に出てくる <@ID> が誰かは、同じ欄の一覧で分かる。人を取り違えず、呼ぶときは表示名で呼ぶ。一覧にない人のことは about_member で調べる。',
   '',
   '## そのままでは書けない依頼',
   '- 小説・お話・ネタなどの依頼に、そのままでは書けない部分（露骨な性描写、窒息・自傷など危険な行為の具体的な描写や手順など）が含まれるときは、断るだけで終わらせない。その部分をぼかした版を代わりに書く（場面転換・暗示・「その夜は――」のようなフェードアウト・朝チュンなど）。',
@@ -203,7 +205,7 @@ const replyLengthOf = length => REPLY_LENGTHS[length] ? length : DEFAULT_REPLY_L
 // what stays the same from one request to the next (the server's setting and information) leads,
 // so a prompt cache can cover as much as possible, and what is new each time (the time, the
 // conversation, the request) follows.
-function buildPrompt ({ request, referenced, channelName, channelID, channelInfo = null, server, forum, images, edit, channels = [], replyLength = null, streamerPersona = true, now }) {
+function buildPrompt ({ request, referenced, channelName, channelID, channelInfo = null, server, forum, images, edit, channels = [], people = [], replyLength = null, streamerPersona = true, now }) {
   const lines = [
     '## 話し方（このサーバーの設定）',
     streamerPersona === false ? PERSONAS.bot : PERSONAS.streamer,
@@ -214,6 +216,8 @@ function buildPrompt ({ request, referenced, channelName, channelID, channelInfo
   if (server) lines.push('', '## このサーバーの情報（最新）', wrap('server', server))
   if (channels.length) lines.push('', '## 依頼や会話に出てくるチャンネル', wrap('channels', channels.join('\n')))
   lines.push('', `依頼されたチャンネル: ${channelInfo || `#${channelName}${channelID ? `（ID: ${channelID}）` : ''}`}`)
+  // Who asked and who the request names, so the reply knows who is who (names are the members' own).
+  if (people.length) lines.push('', '## 依頼した人と、依頼や会話に出てくるメンバー（<@ID> は Discord のメンション）', wrap('members', people.join('\n')))
   if (forum) lines.push('', `## 投稿先に指定されたフォーラム\n${forum.id}: ${forum.name}（フォーラムに投稿する場合はここに投稿する）`)
   if (edit) {
     const submit = edit.kind === 'event' ? SUBMIT_EVENT_DECLARATION.name : SUBMIT_FORUM_DECLARATION.name
@@ -542,7 +546,7 @@ function deepModel () {
 }
 const THINK_DEEPER_DECLARATION = {
   name: 'think_deeper',
-  description: '計算・推論が多い依頼や、長い文章を頼まれたときだけ、ほかのツールより先に呼ぶ。呼ぶと、ここからはより強いモデル（時間がかかる）が調べ直して答える。あいさつ・雑談・短い質問では呼ばない。',
+  description: '計算・推論が多い依頼や、長い文章（小説・物語・SS などの創作を含む）を頼まれたときだけ、ほかのツールより先に呼ぶ。呼ぶと、ここからはより強いモデル（時間がかかる）が調べ直して答える。あいさつ・雑談・短い質問では呼ばない。',
   parameters: { type: 'OBJECT', properties: { reason: { type: 'STRING', description: 'なぜ強いモデルが要るか（短く）' } }, required: ['reason'] }
 }
 
@@ -710,7 +714,7 @@ async function draft ({ request, referenced, channelName, channelID, server, for
       ]
     : []
   const conversation = {
-    contents: [{ role: 'user', parts: [{ text: buildPrompt({ request, referenced, channelName, channelID, channelInfo: channelID ? eventTools().requestChannelInfo(channelID, guild) : null, server, forum, images, edit, channels: member ? eventTools().namedChannels([request, referenced?.text], guild, member) : [], replyLength, streamerPersona, now }) }, ...shown] }],
+    contents: [{ role: 'user', parts: [{ text: buildPrompt({ request, referenced, channelName, channelID, channelInfo: channelID ? eventTools().requestChannelInfo(channelID, guild) : null, server, forum, images, edit, channels: member ? eventTools().namedChannels([request, referenced?.text], guild, member) : [], people: member ? eventTools().namedMembers([request, referenced?.text], guild, member) : [], replyLength, streamerPersona, now }) }, ...shown] }],
     guild,
     member,
     tools,

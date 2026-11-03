@@ -5,6 +5,7 @@
 // the channel's feed and stays open for UPLOAD_EVENT_HOURS (default 24), so members see the new
 // video in the server's events; then it is ended. Only uploads made in the last
 // UPLOAD_EVENT_MAX_AGE_HOURS (default 6) count, so turning this on does not post old videos.
+// Shorts (videos at most UPLOAD_EVENT_SHORTS_SECONDS long, default 180) get no event.
 //
 // A stream's event follows it: made when the stream is scheduled (or, unscheduled, when it starts),
 // moved when the start time changes, started when it goes live, kept open while it runs, and ended
@@ -16,7 +17,7 @@
 // up to 50).
 const cluster = require('cluster')
 const youtubeDB = require('../../db/interfaces/postgres/youtube')
-const { fetchVideos } = require('../utils/youtube')
+const { fetchVideos, durationSeconds } = require('../utils/youtube')
 const { feedVideoIds } = require('./youtubeSync')
 const urlFetcher = require('../utils/urlFetcher')
 const { cropTo, SIZES } = require('../utils/imageCrop')
@@ -34,6 +35,19 @@ const EXTEND_BY_MS = 60 * 60 * 1000
 const STATUS = { scheduled: 1, active: 2, completed: 3, canceled: 4 }
 const DEFAULT_UPLOAD_EVENT_HOURS = 24
 const DEFAULT_UPLOAD_MAX_AGE_HOURS = 6
+// YouTube Shorts are at most 3 minutes long.
+const DEFAULT_SHORTS_SECONDS = 180
+
+function shortsSeconds () {
+  const n = Number(process.env.UPLOAD_EVENT_SHORTS_SECONDS)
+  return process.env.UPLOAD_EVENT_SHORTS_SECONDS && Number.isFinite(n) && n >= 0 ? n : DEFAULT_SHORTS_SECONDS
+}
+
+// Whether the upload is a Short (or as short): known length at most shortsSeconds().
+function isShort (video) {
+  const seconds = durationSeconds(video?.duration)
+  return seconds !== null && seconds !== undefined && seconds <= shortsSeconds()
+}
 
 function hoursSetting (name, fallback) {
   const n = Number(process.env[name])
@@ -176,9 +190,11 @@ async function follow (guild, video, record, now = new Date()) {
 }
 
 // A new upload's event: started at once, open for UPLOAD_EVENT_HOURS. Null for one too old to announce.
+// A Short gets none; it is recorded as passed over ('gone', no event), so it is not looked at again.
 async function announceUpload (guild, video, now = new Date()) {
   const published = new Date(video.publishedAt || 0)
   if (now - published > hoursSetting('UPLOAD_EVENT_MAX_AGE_HOURS', DEFAULT_UPLOAD_MAX_AGE_HOURS) * 3600 * 1000) return null
+  if (isShort(video)) return { eventID: '', status: 'gone', scheduledStart: null, scheduledEnd: null, kind: 'upload' }
   const start = new Date(now.getTime() + START_MARGIN_MS)
   const { eventID, scheduledEnd } = await createEvent(guild, video, start, { upload: true, length: hoursSetting('UPLOAD_EVENT_HOURS', DEFAULT_UPLOAD_EVENT_HOURS) * 3600 * 1000 })
   await setStatus(guild, eventID, 'active')
@@ -322,4 +338,4 @@ function startWatcher () {
   return setInterval(() => checkAll(), seconds * 1000)
 }
 
-module.exports = { startWatcher, checkAll, checkGuild, checkChannel, follow, announceUpload, endUpload, summarizeArchives, eventDescription, STATUS }
+module.exports = { isShort, startWatcher, checkAll, checkGuild, checkChannel, follow, announceUpload, endUpload, summarizeArchives, eventDescription, STATUS }
