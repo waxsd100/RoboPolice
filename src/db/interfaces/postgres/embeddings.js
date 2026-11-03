@@ -42,7 +42,7 @@ async function saveEmbeddingBatch (name, model, messageIDs) {
   const client = await pool.getPostgresClient()
   try {
     await client.query('BEGIN')
-    await client.query('INSERT INTO embedding_batches (name, model) VALUES ($1, $2)', [name, model])
+    await client.query('INSERT INTO embedding_batches (name, model_id) VALUES ($1, $2)', [name, await modelId(model)])
     await client.query('INSERT INTO embedding_batch_messages (message_id, batch_name) SELECT unnest($1::text[]), $2 ON CONFLICT DO NOTHING', [messageIDs, name])
     await client.query('COMMIT')
   } catch (e) {
@@ -56,9 +56,10 @@ async function saveEmbeddingBatch (name, model, messageIDs) {
 // [{ name, model, message_ids }], oldest first.
 async function runningEmbeddingBatches () {
   const rows = await pool.query(
-    `SELECT b.name, b.model, coalesce(array_agg(m.message_id) FILTER (WHERE m.message_id IS NOT NULL), '{}') AS message_ids
-     FROM embedding_batches b LEFT JOIN embedding_batch_messages m ON m.batch_name = b.name
-     GROUP BY b.name, b.model, b.created_at ORDER BY b.created_at`)
+    `SELECT b.name, em.name AS model, coalesce(array_agg(m.message_id) FILTER (WHERE m.message_id IS NOT NULL), '{}') AS message_ids
+     FROM embedding_batches b JOIN embedding_models em ON em.id = b.model_id
+     LEFT JOIN embedding_batch_messages m ON m.batch_name = b.name
+     GROUP BY b.name, em.name, b.created_at ORDER BY b.created_at`)
   return rows.rows
 }
 

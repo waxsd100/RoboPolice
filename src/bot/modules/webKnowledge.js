@@ -2,7 +2,7 @@
 // groups the streamer belongs to. KNOWLEDGE_TOPICS names them (comma-separated or one per line,
 // each with what it is, e.g. "ぽみそしる（のばまんが所属する実況者グループ）"). Each is looked up
 // with Gemini's Google Search once every WEB_REFRESH_HOURS (default 168, a week) and written as a
-// page of the web knowledge tables (web_pages / web_sections / web_facts), whose knowledge is then
+// page of the knowledge tables as source 'web', whose knowledge is then
 // taken out and embedded with the wiki's (wikiKnowledge.js), so it is searched with search_wiki.
 //
 // What search finds can be out of date or wrong; the page says when it was looked up and lists

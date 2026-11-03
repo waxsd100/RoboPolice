@@ -160,8 +160,9 @@ server emoji of that name.
 With `WIKI_URLS` set, the community's wiki is knowledge too (`src/bot/modules/wikiKnowledge.js`):
 the worker owning shard 0 reads every page of it once a week (one page a second, only the `/d/`
 pages its robots.txt allows), splits each at its headings, and stores the parts with embeddings in
-`wiki_pages` and `wiki_sections`. Gemini then takes knowledge out of each part, as structured
-JSON, into `wiki_facts`: characters (name, other names and readings, who they are and how they
+`knowledge_pages` and `knowledge_sections` (as source `wiki`; images in `knowledge_section_images`).
+Gemini then takes knowledge out of each part, as structured JSON, into `knowledge_facts` (other names
+in `knowledge_fact_aliases`): characters (name, other names and readings, who they are and how they
 look), quotes (the words, and who said them when) and terms (running jokes, the community's words
 and what they mean), each embedded on its own; a part is read again only when it changes. The model
 searches all of it with `search_wiki` (the knowledge first, then the pages for detail), and uses its quotes now and then as the streamer would. It is fans' writing, so
@@ -171,10 +172,9 @@ With `TWITTER_ACCOUNTS` set, the streamer's own X posts are knowledge too
 (`src/bot/modules/twitterKnowledge.js`). They are read through FxTwitter's public API
 (api.fxtwitter.com), not X's: the first time up to `TWITTER_MAX_PAGES` pages back, then every
 `TWITTER_REFRESH_HOURS` until posts already stored, one request every 2 seconds, a failed request
-tried again twice. Reposts of others are left out. Posts are stored in `x_posts`, and each
-month's posts are written as one page of the X knowledge tables `x_pages` / `x_sections` /
-`x_facts` (one line per post with its date and URL; the same shape as the wiki's tables, kept apart
-from them), so knowledge is taken out of them and they are searched with `search_wiki` together
+tried again twice. Reposts of others are left out. Posts are stored in `x_posts` (media URLs in `x_post_media`), and each
+month's posts are written as one page of the knowledge tables as source `x` (one line per post with
+its date and URL), so knowledge is taken out of them and they are searched with `search_wiki` together
 with the wiki; the
 model gives a post's URL when it mentions one. FxTwitter is a third-party service and may change or
 stop; nothing stored is lost then.
@@ -186,8 +186,9 @@ history), and nobody else's. The worker hosting the owner's server reads each su
 back to its start once, 100 messages a request, one request every `DISCORD_HISTORY_DELAY_MS`
 (default 1000); where it got to is kept in `discord_backfill`, so a restart goes on from there. New,
 edited and deleted messages are followed after that (a deleted one leaves the knowledge). Messages
-are stored in `discord_posts`, and each account's messages of a month become one page of
-`discord_pages` / `discord_sections` / `discord_facts` (one line per message with its date, channel
+are stored in `discord_posts` (channel and author names once each in `discord_channels` and
+`discord_users`), and each account's messages of a month become one page of the knowledge tables
+as source `discord` (one line per message with its date, channel
 and link), so knowledge is taken out of them and they are searched with `search_wiki` together with
 the wiki and the X posts; the model gives a message's link when it mentions one. Threads are not read.
 
@@ -195,8 +196,8 @@ With `KNOWLEDGE_TOPICS` set (comma-separated or one per line, each with what it 
 `ぽみそしる（のばまんが所属する実況者グループ）`), topics the wiki and the posts say little about are
 looked up on the web (`src/bot/modules/webKnowledge.js`): Gemini searches each with Google Search
 once every `WEB_REFRESH_HOURS` (default 168) and sums up what it found (members, when it started,
-what it does, official links) with its sources and the date. That is stored in `web_pages` /
-`web_sections` / `web_facts`, its knowledge taken out and searched with `search_wiki` like the rest;
+what it does, official links) with its sources and the date. That is stored in the knowledge tables as
+source `web`, its knowledge taken out and searched with `search_wiki` like the rest;
 the model says it is what was found as of that date, not certain fact.
 
 Each emoji is described once from its image and name by Gemini (what it shows, when to use it) and
