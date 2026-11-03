@@ -22,6 +22,23 @@ describe('messageNoise', () => {
     assert.equal(embeddableText('すごーーーーーーい配信だった'), 'すごーーい配信だった')
   })
 
+  test('commands to bots are left out; markdown and Japanese that start with a mark are not commands', () => {
+    for (const text of ['!rank', '!rank <@308674858781245440>', '/roll 1d6', '%help', '$daily', '.play 夜に駆ける', '?ban someone']) {
+      assert.equal(embeddableText(text), '', JSON.stringify(text))
+    }
+    process.env.GLOBAL_BOT_PREFIX = 'rp!'
+    try {
+      assert.equal(embeddableText('rp!stats please'), '')
+    } finally {
+      delete process.env.GLOBAL_BOT_PREFIX
+    }
+    assert.equal(embeddableText('> 引用した明日の配信の話'), '> 引用した明日の配信の話')
+    assert.equal(embeddableText('- ホラーゲームやりたい'), '- ホラーゲームやりたい')
+    assert.equal(embeddableText('...明日の配信たのしみ'), '..明日の配信たのしみ', 'drawn out, but kept')
+    assert.equal(embeddableText('？明日の配信は何時から'), '？明日の配信は何時から')
+    assert.equal(embeddableText('!!!明日の配信たのしみ'), '!!明日の配信たのしみ')
+  })
+
   test('numbers are not drawn-out letters', () => {
     assert.equal(embeddableText('10000円のガチャ'), '10000円のガチャ')
   })

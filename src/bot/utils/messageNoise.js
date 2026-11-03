@@ -13,10 +13,22 @@ function minChars () {
 // Laughter and its like, whatever the length: www, ｗｗ, 草, 笑.
 const LAUGHTER = /^[wWｗＷ草笑]+$/u
 
+// A command to some bot: a prefix (! / % $ . ? or this bot's GLOBAL_BOT_PREFIX) right before a
+// word, such as !rank, /roll, %help, .play 曲名, ?ban. Markdown is not: '> 引用', '- 項目' have a
+// space after the mark, '~~消し~~' is not a prefix here, and '...' or '？' are not either.
+const COMMAND_PREFIXES = '!/%$.?'
+function isCommand (text) {
+  const prefixes = [...COMMAND_PREFIXES, process.env.GLOBAL_BOT_PREFIX].filter(Boolean)
+  const t = String(text || '').trim()
+  return prefixes.some(p => t.startsWith(p) && /^[a-z][\w-]*/i.test(t.slice(p.length)))
+}
+
 // The text of a message as it is embedded, or '' for one not worth embedding.
 function embeddableText (text) {
   // 'None' is how a message with no text (only images, a sticker or an embed) is stored.
   if (String(text || '').trim() === 'None') return ''
+  // Commands to bots say nothing of the conversation.
+  if (isCommand(text)) return ''
   const s = String(text || '')
     .replace(/https?:\/\/\S+/g, ' ') // links
     .replace(/<a?:\w+:\d+>/g, ' ') // custom emojis
@@ -31,4 +43,4 @@ function embeddableText (text) {
   return s
 }
 
-module.exports = { embeddableText, minChars, DEFAULT_MIN_CHARS }
+module.exports = { embeddableText, isCommand, minChars, DEFAULT_MIN_CHARS }
