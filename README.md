@@ -593,6 +593,10 @@ the secrets if it leaks, so keep it only on the platform and delete it in the co
 | `GEMINI_API_KEY` | Optional when the key is stored in the gateway (BYOK); otherwise required for drafting from mentions |
 | `GEMINI_MODEL` | Optional. Defaults to `gemini-3.8-flash` (a fixed model rather than the `gemini-flash-latest` alias, so a cache is made for a known model and a new model is a choice) |
 | `GEMINI_THINKING_LEVEL` | Optional (default `high`; `minimal`, `low`, `medium` or `high`). How much Gemini 3 thinks before a mention reply or draft, billed as answer tokens. Not sent to older models |
+| `GEMINI_DEEP_MODEL` | Optional (default `gemini-4-argon`). The stronger model a mention is handed over to when it needs much reasoning or a long text: the reply model calls `think_deeper` first, and this model answers from the request on (it has no explicit cache, so requests go in full). Empty to turn it off |
+| `GEMINI_DEEP_FLEX` | Optional (default on). `false` asks `GEMINI_DEEP_MODEL` at the standard tier instead of Flex inference (half the price, but queued for up to about 15 minutes; the requester sees that it is thinking) |
+| `GEMINI_DEEP_FLEX_FALLBACK` | Optional (default on). Without Flex capacity (HTTP 429/503, after retries) the request is sent once at the standard tier, at the standard price. `false` reports the failure instead |
+| `GEMINI_DEEP_THINKING_LEVEL` | Optional (default `high`). How much `GEMINI_DEEP_MODEL` thinks |
 | `VIDEO_SUMMARY_THINKING_LEVEL` | Optional (default `low`). The same for video summaries, which need little thinking |
 | `GEMINI_LIGHT_THINKING_LEVEL` | Optional (default `low`). The same for work in the background (knowledge, emoji descriptions, blurbs, game links, server knowledge) |
 | `GEMINI_EXPLICIT_CACHE` | Optional. `false` stops caching the system instructions and tools (see below) |

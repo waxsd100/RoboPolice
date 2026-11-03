@@ -96,6 +96,7 @@ const SYSTEM_INSTRUCTION = [
   '- 依頼者が画像そのものを指示したとき（「背景を夜空にして」「この画像に差し替えて」など）は image_instruction に入れる。内容の修正のときも、画像の指示が新しく出たときだけ入れる。',
   '',
   '## 調べ方',
+  '- 計算・推論が多い依頼（込み入った比較・計算・推理・計画など）や、長い文章（記事・長いまとめ・詳しい解説など）を頼まれたときは、ほかのツールより先に think_deeper を呼ぶ（呼べるときだけ）。あいさつ・雑談・短い質問では呼ばない。',
   '- サーバーの情報（チャンネル・ロール・サーバー絵文字・コミュニティの知識・YouTube チャンネル）は依頼と一緒に渡している。登録済みのイベント・動画の中身・wiki の詳しい内容など、それ以外は必要なときだけツールで調べる（雑談やあいさつに調べ物はいらない）。',
   '- 依頼メッセージが返信のときだけ、返信をたどった会話を渡している。その中の「あなた（BOT）」は、あなた自身がこれまでに送ったメッセージです。答えるのは最後の依頼メッセージで、会話は「それ」「さっきの」が何を指すかなど、話の流れをつかむために使う。前の自分の発言の話題・ネタ・口調・言い回しを引きずったり、同じことを言い直したりしない。相手が話題を変えたら新しい話題に答え、前の自分の発言が間違っていたら、それに合わせず正す。',
   '- 返信でない依頼は、それだけで完結した新しい話しかけとして答える。そのチャンネルでそれまでに話されていたことや、前に自分が言ったことを前提にしない。チャンネルのメッセージを読む（get_recent_messages・search_channel_history）のは、依頼がチャンネルの中身やこれまでの話をはっきり求めているときだけ（あいさつ・雑談のために読みに行かない）。読んだときも、話し方はそのチャンネルに合わせない。',
@@ -485,15 +486,35 @@ function forgetCache (name) {
   for (const [key, c] of caches) if (c.name === name) caches.delete(key)
 }
 
-async function generate (contents, declarations, allowed = null) {
-  const model = process.env.GEMINI_MODEL || DEFAULT_GEMINI_MODEL
+// Requests that need much reasoning or a long text are answered by a stronger model
+// (GEMINI_DEEP_MODEL, by default gemini-4-argon; empty to turn this off), which the model hands
+// over to by calling think_deeper first. It runs on Flex inference (half the price, but queued
+// for up to about 15 minutes; GEMINI_DEEP_FLEX=false for the standard tier) and thinks at
+// GEMINI_DEEP_THINKING_LEVEL (default high). It has no explicit cache: requests go in full.
+const DEFAULT_DEEP_MODEL = 'gemini-4-argon'
+const DEEP_TIMEOUT_MS = 20 * 60 * 1000
+const DEEP_PROGRESS = 'じっくり考えています…（強いモデルで考えるため、数分かかることがあります）'
+function deepModel () {
+  return (process.env.GEMINI_DEEP_MODEL ?? DEFAULT_DEEP_MODEL).trim() || null
+}
+const THINK_DEEPER_DECLARATION = {
+  name: 'think_deeper',
+  description: '計算・推論が多い依頼や、長い文章を頼まれたときだけ、ほかのツールより先に呼ぶ。呼ぶと、ここからはより強いモデル（時間がかかる）が調べ直して答える。あいさつ・雑談・短い質問では呼ばない。',
+  parameters: { type: 'OBJECT', properties: { reason: { type: 'STRING', description: 'なぜ強いモデルが要るか（短く）' } }, required: ['reason'] }
+}
+
+async function generate (contents, declarations, allowed = null, { deep = false } = {}) {
+  const model = deep ? deepModel() : (process.env.GEMINI_MODEL || DEFAULT_GEMINI_MODEL)
   const prefix = {
     systemInstruction: { parts: [{ text: systemInstruction() }] },
     tools: [{ functionDeclarations: declarations }],
     // ANY: every turn must be a tool call, so the loop always ends in a submit_* call.
     toolConfig: { functionCallingConfig: { mode: 'ANY', ...(allowed ? { allowedFunctionNames: allowed } : {}) } }
   }
-  const generationConfig = { temperature: temperature(), ...thinkingConfig(model) }
+  const generationConfig = { temperature: temperature(), ...thinkingConfig(model, deep ? { setting: 'GEMINI_DEEP_THINKING_LEVEL', fallback: 'high' } : undefined) }
+  if (deep) {
+    return callGemini(model, { ...prefix, contents, generationConfig }, { purpose: 'mention-deep', timeoutMs: DEEP_TIMEOUT_MS, flex: process.env.GEMINI_DEEP_FLEX !== 'false' })
+  }
   // The last step, limited to submitting (allowed), has its own toolConfig: sent in full, since a
   // request that uses a cache cannot set one.
   const cache = allowed ? null : await cachedPrefix(model, prefix)
@@ -510,14 +531,28 @@ async function generate (contents, declarations, allowed = null) {
 
 // Runs the model with the read-only tools until it submits a draft, appending every turn to
 // `contents` so the conversation can be continued with a correction. Returns the submit call.
+// contents.deep: the conversation went over to the stronger model (think_deeper), so a correction
+// continues with it.
 async function runAgent (contents, tools, submits = SUBMIT_DECLARATIONS) {
-  const declarations = [...tools.declarations, ...submits]
+  const offered = deepModel() ? [THINK_DEEPER_DECLARATION] : []
+  const declarationsFor = () => [...tools.declarations, ...(contents.deep ? [] : offered), ...submits]
+  const start = contents.length
   const steps = maxSteps()
   for (let step = 0; step < steps; step++) {
     const last = step === steps - 1
     // The last step answers with what is known instead of failing: only a submit can be called.
     if (last && step > 0) contents[contents.length - 1].parts.push({ text: LAST_STEP_NOTE })
-    const content = await generate(contents, declarations, last ? submits.map(d => d.name) : null)
+    const content = await generate(contents, declarationsFor(), last ? submits.map(d => d.name) : null, { deep: !!contents.deep })
+    const handOver = !contents.deep && offered.length && content.parts.some(p => p.functionCall?.name === THINK_DEEPER_DECLARATION.name)
+    if (handOver) {
+      // The stronger model starts this turn again from the request: one model's thought
+      // signatures are not another's, so nothing of this model's turn goes with it.
+      contents.splice(start)
+      contents.deep = true
+      global.logger?.info(`[GEMINI]: Handing a request over to ${deepModel()}`)
+      await tools.progress?.(DEEP_PROGRESS)
+      continue
+    }
     // Echo the model turn back unchanged: newer models attach thought signatures to it.
     contents.push(content)
     const calls = content.parts.filter(p => p.functionCall).map(p => p.functionCall)
@@ -649,4 +684,4 @@ async function revise (conversation, correction) {
   return check(conversation, await runAgent(conversation.contents, conversation.tools, conversation.submits))
 }
 
-module.exports = { REPLY_LENGTHS, DEFAULT_REPLY_LENGTH, PERSONAS, thinkingConfig, cachedPrefix, caches, purgedFor, promptVersion, lightModel, draft, revise, MAX_STEPS, isConfigured, toScheduledEvent, callGemini, geminiRequest, geminiSend, retryTimer, DEFAULT_GEMINI_MODEL, ENTITY_TYPES, GeminiError }
+module.exports = { THINK_DEEPER_DECLARATION, deepModel, REPLY_LENGTHS, DEFAULT_REPLY_LENGTH, PERSONAS, thinkingConfig, cachedPrefix, caches, purgedFor, promptVersion, lightModel, draft, revise, MAX_STEPS, isConfigured, toScheduledEvent, callGemini, geminiRequest, geminiSend, retryTimer, DEFAULT_GEMINI_MODEL, ENTITY_TYPES, GeminiError }
