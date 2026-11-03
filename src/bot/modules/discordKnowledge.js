@@ -129,12 +129,14 @@ async function readChannel (guild, channel, { wait = delay(), getMessages = (id,
   let added = 0
   const months = new Set()
   for (;;) {
-    const batch = await getMessages(channel.id, { limit: PAGE_SIZE, ...(before ? { before } : {}) })
+    // A message Eris could not read comes back as null: left out, but counted for a full page.
+    const page = await getMessages(channel.id, { limit: PAGE_SIZE, ...(before ? { before } : {}) })
+    const batch = page.filter(Boolean)
     const posts = batch.filter(m => users().includes(m.author?.id)).map(m => toPost(m, guild, channel)).filter(Boolean)
     const fresh = await store.savePosts(posts)
     for (const p of fresh) months.add(monthKey(p))
     added += fresh.length
-    const done = batch.length < PAGE_SIZE
+    const done = page.length < PAGE_SIZE
     if (batch.length) before = batch.reduce((oldest, m) => BigInt(m.id) < BigInt(oldest) ? m.id : oldest, batch[0].id)
     await store.saveBackfill(guild.id, channel.id, before || null, done)
     if (done) break
