@@ -311,6 +311,22 @@ async function geminiSend (method, path, { timeoutMs = 30 * 1000 } = {}) {
   return method === 'DELETE' ? {} : res.json()
 }
 
+// A GET to the Gemini API (`path` under v1beta) whose response is read as it streams in (a batch's
+// results): resolves to the fetch Response, its body not yet read.
+async function geminiStream (path, { timeoutMs = 10 * 60 * 1000 } = {}) {
+  const res = await fetch(gatewayURL(`google-ai-studio/v1beta/${path}`), {
+    method: 'GET',
+    headers: geminiHeaders(),
+    signal: AbortSignal.timeout(timeoutMs),
+    dispatcher: dispatcherFor(timeoutMs)
+  })
+  if (!res.ok) {
+    const text = (await res.text()).slice(0, 300)
+    throw new GeminiError(`Gemini GET ${path} failed: HTTP ${res.status} ${text}`, `AI の呼び出しに失敗しました（HTTP ${res.status}）`, null, res.status)
+  }
+  return res
+}
+
 // One POST to the Gemini API (`path` under v1beta) through the gateway, retrying HTTP 429.
 // flex: Flex inference (serviceTier flex, half the price, queued for minutes at most): also retried
 // on HTTP 503 (no Flex capacity), then sent once at the standard tier unless
@@ -725,4 +741,4 @@ async function revise (conversation, correction) {
   return check(conversation, await runAgent(conversation.contents, conversation.tools, conversation.submits))
 }
 
-module.exports = { SAFETY_SETTINGS, withSafetySettings, THINK_DEEPER_DECLARATION, deepModel, REPLY_LENGTHS, DEFAULT_REPLY_LENGTH, PERSONAS, thinkingConfig, cachedPrefix, caches, purgedFor, promptVersion, lightModel, draft, revise, MAX_STEPS, isConfigured, toScheduledEvent, callGemini, geminiRequest, geminiSend, retryTimer, DEFAULT_GEMINI_MODEL, ENTITY_TYPES, GeminiError }
+module.exports = { SAFETY_SETTINGS, withSafetySettings, THINK_DEEPER_DECLARATION, deepModel, REPLY_LENGTHS, DEFAULT_REPLY_LENGTH, PERSONAS, thinkingConfig, cachedPrefix, caches, purgedFor, promptVersion, lightModel, draft, revise, MAX_STEPS, isConfigured, toScheduledEvent, callGemini, geminiRequest, geminiSend, geminiStream, retryTimer, DEFAULT_GEMINI_MODEL, ENTITY_TYPES, GeminiError }

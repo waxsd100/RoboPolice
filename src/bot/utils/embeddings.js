@@ -3,7 +3,8 @@
 //
 // Vectors are DIMENSIONS long (the model is trained so a prefix of its output is a usable
 // embedding), normalized, and handled in the app as signed bytes (each component times 127).
-const { geminiRequest, geminiSend } = require('../modules/eventDrafter')
+const { geminiRequest, geminiSend, geminiStream } = require('../modules/eventDrafter')
+const { forEachArrayItem, textChunks } = require('./jsonItems')
 
 const DEFAULT_EMBEDDING_MODEL = 'gemini-embedding-001'
 const DIMENSIONS = 512
@@ -98,21 +99,24 @@ async function submitEmbeddingBatch (texts, keys) {
 
 // The batch's state: 'running', 'succeeded' with { vectors: Map(key -> Int8Array), failed: [key] },
 // or 'failed' (failed, cancelled or expired at Gemini).
+// A finished batch's results are large (20,000 vectors of 512 numbers: over 200 MB of JSON), so the
+// state is asked for alone (`fields`), and only a finished batch's results are read, as they stream
+// in, one at a time (jsonItems.js), with time enough to download them.
+const BATCH_STATE_FIELDS = 'name,state,metadata.state,done,error'
 async function embeddingBatchResult (batch) {
-  const data = await geminiSend('GET', batch)
+  const data = await geminiSend('GET', `${batch}?fields=${encodeURIComponent(BATCH_STATE_FIELDS)}`)
   const state = String(data.metadata?.state || data.state || '')
   if (/FAILED|CANCELLED|EXPIRED/.test(state)) return { state: 'failed', detail: state }
   if (!/SUCCEEDED/.test(state)) return { state: 'running' }
-  const out = data.response || data.metadata?.output || data.output || data.dest || {}
-  const list = out.inlinedResponses?.inlinedResponses || out.inlinedResponses || out.inlinedEmbedContentResponses || []
   const vectors = new Map()
   const failed = []
-  for (const r of Array.isArray(list) ? list : []) {
+  const res = await geminiStream(batch)
+  await forEachArrayItem(textChunks(res), ['inlinedResponses', 'inlinedEmbedContentResponses'], r => {
     const key = r.metadata?.key
     const values = r.response?.embedding?.values || r.response?.embeddings?.[0]?.values
     if (key && values?.length) vectors.set(key, quantize(values))
     else if (key) failed.push(key)
-  }
+  })
   return { state: 'succeeded', vectors, failed }
 }
 

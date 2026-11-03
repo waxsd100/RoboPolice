@@ -97,10 +97,28 @@ function press (reply, label, userID = REQUESTER) {
   return interactionCreate.handle(interaction)
 }
 
+// The events these tests draft are on fixed dates (2026-11-03 and later), and an event that has
+// already started is refused: the clock is set to 2026-10-29 15:00 in Japan while these tests run
+// (moving on as usual from there), so they do not start failing once those dates have passed.
+const RealDate = Date
+const FAKE_START = RealDate.parse('2026-10-29T15:00:00+09:00')
+const realStart = RealDate.now()
+const fakeNow = () => FAKE_START + (RealDate.now() - realStart)
+class FixedDate extends RealDate {
+  constructor (...args) {
+    if (args.length === 0) super(fakeNow())
+    else super(...args)
+  }
+
+  static now () { return fakeNow() }
+}
+
 describe('mention → event / forum post (integration)', () => {
   let site
   let discord
   let quota
+  before(() => { global.Date = FixedDate })
+  after(() => { global.Date = RealDate })
   before(async () => {
     // A poster is far from a banner's shape (shown whole by default); the photo is close to it
     // (cropped by default).
