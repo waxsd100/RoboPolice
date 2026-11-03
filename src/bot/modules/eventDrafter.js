@@ -4,7 +4,7 @@ const { withoutCharCount } = require('../utils/textClean')
 const { wrap } = require('../utils/untrusted')
 const { Agent } = require('undici')
 const { gatewayURL, gatewayAuthHeaders, isGatewayConfigured } = require('../utils/aiGateway')
-const { currentUsage, recordTokens, addTokens } = require('../utils/geminiUsage')
+const { currentUsage, recordTokens, addTokens, addModel, addFallback } = require('../utils/geminiUsage')
 
 // A fixed model, not an alias such as gemini-flash-latest: an explicit cache (below) is made for one
 // model, and a change of model should be a choice, not a surprise.
@@ -338,6 +338,7 @@ async function geminiPost (path, body, { timeoutMs = GEMINI_TIMEOUT_MS, purpose 
   if (!res.ok && flex && [429, 503].includes(res.status) && process.env.GEMINI_DEEP_FLEX_FALLBACK !== 'false') {
     await res.text().catch(() => {})
     global.logger?.info(`[GEMINI]: No Flex capacity for ${model} (HTTP ${res.status}); asking at the standard tier`)
+    if (purpose.startsWith('mention')) addFallback(`${model}: Flex full → standard tier`)
     const { serviceTier, ...standard } = body
     return geminiPost(path, standard, { timeoutMs, purpose, model })
   }
@@ -349,6 +350,8 @@ async function geminiPost (path, body, { timeoutMs = GEMINI_TIMEOUT_MS, purpose 
   const data = await res.json()
   recordTokens(purpose, model, data?.usageMetadata)
   addTokens(data?.usageMetadata)
+  // The model that answered the reply itself, for the line under it.
+  if (purpose.startsWith('mention')) addModel(model, { flex })
   return data
 }
 
@@ -504,7 +507,8 @@ function forgetCache (name) {
 
 // Requests that need much reasoning or a long text are answered by a stronger model
 // (GEMINI_DEEP_MODEL, by default gemini-4-argon; empty to turn this off), which the model hands
-// over to by calling think_deeper first. It runs on Flex inference (half the price, but queued
+// over to by calling think_deeper first. If it refuses (its safety filters or policy), the usual
+// model answers instead, from the request again. It runs on Flex inference (half the price, but queued
 // for up to about 15 minutes; GEMINI_DEEP_FLEX=false for the standard tier) and thinks at
 // GEMINI_DEEP_THINKING_LEVEL (default high). It has no explicit cache: requests go in full.
 const DEFAULT_DEEP_MODEL = 'gemini-4-argon'
@@ -550,7 +554,8 @@ async function generate (contents, declarations, allowed = null, { deep = false 
 // contents.deep: the conversation went over to the stronger model (think_deeper), so a correction
 // continues with it.
 async function runAgent (contents, tools, submits = SUBMIT_DECLARATIONS) {
-  const offered = deepModel() ? [THINK_DEEPER_DECLARATION] : []
+  // Not offered again once the stronger model refused this conversation.
+  const offered = deepModel() && !contents.deepRefused ? [THINK_DEEPER_DECLARATION] : []
   const declarationsFor = () => [...tools.declarations, ...(contents.deep ? [] : offered), ...submits]
   const start = contents.length
   const steps = maxSteps()
@@ -558,7 +563,22 @@ async function runAgent (contents, tools, submits = SUBMIT_DECLARATIONS) {
     const last = step === steps - 1
     // The last step answers with what is known instead of failing: only a submit can be called.
     if (last && step > 0) contents[contents.length - 1].parts.push({ text: LAST_STEP_NOTE })
-    const content = await generate(contents, declarationsFor(), last ? submits.map(d => d.name) : null, { deep: !!contents.deep })
+    let content
+    try {
+      content = await generate(contents, declarationsFor(), last ? submits.map(d => d.name) : null, { deep: !!contents.deep })
+    } catch (e) {
+      if (!contents.deep || !e.blocked) throw e
+      // The stronger model refused (its safety filters or policy): the usual model answers instead,
+      // from the request again, and the line under the reply says so.
+      const fallback = process.env.GEMINI_MODEL || DEFAULT_GEMINI_MODEL
+      global.logger?.info(`[GEMINI]: ${deepModel()} refused a request (${e.blocked}); ${fallback} answers instead`)
+      addFallback(`${deepModel()} refused (${e.blocked}) → ${fallback}`)
+      contents.splice(start)
+      contents.deep = false
+      contents.deepRefused = true
+      offered.length = 0
+      continue
+    }
     const handOver = !contents.deep && offered.length && content.parts.some(p => p.functionCall?.name === THINK_DEEPER_DECLARATION.name)
     if (handOver) {
       // The stronger model starts this turn again from the request: one model's thought
