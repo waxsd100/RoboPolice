@@ -125,6 +125,7 @@ server's history takes disk space: with no retention set and no limit given, all
 | `%stoplogging` / `%ignorechannel` / `%logbots` | スラッシュコマンドと同じ | 管理者・チャンネルの管理 |
 | `%reset` | サーバーのログ設定をすべて消す（`yes` と返信して確定） | 管理者 |
 | `%help` / `%info` / `%invite` / `%ping` / `%serverinfo` / `%userinfo` / `%clearmydata` | ヘルプ・BOT の情報・招待リンクなど | だれでも |
+| `%debugfooter on` / `off` | このサーバーのメンション返信の下に、答えたモデル・使ったトークン・フォールバックを小さい灰色の字で出す（`-# model: gemini-3.8-flash → gemini-4-argon (flex) · tokens: in … (cached …) · out … · thinking … · N Gemini calls · fallback: …`）。初期はオフ。引数なしで今の設定を表示 | `CREATOR_IDS` の人 |
 | `%eval` / `%reload` / `%reindexcommands` | 開発用 | `CREATOR_IDS` の人 |
 
 ## Events and forum posts from a mention
@@ -610,7 +611,6 @@ the secrets if it leaks, so keep it only on the platform and delete it in the co
 | `GEMINI_EXPLICIT_CACHE` | Optional. `false` stops caching the system instructions and tools (see below) |
 | `GEMINI_LIGHT_MODEL` | Optional (default `gemini-3.5-flash-lite`). The cheaper model for work in the background: taking knowledge out of the wiki, X and web pages and the servers' messages (`SERVER_LORE`), describing emojis, stream blurbs, game links, and putting a long video's parts together. Empty to use `GEMINI_MODEL` for everything. Mention replies and video summaries use `GEMINI_MODEL` |
 | `VIDEO_SUMMARY_FPS` | Optional (default `0.2`, one frame every 5 seconds; Gemini's own default is 1). Frames a second Gemini looks at when summarizing a video. Each frame costs tokens while the sound is heard throughout, so fewer frames cost much less |
-| `MENTION_TOKEN_FOOTER` | Optional. Chat replies end with the models that answered and the Gemini tokens they used in Discord's small grey text (`-# model: gemini-3.8-flash → gemini-4-argon (flex) · tokens: in … (cached …) · out … · thinking … · N Gemini calls`), and what fell back (`· fallback: gemini-4-argon refused (SAFETY) → gemini-3.8-flash`, `… Flex full → standard tier`); `false` leaves it out |
 | `GEMINI_TEMPERATURE` | Optional (default `1`, 0–2; Gemini 3 is tuned for 1 and may loop below it). How varied mention replies and drafts are; higher is more varied. Drafts are checked field by field either way |
 | `GEMINI_REPLY_TIMEOUT_SECONDS` | Optional (default `180`). How long one Gemini round trip of a mention reply or draft may take before it is given up (`GEMINI_DEEP_MODEL` has its own 20 minutes) |
 | `REPLY_POLISH` | Optional (default on). Mention chat replies are rewritten once by `GEMINI_LIGHT_MODEL` with [yomiyasu-pocket](https://github.com/nanaism/yomiyasu-pocket) (MIT, kept in `vendor/yomiyasu-pocket`) to read less like AI-made Japanese, keeping what they say, their tone, mentions, emojis, links and code. Not replies of `GEMINI_DEEP_MODEL` (stories and long writing), nor ones under 40 characters; a rewrite that drops a mention, link or code or changes the length by half is not used. A daily workflow (`yomiyasu-update.yml`) opens a pull request when yomiyasu-pocket has a new release. `false` turns it off |

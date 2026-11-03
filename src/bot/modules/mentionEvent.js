@@ -453,8 +453,9 @@ async function handle (message) {
       // Only a reply brings a conversation in (`referenced`): what was said before in the channel
       // is not, so the bot is the same in every channel.
       // /replylength and /persona; without them (or the database) replies are as by default.
-      const { replyLength, streamerPersona } = await replySettingsStore.getReplySettings(guild.id)
-        .catch(() => ({ replyLength: null, streamerPersona: true }))
+      // %debugfooter: the line under a reply with the models and tokens, off by default.
+      const { replyLength, streamerPersona, debugFooter } = await replySettingsStore.getReplySettings(guild.id)
+        .catch(() => ({ replyLength: null, streamerPersona: true, debugFooter: false }))
       let result = await draft({
         request,
         referenced,
@@ -486,7 +487,7 @@ async function handle (message) {
             // stronger model wrote (stories and other long writing).
             if (!result.conversation?.contents?.deep) result = { ...result, text: await polish(result.text, { guildID: guild.id }) }
             const { content, embeds } = await withLinkCards(withServerChannels(withServerEmojis(checkedLinks(result, guild), guild), guild, message.member))
-            await reply.edit({ content: withFooter(content, tokenFooter(usage)), embeds, components: [], allowedMentions: NO_MENTIONS })
+            await reply.edit({ content: withFooter(content, debugFooter ? tokenFooter(usage) : ''), embeds, components: [], allowedMentions: NO_MENTIONS })
             return
           }
           // The requester asked something about the draft instead of correcting it: answer, and

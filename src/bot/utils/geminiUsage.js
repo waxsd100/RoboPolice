@@ -44,11 +44,11 @@ function addFallback (note) {
 
 const n = x => x.toLocaleString('en-US')
 
-// The tokens a mention used, as Discord's small grey text (-#), or '' when none were counted or
-// MENTION_TOKEN_FOOTER=false.
+// The tokens a mention used, as Discord's small grey text (-#), or '' when none were counted. Shown
+// only in servers that turned it on (%debugfooter).
 function tokenFooter (usage) {
   const t = usage?.tokens
-  if (process.env.MENTION_TOKEN_FOOTER === 'false' || !t || !(t.prompt + t.output + t.thoughts)) return ''
+  if (!t || !(t.prompt + t.output + t.thoughts)) return ''
   const model = usage.models?.length ? `model: ${usage.models.join(' → ')} · ` : ''
   const fallback = usage.fallbacks?.length ? ` · fallback: ${usage.fallbacks.join('; ')}` : ''
   return `-# ${model}tokens: in ${n(t.prompt)} (cached ${n(t.cached)}) · out ${n(t.output)}${t.thoughts ? ` · thinking ${n(t.thoughts)}` : ''} · ${usage.requests} Gemini call${usage.requests === 1 ? '' : 's'}${fallback}`

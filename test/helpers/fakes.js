@@ -172,15 +172,17 @@ function installLoreStore ({ facts = {}, styles = {}, messages = [] } = {}) {
 installLoreStore()
 
 // The reply settings (/replylength, /persona), in memory: lengths { guildID: 'long' | 'normal' |
-// 'short' }, personas { guildID: false } for servers that turned the streamer off. Installed when
-// this file loads, so no test reaches a real database.
-function installReplyLengthStore (lengths = {}, personas = {}) {
+// 'short' }, personas { guildID: false } for servers that turned the streamer off, debugFooters
+// { guildID: true } for servers that show the debug line. Installed when this file loads, so no test
+// reaches a real database.
+function installReplyLengthStore (lengths = {}, personas = {}, debugFooters = {}) {
   const store = require('../../src/db/interfaces/postgres/replySettings')
-  store.getReplySettings = async guildID => ({ replyLength: lengths[guildID] || null, streamerPersona: personas[guildID] !== false })
+  store.getReplySettings = async guildID => ({ replyLength: lengths[guildID] || null, streamerPersona: personas[guildID] !== false, debugFooter: debugFooters[guildID] === true })
   store.getReplyLength = async guildID => lengths[guildID] || null
   store.setReplyLength = async (guildID, length) => { lengths[guildID] = length }
   store.setStreamerPersona = async (guildID, enabled) => { personas[guildID] = enabled }
-  return { lengths, personas }
+  store.setDebugFooter = async (guildID, enabled) => { debugFooters[guildID] = enabled }
+  return { lengths, personas, debugFooters }
 }
 installReplyLengthStore()
 
