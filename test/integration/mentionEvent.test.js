@@ -868,13 +868,36 @@ describe('mention → event / forum post (integration)', () => {
       json: async () => ({ candidates: [{ content: { role: 'model', parts: turns[i++] } }], usageMetadata: { promptTokenCount: 1200, cachedContentTokenCount: 1000, candidatesTokenCount: 15, thoughtsTokenCount: 40 } })
     })
     await mentionEvent.handle(mention(channel, '<@BOT> やあ'))
-    assert.equal(replies[0].state.content, 'やあ\n-# tokens: in 2,400 (cached 2,000) · out 30 · thinking 80 · 2 Gemini calls')
+    assert.equal(replies[0].state.content, 'やあ\n-# model: gemini-3.8-flash · tokens: in 2,400 (cached 2,000) · out 30 · thinking 80 · 2 Gemini calls')
     process.env.MENTION_TOKEN_FOOTER = 'false'
     const again = createChannel()
     installGemini([[call('submit_chat_reply', { text: 'やあ' })]])
     await mentionEvent.handle(mention(again.channel, '<@BOT> やあ'))
     assert.equal(again.replies[0].state.content, 'やあ')
     delete process.env.MENTION_TOKEN_FOOTER
+  })
+
+  test('chat: the line under the reply names the models; when Argon refuses, Flash answers and that is said too', async (t) => {
+    t.mock.method(global.logger, 'info', () => {})
+    const { channel, replies } = createChannel()
+    const requests = []
+    global.fetch = async (url, init) => {
+      const body = JSON.parse(init.body)
+      requests.push({ url, body })
+      const meta = { promptTokenCount: 100, candidatesTokenCount: 10 }
+      if (requests.length === 1) return { ok: true, json: async () => ({ candidates: [{ content: { role: 'model', parts: [call('think_deeper', { reason: '長文' })] } }], usageMetadata: meta }) }
+      if (/gemini-4-argon/.test(url)) return { ok: true, json: async () => ({ promptFeedback: { blockReason: 'PROHIBITED_CONTENT' }, usageMetadata: meta }) }
+      return { ok: true, json: async () => ({ candidates: [{ content: { role: 'model', parts: [call('submit_chat_reply', { text: '書いたよ' })] } }], usageMetadata: meta }) }
+    }
+    await mentionEvent.handle(mention(channel, '<@BOT> 長い話を書いて'))
+    assert.deepEqual(requests.map(r => r.url.match(/models\/([^:]+)/)[1]), ['gemini-3.8-flash', 'gemini-4-argon', 'gemini-3.8-flash'])
+    assert.equal(requests[1].body.serviceTier, 'flex')
+    assert.ok(!requests[2].body.tools[0].functionDeclarations.some(d => d.name === 'think_deeper'), 'not handed over again')
+    assert.equal(requests[2].body.contents.length, 1, 'from the request again')
+    const [text, footer] = replies[0].state.content.split('\n')
+    assert.equal(text, '書いたよ')
+    assert.match(footer, /^-# model: gemini-3\.8-flash → gemini-4-argon \(flex\) → gemini-3\.8-flash · tokens: /)
+    assert.match(footer, / · fallback: gemini-4-argon refused \(PROHIBITED_CONTENT\) → gemini-3\.8-flash$/)
   })
 
   test('chat: server emojis are offered to the model, and :name: becomes the emoji', async () => {

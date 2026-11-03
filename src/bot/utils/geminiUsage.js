@@ -8,7 +8,7 @@ const storage = new AsyncLocalStorage()
 // onWait(ms) is told when a call waits before retrying, to show the requester why it is slow.
 // tokens: what the calls used, from Gemini's usageMetadata (shown under a chat reply).
 function trackUsage (fn) {
-  const usage = { requests: 0, retries: 0, onWait: () => {}, tokens: { prompt: 0, cached: 0, output: 0, thoughts: 0 } }
+  const usage = { requests: 0, retries: 0, onWait: () => {}, tokens: { prompt: 0, cached: 0, output: 0, thoughts: 0 }, models: [], fallbacks: [] }
   return storage.run(usage, () => fn(usage))
 }
 
@@ -27,6 +27,21 @@ function addTokens (meta) {
   usage.tokens.thoughts += meta.thoughtsTokenCount || 0
 }
 
+// The model that answered a call of the reply itself, in order, once each in a row: 'gemini-3.8-flash',
+// 'gemini-4-argon (flex)'.
+function addModel (model, { flex = false } = {}) {
+  const usage = currentUsage()
+  if (!usage?.models || !model) return
+  const label = flex ? `${model} (flex)` : model
+  if (usage.models[usage.models.length - 1] !== label) usage.models.push(label)
+}
+
+// Something that went another way than asked (a model refused, Flex was full), to show under the reply.
+function addFallback (note) {
+  const usage = currentUsage()
+  if (usage?.fallbacks && !usage.fallbacks.includes(note)) usage.fallbacks.push(note)
+}
+
 const n = x => x.toLocaleString('en-US')
 
 // The tokens a mention used, as Discord's small grey text (-#), or '' when none were counted or
@@ -34,7 +49,9 @@ const n = x => x.toLocaleString('en-US')
 function tokenFooter (usage) {
   const t = usage?.tokens
   if (process.env.MENTION_TOKEN_FOOTER === 'false' || !t || !(t.prompt + t.output + t.thoughts)) return ''
-  return `-# tokens: in ${n(t.prompt)} (cached ${n(t.cached)}) · out ${n(t.output)}${t.thoughts ? ` · thinking ${n(t.thoughts)}` : ''} · ${usage.requests} Gemini call${usage.requests === 1 ? '' : 's'}`
+  const model = usage.models?.length ? `model: ${usage.models.join(' → ')} · ` : ''
+  const fallback = usage.fallbacks?.length ? ` · fallback: ${usage.fallbacks.join('; ')}` : ''
+  return `-# ${model}tokens: in ${n(t.prompt)} (cached ${n(t.cached)}) · out ${n(t.output)}${t.thoughts ? ` · thinking ${n(t.thoughts)}` : ''} · ${usage.requests} Gemini call${usage.requests === 1 ? '' : 's'}${fallback}`
 }
 
 // Tokens used, by what they were used for (`purpose`), so the cost can be traced: the prompt (and how
@@ -74,4 +91,4 @@ function logTokens () {
   tokens.clear()
 }
 
-module.exports = { trackUsage, currentUsage, addTokens, tokenFooter, recordTokens, tokenCounts, logTokens }
+module.exports = { trackUsage, currentUsage, addTokens, addModel, addFallback, tokenFooter, recordTokens, tokenCounts, logTokens }
