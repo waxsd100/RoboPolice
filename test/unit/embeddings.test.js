@@ -148,12 +148,12 @@ describe('embeddingIndexer', () => {
       if (String(url).endsWith(':batchEmbedContents')) return embedOne(url, init)
       requests.push({ url, body: init.body ? JSON.parse(init.body) : null })
       if (String(url).endsWith(':asyncBatchEmbedContent')) return { ok: true, json: async () => ({ name: 'batches/e1', metadata: { state: 'BATCH_STATE_PENDING' } }) }
-      // The state alone, then (when done) the results, streamed in small pieces.
-      if (String(url).includes('/batches/e1?fields=')) return { ok: true, json: async () => ({ name: 'batches/e1', metadata: { state } }) }
+      // The batch, streamed in small pieces: its state, and its results once it is done.
       if (String(url).endsWith('/batches/e1')) {
         const values = new Array(DIMENSIONS).fill(0)
         values[0] = 1
-        const text = JSON.stringify({ name: 'batches/e1', metadata: { state }, response: { inlinedResponses: { inlinedResponses: [{ metadata: { key: 'p3' }, response: { embedding: { values } } }, { metadata: { key: 'p1' }, error: { message: 'x' } }] } } }, null, 2)
+        const done = state === 'BATCH_STATE_SUCCEEDED'
+        const text = JSON.stringify({ name: 'batches/e1', metadata: { '@type': 'x', state }, ...(done ? { done, response: { inlinedResponses: { inlinedResponses: [{ metadata: { key: 'p3' }, response: { embedding: { values } } }, { metadata: { key: 'p1' }, error: { message: 'x' } }] } } } : {}) }, null, 2)
         const bytes = new TextEncoder().encode(text)
         const body = []
         for (let i = 0; i < bytes.length; i += 97) body.push(bytes.slice(i, i + 97))
@@ -178,7 +178,6 @@ describe('embeddingIndexer', () => {
       await indexer.indexMessages()
       assert.equal(requests.filter(r => r.url.endsWith(':asyncBatchEmbedContent')).length, 1, 'no second batch while one runs')
 
-      assert.ok(!requests.some(r => String(r.url).endsWith('/batches/e1')), 'while it runs, only its state is asked for')
       state = 'BATCH_STATE_SUCCEEDED'
       await indexer.indexMessages()
       assert.ok(saved.messages.some(m => m.id === 'p3' && m.embedding.length === DIMENSIONS))

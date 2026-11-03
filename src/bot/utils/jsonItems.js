@@ -6,10 +6,13 @@
 // assumed to be well formed (it is Gemini's); an item that does not parse is skipped.
 
 // Calls onItem(object) for each object directly inside an array whose key is `arrayKey` (or one of
-// them, given a list), wherever it is. `chunks` is an async iterable of strings. Resolves to how
-// many items were found.
-async function forEachArrayItem (chunks, arrayKey, onItem) {
+// them, given a list), wherever it is. `chunks` is an async iterable of strings. onString(key,
+// value) is told of every short string value outside those items (such as a batch's state).
+// Resolves to how many items were found.
+async function forEachArrayItem (chunks, arrayKey, onItem, { onString = null } = {}) {
   const keys = new Set([].concat(arrayKey))
+  let readingValue = false
+  let value = ''
   const stack = [] // { type: '{' | '[', target, item }
   let inString = false
   let escape = false
@@ -34,8 +37,12 @@ async function forEachArrayItem (chunks, arrayKey, onItem) {
             readingKey = false
             expectKey = false
             currentKey = key
+          } else if (readingValue) {
+            readingValue = false
+            if (value.length < 256) onString(currentKey, value)
           }
         } else if (readingKey && key.length < 64) key += c
+        else if (readingValue && value.length < 256) value += c
         continue
       }
       if (c === '"') {
@@ -43,6 +50,9 @@ async function forEachArrayItem (chunks, arrayKey, onItem) {
         if (expectKey && stack[stack.length - 1]?.type === '{') {
           readingKey = true
           key = ''
+        } else if (onString && !parts && currentKey && stack[stack.length - 1]?.type === '{') {
+          readingValue = true
+          value = ''
         }
       } else if (c === '{') {
         const parent = stack[stack.length - 1]
