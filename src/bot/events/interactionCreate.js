@@ -66,7 +66,7 @@ module.exports = {
             }).catch(() => {})
             return
           }
-          if (command.userPerms && command.userPerms.length !== 0 && !hasStaffAccess(interaction.member.roles, global.bot.guilds.get(interaction.guildID))) {
+          if (command.userPerms && command.userPerms.length !== 0 && !isCreator(interaction.member.user.id) && !hasStaffAccess(interaction.member.roles, global.bot.guilds.get(interaction.guildID))) {
             const userChannelPerms = interaction.channel.permissionsOf(interaction.member.user.id).json
             const missingPermissions = command.userPerms.filter(bpName => !userChannelPerms[bpName])
             if (missingPermissions.length !== 0) {

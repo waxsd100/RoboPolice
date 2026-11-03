@@ -134,9 +134,9 @@ Mention the app with a description, an event page URL, or a Discord message link
 message and mention it. It drafts either a server scheduled event or a forum post, shows it with
 Register / Post and Cancel buttons, and creates it only after the requester confirms. Anyone can
 mention it; what a request makes is checked when it is drafted. Registering or changing an event
-needs **Manage Events** from the requester (or the owner, an administrator, or `STAFF_ROLE_ID`
-staff) and from the app; a forum post needs both the requester and the app to be able to post in that
-forum, and is sent with mentions disabled so drafted text can't ping anyone.
+needs **Manage Events** from the requester (or the owner, an administrator, `STAFF_ROLE_ID`
+staff, or a `CREATOR_IDS` user) and from the app; a forum post needs both the requester (unless a
+`CREATOR_IDS` user) and the app to be able to post in that forum, and is sent with mentions disabled so drafted text can't ping anyone.
 
 A mention that does not ask for an event or a forum post (a greeting, a question, small talk) gets a
 plain chat reply (`submit_chat_reply`), with pings disabled. The model plays the creator of the
@@ -590,6 +590,7 @@ the secrets if it leaks, so keep it only on the platform and delete it in the co
 | Variable | Effect |
 |---|---|
 | `MESSAGE_HISTORY_DAYS` | Retention window. Unset (or 0/non-numeric) means retention is unlimited by design — nothing is ever pruned, and `/help`/`/clearmydata` say so instead of naming a day count. The bot logs which mode it's in at startup. If you go unlimited on a real deployment, update the Privacy Policy's retention section to match, since it currently states a fixed number of days. |
+| `CREATOR_IDS` | Optional. The bot's developers (Discord user IDs, comma-separated). They can use the developer commands (`%eval`, `%setcmd`, …) and bypass every permission check a member's own permissions could pass, in every server: prefix commands, the permissions slash commands ask of the user, Manage Events for a mention event, and posting in a forum. Not what the bot itself needs |
 | `STAFF_ROLE_ID` | Optional. A member holding this role, or any role at or above it in Settings > Roles, bypasses the same permission checks a server owner already bypasses — not creator-only commands, and not what the bot itself needs. Unset disables it entirely. |
 | `PRUNE_EXTERNAL` | Set `true` only when running `prune.js` as a separate cron service, so the bot stops scheduling its own sweep |
 | `CLOUDFLARE_ACCOUNT_ID`, `CLOUDFLARE_AI_GATEWAY_ID` | Enable drafting events and forum posts from mentions. Unset means mentions are ignored (unless `CLOUDFLARE_AI_GATEWAY_URL` is set) |
