@@ -96,7 +96,7 @@ server's history takes disk space: with no retention set and no limit given, all
 | コマンド | 内容 | 必要な権限 |
 |---|---|---|
 | `/youtube sync` | BOT が見ているチャンネルを読み直し、新しい動画と配信の状態を取り込む（普段は自動。オーナーのサーバーからのみ） | サーバーの管理 |
-| `/youtube summarize count:<1〜50> force:<True/False> url:<動画リンク>` | まだ要約していない動画を新しい順に `count` 本（初期値 3）要約する。3本ずつ同時に要約する（`VIDEO_SUMMARY_CONCURRENCY` で1〜10本に変更可）。本数が多いと時間がかかる。`force:True` で要約済みも作り直す。`url` を指定するとその1本だけを要約して内容を表示する（他のチャンネルの動画でも可） | サーバーの管理 |
+| `/youtube summarize count:<1〜50> force:<True/False> url:<動画リンク>` | まだ要約していない動画を新しい順に `count` 本（初期値 3）要約する。Gemini の Batch API にまとめて依頼し（料金は半分、終わるまで数分〜最大24時間）、終わったらコマンドを使ったチャンネルで知らせる。`force:True` で要約済みも作り直す。`url` を指定するとその1本だけを要約し、終わったら内容を表示する（保存済みならすぐ表示。他のチャンネルの動画でも可）。`VIDEO_SUMMARY_BATCH=false` なら、その場で3本ずつ（`VIDEO_SUMMARY_CONCURRENCY`）要約する | サーバーの管理 |
 | `/youtube liveevents enabled:<True/False>` | 配信をサーバーのイベントとして自動で登録する（予定の枠で作成、開始で開催中、終了で終了）。説明の先頭に AI が配信内容の紹介を書き、終了後はアーカイブを自動で要約する。新しく投稿された動画も「📺 新着動画」として投稿から24時間イベントにする | サーバーの管理（BOT にイベントの管理） |
 | `/youtube show` | 設定しているチャンネル、保存している動画の数、配信の予定、配信のイベント登録の有無を表示する | サーバーの管理 |
 | `/replylength length:<long/normal/short>` | メンションへの返事の長さをサーバーごとに決める。`long`（初期値）は長くても500文字程度、`normal` は内容に合わせて（あいさつは1〜2文、説明は400文字程度まで）、`short` は答えだけを短く（200文字程度まで）。`length` を省くと今の設定を表示する | サーバーの管理 |
@@ -620,6 +620,7 @@ the secrets if it leaks, so keep it only on the platform and delete it in the co
 | `LIVE_EVENT_AI_DESCRIPTION` | Optional. `false` stops the AI's line on what a stream is about (from its title, description and thumbnail) at the top of its Discord event |
 | `LIVE_ARCHIVE_SUMMARY` | Optional. `false` stops summarizing a stream's archive once it is over (tried 30 minutes after it ends, then hourly, three times at most) |
 | `VIDEO_SUMMARY_CONCURRENCY` | Optional. How many videos `/youtube summarize` summarizes at once (1-10). Defaults to 3 |
+| `VIDEO_SUMMARY_BATCH` | Optional (default on). `/youtube summarize` sends the videos to Gemini's Batch API: half the price, done within 24 hours (usually much sooner); the summaries are stored and the channel is told when the batch is done (it is checked every 5 minutes, and survives restarts). A video too long for one request is then summarized in parts the usual way. `false` summarizes right away instead. Summaries the model asks for during a mention are always made right away |
 | `YOUTUBE_CHANNELS` | Optional (default `UCTW2tw0Mhho72MojB1L48IQ,UCz7pNw3UkTF9WQjHcYpFD9g`, のばまんゲームス and のばまん・ロー・エフォート; empty keeps those followed). The YouTube channels the bot follows for every server, comma-separated `@handle`, channel URL or `UC…` ID |
 | `YOUTUBE_AUTO_SYNC_MINUTES` | Optional. How often to check the bot's YouTube channels for new videos. Defaults to 15; 0 turns it off |
 | `YOUTUBE_LIVE_POLL_SECONDS` | Optional. How often to check for streams on servers with stream events on. Defaults to 60; 0 turns it off |
