@@ -178,6 +178,22 @@ describe('checkGuild', () => {
     assert.deepEqual(await require('../../src/db/interfaces/postgres/youtube').archivesToSummarize('100'), [])
   })
 
+  test('a Short (at most 3 minutes) gets no event, and is not looked at again', async () => {
+    const bot = installBot()
+    const justNow = new Date(Date.now() - 10 * 60 * 1000).toISOString()
+    const calls = fakeYouTube(['short000001'], [apiVideo('short000001', 'none', { snippet: { title: 'ショート', description: '', publishedAt: justNow, liveBroadcastContent: 'none', thumbnails: {} }, contentDetails: { duration: 'PT58S' } })])
+    await liveWatcher.checkGuild('100', UC)
+    assert.equal(bot.calls.length, 0, 'no event')
+    assert.equal(store.liveEvents[100].short000001.status, 'gone')
+    const before = calls.length
+    await liveWatcher.checkGuild('100', UC)
+    assert.ok(!calls.slice(before).some(c => c.includes('short000001')), 'not read from the API again')
+    assert.equal(bot.calls.length, 0)
+    assert.equal(liveWatcher.isShort({ duration: 'PT3M' }), true)
+    assert.equal(liveWatcher.isShort({ duration: 'PT3M1S' }), false)
+    assert.equal(liveWatcher.isShort({ duration: null }), false, 'unknown length: an ordinary upload')
+  })
+
   test('UPLOAD_EVENTS=false keeps uploads out of events', async () => {
     process.env.UPLOAD_EVENTS = 'false'
     try {
