@@ -1,0 +1,9 @@
+account_id              = "your-cloudflare-account-id"
+access_service_token_id = "service-token-id-from-the-dashboard"
+
+# Optional
+# gateway_id      = "robopolice"
+# gateway_domain  = "ai-gateway.skyblock.jp"
+# allowed_emails  = ["you@example.com"]
+# rate_limit                  = 60
+# rate_limit_interval_seconds = 60
