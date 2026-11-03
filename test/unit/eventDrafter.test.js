@@ -141,7 +141,60 @@ describe('draft', () => {
     assert.equal(headers['cf-aig-authorization'], 'Bearer gw-token')
     assert.equal(body.toolConfig.functionCallingConfig.mode, 'ANY')
     assert.equal(requests[0].dispatcher, undefined, 'ordinary calls keep fetch\'s default limits')
-    assert.deepEqual(body.tools[0].functionDeclarations.map(d => d.name), ['lookup', 'submit_event_draft', 'submit_forum_post_draft', 'submit_chat_reply'])
+    assert.deepEqual(body.tools[0].functionDeclarations.map(d => d.name), ['lookup', 'think_deeper', 'submit_event_draft', 'submit_forum_post_draft', 'submit_chat_reply'])
+    assert.equal(body.serviceTier, undefined, 'the standard tier')
+  })
+
+  test('think_deeper hands the request over to the stronger model on Flex, from the start', async () => {
+    const progress = []
+    const deepTools = { ...tools, progress: text => progress.push(text) }
+    const requests = installGemini([
+      [call('lookup', { q: 'x' }), call('think_deeper', { reason: '長い解説' })],
+      [call('submit_chat_reply', { text: 'じっくり考えた答え' })]
+    ])
+    const result = await draft({ request: '詳しく解説して', channelName: 'general', guild, tools: deepTools, now: NOW })
+    assert.equal(result.text, 'じっくり考えた答え')
+    assert.match(requests[1].url, /models\/gemini-4-argon:generateContent$/)
+    assert.equal(requests[1].body.serviceTier, 'flex')
+    assert.equal(requests[1].body.cachedContent, undefined)
+    assert.deepEqual(requests[1].body.generationConfig.thinkingConfig, { thinkingLevel: 'high' })
+    assert.equal(requests[1].body.contents.length, 1, 'only the request: nothing of the first model\'s turn')
+    assert.ok(!requests[1].body.tools[0].functionDeclarations.some(d => d.name === 'think_deeper'), 'not offered again')
+    assert.ok(requests[1].dispatcher, 'a long wait allowed')
+    assert.match(progress[0], /じっくり考えています/)
+  })
+
+  test('without Flex capacity the stronger model is asked once at the standard tier', async (t) => {
+    const { retryTimer } = require('../../src/bot/modules/eventDrafter')
+    t.mock.method(retryTimer, 'sleep', async () => {})
+    t.mock.method(global.logger, 'info', () => {})
+    const requests = []
+    let i = 0
+    global.fetch = async (url, init) => {
+      const body = JSON.parse(init.body)
+      requests.push({ url, body })
+      i++
+      if (i === 1) return { ok: true, json: async () => ({ candidates: [{ content: { role: 'model', parts: [call('think_deeper', { reason: '計算' })] } }] }) }
+      if (body.serviceTier === 'flex') return { ok: false, status: 503, headers: { get: () => null }, text: async () => 'at capacity' }
+      return { ok: true, json: async () => ({ candidates: [{ content: { role: 'model', parts: [call('submit_chat_reply', { text: '答え' })] } }] }) }
+    }
+    const result = await draft({ request: '計算して', channelName: 'general', guild, tools, now: NOW })
+    assert.equal(result.text, '答え')
+    const flex = requests.filter(r => r.body.serviceTier === 'flex')
+    assert.equal(flex.length, 4, 'tried and retried at Flex')
+    assert.equal(requests.at(-1).body.serviceTier, undefined, 'then the standard tier')
+    assert.match(requests.at(-1).url, /gemini-4-argon/)
+  })
+
+  test('GEMINI_DEEP_MODEL empty: think_deeper is not offered', async () => {
+    process.env.GEMINI_DEEP_MODEL = ''
+    try {
+      const requests = installGemini([[call('submit_chat_reply', { text: 'x' })]])
+      await draft({ request: 'やあ', channelName: 'general', guild, tools, now: NOW })
+      assert.ok(!requests[0].body.tools[0].functionDeclarations.some(d => d.name === 'think_deeper'))
+    } finally {
+      delete process.env.GEMINI_DEEP_MODEL
+    }
   })
 
   test('answers talk that is not a request with a chat reply, in the community\'s character', async () => {

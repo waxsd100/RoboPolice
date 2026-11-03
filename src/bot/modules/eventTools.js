@@ -388,7 +388,7 @@ function createTools ({ guild, member, ask, progress = () => {} }) {
   }
 
   const declarations = [...DECLARATIONS, FIND_GAME, ABOUT_MEMBER, ...(messageEmbeddingsEnabled() ? [SEARCH_SERVER_MESSAGES] : []), ...(wikiKnowledge.searchable() ? [SEARCH_WIKI] : [])]
-  return { declarations, call, sources, readMessage, readThread }
+  return { declarations, call, sources, readMessage, readThread, progress }
 }
 
 async function scheduledEvents (guild) {
