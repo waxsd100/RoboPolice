@@ -317,7 +317,7 @@ streams and uploads become its events (`/youtube liveevents`). Knowledge accumul
 YouTube streams scheduled events (`src/bot/modules/liveWatcher.js`), and new uploads too: an
 ordinary video seen in the channel's feed within `UPLOAD_EVENT_MAX_AGE_HOURS` (default 6) of its
 upload becomes a "📺 新着動画" event, started at once with its description, link and thumbnail, and
-ended after `UPLOAD_EVENT_HOURS` (default 24); `UPLOAD_EVENTS=false` turns that off. Each stream's event follows it: made when the stream is scheduled, with its title,
+ended after `UPLOAD_EVENT_HOURS` (default 24); `UPLOAD_EVENTS=false` turns that off. Shorts (videos at most `UPLOAD_EVENT_SHORTS_SECONDS` long, default 180) get no event. Each stream's event follows it: made when the stream is scheduled, with its title,
 description, link and thumbnail as the cover (an unscheduled stream gets one when it starts, started
 straight away); moved when the start time changes; started when the stream goes live; kept open past
 its planned end while it runs; completed when it ends, or cancelled if the stream is called off or
