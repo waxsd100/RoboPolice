@@ -5,8 +5,10 @@
 //
 // What a mention used is added once it is answered, so the mention that crosses a limit is still
 // answered and the next is refused. Every Gemini call made for it counts (lookups, the stronger
-// model, the rewrite), with prompt tokens read from Gemini's cache at a tenth, as they are billed
-// at a fraction. The bot's developers (CREATOR_IDS) have no limit.
+// model, the rewrite), weighted by what the model costs: a stronger model's tokens count for more,
+// a lighter one's for less, and Flex inference (half the price) for half (weightOf). Prompt tokens
+// read from Gemini's cache count at a tenth, as they are billed at a fraction. The bot's developers
+// (CREATOR_IDS) have no limit.
 //
 // Other servers than the owner's (priority.js) also have a cap for the whole server per day (Japan
 // time): MENTION_GUILD_DAILY_LIMIT_OTHER mentions (default 30), 0 to turn it off.
@@ -58,11 +60,33 @@ function today (now) {
   return new Intl.DateTimeFormat('sv-SE', { timeZone: TIMEZONE }).format(now)
 }
 
-// The tokens a mention used, as counted against the limits.
-function weightedTokens (tokens) {
-  if (!tokens) return 0
-  const cached = tokens.cached || 0
-  return Math.max(0, Math.round((tokens.prompt || 0) - cached + cached * CACHED_WEIGHT + (tokens.output || 0) + (tokens.thoughts || 0)))
+// How much a model's token counts, against the usual reply model's 1: MENTION_TOKEN_WEIGHTS
+// ("gemini-4-argon=4,gemini-3.5-flash-lite=0.25", by exact name) for the models it names; else
+// by kind: a Pro / Argon / Ultra model 4, a Lite one 0.25, any other 1. Flex inference halves it.
+const DEFAULT_WEIGHTS = [[/argon|pro|ultra/i, 4], [/lite/i, 0.25]]
+function configuredWeights () {
+  const weights = new Map()
+  for (const pair of String(process.env.MENTION_TOKEN_WEIGHTS || '').split(',')) {
+    const [name, value] = pair.split('=').map(s => s?.trim())
+    const n = Number(value)
+    if (name && value && Number.isFinite(n) && n >= 0) weights.set(name, n)
+  }
+  return weights
+}
+function weightOf (model, { flex = false } = {}) {
+  const name = String(model || '')
+  const configured = configuredWeights()
+  const weight = configured.has(name) ? configured.get(name) : (DEFAULT_WEIGHTS.find(([re]) => re.test(name))?.[1] ?? 1)
+  return flex ? weight / 2 : weight
+}
+
+// The tokens one Gemini response used (its usageMetadata), as counted against the limits.
+function costOf (meta, model, { flex = false } = {}) {
+  if (!meta) return 0
+  const prompt = meta.promptTokenCount || 0
+  const cached = meta.cachedContentTokenCount || 0
+  const tokens = prompt - cached + cached * CACHED_WEIGHT + (meta.candidatesTokenCount || 0) + (meta.thoughtsTokenCount || 0)
+  return Math.max(0, tokens * weightOf(model, { flex }))
 }
 
 // Whether `userID` may have a mention answered now. Resolves to { allowed } or, when not,
@@ -91,9 +115,9 @@ async function take (userID, guildID = null, now = new Date()) {
   }
 }
 
-// Counts what an answered mention used against the user's limits.
-async function record (userID, tokens, now = new Date()) {
-  const amount = weightedTokens(tokens)
+// Counts what an answered mention used (the sum of costOf of its calls) against the user's limits.
+async function record (userID, cost, now = new Date()) {
+  const amount = Math.round(cost || 0)
   if (!amount || isCreator(userID)) return
   try {
     for (const w of WINDOWS) {
@@ -116,4 +140,4 @@ function refusal (quota, now = new Date()) {
   return `利用上限（${quota.label}あたり ${quota.limit.toLocaleString('en-US')} トークン）に達しました。${at}ごろ（日本時間）からまた使えます。`
 }
 
-module.exports = { take, record, refusal, weightedTokens, store, today, WINDOWS, DEFAULT_OTHER_GUILD_LIMIT }
+module.exports = { take, record, refusal, costOf, weightOf, store, today, WINDOWS, DEFAULT_OTHER_GUILD_LIMIT }

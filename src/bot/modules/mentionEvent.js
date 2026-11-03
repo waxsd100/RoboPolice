@@ -615,7 +615,7 @@ async function handle (message) {
     } finally {
       inProgress.delete(message.author.id)
       // Whatever it ended in, the tokens it used count against the user's limits.
-      await mentionQuota.record(message.author.id, usage.tokens)
+      await mentionQuota.record(message.author.id, usage.cost)
       global.logger.info(`Mention drafting in ${guild.id}: ${usage.requests} Gemini request(s), ${usage.retries} retried after HTTP 429`)
     }
   })

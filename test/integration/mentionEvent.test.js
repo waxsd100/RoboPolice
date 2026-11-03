@@ -1085,6 +1085,21 @@ describe('mention → event / forum post (integration)', () => {
     assert.equal(replies[3].state.content, 'どうも')
   })
 
+  test('the stronger model\'s tokens count for more against the limit, Flex for half', async (t) => {
+    t.mock.method(global.logger, 'info', () => {})
+    const { channel, replies } = createChannel()
+    const meta = { promptTokenCount: 1000, candidatesTokenCount: 0 }
+    let i = 0
+    global.fetch = async () => ({
+      ok: true,
+      json: async () => ({ candidates: [{ content: { role: 'model', parts: [i++ === 0 ? call('think_deeper', { reason: '長文' }) : call('submit_chat_reply', { text: '書いたよ' })] } }], usageMetadata: meta })
+    })
+    await mentionEvent.handle(mention(channel, '<@BOT> 長い話を書いて'))
+    assert.equal(replies[0].state.content, '書いたよ')
+    // 1,000 from the reply model, 1,000 × 4 (Argon) ÷ 2 (Flex).
+    assert.equal(quota.get(`mention-tokens:5h:${REQUESTER}`), 3000)
+  })
+
   test('outside the owner\'s server, the whole server has 30 mentions a day; the bot\'s developers have no token limit', async () => {
     const { channel, replies } = createChannel()
     const day = require('../../src/bot/utils/mentionQuota').today(new Date())

@@ -6,9 +6,10 @@ const { AsyncLocalStorage } = require('node:async_hooks')
 const storage = new AsyncLocalStorage()
 
 // onWait(ms) is told when a call waits before retrying, to show the requester why it is slow.
-// tokens: what the calls used, from Gemini's usageMetadata (shown under a chat reply).
+// tokens: what the calls used, from Gemini's usageMetadata (shown under a chat reply); cost: the
+// same weighted by model, as counted against the user's limits (mentionQuota.js).
 function trackUsage (fn) {
-  const usage = { requests: 0, retries: 0, onWait: () => {}, tokens: { prompt: 0, cached: 0, output: 0, thoughts: 0 }, models: [], fallbacks: [] }
+  const usage = { requests: 0, retries: 0, onWait: () => {}, tokens: { prompt: 0, cached: 0, output: 0, thoughts: 0 }, cost: 0, models: [], fallbacks: [] }
   return storage.run(usage, () => fn(usage))
 }
 
@@ -17,10 +18,12 @@ function currentUsage () {
   return storage.getStore() || null
 }
 
-// Adds a response's usageMetadata to the mention being handled, if any.
-function addTokens (meta) {
+// Adds a response's usageMetadata (from `model`, on Flex inference or not) to the mention being
+// handled, if any.
+function addTokens (meta, { model = '', flex = false } = {}) {
   const usage = currentUsage()
   if (!usage?.tokens || !meta) return
+  usage.cost = (usage.cost || 0) + require('./mentionQuota').costOf(meta, model, { flex })
   usage.tokens.prompt += meta.promptTokenCount || 0
   usage.tokens.cached += meta.cachedContentTokenCount || 0
   usage.tokens.output += meta.candidatesTokenCount || 0

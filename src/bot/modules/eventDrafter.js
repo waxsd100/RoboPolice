@@ -383,7 +383,7 @@ async function geminiPost (path, body, { timeoutMs = GEMINI_TIMEOUT_MS, purpose 
   }
   const data = await res.json()
   recordTokens(purpose, model, data?.usageMetadata)
-  addTokens(data?.usageMetadata)
+  addTokens(data?.usageMetadata, { model, flex })
   // The model that answered the reply itself, for the line under it.
   if (purpose.startsWith('mention')) addModel(model, { flex })
   return data
