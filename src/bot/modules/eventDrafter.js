@@ -134,6 +134,7 @@ const SYSTEM_INSTRUCTION = [
   '- サーバーの情報に「このサーバーのノリ」があれば、選ばれた話し方（配信者として／BOT として）は保ちながら、言い回し・語尾・ツッコミの温度感をこのサーバーに合わせる。',
   '- 「このサーバーのこと」と「前に出た、依頼に近い発言」は、仲間として知っていること。話に合うときに身内ネタや出来事を自然に拾う（毎回ではなく、説明しすぎない）。古い出来事は前のこととして話す。',
   '- メンバーについて聞かれたら about_member で調べてから答える（足りなければ search_server_messages などで、その人の発言を探す）。',
+  '- 話しかけてきたのは「依頼した人」の欄の人です（返信の会話では「（依頼者）」の付いた人）。依頼や会話に出てくる <@ID> が誰かは、同じ欄の一覧で分かる。人を取り違えず、呼ぶときは表示名で呼ぶ。一覧にない人のことは about_member で調べる。',
   '',
   '## そのままでは書けない依頼',
   '- 小説・お話・ネタなどの依頼に、そのままでは書けない部分（露骨な性描写、窒息・自傷など危険な行為の具体的な描写や手順など）が含まれるときは、断るだけで終わらせない。その部分をぼかした版を代わりに書く（場面転換・暗示・「その夜は――」のようなフェードアウト・朝チュンなど）。',
@@ -202,7 +203,7 @@ const replyLengthOf = length => REPLY_LENGTHS[length] ? length : DEFAULT_REPLY_L
 // what stays the same from one request to the next (the server's setting and information) leads,
 // so a prompt cache can cover as much as possible, and what is new each time (the time, the
 // conversation, the request) follows.
-function buildPrompt ({ request, referenced, channelName, channelID, channelInfo = null, server, forum, images, edit, channels = [], replyLength = null, streamerPersona = true, now }) {
+function buildPrompt ({ request, referenced, channelName, channelID, channelInfo = null, server, forum, images, edit, channels = [], people = [], replyLength = null, streamerPersona = true, now }) {
   const lines = [
     '## 話し方（このサーバーの設定）',
     streamerPersona === false ? PERSONAS.bot : PERSONAS.streamer,
@@ -213,6 +214,8 @@ function buildPrompt ({ request, referenced, channelName, channelID, channelInfo
   if (server) lines.push('', '## このサーバーの情報（最新）', wrap('server', server))
   if (channels.length) lines.push('', '## 依頼や会話に出てくるチャンネル', wrap('channels', channels.join('\n')))
   lines.push('', `依頼されたチャンネル: ${channelInfo || `#${channelName}${channelID ? `（ID: ${channelID}）` : ''}`}`)
+  // Who asked and who the request names, so the reply knows who is who (names are the members' own).
+  if (people.length) lines.push('', '## 依頼した人と、依頼や会話に出てくるメンバー（<@ID> は Discord のメンション）', wrap('members', people.join('\n')))
   if (forum) lines.push('', `## 投稿先に指定されたフォーラム\n${forum.id}: ${forum.name}（フォーラムに投稿する場合はここに投稿する）`)
   if (edit) {
     const submit = edit.kind === 'event' ? SUBMIT_EVENT_DECLARATION.name : SUBMIT_FORUM_DECLARATION.name
@@ -709,7 +712,7 @@ async function draft ({ request, referenced, channelName, channelID, server, for
       ]
     : []
   const conversation = {
-    contents: [{ role: 'user', parts: [{ text: buildPrompt({ request, referenced, channelName, channelID, channelInfo: channelID ? eventTools().requestChannelInfo(channelID, guild) : null, server, forum, images, edit, channels: member ? eventTools().namedChannels([request, referenced?.text], guild, member) : [], replyLength, streamerPersona, now }) }, ...shown] }],
+    contents: [{ role: 'user', parts: [{ text: buildPrompt({ request, referenced, channelName, channelID, channelInfo: channelID ? eventTools().requestChannelInfo(channelID, guild) : null, server, forum, images, edit, channels: member ? eventTools().namedChannels([request, referenced?.text], guild, member) : [], people: member ? eventTools().namedMembers([request, referenced?.text], guild, member) : [], replyLength, streamerPersona, now }) }, ...shown] }],
     guild,
     member,
     tools,

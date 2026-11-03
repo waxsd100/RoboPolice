@@ -540,6 +540,23 @@ function namedChannels (texts, guild, member) {
     .map(c => `- <#${c.id}>: #${c.name}（${CHANNEL_TYPES[c.type] || c.type}）${c.topic ? ` — ${c.topic.replace(/\s+/g, ' ').slice(0, MAX_TOPIC)}` : ''}`)
 }
 
+// Who asked, and the members a message names (<@ID>), as lines for the model, so it knows who is
+// who: "依頼した人: 表示名（@user、ID: …）", "<@ID>: 表示名（@user）". Members no longer in the
+// server are left out.
+function namedMembers (texts, guild, requester) {
+  const name = m => displayName(m) || m.user?.username || m.id
+  const user = m => m.username || m.user?.username || m.id
+  const label = m => `${name(m)}（@${user(m)}${m.bot || m.user?.bot ? '、BOT' : ''}）`
+  const lines = requester ? [`- 依頼した人（このメッセージを書いた人）: ${name(requester)}（@${user(requester)}、ID: ${requester.id}）`] : []
+  const ids = new Set()
+  for (const t of texts) for (const m of String(t || '').matchAll(/<@!?(\d+)>/g)) ids.add(m[1])
+  for (const id of ids) {
+    const m = guild.members.get(id)
+    if (m && id !== global.bot.user.id) lines.push(`- <@${id}>: ${label(m)}${requester && id === requester.id ? '（依頼した人本人）' : ''}`)
+  }
+  return lines
+}
+
 // The server's emojis for the model. With descriptions (emojiDescriber.js), one per line with what
 // it shows and when to use it, those closest in meaning to the request first (`vectorOf()`
 // resolves to its embedding, or null); otherwise just the codes.
@@ -677,4 +694,4 @@ async function describeServer (guild, member, requestChannelID, { query = '', co
   return lines.join('\n')
 }
 
-module.exports = { worthSearching, createTools, formatMessage, describeServer, withServerEmojis, withServerChannels, namedChannels, requestChannelInfo, searchYouTube, MESSAGE_LINK, CHANNEL_LINK, StopDrafting }
+module.exports = { worthSearching, createTools, formatMessage, describeServer, withServerEmojis, withServerChannels, namedChannels, namedMembers, requestChannelInfo, searchYouTube, MESSAGE_LINK, CHANNEL_LINK, StopDrafting }

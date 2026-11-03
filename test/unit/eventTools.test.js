@@ -4,7 +4,7 @@ const assert = require('node:assert/strict')
 const { createGuild, createMember, installBot } = require('../helpers/fakes')
 const urlFetcher = require('../../src/bot/utils/urlFetcher')
 const { unwrapTools } = require('../helpers/fakes')
-const { createTools: rawCreateTools, formatMessage, withServerEmojis, withServerChannels, namedChannels, requestChannelInfo, StopDrafting } = require('../../src/bot/modules/eventTools')
+const { createTools: rawCreateTools, formatMessage, withServerEmojis, withServerChannels, namedChannels, namedMembers, requestChannelInfo, StopDrafting } = require('../../src/bot/modules/eventTools')
 const createTools = opts => unwrapTools(rawCreateTools(opts))
 
 const REQUESTER = '1'
@@ -498,6 +498,26 @@ describe('channels in replies', () => {
       '- <#204>: #ボイス（voice）'
     ])
     assert.deepEqual(namedChannels(['https://discord.com/channels/300/301'], guild, member), [], 'another server\'s')
+  })
+})
+
+describe('who is who', () => {
+  test('who asked, and the members a message names, by their names', () => {
+    global.bot = { ...global.bot, user: { id: 'BOT' } }
+    const members = new Map([
+      ['11', { id: '11', nick: 'わこち', username: 'wakokara' }],
+      ['22', { id: '22', user: { globalName: 'くらじー', username: 'desu_crazy' } }],
+      ['33', { id: '33', username: 'otherbot', bot: true }]
+    ])
+    const g = { members }
+    const requester = members.get('11')
+    assert.deepEqual(namedMembers(['<@22> ってどんな人？ <@!33> と <@11> と <@BOT> と <@99>', '<@22> また'], g, requester), [
+      '- 依頼した人（このメッセージを書いた人）: わこち（@wakokara、ID: 11）',
+      '- <@22>: くらじー（@desu_crazy）',
+      '- <@33>: otherbot（@otherbot、BOT）',
+      '- <@11>: わこち（@wakokara）（依頼した人本人）'
+    ])
+    assert.deepEqual(namedMembers(['なし'], g, null), [])
   })
 })
 
