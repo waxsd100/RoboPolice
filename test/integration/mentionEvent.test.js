@@ -889,22 +889,26 @@ describe('mention → event / forum post (integration)', () => {
     assert.match(requests[0].body.systemInstruction.parts[0].text, /話しかけてきたのは「依頼した人」の欄の人です/)
   })
 
-  test('chat: the tokens the reply used go under it in small grey text', async () => {
+  test('chat: with %debugfooter on in the server, the models and tokens go under the reply in small grey text; off by default', async () => {
+    const { installReplyLengthStore } = require('../helpers/fakes')
     const { channel, replies } = createChannel()
-    let i = 0
-    const turns = [[call('lookup_nothing')], [call('submit_chat_reply', { text: 'やあ' })]]
-    global.fetch = async () => ({
-      ok: true,
-      json: async () => ({ candidates: [{ content: { role: 'model', parts: turns[i++] } }], usageMetadata: { promptTokenCount: 1200, cachedContentTokenCount: 1000, candidatesTokenCount: 15, thoughtsTokenCount: 40 } })
-    })
-    await mentionEvent.handle(mention(channel, '<@BOT> やあ'))
-    assert.equal(replies[0].state.content, 'やあ\n-# model: gemini-3.8-flash · tokens: in 2,400 (cached 2,000) · out 30 · thinking 80 · 2 Gemini calls')
-    process.env.MENTION_TOKEN_FOOTER = 'false'
-    const again = createChannel()
+    const usage = { promptTokenCount: 1200, cachedContentTokenCount: 1000, candidatesTokenCount: 15, thoughtsTokenCount: 40 }
     installGemini([[call('submit_chat_reply', { text: 'やあ' })]])
-    await mentionEvent.handle(mention(again.channel, '<@BOT> やあ'))
-    assert.equal(again.replies[0].state.content, 'やあ')
-    delete process.env.MENTION_TOKEN_FOOTER
+    global.fetch = (fetch => async (...args) => { const res = await fetch(...args); const data = await res.json(); return { ok: true, json: async () => ({ ...data, usageMetadata: usage }) } })(global.fetch)
+    await mentionEvent.handle(mention(channel, '<@BOT> やあ'))
+    assert.equal(replies[0].state.content, 'やあ', 'off by default')
+
+    installReplyLengthStore({}, {}, { [channel.guild.id]: true })
+    try {
+      const again = createChannel()
+      let i = 0
+      const turns = [[call('lookup_nothing')], [call('submit_chat_reply', { text: 'やあ' })]]
+      global.fetch = async () => ({ ok: true, json: async () => ({ candidates: [{ content: { role: 'model', parts: turns[i++] } }], usageMetadata: usage }) })
+      await mentionEvent.handle(mention(again.channel, '<@BOT> やあ'))
+      assert.equal(again.replies[0].state.content, 'やあ\n-# model: gemini-3.8-flash · tokens: in 2,400 (cached 2,000) · out 30 · thinking 80 · 2 Gemini calls')
+    } finally {
+      installReplyLengthStore()
+    }
   })
 
   test('chat: the line under the reply names the models; when Argon refuses, Flash answers and that is said too', async (t) => {
@@ -919,6 +923,9 @@ describe('mention → event / forum post (integration)', () => {
       if (/gemini-4-argon/.test(url)) return { ok: true, json: async () => ({ promptFeedback: { blockReason: 'PROHIBITED_CONTENT' }, usageMetadata: meta }) }
       return { ok: true, json: async () => ({ candidates: [{ content: { role: 'model', parts: [call('submit_chat_reply', { text: '書いたよ' })] } }], usageMetadata: meta }) }
     }
+    const { installReplyLengthStore } = require('../helpers/fakes')
+    installReplyLengthStore({}, {}, { [channel.guild.id]: true })
+    t.after(() => installReplyLengthStore())
     await mentionEvent.handle(mention(channel, '<@BOT> 長い話を書いて'))
     assert.deepEqual(requests.map(r => r.url.match(/models\/([^:]+)/)[1]), ['gemini-3.8-flash', 'gemini-4-argon', 'gemini-3.8-flash'])
     assert.equal(requests[1].body.serviceTier, 'flex')

@@ -113,7 +113,7 @@ describe('migrations', { skip: !database.available && 'needs PGHOST' }, () => {
     assert.deepEqual(await q('SELECT guild_id, event FROM guild_disabled_events'), [{ guild_id: 'g1', event: 'presenceUpdate' }])
     assert.deepEqual(await q('SELECT id, log_bots FROM guilds ORDER BY id'), [{ id: 'g1', log_bots: true }, { id: 'g2', log_bots: false }])
     const columns = (await q("SELECT column_name FROM information_schema.columns WHERE table_name = 'guilds' ORDER BY column_name")).map(r => r.column_name)
-    assert.deepEqual(columns, ['details_updated_at', 'icon_url', 'id', 'joined_at', 'log_bots', 'member_count', 'name', 'owner_id', 'reply_length', 'streamer_persona', 'youtube_live_events'])
+    assert.deepEqual(columns, ['debug_footer', 'details_updated_at', 'icon_url', 'id', 'joined_at', 'log_bots', 'member_count', 'name', 'owner_id', 'reply_length', 'streamer_persona', 'youtube_live_events'])
   })
 
   test('image URLs become rows', async () => {
