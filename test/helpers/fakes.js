@@ -90,7 +90,22 @@ function installEmbeddingStore ({ videos = {}, messages = [], pending = [] } = {
   }
   store.videosForEmbedding = async () => []
   store.saveVideoEmbedding = async (videoID, embedding, hash, model) => saved.videos.push({ videoID, embedding, hash, model })
-  store.pendingMessages = async limit => pending.slice(0, limit)
+  store.pendingMessages = async (limit, { after = null, before = null } = {}) => pending
+    .filter(m => !saved.batched.has(m.id) && !saved.handled.includes(m.id) && (!after || (m.ts && m.ts >= after)) && (!before || !m.ts || m.ts < before))
+    .slice(0, limit)
+  // Embedding batches of past messages (Batch API).
+  saved.batches = []
+  saved.batched = new Set()
+  store.saveEmbeddingBatch = async (name, model, ids) => {
+    saved.batches.push({ name, model, message_ids: ids })
+    ids.forEach(id => saved.batched.add(id))
+  }
+  store.runningEmbeddingBatches = async () => saved.batches.map(b => ({ ...b }))
+  store.deleteEmbeddingBatch = async name => {
+    const batch = saved.batches.find(b => b.name === name)
+    batch?.message_ids.forEach(id => saved.batched.delete(id))
+    saved.batches = saved.batches.filter(b => b.name !== name)
+  }
   store.saveMessageEmbeddings = async (rows, handled) => {
     saved.messages.push(...rows)
     saved.handled.push(...handled)

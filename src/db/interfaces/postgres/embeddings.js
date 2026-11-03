@@ -22,13 +22,49 @@ async function modelId (name) {
   return modelIds.get(name)
 }
 
-// Messages not handled yet, those of the owner's servers first, then newest first:
-// [{ id, guild_id, channel_id, ts, content }].
-async function pendingMessages (limit) {
+// Messages not handled yet and not in a running batch, those of the owner's servers first, then
+// newest first: [{ id, guild_id, channel_id, ts, content }]. after: only those sent since then;
+// before: only those sent before then (or at no known time).
+async function pendingMessages (limit, { after = null, before = null } = {}) {
   const rows = await pool.query(
-    'SELECT id, guild_id, channel_id, ts, content FROM messages WHERE embedding_model_id IS NULL ORDER BY (guild_id = ANY($2)) DESC NULLS LAST, ts DESC LIMIT $1',
-    [limit, ownerGuildIDs()])
+    `SELECT id, guild_id, channel_id, ts, content FROM messages m
+     WHERE embedding_model_id IS NULL
+       AND ($3::timestamptz IS NULL OR ts >= $3)
+       AND ($4::timestamptz IS NULL OR ts < $4 OR ts IS NULL)
+       AND NOT EXISTS (SELECT 1 FROM embedding_batch_messages b WHERE b.message_id = m.id)
+     ORDER BY (guild_id = ANY($2)) DESC NULLS LAST, ts DESC LIMIT $1`,
+    [limit, ownerGuildIDs(), after, before])
   return rows.rows
+}
+
+// Embedding batches (migrations/028_embedding_batches.sql).
+async function saveEmbeddingBatch (name, model, messageIDs) {
+  const client = await pool.getPostgresClient()
+  try {
+    await client.query('BEGIN')
+    await client.query('INSERT INTO embedding_batches (name, model) VALUES ($1, $2)', [name, model])
+    await client.query('INSERT INTO embedding_batch_messages (message_id, batch_name) SELECT unnest($1::text[]), $2 ON CONFLICT DO NOTHING', [messageIDs, name])
+    await client.query('COMMIT')
+  } catch (e) {
+    await client.query('ROLLBACK').catch(() => {})
+    throw e
+  } finally {
+    client.release()
+  }
+}
+
+// [{ name, model, message_ids }], oldest first.
+async function runningEmbeddingBatches () {
+  const rows = await pool.query(
+    `SELECT b.name, b.model, coalesce(array_agg(m.message_id) FILTER (WHERE m.message_id IS NOT NULL), '{}') AS message_ids
+     FROM embedding_batches b LEFT JOIN embedding_batch_messages m ON m.batch_name = b.name
+     GROUP BY b.name, b.model, b.created_at ORDER BY b.created_at`)
+  return rows.rows
+}
+
+// Drops the batch; its messages not handled meanwhile are pending again.
+async function deleteEmbeddingBatch (name) {
+  await pool.query('DELETE FROM embedding_batches WHERE name = $1', [name])
 }
 
 // Stores [{ id, embedding (an Int8Array from embed()), model }] and marks `handledIds` as handled by
@@ -161,4 +197,4 @@ async function videoScores (guildID, query, model) {
   return Object.fromEntries(rows.rows.map(r => [r.video_id, Number(r.score)]))
 }
 
-module.exports = { pendingMessages, saveMessageEmbeddings, embeddedMessagesAfter, dropMessageEmbeddings, resetStaleMessageEmbeddings, invalidateMessage, nearestMessages, getMessages, videosForEmbedding, saveVideoEmbedding, hasVideoEmbeddings, videoScores, modelId }
+module.exports = { saveEmbeddingBatch, runningEmbeddingBatches, deleteEmbeddingBatch, pendingMessages, saveMessageEmbeddings, embeddedMessagesAfter, dropMessageEmbeddings, resetStaleMessageEmbeddings, invalidateMessage, nearestMessages, getMessages, videosForEmbedding, saveVideoEmbedding, hasVideoEmbeddings, videoScores, modelId }
