@@ -129,6 +129,72 @@ describe('embeddingIndexer', () => {
     assert.equal(saved.dropped.length, 4)
   })
 
+  test('past messages go to the Batch API, one batch at a time; recent ones are embedded right away', async (t) => {
+    t.mock.method(global.logger, 'info', () => {})
+    const old = new Date(Date.now() - 3 * 24 * 60 * 60 * 1000)
+    const saved = installEmbeddingStore({
+      pending: [
+        { id: 'new', guild_id: '100', channel_id: '201', ts: new Date(), content: '今日の配信たのしみ' },
+        { id: 'p1', guild_id: '100', channel_id: '201', ts: old, content: '去年のホラー配信こわかった' },
+        { id: 'p2', guild_id: '100', channel_id: '201', ts: old, content: 'wwwww' },
+        { id: 'p3', guild_id: '100', channel_id: '201', ts: old, content: 'マイクラのコラボまたやって' }
+      ]
+    })
+    const requests = []
+    let state = 'BATCH_STATE_RUNNING'
+    const sync = installEmbeddingModel()
+    const embedOne = global.fetch
+    global.fetch = async (url, init = {}) => {
+      if (String(url).endsWith(':batchEmbedContents')) return embedOne(url, init)
+      requests.push({ url, body: init.body ? JSON.parse(init.body) : null })
+      if (String(url).endsWith(':asyncBatchEmbedContent')) return { ok: true, json: async () => ({ name: 'batches/e1', metadata: { state: 'BATCH_STATE_PENDING' } }) }
+      if (String(url).endsWith('/batches/e1')) {
+        const values = new Array(DIMENSIONS).fill(0)
+        values[0] = 1
+        return { ok: true, json: async () => ({ name: 'batches/e1', metadata: { state }, response: { inlinedResponses: { inlinedResponses: [{ metadata: { key: 'p3' }, response: { embedding: { values } } }, { metadata: { key: 'p1' }, error: { message: 'x' } }] } } }) }
+      }
+      throw new Error(`unexpected ${url}`)
+    }
+    process.env.MESSAGE_EMBEDDINGS = 'true'
+    try {
+      assert.equal(await indexer.indexMessages(), 1)
+      assert.deepEqual(saved.messages.map(m => m.id), ['new'], 'the recent one right away')
+      assert.equal(sync.length, 1)
+      const [sent] = requests
+      assert.match(sent.url, /models\/gemini-embedding-001:asyncBatchEmbedContent$/)
+      const inline = sent.body.batch.inputConfig.requests.requests
+      assert.deepEqual(inline.map(r => r.metadata.key), ['p1', 'p3'])
+      assert.deepEqual(Object.keys(inline[0].request).sort(), ['content', 'model', 'outputDimensionality', 'taskType'])
+      assert.equal(inline[0].request.taskType, 'RETRIEVAL_DOCUMENT')
+      assert.ok(saved.handled.includes('p2'), 'noise is only marked as handled')
+      assert.deepEqual(saved.batches.map(b => b.message_ids), [['p1', 'p3']])
+
+      await indexer.indexMessages()
+      assert.equal(requests.filter(r => r.url.endsWith(':asyncBatchEmbedContent')).length, 1, 'no second batch while one runs')
+
+      state = 'BATCH_STATE_SUCCEEDED'
+      await indexer.indexMessages()
+      assert.ok(saved.messages.some(m => m.id === 'p3' && m.embedding.length === DIMENSIONS))
+      assert.ok(!saved.messages.some(m => m.id === 'p1'), 'one Gemini could not embed has no vector...')
+      assert.ok(saved.handled.includes('p1'), '...but is handled, not sent again and again')
+      assert.equal(saved.batches.length, 0)
+    } finally {
+      delete process.env.MESSAGE_EMBEDDINGS
+    }
+  })
+
+  test('EMBEDDING_BATCH_AFTER_HOURS=0 embeds every message right away', async () => {
+    process.env.EMBEDDING_BATCH_AFTER_HOURS = '0'
+    try {
+      installEmbeddingModel()
+      const saved = installEmbeddingStore({ pending: [{ id: 'p1', guild_id: '100', channel_id: '201', ts: new Date(0), content: '昔のホラー配信の話' }] })
+      assert.equal(await indexer.indexMessages(), 1)
+      assert.equal(saved.batches.length, 0)
+    } finally {
+      delete process.env.EMBEDDING_BATCH_AFTER_HOURS
+    }
+  })
+
   test('a failure is logged and tried again next time', async (t) => {
     const warned = t.mock.method(global.logger, 'warn', () => {})
     installEmbeddingStore()

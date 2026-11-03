@@ -639,6 +639,7 @@ the secrets if it leaks, so keep it only on the platform and delete it in the co
 | `SERVER_LORE_WEEKS` | Optional (default `8`). How many recent weeks of messages `SERVER_LORE` learns from; older knowledge is dropped |
 | `MESSAGE_EMBEDDINGS` | Optional. `true` embeds every stored message for search by meaning (sends them to Gemini; see above). Off by default |
 | `MESSAGE_EMBEDDING_MIN_CHARS` | Optional. Messages with fewer letters or digits than this, once links, emojis and mentions are taken out, are not embedded or found by meaning (nor is laughter such as `www` or `草`). Default 5 |
+| `EMBEDDING_BATCH_AFTER_HOURS` | Optional (default `24`). With `MESSAGE_EMBEDDINGS=true`, messages older than this many hours (the history read back, a backlog) are embedded through Gemini's Batch API: half the price, done within a day, one batch of up to 20,000 messages at a time, checked every run (`EMBEDDING_INTERVAL_MINUTES`) and kept across restarts. Newer messages are embedded right away so they can be found soon (Flex inference does not take embedding models). `0` embeds everything right away |
 | `EMBEDDING_INTERVAL_MINUTES` | Optional. How often to embed new videos and messages. Defaults to 5; 0 turns it off |
 | `GEMINI_EMBEDDING_MODEL` | Optional. Defaults to `gemini-embedding-001` |
 | `YOUTUBE_GATEWAY_PROVIDER` | Optional. Slug of an AI Gateway custom provider (see below). Set, YouTube API calls go through Cloudflare AI Gateway; unset, straight to Google |

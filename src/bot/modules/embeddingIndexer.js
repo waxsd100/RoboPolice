@@ -2,7 +2,7 @@
 // and summary, redone when any of them changes) and, when MESSAGE_EMBEDDINGS=true, every stored
 // message. One worker runs it for all servers, like the retention sweep.
 const crypto = require('crypto')
-const { embed, model } = require('../utils/embeddings')
+const { embed, model, submitEmbeddingBatch, embeddingBatchResult } = require('../utils/embeddings')
 const store = require('../../db/interfaces/postgres/embeddings')
 const { isGatewayConfigured } = require('../utils/aiGateway')
 const { embeddableText } = require('../utils/messageNoise')
@@ -10,10 +10,24 @@ const { embeddableText } = require('../utils/messageNoise')
 const DEFAULT_INTERVAL_MINUTES = 5
 // Per run, so a first run over a large history spreads over many runs instead of one long burst.
 const MESSAGES_PER_RUN = 1000
+// Messages older than EMBEDDING_BATCH_AFTER_HOURS (default 24; 0 to embed everything right away)
+// are embedded through Gemini's Batch API instead: half the price, done within a day. One batch at
+// a time, of at most BATCH_MAX messages and BATCH_MAX_BYTES of text (Gemini takes 20 MB inline).
+// Newer ones are embedded right away, so they can be found soon. (Flex inference does not take
+// embedding models.)
+const DEFAULT_BATCH_AFTER_HOURS = 24
+const BATCH_MAX = 20000
+const BATCH_MAX_BYTES = 10 * 1024 * 1024
 const VIDEOS_PER_RUN = 500
 
 function messageEmbeddingsEnabled () {
   return process.env.MESSAGE_EMBEDDINGS === 'true'
+}
+
+function batchAfterHours () {
+  const raw = process.env.EMBEDDING_BATCH_AFTER_HOURS
+  const n = Number(raw)
+  return raw !== undefined && raw !== '' && Number.isFinite(n) && n >= 0 ? n : DEFAULT_BATCH_AFTER_HOURS
 }
 
 function intervalMinutes () {
@@ -55,11 +69,12 @@ function plainText (stored) {
 async function indexMessages () {
   const reset = await store.resetStaleMessageEmbeddings(model(), MESSAGES_PER_RUN)
   if (reset) global.logger.info(`[EMBEDDINGS]: ${reset} message(s) were embedded by another model and will be embedded again`)
-  const pending = await store.pendingMessages(MESSAGES_PER_RUN)
+  const hours = batchAfterHours()
+  const cutoff = hours ? new Date(Date.now() - hours * 60 * 60 * 1000) : null
+  if (cutoff) await batchPastMessages(cutoff)
+  const pending = await store.pendingMessages(MESSAGES_PER_RUN, { after: cutoff })
   if (pending.length === 0) return 0
-  // Messages from before channels were recorded can't be searched by channel; empty ones and noise
-  // ("w", a bare link or emoji: messageNoise.js) say nothing. All are only marked as handled.
-  const wanted = pending.map(m => ({ ...m, text: embeddableText(plainText(m.content)) })).filter(m => m.text && m.channel_id && m.guild_id)
+  const wanted = worthEmbedding(pending)
   const vectors = wanted.length ? await embed(wanted.map(m => m.text)) : []
   await store.saveMessageEmbeddings(
     wanted.map((m, i) => ({ id: m.id, embedding: vectors[i], model: model() })),
@@ -88,6 +103,51 @@ async function cleanseMessages () {
   return dropped
 }
 
+// Messages from before channels were recorded can't be searched by channel; empty ones and noise
+// ("w", a bare link or emoji: messageNoise.js) say nothing. Those are only marked as handled.
+function worthEmbedding (pending) {
+  return pending.map(m => ({ ...m, text: embeddableText(plainText(m.content)) })).filter(m => m.text && m.channel_id && m.guild_id)
+}
+
+// Looks at the running batch of past messages, storing it when done, and sends the next one when
+// none is running. Resolves to how many messages a finished batch embedded.
+async function batchPastMessages (cutoff) {
+  let embedded = 0
+  for (const batch of await store.runningEmbeddingBatches()) {
+    const result = await embeddingBatchResult(batch.name)
+    if (result.state === 'running') return embedded
+    if (result.state === 'failed') {
+      global.logger.warn(`[EMBEDDINGS]: Batch ${batch.name} ended ${result.detail}; its messages will be sent again`)
+    } else {
+      // Messages Gemini could not embed are marked as handled too, so they are not sent again and again.
+      const rows = batch.message_ids.filter(id => result.vectors.has(id)).map(id => ({ id, embedding: result.vectors.get(id), model: batch.model }))
+      await store.saveMessageEmbeddings(rows, batch.message_ids, batch.model)
+      embedded += rows.length
+      global.logger.info(`[EMBEDDINGS]: Batch ${batch.name} done: embedded ${rows.length} past message(s)${result.failed.length ? `, ${result.failed.length} could not be` : ''}`)
+    }
+    await store.deleteEmbeddingBatch(batch.name)
+  }
+  const pending = await store.pendingMessages(BATCH_MAX, { before: cutoff })
+  if (pending.length === 0) return embedded
+  const wanted = []
+  let bytes = 0
+  for (const m of worthEmbedding(pending)) {
+    bytes += Buffer.byteLength(m.text) + 200
+    if (bytes > BATCH_MAX_BYTES) break
+    wanted.push(m)
+  }
+  const sent = new Set(wanted.map(m => m.id))
+  // Only marked as handled: nothing to send for them.
+  const nothing = pending.filter(m => !sent.has(m.id) && !worthEmbedding([m]).length).map(m => m.id)
+  if (nothing.length) await store.saveMessageEmbeddings([], nothing, model())
+  if (wanted.length) {
+    const name = await submitEmbeddingBatch(wanted.map(m => m.text), wanted.map(m => m.id))
+    await store.saveEmbeddingBatch(name, model(), wanted.map(m => m.id))
+    global.logger.info(`[EMBEDDINGS]: Sent ${wanted.length} past message(s) to be embedded in batch ${name}`)
+  }
+  return embedded
+}
+
 let running = false
 async function runOnce () {
   if (running) return
@@ -113,4 +173,4 @@ function startIndexer () {
   return setInterval(runOnce, minutes * 60 * 1000)
 }
 
-module.exports = { startIndexer, runOnce, indexVideos, indexMessages, cleanseMessages, cleanse, messageEmbeddingsEnabled, videoText, hashOf }
+module.exports = { startIndexer, runOnce, indexVideos, indexMessages, batchPastMessages, batchAfterHours, cleanseMessages, cleanse, messageEmbeddingsEnabled, videoText, hashOf }

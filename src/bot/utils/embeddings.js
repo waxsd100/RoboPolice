@@ -3,7 +3,7 @@
 //
 // Vectors are DIMENSIONS long (the model is trained so a prefix of its output is a usable
 // embedding), normalized, and handled in the app as signed bytes (each component times 127).
-const { geminiRequest } = require('../modules/eventDrafter')
+const { geminiRequest, geminiSend } = require('../modules/eventDrafter')
 
 const DEFAULT_EMBEDDING_MODEL = 'gemini-embedding-001'
 const DIMENSIONS = 512
@@ -81,4 +81,39 @@ function fromBase64 (text) {
   return new Int8Array(buffer.buffer, buffer.byteOffset, buffer.byteLength)
 }
 
-module.exports = { embed, embedQuery, blend, model, similarity, quantize, toVectorLiteral, toBase64, fromBase64, DIMENSIONS, BATCH_SIZE }
+// Texts for storing (RETRIEVAL_DOCUMENT), sent to Gemini's Batch API as one batch: half the price,
+// done within a day. keys: one per text, to find its vector again. Resolves to the batch's name.
+async function submitEmbeddingBatch (texts, keys) {
+  const name = `models/${model()}`
+  const data = await geminiRequest(model(), 'asyncBatchEmbedContent', {
+    batch: {
+      displayName: `robopolice-embeddings-${Date.now()}`,
+      inputConfig: { requests: { requests: texts.map((text, i) => ({ request: request(name, text, 'RETRIEVAL_DOCUMENT'), metadata: { key: keys[i] } })) } }
+    }
+  }, { purpose: 'embedding-batch', timeoutMs: 2 * 60 * 1000 })
+  const batch = data.name || data.metadata?.name
+  if (!/^batches\//.test(batch || '')) throw new Error(`Gemini returned no batch name: ${JSON.stringify(data).slice(0, 300)}`)
+  return batch
+}
+
+// The batch's state: 'running', 'succeeded' with { vectors: Map(key -> Int8Array), failed: [key] },
+// or 'failed' (failed, cancelled or expired at Gemini).
+async function embeddingBatchResult (batch) {
+  const data = await geminiSend('GET', batch)
+  const state = String(data.metadata?.state || data.state || '')
+  if (/FAILED|CANCELLED|EXPIRED/.test(state)) return { state: 'failed', detail: state }
+  if (!/SUCCEEDED/.test(state)) return { state: 'running' }
+  const out = data.response || data.metadata?.output || data.output || data.dest || {}
+  const list = out.inlinedResponses?.inlinedResponses || out.inlinedResponses || out.inlinedEmbedContentResponses || []
+  const vectors = new Map()
+  const failed = []
+  for (const r of Array.isArray(list) ? list : []) {
+    const key = r.metadata?.key
+    const values = r.response?.embedding?.values || r.response?.embeddings?.[0]?.values
+    if (key && values?.length) vectors.set(key, quantize(values))
+    else if (key) failed.push(key)
+  }
+  return { state: 'succeeded', vectors, failed }
+}
+
+module.exports = { submitEmbeddingBatch, embeddingBatchResult, embed, embedQuery, blend, model, similarity, quantize, toVectorLiteral, toBase64, fromBase64, DIMENSIONS, BATCH_SIZE }
