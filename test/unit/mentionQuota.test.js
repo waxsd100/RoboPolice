@@ -5,65 +5,76 @@ const mentionQuota = require('../../src/bot/utils/mentionQuota')
 
 const OWNER = '615170683068219393'
 const OTHER = '100'
+const HOUR = 60 * 60 * 1000
+const at = (t, hours = 0) => new Date(Date.parse(t) + hours * HOUR)
+const T0 = '2026-10-30T12:00:00+09:00'
 
 describe('mentionQuota', () => {
   let counts
   beforeEach(() => { counts = installQuotaStore() })
   afterEach(() => {
-    for (const name of ['MENTION_DAILY_LIMIT', 'MENTION_DAILY_LIMIT_OTHER', 'MENTION_GUILD_DAILY_LIMIT_OTHER', 'OWNER_GUILD_IDS']) delete process.env[name]
+    for (const name of ['MENTION_TOKEN_PRICES', 'MENTION_TOKEN_LIMIT_5H', 'MENTION_TOKEN_LIMIT_WEEK', 'MENTION_GUILD_DAILY_LIMIT_OTHER', 'OWNER_GUILD_IDS', 'CREATOR_IDS']) delete process.env[name]
   })
 
-  test('in the owner\'s server, 30 mentions a day per user by default, then refuses', async () => {
+  test('a response counts by what it cost on Gemini\'s price list, in tokens of the usual model\'s input', () => {
+    const now = new Date('2026-11-03T12:00:00Z')
+    const meta = { promptTokenCount: 12000, cachedContentTokenCount: 10000, candidatesTokenCount: 300, thoughtsTokenCount: 700 }
+    // 2,000 × $0.75 + 10,000 × $0.075 (cached) + 1,000 × $3.75 (answer and thinking), in $0.75 tokens.
+    assert.equal(mentionQuota.costOf(meta, 'gemini-3.8-flash', { now }), 8000)
+    assert.equal(mentionQuota.costOf(meta, 'gemini-4-argon', { now }), 20000, '$2 / $0.10 / $10')
+    assert.equal(mentionQuota.costOf(meta, 'gemini-4-argon', { now, flex: true }), 10000, 'Flex inference for half')
+    assert.equal(mentionQuota.costOf(meta, 'gemini-4-argon', { now: new Date('2026-12-01T00:00:00Z') }), 40000, 'from the date its price changes')
+    assert.equal(Math.round(mentionQuota.costOf(meta, 'gemini-3.5-flash-lite', { now })), 4533, 'a cheaper model for less')
+    assert.equal(mentionQuota.costOf(null, 'gemini-3.8-flash'), 0)
+  })
+
+  test('per user across servers: 300,000 tokens in five hours from the first use, then refused until it resets', async () => {
+    await mentionQuota.record('1', 200000, at(T0))
+    assert.equal((await mentionQuota.take('1', OWNER, at(T0, 1))).allowed, true, 'under the limit')
+    await mentionQuota.record('1', 100000, at(T0, 1))
+    const refused = await mentionQuota.take('1', OTHER, at(T0, 2))
+    assert.deepEqual(refused, { allowed: false, scope: 'user', window: '5h', label: '5時間', limit: 300000, resetsAt: at(T0, 5) })
+    assert.equal((await mentionQuota.take('1', OWNER, at(T0, 2))).allowed, false, 'in every server')
+    assert.equal((await mentionQuota.take('2', OWNER, at(T0, 2))).allowed, true, 'counted per user')
+    assert.equal((await mentionQuota.take('1', OWNER, at(T0, 5))).allowed, true, 'the window is over')
+    assert.equal(mentionQuota.refusal(refused, at(T0, 2)), '利用上限（5時間あたり 300,000 トークン）に達しました。17:00ごろ（日本時間）からまた使えます。')
+  })
+
+  test('a week: 2,000,000 tokens from the first use; the reset date is said when it is another day', async () => {
+    for (let i = 0; i < 7; i++) await mentionQuota.record('1', 290000, at(T0, i * 6))
+    const refused = await mentionQuota.take('1', OWNER, at(T0, 42))
+    assert.equal(refused.window, 'week')
+    assert.deepEqual(refused.resetsAt, at(T0, 7 * 24))
+    assert.equal(mentionQuota.refusal(refused, at(T0, 42)), '利用上限（1週間あたり 2,000,000 トークン）に達しました。11/6 12:00ごろ（日本時間）からまた使えます。')
+  })
+
+  test('the limits can be changed, and 0 turns one off; the bot\'s developers have none', async () => {
+    process.env.MENTION_TOKEN_LIMIT_5H = '0'
+    process.env.MENTION_TOKEN_LIMIT_WEEK = '1000'
+    await mentionQuota.record('1', 1000, at(T0))
+    assert.equal(counts.has('mention-tokens:5h:1'), false)
+    assert.equal((await mentionQuota.take('1', OWNER, at(T0))).window, 'week')
+    process.env.CREATOR_IDS = '1'
+    assert.equal((await mentionQuota.take('1', OWNER, at(T0))).allowed, true)
+  })
+
+  test('outside the owner\'s server, the whole server has 30 mentions a day (Japan time)', async () => {
     const now = new Date('2026-10-30T12:00:00+09:00')
-    for (let i = 0; i < 30; i++) assert.equal((await mentionQuota.take('1', OWNER, now)).allowed, true)
-    assert.deepEqual(await mentionQuota.take('1', OWNER, now), { allowed: false, limit: 30, scope: 'user' })
-    assert.equal((await mentionQuota.take('2', OWNER, now)).allowed, true, 'counted per user')
-  })
-
-  test('elsewhere, 5 a day per user and 30 a day for the whole server', async () => {
-    const now = new Date('2026-10-30T12:00:00+09:00')
-    for (let i = 0; i < 5; i++) assert.equal((await mentionQuota.take('1', OTHER, now)).allowed, true)
-    assert.deepEqual(await mentionQuota.take('1', OTHER, now), { allowed: false, limit: 5, scope: 'user' })
-    // 24 more users bring the server to 30 answered (the refused one is not counted).
-    for (let u = 2; u <= 6; u++) for (let i = 0; i < 5; i++) await mentionQuota.take(String(u), OTHER, now)
-    assert.equal(counts.get(`mention-quota-guild:${OTHER}:2026-10-30`), 30)
-    assert.deepEqual(await mentionQuota.take('7', OTHER, now), { allowed: false, limit: 30, scope: 'guild' })
-    assert.equal(counts.get(`mention-quota:${OTHER}:7:2026-10-30`), 0, 'refused by the server limit: not counted against the user')
-    assert.equal((await mentionQuota.take('1', OWNER, now)).allowed, true, 'the owner\'s server is counted apart')
-  })
-
-  test('OWNER_GUILD_IDS names the owner\'s servers', async () => {
-    process.env.OWNER_GUILD_IDS = `${OTHER}, 555`
-    const now = new Date('2026-10-30T12:00:00+09:00')
-    for (let i = 0; i < 10; i++) assert.equal((await mentionQuota.take('1', OTHER, now)).allowed, true)
-  })
-
-  test('the day turns over at midnight Japan time', async () => {
-    assert.equal(mentionQuota.today(new Date('2026-10-30T23:59:00+09:00')), '2026-10-30')
-    assert.equal(mentionQuota.today(new Date('2026-10-31T00:00:00+09:00')), '2026-10-31')
-    process.env.MENTION_DAILY_LIMIT = '1'
-    await mentionQuota.take('1', OWNER, new Date('2026-10-30T23:59:00+09:00'))
-    assert.equal((await mentionQuota.take('1', OWNER, new Date('2026-10-30T23:59:30+09:00'))).allowed, false)
-    assert.equal((await mentionQuota.take('1', OWNER, new Date('2026-10-31T00:00:00+09:00'))).allowed, true)
-    assert.deepEqual([...counts.keys()], ['mention-quota:1:2026-10-30', 'mention-quota:1:2026-10-31'])
-  })
-
-  test('the limits can be changed, and 0 turns one off', async () => {
-    process.env.MENTION_DAILY_LIMIT = '0'
-    for (let i = 0; i < 40; i++) assert.equal((await mentionQuota.take('1', OWNER)).allowed, true)
-    assert.equal(counts.size, 0)
-    process.env.MENTION_DAILY_LIMIT = 'abc'
-    assert.equal((await mentionQuota.take('1', OWNER)).limit, 30)
-    process.env.MENTION_DAILY_LIMIT_OTHER = '0'
-    process.env.MENTION_GUILD_DAILY_LIMIT_OTHER = '2'
-    await mentionQuota.take('1', OTHER)
-    await mentionQuota.take('2', OTHER)
-    assert.equal((await mentionQuota.take('3', OTHER)).scope, 'guild')
+    for (let u = 1; u <= 30; u++) assert.equal((await mentionQuota.take(String(u), OTHER, now)).allowed, true)
+    assert.deepEqual(await mentionQuota.take('31', OTHER, now), { allowed: false, scope: 'guild', limit: 30 })
+    assert.equal(counts.get(`mention-quota-guild:${OTHER}:2026-10-30`), 31)
+    assert.equal((await mentionQuota.take('31', OTHER, new Date('2026-10-31T00:00:00+09:00'))).allowed, true, 'the next day in Japan')
+    assert.equal((await mentionQuota.take('31', OWNER, now)).allowed, true, 'not in the owner\'s server')
+    process.env.OWNER_GUILD_IDS = OTHER
+    assert.equal((await mentionQuota.take('32', OTHER, now)).allowed, true, 'OWNER_GUILD_IDS names the owner\'s servers')
+    delete process.env.OWNER_GUILD_IDS
+    process.env.MENTION_GUILD_DAILY_LIMIT_OTHER = '0'
+    assert.equal((await mentionQuota.take('33', OTHER, now)).allowed, true)
   })
 
   test('lets the mention through when Redis fails', async (t) => {
     const warned = t.mock.method(global.logger, 'warn', () => {})
-    mentionQuota.store.increment = async () => { throw new Error('ECONNREFUSED') }
+    mentionQuota.store.get = async () => { throw new Error('ECONNREFUSED') }
     assert.equal((await mentionQuota.take('1', OTHER)).allowed, true)
     assert.match(warned.mock.calls[0].arguments[0], /ECONNREFUSED/)
   })

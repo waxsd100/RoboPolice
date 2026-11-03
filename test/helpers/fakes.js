@@ -187,14 +187,33 @@ function installReplyLengthStore (lengths = {}, personas = {}, debugFooters = {}
 installReplyLengthStore()
 
 // Replaces the Redis counter behind the daily mention limit with an in-memory one.
+// counts: { key: number } (the server caps and the token windows); windows also keep when each
+// token window ends ({ key: Date }), by the `now` given (the clock otherwise).
 function installQuotaStore () {
   const counts = new Map()
+  const ends = new Map()
   const { store } = require('../../src/bot/utils/mentionQuota')
+  const live = (key, now) => {
+    const end = ends.get(key)
+    if (end && end.getTime() <= now.getTime()) {
+      counts.delete(key)
+      ends.delete(key)
+    }
+  }
+  store.get = async (key, now = new Date()) => {
+    live(key, now)
+    const end = ends.get(key)
+    return { value: counts.get(key) || 0, resetsInMs: end ? end.getTime() - now.getTime() : null }
+  }
+  store.add = async (key, amount, seconds, now = new Date()) => {
+    live(key, now)
+    if (!ends.has(key)) ends.set(key, new Date(now.getTime() + seconds * 1000))
+    counts.set(key, (counts.get(key) || 0) + amount)
+  }
   store.increment = async key => {
     counts.set(key, (counts.get(key) || 0) + 1)
     return counts.get(key)
   }
-  store.decrement = async key => counts.set(key, (counts.get(key) || 0) - 1)
   return counts
 }
 

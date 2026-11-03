@@ -1055,32 +1055,69 @@ describe('mention → event / forum post (integration)', () => {
     assert.equal(discord.find(c => c.method === 'POST').body.name, '交流会')
   })
 
-  test('outside the owner\'s server, each user gets 5 mentions a day, the server 30', async () => {
+  test('each user has a token limit across every server: what a mention used counts, and a full window refuses until it resets', async () => {
+    const { WINDOWS } = require('../../src/bot/utils/mentionQuota')
+    const usage = { promptTokenCount: 12000, cachedContentTokenCount: 10000, candidatesTokenCount: 300, thoughtsTokenCount: 700 }
     const { channel, replies } = createChannel()
-    const day = require('../../src/bot/utils/mentionQuota').today(new Date())
-    quota.set(`mention-quota:100:${REQUESTER}:${day}`, 5)
+    installGemini([[call('submit_chat_reply', { text: 'やあ' })]])
+    global.fetch = (fetch => async (...args) => { const res = await fetch(...args); const data = await res.json(); return { ok: true, json: async () => ({ ...data, usageMetadata: usage }) } })(global.fetch)
+    await mentionEvent.handle(mention(channel, '<@BOT> こんにちは'))
+    assert.equal(replies[0].state.content, 'やあ')
+    // On Gemini 3.8 Flash's prices: 2,000 not cached + 10,000 cached at a tenth + 1,000 answer and thinking at five times.
+    assert.equal(quota.get(`mention-tokens:5h:${REQUESTER}`), 8000)
+    assert.equal(quota.get(`mention-tokens:week:${REQUESTER}`), 8000)
+
+    // The five hours are used up: refused, in any server, with when it resets (5 hours after the first use).
+    quota.set(`mention-tokens:5h:${REQUESTER}`, WINDOWS[0].fallback)
     installGemini([])
     await mentionEvent.handle(mention(channel, '<@BOT> こんにちは'))
-    assert.equal(replies[0].state.content, '今日の利用回数の上限（1日5回）に達しました。明日（日本時間の0時以降）またお試しください。')
-    quota.set(`mention-quota-guild:100:${day}`, 30)
+    assert.match(replies[1].state.content, /^利用上限（5時間あたり 300,000 トークン）に達しました。20:0\dごろ（日本時間）からまた使えます。$/)
+    process.env.OWNER_GUILD_IDS = '100'
+    try {
+      await mentionEvent.handle(mention(channel, '<@BOT> こんにちは'))
+      assert.match(replies[2].state.content, /^利用上限（5時間あたり/, 'the owner\'s server too')
+    } finally {
+      delete process.env.OWNER_GUILD_IDS
+    }
+    // Someone else is not affected.
+    installGemini([[call('submit_chat_reply', { text: 'どうも' })]])
     await mentionEvent.handle(mention(channel, '<@BOT> こんにちは', { author: OTHER_USER, member: createMember({ id: OTHER_USER }) }))
-    assert.equal(replies[1].state.content, 'このサーバーの今日の利用回数の上限（1日30回）に達しました。明日（日本時間の0時以降）またお試しください。')
-    quota.delete(`mention-quota-guild:100:${day}`)
+    assert.equal(replies[3].state.content, 'どうも')
   })
 
-  test('in the owner\'s server, each user gets 30 mentions a day', async () => {
-    process.env.OWNER_GUILD_IDS = '100'
+  test('the stronger model\'s tokens count by its price against the limit, Flex for half', async (t) => {
+    t.mock.method(global.logger, 'info', () => {})
     const { channel, replies } = createChannel()
-    for (let i = 0; i < 30; i++) quota.set(`mention-quota:${REQUESTER}:${require('../../src/bot/utils/mentionQuota').today(new Date())}`, i + 1)
+    const meta = { promptTokenCount: 1000, candidatesTokenCount: 0 }
+    let i = 0
+    global.fetch = async () => ({
+      ok: true,
+      json: async () => ({ candidates: [{ content: { role: 'model', parts: [i++ === 0 ? call('think_deeper', { reason: '長文' }) : call('submit_chat_reply', { text: '書いたよ' })] } }], usageMetadata: meta })
+    })
+    await mentionEvent.handle(mention(channel, '<@BOT> 長い話を書いて'))
+    assert.equal(replies[0].state.content, '書いたよ')
+    // 1,000 from the reply model; 1,000 at Argon's $2 (against $0.75), halved for Flex.
+    assert.equal(quota.get(`mention-tokens:5h:${REQUESTER}`), 2333)
+  })
+
+  test('outside the owner\'s server, the whole server has 30 mentions a day; the bot\'s developers have no token limit', async () => {
+    const { channel, replies } = createChannel()
+    const day = require('../../src/bot/utils/mentionQuota').today(new Date())
+    quota.set(`mention-quota-guild:100:${day}`, 30)
     installGemini([])
     await mentionEvent.handle(mention(channel, '<@BOT> こんにちは'))
-    delete process.env.OWNER_GUILD_IDS
-    assert.equal(replies[0].state.content, '今日の利用回数の上限（1日30回）に達しました。明日（日本時間の0時以降）またお試しください。')
-    process.env.OWNER_GUILD_IDS = '100'
-    installGemini([[call('submit_chat_reply', { text: 'やあ' })]])
-    await mentionEvent.handle(mention(channel, '<@BOT> こんにちは', { author: OTHER_USER, member: createMember({ id: OTHER_USER }) }))
-    delete process.env.OWNER_GUILD_IDS
-    assert.equal(replies[1].state.content, 'やあ')
+    assert.equal(replies[0].state.content, 'このサーバーの今日の利用回数の上限（1日30回）に達しました。明日（日本時間の0時以降）またお試しください。')
+    quota.delete(`mention-quota-guild:100:${day}`)
+
+    quota.set(`mention-tokens:week:${REQUESTER}`, 10 ** 9)
+    process.env.CREATOR_IDS = REQUESTER
+    try {
+      installGemini([[call('submit_chat_reply', { text: 'やあ' })]])
+      await mentionEvent.handle(mention(channel, '<@BOT> こんにちは'))
+      assert.equal(replies[1].state.content, 'やあ')
+    } finally {
+      delete process.env.CREATOR_IDS
+    }
   })
 
   describe('changing what the bot made', () => {
