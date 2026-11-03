@@ -1,5 +1,5 @@
-// Which servers come first. The owner's servers (OWNER_GUILD_IDS, comma-separated) get the looser
-// mention limits and go first in everything done in the background; every other server waits for
+// Which servers come first. The owner's servers (OWNER_GUILD_IDS, comma-separated) have no
+// per-server mention cap and go first in everything done in the background; every other server waits for
 // them (backgroundQueue.js, and the order background jobs go through servers and stored rows).
 const DEFAULT_OWNER_GUILDS = '615170683068219393'
 

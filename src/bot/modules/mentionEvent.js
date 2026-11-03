@@ -410,12 +410,9 @@ async function handle (message) {
     let reply
     try {
       reply = await message.channel.createMessage({ content: '内容を読み取っています…', ...reference })
+      // Per user across every server, in tokens (mentionQuota.js).
       const quota = await mentionQuota.take(message.author.id, guild.id)
-      if (!quota.allowed) {
-        throw new StopDrafting(quota.scope === 'guild'
-          ? `このサーバーの今日の利用回数の上限（1日${quota.limit}回）に達しました。明日（日本時間の0時以降）またお試しください。`
-          : `今日の利用回数の上限（1日${quota.limit}回）に達しました。明日（日本時間の0時以降）またお試しください。`)
-      }
+      if (!quota.allowed) throw new StopDrafting(mentionQuota.refusal(quota))
       usage.onWait = ms => reply.edit({ content: `AI が混み合っているため、${Math.ceil(ms / 1000)} 秒待ってから再試行します…` }).catch(() => {})
       const member = message.member
       const tools = createTools({
@@ -617,6 +614,8 @@ async function handle (message) {
       }
     } finally {
       inProgress.delete(message.author.id)
+      // Whatever it ended in, the tokens it used count against the user's limits.
+      await mentionQuota.record(message.author.id, usage.cost)
       global.logger.info(`Mention drafting in ${guild.id}: ${usage.requests} Gemini request(s), ${usage.retries} retried after HTTP 429`)
     }
   })
