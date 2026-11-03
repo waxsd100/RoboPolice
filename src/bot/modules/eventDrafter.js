@@ -367,7 +367,7 @@ function lightModel () {
 // The safety filters of every request: off but for civic integrity (election misinformation and
 // the like), which blocks from a medium probability. What Google never allows (such as anything
 // sexual about minors) is blocked whatever these say, and they change nothing of the usage policy.
-// Image models are left with their own.
+// Image models are left with their own, and so are video summaries (options.defaultSafety).
 const SAFETY_SETTINGS = [
   { category: 'HARM_CATEGORY_HARASSMENT', threshold: 'OFF' },
   { category: 'HARM_CATEGORY_HATE_SPEECH', threshold: 'OFF' },
@@ -380,7 +380,7 @@ function withSafetySettings (model, body) {
 }
 
 async function callGemini (model, body, options) {
-  body = withSafetySettings(model, body)
+  if (!options?.defaultSafety) body = withSafetySettings(model, body)
   if (!body.generationConfig?.thinkingConfig && !/image/i.test(model)) {
     const thinking = thinkingConfig(model, { setting: 'GEMINI_LIGHT_THINKING_LEVEL', fallback: 'low' })
     if (thinking.thinkingConfig) body = { ...body, generationConfig: { ...body.generationConfig, ...thinking } }

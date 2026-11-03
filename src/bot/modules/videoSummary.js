@@ -2,7 +2,7 @@
 // keeps the summary so the same video is never summarized twice. Only run when the
 // model decides it needs a video's contents (a video was linked, or a question is about what a
 // video says): it is far costlier than reading titles and descriptions.
-const { callGemini, DEFAULT_GEMINI_MODEL, GeminiError, lightModel, thinkingConfig, withSafetySettings } = require('./eventDrafter')
+const { callGemini, DEFAULT_GEMINI_MODEL, GeminiError, lightModel, thinkingConfig } = require('./eventDrafter')
 const youtubeDB = require('../../db/interfaces/postgres/youtube')
 const youtube = require('../utils/youtube')
 const { parseVideoId, durationSeconds } = youtube
@@ -72,15 +72,15 @@ function summaryRequest (videoID, prompt = PROMPT, clip = null) {
     // Gemini 3 thinks at high unless told: a summary needs little (VIDEO_SUMMARY_THINKING_LEVEL).
     generationConfig: { temperature: 0.2, mediaResolution: 'MEDIA_RESOLUTION_LOW', ...thinkingConfig(model, { setting: 'VIDEO_SUMMARY_THINKING_LEVEL', fallback: 'low' }) }
   }
-  // The same safety filters as every other request (also in a batch, which does not go through callGemini).
-  return { model, body: withSafetySettings(model, body) }
+  // Video summaries keep the model's own safety filters (no safetySettings), also in a batch.
+  return { model, body }
 }
 
 // flex: on Flex inference (half the price, queued for up to about 15 minutes more).
 const FLEX_EXTRA_MS = 15 * 60 * 1000
 function askVideo (videoID, prompt, clip = null, { flex = false } = {}) {
   const { model, body } = summaryRequest(videoID, prompt, clip)
-  return callGemini(model, body, { timeoutMs: summaryTimeoutMs() + (flex ? FLEX_EXTRA_MS : 0), purpose: flex ? 'videoSummary-flex' : 'videoSummary', flex })
+  return callGemini(model, body, { timeoutMs: summaryTimeoutMs() + (flex ? FLEX_EXTRA_MS : 0), purpose: flex ? 'videoSummary-flex' : 'videoSummary', flex, defaultSafety: true })
 }
 
 // Stores `text` as the video's summary, asked for by the server. Resolves to the summary.
@@ -125,7 +125,7 @@ async function summarizeParts (guildID, videoID, seconds, partSeconds) {
   const merged = await backgroundQueue.run(guildID, () => callGemini(lightModel(), {
     contents: [{ role: 'user', parts: [{ text: `次は1本の長い動画を時間で分けて要約したものです。これを1つの要約にまとめてください（長くても1500文字程度まで。文字数は書かない）。話題の順に箇条書きにし、各項目の先頭の [時間] は書き換えずにそのまま残してください。告知・日時・出演者・URL など具体的な情報は残してください。\n\n${parts.join('\n\n')}` }] }],
     generationConfig: { temperature: 0.2 }
-  }, { timeoutMs: 2 * 60 * 1000, purpose: 'videoSummary' }))
+  }, { timeoutMs: 2 * 60 * 1000, purpose: 'videoSummary', defaultSafety: true }))
   return textOf(merged)
 }
 

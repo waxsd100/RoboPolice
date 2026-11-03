@@ -152,7 +152,7 @@ describe('draft', () => {
     ], 'filters off but for civic integrity, at medium')
   })
 
-  test('every request carries the safety settings, but image models and a request that sets its own', async () => {
+  test('every request carries the safety settings, but image models, video summaries and a request that sets its own', async () => {
     const { callGemini, SAFETY_SETTINGS } = require('../../src/bot/modules/eventDrafter')
     const { summaryRequest } = require('../../src/bot/modules/videoSummary')
     const requests = installGemini([[{ text: 'a' }], [{ text: 'b' }], [{ text: 'c' }]])
@@ -162,7 +162,10 @@ describe('draft', () => {
     assert.deepEqual(requests[0].body.safetySettings, SAFETY_SETTINGS)
     assert.equal(requests[1].body.safetySettings, undefined)
     assert.deepEqual(requests[2].body.safetySettings, [])
-    assert.deepEqual(summaryRequest('dQw4w9WgXcQ').body.safetySettings, SAFETY_SETTINGS, 'also in a batch')
+    assert.equal(summaryRequest('dQw4w9WgXcQ').body.safetySettings, undefined, 'video summaries keep the model\'s own, also in a batch')
+    const more = installGemini([[{ text: 'd' }]])
+    await callGemini('gemini-3.8-flash', { contents: [] }, { defaultSafety: true })
+    assert.equal(more[0].body.safetySettings, undefined)
   })
 
   test('think_deeper hands the request over to the stronger model on Flex, from the start', async () => {
