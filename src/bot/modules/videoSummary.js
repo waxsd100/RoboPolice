@@ -72,6 +72,7 @@ function summaryRequest (videoID, prompt = PROMPT, clip = null) {
     // Gemini 3 thinks at high unless told: a summary needs little (VIDEO_SUMMARY_THINKING_LEVEL).
     generationConfig: { temperature: 0.2, mediaResolution: 'MEDIA_RESOLUTION_LOW', ...thinkingConfig(model, { setting: 'VIDEO_SUMMARY_THINKING_LEVEL', fallback: 'low' }) }
   }
+  // Video summaries keep the model's own safety filters (no safetySettings), also in a batch.
   return { model, body }
 }
 
@@ -79,7 +80,7 @@ function summaryRequest (videoID, prompt = PROMPT, clip = null) {
 const FLEX_EXTRA_MS = 15 * 60 * 1000
 function askVideo (videoID, prompt, clip = null, { flex = false } = {}) {
   const { model, body } = summaryRequest(videoID, prompt, clip)
-  return callGemini(model, body, { timeoutMs: summaryTimeoutMs() + (flex ? FLEX_EXTRA_MS : 0), purpose: flex ? 'videoSummary-flex' : 'videoSummary', flex })
+  return callGemini(model, body, { timeoutMs: summaryTimeoutMs() + (flex ? FLEX_EXTRA_MS : 0), purpose: flex ? 'videoSummary-flex' : 'videoSummary', flex, defaultSafety: true })
 }
 
 // Stores `text` as the video's summary, asked for by the server. Resolves to the summary.
@@ -124,7 +125,7 @@ async function summarizeParts (guildID, videoID, seconds, partSeconds) {
   const merged = await backgroundQueue.run(guildID, () => callGemini(lightModel(), {
     contents: [{ role: 'user', parts: [{ text: `次は1本の長い動画を時間で分けて要約したものです。これを1つの要約にまとめてください（長くても1500文字程度まで。文字数は書かない）。話題の順に箇条書きにし、各項目の先頭の [時間] は書き換えずにそのまま残してください。告知・日時・出演者・URL など具体的な情報は残してください。\n\n${parts.join('\n\n')}` }] }],
     generationConfig: { temperature: 0.2 }
-  }, { timeoutMs: 2 * 60 * 1000, purpose: 'videoSummary' }))
+  }, { timeoutMs: 2 * 60 * 1000, purpose: 'videoSummary', defaultSafety: true }))
   return textOf(merged)
 }
 

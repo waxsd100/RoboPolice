@@ -364,7 +364,23 @@ function lightModel () {
 // One generateContent call through the gateway. Returns the first candidate's content. A call that
 // says nothing of thinking (background work: knowledge, emojis, blurbs, …) thinks at low
 // (GEMINI_LIGHT_THINKING_LEVEL); image models are left as they are.
+// The safety filters of every request: off but for civic integrity (election misinformation and
+// the like), which blocks from a medium probability. What Google never allows (such as anything
+// sexual about minors) is blocked whatever these say, and they change nothing of the usage policy.
+// Image models are left with their own, and so are video summaries (options.defaultSafety).
+const SAFETY_SETTINGS = [
+  { category: 'HARM_CATEGORY_HARASSMENT', threshold: 'OFF' },
+  { category: 'HARM_CATEGORY_HATE_SPEECH', threshold: 'OFF' },
+  { category: 'HARM_CATEGORY_SEXUALLY_EXPLICIT', threshold: 'OFF' },
+  { category: 'HARM_CATEGORY_DANGEROUS_CONTENT', threshold: 'OFF' },
+  { category: 'HARM_CATEGORY_CIVIC_INTEGRITY', threshold: 'BLOCK_MEDIUM_AND_ABOVE' }
+]
+function withSafetySettings (model, body) {
+  return body.safetySettings || /image/i.test(model) ? body : { ...body, safetySettings: SAFETY_SETTINGS }
+}
+
 async function callGemini (model, body, options) {
+  if (!options?.defaultSafety) body = withSafetySettings(model, body)
   if (!body.generationConfig?.thinkingConfig && !/image/i.test(model)) {
     const thinking = thinkingConfig(model, { setting: 'GEMINI_LIGHT_THINKING_LEVEL', fallback: 'low' })
     if (thinking.thinkingConfig) body = { ...body, generationConfig: { ...body.generationConfig, ...thinking } }
@@ -684,4 +700,4 @@ async function revise (conversation, correction) {
   return check(conversation, await runAgent(conversation.contents, conversation.tools, conversation.submits))
 }
 
-module.exports = { THINK_DEEPER_DECLARATION, deepModel, REPLY_LENGTHS, DEFAULT_REPLY_LENGTH, PERSONAS, thinkingConfig, cachedPrefix, caches, purgedFor, promptVersion, lightModel, draft, revise, MAX_STEPS, isConfigured, toScheduledEvent, callGemini, geminiRequest, geminiSend, retryTimer, DEFAULT_GEMINI_MODEL, ENTITY_TYPES, GeminiError }
+module.exports = { SAFETY_SETTINGS, withSafetySettings, THINK_DEEPER_DECLARATION, deepModel, REPLY_LENGTHS, DEFAULT_REPLY_LENGTH, PERSONAS, thinkingConfig, cachedPrefix, caches, purgedFor, promptVersion, lightModel, draft, revise, MAX_STEPS, isConfigured, toScheduledEvent, callGemini, geminiRequest, geminiSend, retryTimer, DEFAULT_GEMINI_MODEL, ENTITY_TYPES, GeminiError }
