@@ -911,6 +911,18 @@ describe('mention → event / forum post (integration)', () => {
     }
   })
 
+  test('a reply Google refuses (its own filters) is told in a line, with no error dump or webhook', async (t) => {
+    t.mock.method(global.logger, 'info', () => {})
+    const errors = t.mock.method(global.logger, 'error', () => {})
+    const hooked = t.mock.method(global.webhook, 'error', () => {})
+    const { channel, replies } = createChannel()
+    global.fetch = async () => ({ ok: true, json: async () => ({ candidates: [{ content: { role: 'model', parts: [] }, finishReason: 'PROHIBITED_CONTENT' }] }) })
+    await mentionEvent.handle(mention(channel, '<@BOT> こんにちは'))
+    assert.equal(replies[0].state.content, 'ごめん、その内容は AI（Google）の制限で答えられなかった…！言い方や中身を変えてもう一回どうぞ。')
+    assert.equal(errors.mock.callCount(), 0)
+    assert.equal(hooked.mock.callCount(), 0)
+  })
+
   test('chat: the line under the reply names the models; when Argon refuses, Flash answers and that is said too', async (t) => {
     t.mock.method(global.logger, 'info', () => {})
     const { channel, replies } = createChannel()

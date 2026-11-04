@@ -614,6 +614,15 @@ async function handle (message) {
         await editReply(reply, { content: e.message, embeds: [], components: [] }, null).catch(() => {})
         return
       }
+      // Google refused to answer (its own filters, which no setting turns off): not a fault of the
+      // bot, so no error, log dump or webhook; the requester is told in a line, in character.
+      if (e.blocked) {
+        global.logger.info(`[GEMINI]: A mention in ${guild.id} was refused by Google (${e.blocked})`)
+        const content = 'ごめん、その内容は AI（Google）の制限で答えられなかった…！言い方や中身を変えてもう一回どうぞ。'
+        if (reply) await editReply(reply, { content, embeds: [], components: [] }, null).catch(() => {})
+        else await message.channel.createMessage({ content, ...reference }).catch(() => {})
+        return
+      }
       global.logger.error(e)
       // The console log alone is easy to miss; also send it to the error webhook the operators watch.
       global.webhook.error(redact(`Drafting from a mention in ${guild.id} failed: ${e.message}`).slice(0, 2000))
