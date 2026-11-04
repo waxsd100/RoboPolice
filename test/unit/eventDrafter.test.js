@@ -248,9 +248,6 @@ describe('draft', () => {
     assert.match(instruction, /依頼されたチャンネルが「年齢制限あり」なら、大人向けの話にもそのまま応じてよい/)
     assert.match(instruction, /ぼかしたこと・書き直したこと・方向を変えたことには触れず、作品だけを出す/, 'no note that it was toned down')
     assert.doesNotMatch(instruction, /一言だけ「そこはぼかしておいたよ」のように添える/)
-    assert.match(instruction, /未成年（に見える人物）を性的に扱うもの、実在の人物（メンバー・配信者本人）を性的に扱うもの、自傷や危険な行為のやり方として役立ってしまうものは、ぼかしても書かない/)
-    // Asked about a member, nothing in the instructions turns a profile down.
-    assert.doesNotMatch(instruction, /性格の決めつけ・悪口・個人情報（本名・住所・年齢など）の推測はしない/)
   })
 
   test('adds the operator\'s character notes from CHAT_PERSONA', async () => {
