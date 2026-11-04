@@ -1055,6 +1055,33 @@ describe('mention → event / forum post (integration)', () => {
     assert.equal(discord.find(c => c.method === 'POST').body.name, '交流会')
   })
 
+  test('chat: what was just said in the channel about the same thing goes with the request; the rest does not', async () => {
+    const { installEmbeddingModel } = require('../helpers/fakes')
+    const { channel, replies } = createChannel()
+    const now = Date.now()
+    const getMessages = global.bot.getMessages
+    global.bot.getMessages = async () => [
+      { id: '499', timestamp: now - 60 * 1000, content: 'マイクラの建築どうする？', author: { id: OTHER_USER, username: 'alice' } },
+      { id: '498', timestamp: now - 2 * 60 * 1000, content: '今日の晩ごはん何にしよ', author: { id: OTHER_USER, username: 'alice' } }
+    ]
+    const embeddings = installEmbeddingModel()
+    const embedFetch = global.fetch
+    const requests = installGemini([[call('submit_chat_reply', { text: '城がいいと思う！' })]])
+    const geminiFetch = global.fetch
+    global.fetch = (url, init) => (String(url).endsWith(':batchEmbedContents') ? embedFetch : geminiFetch)(url, init)
+    try {
+      await mentionEvent.handle(mention(channel, '<@BOT> さっきのマイクラの話どう思う？'))
+    } finally {
+      global.bot.getMessages = getMessages
+    }
+    assert.equal(replies[0].state.content, '城がいいと思う！')
+    assert.equal(embeddings.length, 2)
+    const prompt = requests[0].body.contents[0].parts[0].text
+    assert.match(prompt, /## 依頼されたチャンネルの最近の会話（依頼に関係しそうなものだけ。古い順）\n<untrusted source="recent">\n- \[\d\d:\d\d\] [^\n]*（<@2>）: マイクラの建築どうする？\n<\/untrusted>/)
+    assert.doesNotMatch(prompt, /晩ごはん/)
+    assert.match(requests[0].body.systemInstruction.parts[0].text, /「依頼されたチャンネルの最近の会話」は、[\s\S]*それを踏まえて考え、答える。関係がなければ使わず/)
+  })
+
   test('each user has a token limit across every server: what a mention used counts, and a full window refuses until it resets', async () => {
     const { WINDOWS } = require('../../src/bot/utils/mentionQuota')
     const usage = { promptTokenCount: 12000, cachedContentTokenCount: 10000, candidatesTokenCount: 300, thoughtsTokenCount: 700 }
