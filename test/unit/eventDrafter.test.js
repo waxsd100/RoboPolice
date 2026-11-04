@@ -267,6 +267,29 @@ describe('draft', () => {
     assert.match(requests.at(-1).url, /gemini-4-argon:streamGenerateContent/)
   })
 
+  test('through the gateway\'s custom domain Flex is not asked for (Cloudflare would time it out), unless GEMINI_FLEX=true', async (t) => {
+    t.mock.method(global.logger, 'info', () => {})
+    const { flexUsable } = require('../../src/bot/modules/eventDrafter')
+    process.env.CLOUDFLARE_AI_GATEWAY_URL = 'https://ai-gateway.example.com'
+    try {
+      const requests = installGemini([[call('think_deeper', { reason: '長文' })], [call('submit_chat_reply', { text: '書いたよ' })]])
+      const result = await draft({ request: '長い話を書いて', channelName: 'general', guild, tools, now: NOW })
+      assert.equal(result.text, '書いたよ')
+      assert.match(requests[1].url, /^https:\/\/ai-gateway\.example\.com\/google-ai-studio\/v1beta\/models\/gemini-4-argon:/)
+      assert.equal(requests[1].body.serviceTier, undefined, 'the standard tier')
+      process.env.GEMINI_FLEX = 'true'
+      assert.equal(flexUsable(), true)
+      delete process.env.GEMINI_FLEX
+      delete process.env.CLOUDFLARE_AI_GATEWAY_URL
+      assert.equal(flexUsable(), true, 'the default endpoint can wait')
+      process.env.GEMINI_FLEX = 'false'
+      assert.equal(flexUsable(), false)
+    } finally {
+      delete process.env.CLOUDFLARE_AI_GATEWAY_URL
+      delete process.env.GEMINI_FLEX
+    }
+  })
+
   test('GEMINI_DEEP_MODEL empty: think_deeper is not offered', async () => {
     process.env.GEMINI_DEEP_MODEL = ''
     try {

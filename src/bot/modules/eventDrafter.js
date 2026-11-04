@@ -396,6 +396,17 @@ async function geminiStream (path, { timeoutMs = 10 * 60 * 1000 } = {}) {
   return res
 }
 
+// Flex inference is only asked for where it can be waited for. Through the gateway's custom domain
+// (CLOUDFLARE_AI_GATEWAY_URL) Cloudflare gives up on a response that has not started within 100
+// seconds (HTTP 524), and a Flex request says nothing while it is queued (minutes): it would time
+// out every time, so it is asked at the standard tier instead. GEMINI_FLEX=true asks for Flex anyway
+// (a domain with a longer timeout), GEMINI_FLEX=false never.
+function flexUsable () {
+  if (process.env.GEMINI_FLEX === 'true') return true
+  if (process.env.GEMINI_FLEX === 'false') return false
+  return !String(process.env.CLOUDFLARE_AI_GATEWAY_URL || '').trim()
+}
+
 // One POST to the Gemini API (`path` under v1beta) through the gateway, retrying HTTP 429.
 // flex: Flex inference (serviceTier flex, half the price, queued for minutes at most): also retried
 // on HTTP 503 (no Flex capacity), then sent once at the standard tier unless
@@ -405,6 +416,7 @@ async function geminiStream (path, { timeoutMs = 10 * 60 * 1000 } = {}) {
 async function geminiPost (path, body, { timeoutMs = GEMINI_TIMEOUT_MS, purpose = 'other', model = '', flex = false, stream = false } = {}) {
   const url = gatewayURL(`google-ai-studio/v1beta/${path}`)
   const headers = geminiHeaders()
+  flex = flex && flexUsable()
   if (flex) body = { ...body, serviceTier: 'flex' }
 
   const usage = currentUsage()
@@ -813,4 +825,4 @@ async function revise (conversation, correction) {
   return check(conversation, await runAgent(conversation.contents, conversation.tools, conversation.submits))
 }
 
-module.exports = { replyTimeoutMs, SAFETY_SETTINGS, withSafetySettings, THINK_DEEPER_DECLARATION, deepModel, REPLY_LENGTHS, DEFAULT_REPLY_LENGTH, PERSONAS, thinkingConfig, cachedPrefix, caches, purgedFor, promptVersion, lightModel, draft, revise, MAX_STEPS, isConfigured, toScheduledEvent, callGemini, geminiRequest, geminiSend, geminiStream, retryTimer, DEFAULT_GEMINI_MODEL, ENTITY_TYPES, GeminiError }
+module.exports = { replyTimeoutMs, flexUsable, SAFETY_SETTINGS, withSafetySettings, THINK_DEEPER_DECLARATION, deepModel, REPLY_LENGTHS, DEFAULT_REPLY_LENGTH, PERSONAS, thinkingConfig, cachedPrefix, caches, purgedFor, promptVersion, lightModel, draft, revise, MAX_STEPS, isConfigured, toScheduledEvent, callGemini, geminiRequest, geminiSend, geminiStream, retryTimer, DEFAULT_GEMINI_MODEL, ENTITY_TYPES, GeminiError }
