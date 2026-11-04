@@ -130,13 +130,52 @@ describe('draft', () => {
     assert.equal(result.event.name, 'A')
   })
 
+  test('a streamed reply is put back together: thought summaries left out, signatures and calls kept, usage taken', async () => {
+    const enc = new TextEncoder()
+    const events = [
+      { candidates: [{ content: { role: 'model', parts: [{ text: '考え中…', thought: true }] } }] },
+      { candidates: [{ content: { role: 'model', parts: [{ text: 'えっと' }] } }] },
+      { candidates: [{ content: { role: 'model', parts: [{ text: '、どうしよう' }] } }] },
+      { candidates: [{ content: { role: 'model', parts: [{ functionCall: { name: 'submit_chat_reply', args: { text: 'やあ！' } }, thoughtSignature: 'sig' }] }, finishReason: 'STOP' }], usageMetadata: { promptTokenCount: 10, candidatesTokenCount: 3 } }
+    ]
+    // Split mid-line, as a network would.
+    const sse = events.map(e => `data: ${JSON.stringify(e)}\r\n\r\n`).join('')
+    const body = [enc.encode(sse.slice(0, 50)), enc.encode(sse.slice(50))]
+    const requests = []
+    global.fetch = async (url, init) => {
+      requests.push({ url, body: JSON.parse(init.body) })
+      return { ok: true, body }
+    }
+    const result = await draft({ request: 'やあ', channelName: 'general', guild, tools, now: NOW })
+    assert.equal(result.kind, 'chat')
+    assert.equal(result.text, 'やあ！')
+    assert.match(requests[0].url, /:streamGenerateContent\?alt=sse$/)
+    assert.equal(requests[0].body.generationConfig.thinkingConfig.includeThoughts, true, 'thought summaries keep the stream going')
+    assert.deepEqual(result.conversation.contents[1].parts, [
+      { text: 'えっと、どうしよう' },
+      { functionCall: { name: 'submit_chat_reply', args: { text: 'やあ！' } }, thoughtSignature: 'sig' }
+    ])
+  })
+
+  test('GEMINI_STREAM=false asks without streaming', async () => {
+    process.env.GEMINI_STREAM = 'false'
+    try {
+      const requests = installGemini([[call('submit_chat_reply', { text: 'やあ' })]])
+      await draft({ request: 'やあ', channelName: 'general', guild, tools, now: NOW })
+      assert.match(requests[0].url, /:generateContent$/)
+      assert.equal(requests[0].body.generationConfig.thinkingConfig.includeThoughts, undefined)
+    } finally {
+      delete process.env.GEMINI_STREAM
+    }
+  })
+
   test('sends the gateway URL, keys and tool setup', async () => {
     process.env.CLOUDFLARE_AI_GATEWAY_TOKEN = 'gw-token'
     process.env.GEMINI_MODEL = 'gemini-test'
     const requests = installGemini([[submit({ name: 'A', start: '2026-11-03T19:00:00+09:00' })]])
     await draft({ request: 'A', channelName: 'general', guild, tools, now: NOW })
     const [{ url, headers, body }] = requests
-    assert.equal(url, 'https://gateway.ai.cloudflare.com/v1/acct/gw/google-ai-studio/v1beta/models/gemini-test:generateContent')
+    assert.equal(url, 'https://gateway.ai.cloudflare.com/v1/acct/gw/google-ai-studio/v1beta/models/gemini-test:streamGenerateContent?alt=sse', 'mention replies are streamed (Cloudflare drops a response not started in 100 seconds)')
     assert.equal(headers['x-goog-api-key'], 'gemini-key')
     assert.equal(headers['cf-aig-authorization'], 'Bearer gw-token')
     assert.equal(body.toolConfig.functionCallingConfig.mode, 'ANY')
@@ -177,17 +216,17 @@ describe('draft', () => {
     ])
     const result = await draft({ request: '詳しく解説して', channelName: 'general', guild, tools: deepTools, now: NOW })
     assert.equal(result.text, 'じっくり考えた答え')
-    assert.match(requests[1].url, /models\/gemini-4-argon:generateContent$/)
+    assert.match(requests[1].url, /models\/gemini-4-argon:streamGenerateContent\?alt=sse$/)
     assert.equal(requests[1].body.serviceTier, 'flex')
     assert.equal(requests[1].body.cachedContent, undefined)
-    assert.deepEqual(requests[1].body.generationConfig.thinkingConfig, { thinkingLevel: 'high' })
+    assert.deepEqual(requests[1].body.generationConfig.thinkingConfig, { thinkingLevel: 'high', includeThoughts: true })
     assert.equal(requests[1].body.contents.length, 1, 'only the request: nothing of the first model\'s turn')
     assert.ok(!requests[1].body.tools[0].functionDeclarations.some(d => d.name === 'think_deeper'), 'not offered again')
     assert.ok(requests[1].dispatcher, 'a long wait allowed')
     assert.match(progress[0], /じっくり考えています/)
   })
 
-  test('without Flex capacity the stronger model is asked once at the standard tier', async (t) => {
+  test('without Flex capacity the stronger model is not asked at the standard tier: the usual model answers, and says so', async (t) => {
     const { retryTimer } = require('../../src/bot/modules/eventDrafter')
     t.mock.method(retryTimer, 'sleep', async () => {})
     t.mock.method(global.logger, 'info', () => {})
@@ -203,10 +242,55 @@ describe('draft', () => {
     }
     const result = await draft({ request: '計算して', channelName: 'general', guild, tools, now: NOW })
     assert.equal(result.text, '答え')
-    const flex = requests.filter(r => r.body.serviceTier === 'flex')
-    assert.equal(flex.length, 4, 'tried and retried at Flex')
-    assert.equal(requests.at(-1).body.serviceTier, undefined, 'then the standard tier')
-    assert.match(requests.at(-1).url, /gemini-4-argon/)
+    assert.equal(requests.filter(r => r.body.serviceTier === 'flex').length, 4, 'tried and retried at Flex')
+    assert.equal(requests.filter(r => /gemini-4-argon/.test(r.url) && r.body.serviceTier === undefined).length, 0, 'never at the standard tier')
+    assert.match(requests.at(-1).url, /gemini-3\.8-flash/)
+    assert.ok(!requests.at(-1).body.tools[0].functionDeclarations.some(d => d.name === 'think_deeper'), 'not handed over again')
+  })
+
+  test('GEMINI_DEEP_FLEX_FALLBACK=true asks the stronger model at the standard tier instead, also after HTTP 524', async (t) => {
+    t.mock.method(global.logger, 'info', () => {})
+    process.env.GEMINI_DEEP_FLEX_FALLBACK = 'true'
+    try {
+      const requests = []
+      let i = 0
+      global.fetch = async (url, init) => {
+        const body = JSON.parse(init.body)
+        requests.push({ url, body })
+        i++
+        if (i === 1) return { ok: true, json: async () => ({ candidates: [{ content: { role: 'model', parts: [call('think_deeper', { reason: '長文' })] } }] }) }
+        if (body.serviceTier === 'flex') return { ok: false, status: 524, headers: { get: () => null }, text: async () => '<title>524: A timeout occurred</title>' }
+        return { ok: true, json: async () => ({ candidates: [{ content: { role: 'model', parts: [call('submit_chat_reply', { text: '書いたよ' })] } }] }) }
+      }
+      const result = await draft({ request: '長い話を書いて', channelName: 'general', guild, tools, now: NOW })
+      assert.equal(result.text, '書いたよ')
+      assert.equal(requests.filter(r => r.body.serviceTier === 'flex').length, 1, 'a 524 is not retried at Flex')
+      assert.equal(requests.at(-1).body.serviceTier, undefined)
+      assert.match(requests.at(-1).url, /gemini-4-argon:streamGenerateContent/)
+    } finally {
+      delete process.env.GEMINI_DEEP_FLEX_FALLBACK
+    }
+  })
+
+  test('with a custom domain, Flex goes to the default endpoint (Cloudflare times the domain out after 100 seconds); the rest to the domain', async (t) => {
+    t.mock.method(global.logger, 'info', () => {})
+    process.env.CLOUDFLARE_AI_GATEWAY_URL = 'https://ai-gateway.example.com'
+    try {
+      const requests = installGemini([[call('think_deeper', { reason: '長文' })], [call('submit_chat_reply', { text: '書いたよ' })]])
+      const result = await draft({ request: '長い話を書いて', channelName: 'general', guild, tools, now: NOW })
+      assert.equal(result.text, '書いたよ')
+      assert.match(requests[0].url, /^https:\/\/ai-gateway\.example\.com\/google-ai-studio\/v1beta\/models\/gemini-3\.8-flash:/)
+      assert.match(requests[1].url, /^https:\/\/gateway\.ai\.cloudflare\.com\/v1\/acct\/gw\/google-ai-studio\/v1beta\/models\/gemini-4-argon:/)
+      assert.equal(requests[1].body.serviceTier, 'flex')
+      process.env.GEMINI_FLEX = 'false'
+      const standard = installGemini([[call('think_deeper', { reason: '長文' })], [call('submit_chat_reply', { text: '書いたよ' })]])
+      await draft({ request: '長い話を書いて', channelName: 'general', guild, tools, now: NOW })
+      assert.equal(standard[1].body.serviceTier, undefined, 'GEMINI_FLEX=false: never Flex')
+      assert.match(standard[1].url, /^https:\/\/ai-gateway\.example\.com\//)
+    } finally {
+      delete process.env.CLOUDFLARE_AI_GATEWAY_URL
+      delete process.env.GEMINI_FLEX
+    }
   })
 
   test('GEMINI_DEEP_MODEL empty: think_deeper is not offered', async () => {
@@ -290,7 +374,7 @@ describe('draft', () => {
     delete process.env.GEMINI_API_KEY
     const requests = installGemini([[submit({ name: 'A', start: '2026-11-03T19:00:00+09:00' })]])
     await draft({ request: 'A', channelName: 'general', guild, tools, now: NOW })
-    assert.match(requests[0].url, /models\/gemini-3.8-flash:generateContent$/)
+    assert.match(requests[0].url, /models\/gemini-3.8-flash:streamGenerateContent\?alt=sse$/)
     assert.equal(requests[0].headers['x-goog-api-key'], undefined)
     assert.equal(requests[0].headers['cf-aig-authorization'], undefined)
     assert.equal(requests[0].headers['cf-aig-byok-alias'], undefined)
@@ -713,7 +797,7 @@ describe('explicit cache and thinking', () => {
     assert.equal(made[0].body.model, 'models/gemini-3.8-flash')
     assert.equal(made[0].body.ttl, '3600s')
     assert.ok(made[0].body.systemInstruction && made[0].body.tools && made[0].body.toolConfig)
-    const asked = requests.filter(r => r.url.endsWith(':generateContent'))
+    const asked = requests.filter(r => /:(stream)?[gG]enerateContent/.test(r.url))
     assert.equal(asked.length, 2)
     for (const r of asked) {
       assert.equal(r.body.cachedContent, made[0].body && 'cachedContents/c1')
@@ -728,7 +812,7 @@ describe('explicit cache and thinking', () => {
     await draft({ request: 'やあ', channelName: 'general', guild, tools: quietTools, now: NOW })
     await draft({ request: 'また', channelName: 'general', guild, tools: quietTools, now: NOW })
     assert.equal(requests.filter(r => r.url.endsWith('/cachedContents')).length, 1)
-    const asked = requests.filter(r => r.url.endsWith(':generateContent'))
+    const asked = requests.filter(r => /:(stream)?[gG]enerateContent/.test(r.url))
     assert.ok(asked.every(r => !r.body.cachedContent && r.body.systemInstruction && r.body.tools))
     process.env.GEMINI_EXPLICIT_CACHE = 'false'
     caches.clear()
@@ -758,7 +842,7 @@ describe('explicit cache and thinking', () => {
     const requests = installCachingGemini({ goneOnce: true })
     const result = await draft({ request: 'やあ', channelName: 'general', guild, tools: quietTools, now: NOW })
     assert.equal(result.kind, 'chat')
-    const asked = requests.filter(r => r.url.endsWith(':generateContent'))
+    const asked = requests.filter(r => /:(stream)?[gG]enerateContent/.test(r.url))
     assert.equal(asked.length, 2)
     assert.ok(asked[1].body.systemInstruction && !asked[1].body.cachedContent)
   })

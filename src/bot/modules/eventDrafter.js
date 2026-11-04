@@ -3,7 +3,8 @@ const { SUBMIT_FORUM_DECLARATION, IMAGE_INSTRUCTION_PROPERTY, toForumPost, image
 const { withoutCharCount } = require('../utils/textClean')
 const { wrap } = require('../utils/untrusted')
 const { Agent } = require('undici')
-const { gatewayURL, gatewayAuthHeaders, isGatewayConfigured } = require('../utils/aiGateway')
+const { gatewayURL, gatewayAuthHeaders, isGatewayConfigured, hasDefaultEndpoint, customBase } = require('../utils/aiGateway')
+const { textChunks } = require('../utils/jsonItems')
 const { currentUsage, recordTokens, addTokens, addModel, addFallback } = require('../utils/geminiUsage')
 
 // A fixed model, not an alias such as gemini-flash-latest: an explicit cache (below) is made for one
@@ -303,8 +304,55 @@ function rateLimitHint (body) {
 
 // One Gemini API call through the gateway (`method` such as "generateContent"), retrying HTTP 429.
 // Returns the response body. purpose: what it is for, to count its tokens by (geminiUsage.js).
+// options.stream: a generateContent call is made as streamGenerateContent (server-sent events) and
+// put back together as one response (streamed). Cloudflare gives up on a response that has not
+// started within 100 seconds (HTTP 524 through the gateway's custom domain), and a call that
+// thinks at high, or waits for Flex, can take longer: streamed, with the model's thought summaries
+// on (includeThoughts), bytes keep coming while it thinks. GEMINI_STREAM=false turns it off.
 async function geminiRequest (model, method, body, options = {}) {
-  return geminiPost(`models/${encodeURIComponent(model)}:${method}`, body, { ...options, model })
+  const stream = !!options.stream && method === 'generateContent' && process.env.GEMINI_STREAM !== 'false'
+  if (stream && body.generationConfig?.thinkingConfig) {
+    body = { ...body, generationConfig: { ...body.generationConfig, thinkingConfig: { ...body.generationConfig.thinkingConfig, includeThoughts: true } } }
+  }
+  const path = stream ? `models/${encodeURIComponent(model)}:streamGenerateContent?alt=sse` : `models/${encodeURIComponent(model)}:${method}`
+  return geminiPost(path, body, { ...options, model, stream })
+}
+
+// A streamed response (server-sent events, one GenerateContentResponse per `data:` line) as one
+// response: the parts of every chunk in order, with the last finish reason, usage and feedback.
+// Thought summaries are only there to keep the stream going and are left out, but for a part that
+// carries a thought signature (which must go back to the model as it came); runs of plain text are
+// joined. A response that is not a stream (no body to read) is read as it is.
+async function streamed (res) {
+  if (!res.body) return res.json()
+  const parts = []
+  const merged = { candidates: [{ content: { role: 'model', parts } }] }
+  const take = line => {
+    const m = line.match(/^data:\s*(.*)$/)
+    if (!m || !m[1].trim()) return
+    let chunk
+    try { chunk = JSON.parse(m[1]) } catch (_) { return }
+    const candidate = chunk.candidates?.[0]
+    for (const part of candidate?.content?.parts || []) {
+      if (part.thought && !part.thoughtSignature) continue
+      const last = parts[parts.length - 1]
+      const plain = p => typeof p.text === 'string' && !p.thought && !p.thoughtSignature && Object.keys(p).length === 1
+      if (last && plain(last) && plain(part)) last.text += part.text
+      else parts.push({ ...part })
+    }
+    if (candidate?.finishReason) merged.candidates[0].finishReason = candidate.finishReason
+    if (chunk.usageMetadata) merged.usageMetadata = chunk.usageMetadata
+    if (chunk.promptFeedback) merged.promptFeedback = chunk.promptFeedback
+  }
+  let buffer = ''
+  for await (const text of textChunks(res)) {
+    buffer += text
+    const lines = buffer.split(/\r?\n/)
+    buffer = lines.pop()
+    lines.forEach(take)
+  }
+  take(buffer)
+  return merged
 }
 
 // The headers of every Gemini call through the gateway.
@@ -348,12 +396,27 @@ async function geminiStream (path, { timeoutMs = 10 * 60 * 1000 } = {}) {
   return res
 }
 
+// Flex inference is asked for unless GEMINI_FLEX=false. A Flex request says nothing while it is
+// queued (minutes), and through the gateway's custom domain Cloudflare gives up after 100 seconds
+// (HTTP 524), so it goes to the gateway's default endpoint instead (gatewayURL's direct), which
+// needs CLOUDFLARE_ACCOUNT_ID and CLOUDFLARE_AI_GATEWAY_ID.
+function flexUsable () {
+  return process.env.GEMINI_FLEX !== 'false'
+}
+let warnedFlexDomain = false
+
 // One POST to the Gemini API (`path` under v1beta) through the gateway, retrying HTTP 429.
-// flex: Flex inference (serviceTier flex, half the price, queued for minutes at most): also retried
-// on HTTP 503 (no Flex capacity), then sent once at the standard tier unless
-// GEMINI_DEEP_FLEX_FALLBACK=false (Gemini does not do that by itself).
-async function geminiPost (path, body, { timeoutMs = GEMINI_TIMEOUT_MS, purpose = 'other', model = '', flex = false } = {}) {
-  const url = gatewayURL(`google-ai-studio/v1beta/${path}`)
+// flex: Flex inference (serviceTier flex, half the price, queued for minutes at most), sent to the
+// default endpoint (flexUsable) and also retried on HTTP 503 (no Flex capacity). It is not sent at
+// the standard tier when Flex fails, unless GEMINI_DEEP_FLEX_FALLBACK=true: the caller deals with
+// the failure (the stronger model's turn is answered by the usual model, runAgent).
+async function geminiPost (path, body, { timeoutMs = GEMINI_TIMEOUT_MS, purpose = 'other', model = '', flex = false, stream = false } = {}) {
+  flex = flex && flexUsable()
+  const url = gatewayURL(`google-ai-studio/v1beta/${path}`, { direct: flex })
+  if (flex && customBase() && !hasDefaultEndpoint() && !warnedFlexDomain) {
+    warnedFlexDomain = true
+    global.logger?.warn('[GEMINI]: Flex requests go through CLOUDFLARE_AI_GATEWAY_URL, where Cloudflare gives up after 100 seconds (HTTP 524); set CLOUDFLARE_ACCOUNT_ID and CLOUDFLARE_AI_GATEWAY_ID so they go to the default endpoint')
+  }
   const headers = geminiHeaders()
   if (flex) body = { ...body, serviceTier: 'flex' }
 
@@ -377,19 +440,20 @@ async function geminiPost (path, body, { timeoutMs = GEMINI_TIMEOUT_MS, purpose 
     }
     await retryTimer.sleep(wait)
   }
-  if (!res.ok && flex && [429, 503].includes(res.status) && process.env.GEMINI_DEEP_FLEX_FALLBACK !== 'false') {
+  if (!res.ok && flex && [429, 503, 524].includes(res.status) && process.env.GEMINI_DEEP_FLEX_FALLBACK === 'true') {
     await res.text().catch(() => {})
-    global.logger?.info(`[GEMINI]: No Flex capacity for ${model} (HTTP ${res.status}); asking at the standard tier`)
-    if (purpose.startsWith('mention')) addFallback(`${model}: Flex full → standard tier`)
+    const why = res.status === 524 ? 'timed out' : 'full'
+    global.logger?.info(`[GEMINI]: Flex ${why} for ${model} (HTTP ${res.status}); asking at the standard tier`)
+    if (purpose.startsWith('mention')) addFallback(`${model}: Flex ${why} → standard tier`)
     const { serviceTier, ...standard } = body
-    return geminiPost(path, standard, { timeoutMs, purpose, model })
+    return geminiPost(path, standard, { timeoutMs, purpose, model, stream })
   }
   if (!res.ok) {
     const text = (await res.text()).slice(0, 1000)
     const hint = res.status === 429 ? rateLimitHint(text) : `AI の呼び出しに失敗しました（HTTP ${res.status}）`
     throw new GeminiError(`Gemini request failed: HTTP ${res.status} ${text}`, hint, null, res.status)
   }
-  const data = await res.json()
+  const data = stream ? await streamed(res) : await res.json()
   recordTokens(purpose, model, data?.usageMetadata)
   addTokens(data?.usageMetadata, { model, flex })
   // The model that answered the reply itself, for the line under it.
@@ -575,26 +639,29 @@ async function generate (contents, declarations, allowed = null, { deep = false 
   }
   const generationConfig = { temperature: temperature(), ...thinkingConfig(model, deep ? { setting: 'GEMINI_DEEP_THINKING_LEVEL', fallback: 'high' } : undefined) }
   if (deep) {
-    return callGemini(model, { ...prefix, contents, generationConfig }, { purpose: 'mention-deep', timeoutMs: DEEP_TIMEOUT_MS, flex: process.env.GEMINI_DEEP_FLEX !== 'false' })
+    return callGemini(model, { ...prefix, contents, generationConfig }, { purpose: 'mention-deep', timeoutMs: DEEP_TIMEOUT_MS, flex: process.env.GEMINI_DEEP_FLEX !== 'false', stream: true })
   }
   // The last step, limited to submitting (allowed), has its own toolConfig: sent in full, since a
   // request that uses a cache cannot set one.
   const cache = allowed ? null : await cachedPrefix(model, prefix)
   if (cache) {
     try {
-      return await callGemini(model, { cachedContent: cache, contents, generationConfig }, { purpose: 'mention', timeoutMs: replyTimeoutMs() })
+      return await callGemini(model, { cachedContent: cache, contents, generationConfig }, { purpose: 'mention', timeoutMs: replyTimeoutMs(), stream: true })
     } catch (e) {
       if (!/cachedContent|CachedContent|cached content/i.test(e.message) || e.blocked) throw e
       forgetCache(cache) // gone on Gemini's side: once more in full
     }
   }
-  return callGemini(model, { ...prefix, contents, generationConfig }, { purpose: 'mention', timeoutMs: replyTimeoutMs() })
+  return callGemini(model, { ...prefix, contents, generationConfig }, { purpose: 'mention', timeoutMs: replyTimeoutMs(), stream: true })
 }
 
 // Runs the model with the read-only tools until it submits a draft, appending every turn to
 // `contents` so the conversation can be continued with a correction. Returns the submit call.
 // contents.deep: the conversation went over to the stronger model (think_deeper), so a correction
 // continues with it.
+// HTTP statuses of a Flex request that found no capacity or was not waited for.
+const FLEX_UNAVAILABLE = [429, 503, 524]
+
 async function runAgent (contents, tools, submits = SUBMIT_DECLARATIONS) {
   // Not offered again once the stronger model refused this conversation.
   const offered = deepModel() && !contents.deepRefused ? [THINK_DEEPER_DECLARATION] : []
@@ -609,12 +676,14 @@ async function runAgent (contents, tools, submits = SUBMIT_DECLARATIONS) {
     try {
       content = await generate(contents, declarationsFor(), last ? submits.map(d => d.name) : null, { deep: !!contents.deep })
     } catch (e) {
-      if (!contents.deep || !e.blocked) throw e
-      // The stronger model refused (its safety filters or policy): the usual model answers instead,
-      // from the request again, and the line under the reply says so.
+      const unavailable = FLEX_UNAVAILABLE.includes(e.status)
+      if (!contents.deep || !(e.blocked || unavailable)) throw e
+      // The stronger model refused (its safety filters or policy), or had no Flex capacity: the
+      // usual model answers instead, from the request again, and the line under the reply says so.
       const fallback = process.env.GEMINI_MODEL || DEFAULT_GEMINI_MODEL
-      global.logger?.info(`[GEMINI]: ${deepModel()} refused a request (${e.blocked}); ${fallback} answers instead`)
-      addFallback(`${deepModel()} refused (${e.blocked}) → ${fallback}`)
+      const why = e.blocked ? `refused (${e.blocked})` : `Flex unavailable (HTTP ${e.status})`
+      global.logger?.info(`[GEMINI]: ${deepModel()} ${why}; ${fallback} answers instead`)
+      addFallback(`${deepModel()} ${why} → ${fallback}`)
       contents.splice(start)
       contents.deep = false
       contents.deepRefused = true
@@ -762,4 +831,4 @@ async function revise (conversation, correction) {
   return check(conversation, await runAgent(conversation.contents, conversation.tools, conversation.submits))
 }
 
-module.exports = { replyTimeoutMs, SAFETY_SETTINGS, withSafetySettings, THINK_DEEPER_DECLARATION, deepModel, REPLY_LENGTHS, DEFAULT_REPLY_LENGTH, PERSONAS, thinkingConfig, cachedPrefix, caches, purgedFor, promptVersion, lightModel, draft, revise, MAX_STEPS, isConfigured, toScheduledEvent, callGemini, geminiRequest, geminiSend, geminiStream, retryTimer, DEFAULT_GEMINI_MODEL, ENTITY_TYPES, GeminiError }
+module.exports = { replyTimeoutMs, flexUsable, SAFETY_SETTINGS, withSafetySettings, THINK_DEEPER_DECLARATION, deepModel, REPLY_LENGTHS, DEFAULT_REPLY_LENGTH, PERSONAS, thinkingConfig, cachedPrefix, caches, purgedFor, promptVersion, lightModel, draft, revise, MAX_STEPS, isConfigured, toScheduledEvent, callGemini, geminiRequest, geminiSend, geminiStream, retryTimer, DEFAULT_GEMINI_MODEL, ENTITY_TYPES, GeminiError }
