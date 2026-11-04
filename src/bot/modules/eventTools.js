@@ -517,7 +517,7 @@ function requestChannelInfo (channelID, guild) {
   const parent = c.parentID ? guild.channels.get(c.parentID) || global.bot.getChannel?.(c.parentID) : null
   const isThread = [10, 11, 12].includes(c.type)
   return [
-    `#${c.name}（ID: ${c.id}、${CHANNEL_TYPES[c.type] || c.type}`,
+    `#${c.name}（ID: ${c.id}、${CHANNEL_TYPES[c.type] || c.type}${c.nsfw || (isThread && parent?.nsfw) ? '、年齢制限あり' : ''}`,
     parent ? (isThread ? `、<#${parent.id}>（#${parent.name}）の中のスレッド` : `、カテゴリ「${parent.name}」`) : '',
     '）',
     c.topic ? `\n  チャンネルの説明: ${c.topic.replace(/\s+/g, ' ').slice(0, MAX_TOPIC * 3)}` : '',
