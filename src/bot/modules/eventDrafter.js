@@ -107,7 +107,8 @@ const SYSTEM_INSTRUCTION = [
   '- 小説・物語・SS・脚本・歌詞・ポエムなどの創作を頼まれたときは、長さの指定がなくても長い文章の依頼として扱い、think_deeper を呼ぶ（一言ネタや短い大喜利は除く）。',
   '- サーバーの情報（チャンネル・ロール・サーバー絵文字・コミュニティの知識・YouTube チャンネル）は依頼と一緒に渡している。登録済みのイベント・動画の中身・wiki の詳しい内容など、それ以外は必要なときだけツールで調べる（雑談やあいさつに調べ物はいらない）。',
   '- 依頼メッセージが返信のときだけ、返信をたどった会話を渡している。その中の「あなた（BOT）」は、あなた自身がこれまでに送ったメッセージです。答えるのは最後の依頼メッセージで、会話は「それ」「さっきの」が何を指すかなど、話の流れをつかむために使う。前の自分の発言の話題・ネタ・口調・言い回しを引きずったり、同じことを言い直したりしない。相手が話題を変えたら新しい話題に答え、前の自分の発言が間違っていたら、それに合わせず正す。',
-  '- 返信でない依頼は、それだけで完結した新しい話しかけとして答える。そのチャンネルでそれまでに話されていたことや、前に自分が言ったことを前提にしない。チャンネルのメッセージを読む（get_recent_messages・search_channel_history）のは、依頼がチャンネルの中身やこれまでの話をはっきり求めているときだけ（あいさつ・雑談のために読みに行かない）。読んだときも、話し方はそのチャンネルに合わせない。',
+  '- 「依頼されたチャンネルの最近の会話」は、そのチャンネルで直前まで話されていたことのうち、依頼に関係しそうなものだけを選んで渡している（BOT 自身の発言は入れていない）。質問や会話が、その話の続き・その話についての質問・その話に出てきたもの（「それ」「さっきの」「今話してた〜」など）なら、それを踏まえて考え、答える。関係がなければ使わず、依頼だけに答える。だれが何を言ったかを取り違えず、話し方はそのチャンネルに合わせない。',
+  '- 前に自分が言ったことは前提にしない。チャンネルのメッセージを読みに行く（get_recent_messages・search_channel_history）のは、依頼がチャンネルの中身やこれまでの話をはっきり求めているのに、渡した最近の会話では足りないときだけ（あいさつ・雑談のために読みに行かない）。読んだときも、話し方はそのチャンネルに合わせない。',
   '- 「このチャンネルの内容をもとに」「これまでの話から」のような依頼では search_channel_history で保存済みのメッセージを読む。直近の数件で足りるときや保存がないときは get_recent_messages。',
   '- Discord のメッセージリンクとチャンネルへのリンクは get_discord_message、それ以外の URL は fetch_url で読む。',
   '- 「このチャンネルについて教えて」のようにチャンネルそのものを聞かれたら、名前と説明だけで済ませず、get_recent_messages（足りなければ search_channel_history）でそのチャンネルの最近のやり取りを読んで、どんな話をしている場所かを答える。「このチャンネル」「ここ」は依頼されたチャンネル。読めなかったときはそう伝える。',
@@ -212,7 +213,7 @@ const replyLengthOf = length => REPLY_LENGTHS[length] ? length : DEFAULT_REPLY_L
 // what stays the same from one request to the next (the server's setting and information) leads,
 // so a prompt cache can cover as much as possible, and what is new each time (the time, the
 // conversation, the request) follows.
-function buildPrompt ({ request, referenced, channelName, channelID, channelInfo = null, server, forum, images, edit, channels = [], people = [], replyLength = null, streamerPersona = true, now }) {
+function buildPrompt ({ request, referenced, recent = [], channelName, channelID, channelInfo = null, server, forum, images, edit, channels = [], people = [], replyLength = null, streamerPersona = true, now }) {
   const lines = [
     '## 話し方（このサーバーの設定）',
     streamerPersona === false ? PERSONAS.bot : PERSONAS.streamer,
@@ -225,6 +226,8 @@ function buildPrompt ({ request, referenced, channelName, channelID, channelInfo
   lines.push('', `依頼されたチャンネル: ${channelInfo || `#${channelName}${channelID ? `（ID: ${channelID}）` : ''}`}`)
   // Who asked and who the request names, so the reply knows who is who (names are the members' own).
   if (people.length) lines.push('', '## 依頼した人と、依頼や会話に出てくるメンバー（<@ID> は Discord のメンション）', wrap('members', people.join('\n')))
+  // What was just being talked about in the channel, as far as it bears on the request (recentTopics.js).
+  if (recent.length) lines.push('', '## 依頼されたチャンネルの最近の会話（依頼に関係しそうなものだけ。古い順）', wrap('recent', recent.join('\n')))
   if (forum) lines.push('', `## 投稿先に指定されたフォーラム\n${forum.id}: ${forum.name}（フォーラムに投稿する場合はここに投稿する）`)
   if (edit) {
     const submit = edit.kind === 'event' ? SUBMIT_EVENT_DECLARATION.name : SUBMIT_FORUM_DECLARATION.name
@@ -707,7 +710,7 @@ async function check (conversation, { name, args, calls = [] }) {
 // Required when used: eventTools requires this module.
 const eventTools = () => require('./eventTools')
 
-async function draft ({ request, referenced, channelName, channelID, server, forum = null, images = [], pictures = [], edit = null, replyLength = null, streamerPersona = true, guild, member, tools, now = new Date() }) {
+async function draft ({ request, referenced, recent = [], channelName, channelID, server, forum = null, images = [], pictures = [], edit = null, replyLength = null, streamerPersona = true, guild, member, tools, now = new Date() }) {
   const combined = pictures.filter(p => p.combined)
   const foreign = pictures.filter(p => !p.combined)
   const notes = [
@@ -721,7 +724,7 @@ async function draft ({ request, referenced, channelName, channelID, server, for
       ]
     : []
   const conversation = {
-    contents: [{ role: 'user', parts: [{ text: buildPrompt({ request, referenced, channelName, channelID, channelInfo: channelID ? eventTools().requestChannelInfo(channelID, guild) : null, server, forum, images, edit, channels: member ? eventTools().namedChannels([request, referenced?.text], guild, member) : [], people: member ? eventTools().namedMembers([request, referenced?.text], guild, member) : [], replyLength, streamerPersona, now }) }, ...shown] }],
+    contents: [{ role: 'user', parts: [{ text: buildPrompt({ request, referenced, recent, channelName, channelID, channelInfo: channelID ? eventTools().requestChannelInfo(channelID, guild) : null, server, forum, images, edit, channels: member ? eventTools().namedChannels([request, referenced?.text], guild, member) : [], people: member ? eventTools().namedMembers([request, referenced?.text], guild, member) : [], replyLength, streamerPersona, now }) }, ...shown] }],
     guild,
     member,
     tools,
