@@ -153,6 +153,14 @@ followed back up to 10 messages and given to the model oldest first, with the bo
 labeled as its own (`あなた（BOT）`) and the requester's marked; the model is told to answer as the
 continuation of it. Nothing is stored for this.
 
+What was just being talked about in the channel goes with every request too, as far as it bears on
+it (`src/bot/modules/recentTopics.js`): of the last `MENTION_RECENT_MESSAGES` messages (default 50,
+at most 100) of the past `MENTION_RECENT_HOURS` (default 12), the ones closest in meaning to the
+request (at most 8), embedded as the mention comes in, oldest first with who said them. So "さっきの
+話だけど" or "それってどうなの？" is answered with the talk it is about, and a request about
+something else gets none of it. The bot's own and other bots' messages, commands and noise are left
+out, so it does not carry on from what it said itself. `MENTION_RECENT_TOPICS=false` turns it off.
+
 The server profile lists the server's custom emojis (those not limited to roles), and chat replies
 use one now and then where it fits. An emoji the model writes as `:name:` is turned into the
 server emoji of that name.
@@ -620,6 +628,7 @@ the secrets if it leaks, so keep it only on the platform and delete it in the co
 | `VIDEO_SUMMARY_FPS` | Optional (default `0.2`, one frame every 5 seconds; Gemini's own default is 1). Frames a second Gemini looks at when summarizing a video. Each frame costs tokens while the sound is heard throughout, so fewer frames cost much less |
 | `GEMINI_TEMPERATURE` | Optional (default `1`, 0–2; Gemini 3 is tuned for 1 and may loop below it). How varied mention replies and drafts are; higher is more varied. Drafts are checked field by field either way |
 | `GEMINI_REPLY_TIMEOUT_SECONDS` | Optional (default `180`). How long one Gemini round trip of a mention reply or draft may take before it is given up (`GEMINI_DEEP_MODEL` has its own 20 minutes) |
+| `MENTION_RECENT_TOPICS`, `MENTION_RECENT_MESSAGES`, `MENTION_RECENT_HOURS` | Optional. The recent messages of the channel that bear on a request go with it: from the last 50 (at most 100) of the past 12 hours by default. `MENTION_RECENT_TOPICS=false` turns it off |
 | `REPLY_POLISH` | Optional (default on). Mention chat replies are rewritten once by `GEMINI_LIGHT_MODEL` with [yomiyasu-pocket](https://github.com/nanaism/yomiyasu-pocket) (MIT, kept in `vendor/yomiyasu-pocket`) to read less like AI-made Japanese, keeping what they say, their tone, mentions, emojis, links and code. Not replies of `GEMINI_DEEP_MODEL` (stories and long writing), nor ones under 40 characters; a rewrite that drops a mention, link or code or changes the length by half is not used. A daily workflow (`yomiyasu-update.yml`) opens a pull request when yomiyasu-pocket has a new release. `false` turns it off |
 | `GEMINI_MAX_STEPS` | Optional (default `20`). How many Gemini round trips a reply or draft may take (each lookup is one); the last one may only answer with what was found |
 | `YOUTUBE_API_KEY` | Optional. YouTube Data API v3 key for `/youtube`. Unset disables the command |
