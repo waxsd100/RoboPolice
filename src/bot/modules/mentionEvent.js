@@ -12,6 +12,7 @@ const { isCreator } = require('../utils/creatorIds')
 const { redact } = require('../utils/redact')
 const { trackUsage, tokenFooter } = require('../utils/geminiUsage')
 const { polish } = require('./replyPolish')
+const { relatedRecent } = require('./recentTopics')
 const mentionQuota = require('../utils/mentionQuota')
 const { SIZES } = require('../utils/imageCrop')
 const { CoverImage, MODES } = require('./coverImage')
@@ -440,15 +441,25 @@ async function handle (message) {
       if (referenced) reportInjection(`the conversation a mention in ${guild.id} replies to`, referenced.text)
       // Fetched fresh for every request. Without it the draft still works, just with less context.
       // Knowledge is looked up by what the members said, not the bot's own earlier replies.
-      const server = await describeServer(guild, member, message.channel.id, { query: request, context: referenced?.othersText }).catch(e => {
-        global.logger.warn(`Could not describe server ${guild.id}: ${e.message}`)
-        return null
-      })
+      // What was just being talked about in the channel, as far as it bears on the request
+      // (recentTopics.js); not when something the bot made is being changed.
+      const [server, recent] = await Promise.all([
+        describeServer(guild, member, message.channel.id, { query: request, context: referenced?.othersText }).catch(e => {
+          global.logger.warn(`Could not describe server ${guild.id}: ${e.message}`)
+          return null
+        }),
+        edit
+          ? []
+          : relatedRecent(message, request).catch(e => {
+            global.logger.warn(`Could not read the recent talk in ${message.channel.id}: ${e.message}`)
+            return []
+          })
+      ])
       // Combined emojis and other servers' emojis in what was said are shown to the model as
       // images, for this request only.
       const pictures = await picturesFor([request, referenced?.text], guild).catch(() => [])
-      // Only a reply brings a conversation in (`referenced`): what was said before in the channel
-      // is not, so the bot is the same in every channel.
+      // A reply brings its conversation in (`referenced`); otherwise only what was just said in the
+      // channel that bears on the request (`recent`), never the bot's own earlier replies.
       // /replylength and /persona; without them (or the database) replies are as by default.
       // %debugfooter: the line under a reply with the models and tokens, off by default.
       const { replyLength, streamerPersona, debugFooter } = await replySettingsStore.getReplySettings(guild.id)
@@ -456,6 +467,7 @@ async function handle (message) {
       let result = await draft({
         request,
         referenced,
+        recent,
         replyLength,
         streamerPersona,
         channelName: message.channel.name,

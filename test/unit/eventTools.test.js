@@ -539,6 +539,11 @@ describe('requestChannelInfo', () => {
     assert.equal(requestChannelInfo('11', g), '#general（ID: 11、text、カテゴリ「雑談部屋」）\n  チャンネルの説明: なんでも 話す場所')
     assert.equal(requestChannelInfo('13', g), '#金曜の募集（ID: 13、thread、<#12>（#募集）の中のスレッド）\n  親チャンネルの説明: 一緒に遊ぶ人を募集')
     assert.equal(requestChannelInfo('999', g), null)
+    // An age-restricted channel says so, and so does a thread in one.
+    g.channels.get('12').nsfw = true
+    assert.match(requestChannelInfo('13', g), /^#金曜の募集（ID: 13、thread、年齢制限あり、/)
+    g.channels.get('11').nsfw = true
+    assert.match(requestChannelInfo('11', g), /^#general（ID: 11、text、年齢制限あり、カテゴリ/)
   })
 })
 
