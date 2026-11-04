@@ -27,6 +27,10 @@ test('a custom domain needs no IDs, and its path starts with the provider', () =
   process.env.CLOUDFLARE_ACCOUNT_ID = 'acct'
   process.env.CLOUDFLARE_AI_GATEWAY_ID = 'gw'
   assert.equal(gatewayURL('custom-youtube/youtube/v3'), 'https://ai-gateway.skyblock.jp/custom-youtube/youtube/v3', 'the domain wins')
+  // A call that may stay silent past Cloudflare's 100 seconds goes to the default endpoint.
+  assert.equal(gatewayURL('google-ai-studio/v1beta/x', { direct: true }), 'https://gateway.ai.cloudflare.com/v1/acct/gw/google-ai-studio/v1beta/x')
+  delete process.env.CLOUDFLARE_AI_GATEWAY_ID
+  assert.equal(gatewayURL('google-ai-studio/v1beta/x', { direct: true }), 'https://ai-gateway.skyblock.jp/google-ai-studio/v1beta/x', 'the domain when the IDs are not there')
 })
 
 test('behind Cloudflare Access: the service token goes with the gateway token', () => {

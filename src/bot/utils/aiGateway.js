@@ -15,9 +15,17 @@ function customBase () {
   return url.replace(/\/+$/, '')
 }
 
-function gatewayURL (providerPath) {
+// Whether the default endpoint can be built (both IDs set), whatever CLOUDFLARE_AI_GATEWAY_URL says.
+function hasDefaultEndpoint () {
+  return !!(process.env.CLOUDFLARE_ACCOUNT_ID && process.env.CLOUDFLARE_AI_GATEWAY_ID)
+}
+
+// direct: the default endpoint even when a custom domain is set (and both IDs are). Through a custom
+// domain Cloudflare's proxy gives up on a response that has not started within 100 seconds (HTTP
+// 524); a call that may stay silent longer (a Flex request waiting in its queue) goes direct.
+function gatewayURL (providerPath, { direct = false } = {}) {
   const base = customBase()
-  if (base) return `${base}/${providerPath}`
+  if (base && !(direct && hasDefaultEndpoint())) return `${base}/${providerPath}`
   return `https://gateway.ai.cloudflare.com/v1/${process.env.CLOUDFLARE_ACCOUNT_ID}/${process.env.CLOUDFLARE_AI_GATEWAY_ID}/${providerPath}`
 }
 
@@ -37,4 +45,4 @@ function isGatewayConfigured () {
   return !!(customBase() || (process.env.CLOUDFLARE_ACCOUNT_ID && process.env.CLOUDFLARE_AI_GATEWAY_ID))
 }
 
-module.exports = { gatewayURL, gatewayAuthHeaders, isGatewayConfigured }
+module.exports = { gatewayURL, gatewayAuthHeaders, isGatewayConfigured, hasDefaultEndpoint, customBase }

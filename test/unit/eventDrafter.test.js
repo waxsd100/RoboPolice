@@ -226,7 +226,7 @@ describe('draft', () => {
     assert.match(progress[0], /じっくり考えています/)
   })
 
-  test('without Flex capacity the stronger model is asked once at the standard tier', async (t) => {
+  test('without Flex capacity the stronger model is not asked at the standard tier: the usual model answers, and says so', async (t) => {
     const { retryTimer } = require('../../src/bot/modules/eventDrafter')
     t.mock.method(retryTimer, 'sleep', async () => {})
     t.mock.method(global.logger, 'info', () => {})
@@ -242,48 +242,51 @@ describe('draft', () => {
     }
     const result = await draft({ request: '計算して', channelName: 'general', guild, tools, now: NOW })
     assert.equal(result.text, '答え')
-    const flex = requests.filter(r => r.body.serviceTier === 'flex')
-    assert.equal(flex.length, 4, 'tried and retried at Flex')
-    assert.equal(requests.at(-1).body.serviceTier, undefined, 'then the standard tier')
-    assert.match(requests.at(-1).url, /gemini-4-argon/)
+    assert.equal(requests.filter(r => r.body.serviceTier === 'flex').length, 4, 'tried and retried at Flex')
+    assert.equal(requests.filter(r => /gemini-4-argon/.test(r.url) && r.body.serviceTier === undefined).length, 0, 'never at the standard tier')
+    assert.match(requests.at(-1).url, /gemini-3\.8-flash/)
+    assert.ok(!requests.at(-1).body.tools[0].functionDeclarations.some(d => d.name === 'think_deeper'), 'not handed over again')
   })
 
-  test('Flex that Cloudflare gave up waiting for (HTTP 524) is asked once more at the standard tier, at once', async (t) => {
+  test('GEMINI_DEEP_FLEX_FALLBACK=true asks the stronger model at the standard tier instead, also after HTTP 524', async (t) => {
     t.mock.method(global.logger, 'info', () => {})
-    const requests = []
-    let i = 0
-    global.fetch = async (url, init) => {
-      const body = JSON.parse(init.body)
-      requests.push({ url, body })
-      i++
-      if (i === 1) return { ok: true, json: async () => ({ candidates: [{ content: { role: 'model', parts: [call('think_deeper', { reason: '長文' })] } }] }) }
-      if (body.serviceTier === 'flex') return { ok: false, status: 524, headers: { get: () => null }, text: async () => '<title>524: A timeout occurred</title>' }
-      return { ok: true, json: async () => ({ candidates: [{ content: { role: 'model', parts: [call('submit_chat_reply', { text: '書いたよ' })] } }] }) }
+    process.env.GEMINI_DEEP_FLEX_FALLBACK = 'true'
+    try {
+      const requests = []
+      let i = 0
+      global.fetch = async (url, init) => {
+        const body = JSON.parse(init.body)
+        requests.push({ url, body })
+        i++
+        if (i === 1) return { ok: true, json: async () => ({ candidates: [{ content: { role: 'model', parts: [call('think_deeper', { reason: '長文' })] } }] }) }
+        if (body.serviceTier === 'flex') return { ok: false, status: 524, headers: { get: () => null }, text: async () => '<title>524: A timeout occurred</title>' }
+        return { ok: true, json: async () => ({ candidates: [{ content: { role: 'model', parts: [call('submit_chat_reply', { text: '書いたよ' })] } }] }) }
+      }
+      const result = await draft({ request: '長い話を書いて', channelName: 'general', guild, tools, now: NOW })
+      assert.equal(result.text, '書いたよ')
+      assert.equal(requests.filter(r => r.body.serviceTier === 'flex').length, 1, 'a 524 is not retried at Flex')
+      assert.equal(requests.at(-1).body.serviceTier, undefined)
+      assert.match(requests.at(-1).url, /gemini-4-argon:streamGenerateContent/)
+    } finally {
+      delete process.env.GEMINI_DEEP_FLEX_FALLBACK
     }
-    const result = await draft({ request: '長い話を書いて', channelName: 'general', guild, tools, now: NOW })
-    assert.equal(result.text, '書いたよ')
-    assert.equal(requests.filter(r => r.body.serviceTier === 'flex').length, 1, 'not retried at Flex')
-    assert.equal(requests.at(-1).body.serviceTier, undefined)
-    assert.match(requests.at(-1).url, /gemini-4-argon:streamGenerateContent/)
   })
 
-  test('through the gateway\'s custom domain Flex is not asked for (Cloudflare would time it out), unless GEMINI_FLEX=true', async (t) => {
+  test('with a custom domain, Flex goes to the default endpoint (Cloudflare times the domain out after 100 seconds); the rest to the domain', async (t) => {
     t.mock.method(global.logger, 'info', () => {})
-    const { flexUsable } = require('../../src/bot/modules/eventDrafter')
     process.env.CLOUDFLARE_AI_GATEWAY_URL = 'https://ai-gateway.example.com'
     try {
       const requests = installGemini([[call('think_deeper', { reason: '長文' })], [call('submit_chat_reply', { text: '書いたよ' })]])
       const result = await draft({ request: '長い話を書いて', channelName: 'general', guild, tools, now: NOW })
       assert.equal(result.text, '書いたよ')
-      assert.match(requests[1].url, /^https:\/\/ai-gateway\.example\.com\/google-ai-studio\/v1beta\/models\/gemini-4-argon:/)
-      assert.equal(requests[1].body.serviceTier, undefined, 'the standard tier')
-      process.env.GEMINI_FLEX = 'true'
-      assert.equal(flexUsable(), true)
-      delete process.env.GEMINI_FLEX
-      delete process.env.CLOUDFLARE_AI_GATEWAY_URL
-      assert.equal(flexUsable(), true, 'the default endpoint can wait')
+      assert.match(requests[0].url, /^https:\/\/ai-gateway\.example\.com\/google-ai-studio\/v1beta\/models\/gemini-3\.8-flash:/)
+      assert.match(requests[1].url, /^https:\/\/gateway\.ai\.cloudflare\.com\/v1\/acct\/gw\/google-ai-studio\/v1beta\/models\/gemini-4-argon:/)
+      assert.equal(requests[1].body.serviceTier, 'flex')
       process.env.GEMINI_FLEX = 'false'
-      assert.equal(flexUsable(), false)
+      const standard = installGemini([[call('think_deeper', { reason: '長文' })], [call('submit_chat_reply', { text: '書いたよ' })]])
+      await draft({ request: '長い話を書いて', channelName: 'general', guild, tools, now: NOW })
+      assert.equal(standard[1].body.serviceTier, undefined, 'GEMINI_FLEX=false: never Flex')
+      assert.match(standard[1].url, /^https:\/\/ai-gateway\.example\.com\//)
     } finally {
       delete process.env.CLOUDFLARE_AI_GATEWAY_URL
       delete process.env.GEMINI_FLEX
