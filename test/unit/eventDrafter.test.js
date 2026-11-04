@@ -243,6 +243,9 @@ describe('draft', () => {
     assert.match(instruction, /小説・物語・SS・脚本・歌詞・ポエムなどの創作を頼まれたときは、長さの指定がなくても長い文章の依頼として扱い、think_deeper を呼ぶ/)
     // What cannot be written as asked is written toned down, not just refused.
     assert.match(instruction, /## そのままでは書けない依頼\n- [\s\S]*断るだけで終わらせない。その部分をぼかした版を代わりに書く/)
+    // Dirty jokes are played along with, not refused; explicit only in an age-restricted channel.
+    assert.match(instruction, /## 下ネタ\n- 下ネタ・エロネタ・下品なボケには、断ったり、注意したり、話をそらしたりせず、普通にノって返す/)
+    assert.match(instruction, /依頼されたチャンネルが「年齢制限あり」なら、大人向けの話にもそのまま応じてよい/)
     assert.match(instruction, /ぼかしたこと・書き直したこと・方向を変えたことには触れず、作品だけを出す/, 'no note that it was toned down')
     assert.doesNotMatch(instruction, /一言だけ「そこはぼかしておいたよ」のように添える/)
     assert.match(instruction, /未成年（に見える人物）を性的に扱うもの、実在の人物（メンバー・配信者本人）を性的に扱うもの、自傷や危険な行為のやり方として役立ってしまうものは、ぼかしても書かない/)
