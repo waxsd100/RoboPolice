@@ -4,15 +4,19 @@ const pool = require('../../clients/postgres')
 async function saveBatch ({ name, guildID, channelID, requesterID, videoIDs, model }) {
   await require('./read').getGuild(guildID) // makes the guild's row if there is none yet
   await pool.query(
-    'INSERT INTO youtube_summary_batches (name, guild_id, channel_id, requester_id, video_ids, model) VALUES ($1, $2, $3, $4, $5, $6)',
+    `WITH batch AS (INSERT INTO youtube_summary_batches (name, guild_id, channel_id, requester_id, model) VALUES ($1, $2, $3, $4, $6) RETURNING name)
+     INSERT INTO youtube_summary_batch_videos (batch_name, position, video_id)
+     SELECT batch.name, v.n - 1, v.video_id FROM batch, unnest($5::text[]) WITH ORDINALITY AS v (video_id, n)`,
     [name, guildID, channelID, requesterID, videoIDs, model])
 }
 
 // [{ name, guild_id, channel_id, requester_id, video_ids, model, created_at }], oldest first.
 async function runningBatches (guildID = null) {
-  const rows = guildID
-    ? await pool.query('SELECT * FROM youtube_summary_batches WHERE guild_id = $1 ORDER BY created_at', [guildID])
-    : await pool.query('SELECT * FROM youtube_summary_batches ORDER BY created_at')
+  // Each with its videos in order (youtube_summary_batch_videos) as video_ids.
+  const rows = await pool.query(
+    `SELECT b.*, coalesce((SELECT array_agg(v.video_id ORDER BY v.position) FROM youtube_summary_batch_videos v WHERE v.batch_name = b.name), '{}') AS video_ids
+     FROM youtube_summary_batches b WHERE $1::text IS NULL OR b.guild_id = $1 ORDER BY b.created_at`,
+    [guildID])
   return rows.rows
 }
 

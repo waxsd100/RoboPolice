@@ -8,12 +8,20 @@ const pool = require('../../clients/postgres')
 async function savePosts (posts) {
   const added = []
   for (const p of posts) {
+    // The channel's and the author's names are kept once each, as last seen.
+    await pool.query(
+      `INSERT INTO discord_channels (id, guild_id, name) VALUES ($1, $2, $3)
+       ON CONFLICT (id) DO UPDATE SET name = $3 WHERE discord_channels.name IS DISTINCT FROM $3`,
+      [p.channelID, p.guildID, p.channelName])
+    await pool.query(
+      `INSERT INTO discord_users (id, name) VALUES ($1, $2)
+       ON CONFLICT (id) DO UPDATE SET name = $2 WHERE discord_users.name IS DISTINCT FROM $2`,
+      [p.authorID, p.authorName])
     const result = await pool.query(
-      `INSERT INTO discord_posts (id, guild_id, channel_id, channel_name, author_id, author_name, content, created_at)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-       ON CONFLICT (id) DO UPDATE SET content = $7, channel_name = $4, author_name = $6
-       WHERE discord_posts.content IS DISTINCT FROM $7`,
-      [p.id, p.guildID, p.channelID, p.channelName, p.authorID, p.authorName, p.content, p.createdAt])
+      `INSERT INTO discord_posts (id, channel_id, author_id, content, created_at) VALUES ($1, $2, $3, $4, $5)
+       ON CONFLICT (id) DO UPDATE SET content = $4
+       WHERE discord_posts.content IS DISTINCT FROM $4`,
+      [p.id, p.channelID, p.authorID, p.content, p.createdAt])
     if (result.rowCount) added.push(p)
   }
   return added
@@ -21,7 +29,9 @@ async function savePosts (posts) {
 
 // Deletes a message. Resolves to the deleted row, or null if it was not stored.
 async function deletePost (id) {
-  const rows = await pool.query('DELETE FROM discord_posts WHERE id = $1 RETURNING guild_id, author_id, created_at', [id])
+  const rows = await pool.query(
+    `DELETE FROM discord_posts p USING discord_channels c WHERE p.id = $1 AND c.id = p.channel_id
+     RETURNING c.guild_id, p.author_id, p.created_at`, [id])
   return rows.rows[0] || null
 }
 
@@ -29,8 +39,9 @@ async function deletePost (id) {
 // range on created_at, so the index on the account and created_at is used.
 async function postsOfMonth (guildID, authorID, month) {
   const rows = await pool.query(
-    `SELECT id, channel_id, channel_name, author_name, content, created_at FROM discord_posts
-     WHERE guild_id = $1 AND author_id = $2 AND created_at >= (($3 || '-01')::timestamp AT TIME ZONE 'Asia/Tokyo') AND created_at < ((($3 || '-01')::timestamp + interval '1 month') AT TIME ZONE 'Asia/Tokyo')
+    `SELECT p.id, p.channel_id, c.name AS channel_name, u.name AS author_name, p.content, p.created_at
+     FROM discord_posts p JOIN discord_channels c ON c.id = p.channel_id JOIN discord_users u ON u.id = p.author_id
+     WHERE c.guild_id = $1 AND p.author_id = $2 AND p.created_at >= (($3 || '-01')::timestamp AT TIME ZONE 'Asia/Tokyo') AND created_at < ((($3 || '-01')::timestamp + interval '1 month') AT TIME ZONE 'Asia/Tokyo')
      ORDER BY created_at`,
     [guildID, authorID, month])
   return rows.rows

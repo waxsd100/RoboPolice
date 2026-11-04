@@ -204,10 +204,10 @@ describe('stores', { skip: !database.available && 'needs PGHOST' }, () => {
     assert.deepEqual((await wiki.characterFacts()).map(c => c.name), ['よつろん'])
     assert.deepEqual((await xKnowledge.characterFacts()).map(c => c.name), ['新キャラ'])
     assert.deepEqual(await wiki.sectionsToExtract(10), [], 'the wiki does not see the X posts')
-    assert.deepEqual((await q('SELECT url FROM x_sections')).map(r => r.url), [xPage])
-    assert.deepEqual((await q("SELECT url FROM wiki_pages WHERE url LIKE 'https://x.com/%'")), [])
+    assert.deepEqual((await q("SELECT url FROM knowledge_sections WHERE source = 'x'")).map(r => r.url), [xPage])
+    assert.deepEqual((await q("SELECT url FROM knowledge_pages WHERE source = 'wiki' AND url LIKE 'https://x.com/%'")), [])
     await xKnowledge.deletePagesExcept('https://x.com', [])
-    assert.deepEqual(await q('SELECT name FROM x_facts'), [], 'knowledge goes with its page')
+    assert.deepEqual(await q("SELECT name FROM knowledge_facts WHERE source = 'x'"), [], 'knowledge goes with its page')
 
     // Read again with one part changed and one gone: only the changed one is embedded again.
     await wiki.savePage(`${root}/d/chars`, 'のばまんのキャラクター', [
@@ -216,11 +216,11 @@ describe('stores', { skip: !database.available && 'needs PGHOST' }, () => {
     ])
     assert.deepEqual((await wiki.sectionsToEmbed('A', 10)).map(s => s.heading), ['よつろん'])
     assert.deepEqual((await wiki.sectionsToExtract(10)).map(s => s.heading), ['よつろん'], 'a changed part is read again')
-    assert.equal((await q('SELECT count(*)::int AS n FROM wiki_sections WHERE url = $1', [`${root}/d/chars`]))[0].n, 2)
+    assert.equal((await q("SELECT count(*)::int AS n FROM knowledge_sections WHERE source = 'wiki' AND url = $1", [`${root}/d/chars`]))[0].n, 2)
     assert.ok(await wiki.lastRead(root))
     assert.equal(await wiki.deletePagesExcept(root, [`${root}/d/chars`]), 1)
-    assert.deepEqual((await q('SELECT url FROM wiki_sections GROUP BY url')).map(r => r.url), [`${root}/d/chars`])
-    assert.deepEqual((await q('SELECT name FROM wiki_facts')).map(r => r.name), ['よつろん'], 'knowledge goes with its page')
+    assert.deepEqual((await q("SELECT url FROM knowledge_sections WHERE source = 'wiki' GROUP BY url")).map(r => r.url), [`${root}/d/chars`])
+    assert.deepEqual((await q("SELECT name FROM knowledge_facts WHERE source = 'wiki'")).map(r => r.name), ['よつろん'], 'knowledge goes with its page')
   })
 
   test('X posts: stored once each, read back by month in Japan time', async () => {
@@ -251,7 +251,7 @@ describe('stores', { skip: !database.available && 'needs PGHOST' }, () => {
     assert.deepEqual(await posts.backfillState('c1'), { before_id: '500', done: true })
     // Their knowledge tables are their own.
     await tables.savePage('https://discord.com/channels/g1#u1-2026-10', 'のばまん の Discord の発言（2026年10月）', [{ heading: '2026年10月 1', text: 'やあ', images: [] }])
-    assert.deepEqual((await q('SELECT url FROM discord_sections')).map(r => r.url), ['https://discord.com/channels/g1#u1-2026-10'])
+    assert.deepEqual((await q("SELECT url FROM knowledge_sections WHERE source = 'discord'")).map(r => r.url), ['https://discord.com/channels/g1#u1-2026-10'])
     assert.equal(await tables.deletePagesExcept('https://discord.com/channels/g1#u1-2026-10', []), 1)
   })
 
@@ -261,7 +261,7 @@ describe('stores', { skip: !database.available && 'needs PGHOST' }, () => {
     await web.savePage('topic:昔のテーマ', '「昔のテーマ」について', [{ heading: '昔のテーマ 1', text: '古い', images: [] }])
     assert.ok(await web.lastRead('topic:ぽみそしる'))
     assert.equal(await web.deletePagesExcept('topic:', ['topic:ぽみそしる']), 1)
-    assert.deepEqual((await q('SELECT url FROM web_sections')).map(r => r.url), ['topic:ぽみそしる'])
+    assert.deepEqual((await q("SELECT url FROM knowledge_sections WHERE source = 'web'")).map(r => r.url), ['topic:ぽみそしる'])
   })
 
   test('past messages read back: stored with their own time and images, a message stored live is left as it is; progress kept', async () => {

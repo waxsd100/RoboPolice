@@ -72,6 +72,18 @@ describe('migrations', { skip: !database.available && 'needs PGHOST' }, () => {
     // Handled with nothing to embed (it has no channel), before 024.
     await q("UPDATE messages SET embedded = true WHERE id = 'm4'")
 
+    // Up to 029: lists in columns, names on every post, a batch's model by name, as before 030.
+    await migrateTo(29)
+    await q("UPDATE wiki_sections SET images = '{https://w.example/a.png,https://w.example/b.png}' WHERE url = 'https://w.example/d/chars'")
+    await q("UPDATE wiki_facts SET aliases = '{よつ,yotsuron}' WHERE name = 'よつろん'")
+    await q("UPDATE x_posts SET media_urls = '{https://pbs.example/1.jpg,https://pbs.example/2.mp4}'")
+    await q(`INSERT INTO discord_posts (id, guild_id, channel_id, channel_name, author_id, author_name, content, created_at) VALUES
+      ('d1', 'g1', 'c1', '雑談（旧）', 'u1', 'のばまん（旧）', 'やあ', '2026-10-01'),
+      ('d2', 'g1', 'c1', '雑談', 'u1', 'のばまん', 'どうも', '2026-10-02')`)
+    await q("INSERT INTO youtube_summary_batches (name, guild_id, channel_id, requester_id, video_ids, model) VALUES ('batches/s1', 'g1', 'c1', 'u1', '{v2,v1}', 'gemini-x')")
+    await q("INSERT INTO embedding_batches (name, model) VALUES ('batches/e1', 'model-a')")
+    await q("INSERT INTO embedding_batch_messages (message_id, batch_name) VALUES ('m1', 'batches/e1'), ('gone', 'batches/e1')")
+
     await migrate()
   })
   // Applies the migrations up to `version`.
@@ -92,14 +104,47 @@ describe('migrations', { skip: !database.available && 'needs PGHOST' }, () => {
     assert.deepEqual(await migrate(), [])
   })
 
-  test('the X posts move to tables of their own, with their knowledge', async () => {
-    assert.deepEqual((await q('SELECT url FROM wiki_pages')).map(r => r.url), ['https://w.example/d/chars'])
-    assert.deepEqual((await q('SELECT name FROM wiki_facts')).map(r => r.name), ['よつろん'])
-    assert.deepEqual((await q('SELECT url, title FROM x_pages')), [{ url: 'https://x.com/nobamangames#2026-10', title: '@nobamangames のポスト（2026年10月）' }])
-    assert.deepEqual((await q('SELECT heading, text, facts_hash FROM x_sections')), [{ heading: '2026年10月 1', text: '告知', facts_hash: 'h2' }])
-    assert.deepEqual((await q('SELECT kind, name, content FROM x_facts')), [{ kind: 'term', name: '告知', content: 'お知らせ' }])
+  test('the X posts move to their own pages, with their knowledge; every source\'s knowledge is in one set of tables', async () => {
+    assert.deepEqual(await q('SELECT source, url, title FROM knowledge_pages ORDER BY source, url'), [
+      { source: 'wiki', url: 'https://w.example/d/chars', title: 'キャラクター' },
+      { source: 'x', url: 'https://x.com/nobamangames#2026-10', title: '@nobamangames のポスト（2026年10月）' }
+    ])
+    assert.deepEqual(await q("SELECT heading, text, facts_hash FROM knowledge_sections WHERE source = 'x'"), [{ heading: '2026年10月 1', text: '告知', facts_hash: 'h2' }])
+    assert.deepEqual(await q('SELECT source, kind, name, content FROM knowledge_facts ORDER BY source'), [
+      { source: 'wiki', kind: 'character', name: 'よつろん', content: '四葉の笑顔' },
+      { source: 'x', kind: 'term', name: '告知', content: 'お知らせ' }
+    ])
     assert.deepEqual((await q('SELECT id, account FROM x_posts')), [{ id: '1', account: 'nobamangames' }])
-    assert.equal((await q("SELECT to_regclass('social_posts') AS t"))[0].t, null)
+    for (const old of ['social_posts', 'wiki_pages', 'wiki_sections', 'wiki_facts', 'x_pages', 'x_sections', 'x_facts', 'discord_pages', 'discord_sections', 'discord_facts', 'web_pages', 'web_sections', 'web_facts']) {
+      assert.equal((await q('SELECT to_regclass($1) AS t', [old]))[0].t, null, old)
+    }
+  })
+
+  test('lists in columns become rows, in order; names are kept once; IDs refer to their rows', async () => {
+    assert.deepEqual(await q('SELECT image_position, image_url FROM knowledge_section_images ORDER BY image_position'), [
+      { image_position: 0, image_url: 'https://w.example/a.png' }, { image_position: 1, image_url: 'https://w.example/b.png' }
+    ])
+    assert.deepEqual(await q('SELECT a.alias FROM knowledge_fact_aliases a JOIN knowledge_facts f ON f.id = a.fact_id ORDER BY a.alias_position'), [{ alias: 'よつ' }, { alias: 'yotsuron' }])
+    assert.deepEqual(await q('SELECT post_id, position, url FROM x_post_media ORDER BY position'), [
+      { post_id: '1', position: 0, url: 'https://pbs.example/1.jpg' }, { post_id: '1', position: 1, url: 'https://pbs.example/2.mp4' }
+    ])
+    assert.deepEqual(await q('SELECT id, guild_id, name FROM discord_channels'), [{ id: 'c1', guild_id: 'g1', name: '雑談' }], 'the newest name')
+    assert.deepEqual(await q('SELECT id, name FROM discord_users'), [{ id: 'u1', name: 'のばまん' }])
+    assert.deepEqual(await q('SELECT id, channel_id, author_id, content FROM discord_posts ORDER BY id'), [
+      { id: 'd1', channel_id: 'c1', author_id: 'u1', content: 'やあ' }, { id: 'd2', channel_id: 'c1', author_id: 'u1', content: 'どうも' }
+    ])
+    assert.deepEqual(await q('SELECT position, video_id FROM youtube_summary_batch_videos ORDER BY position'), [{ position: 0, video_id: 'v2' }, { position: 1, video_id: 'v1' }])
+    assert.deepEqual(await q('SELECT b.name, m.name AS model FROM embedding_batches b JOIN embedding_models m ON m.id = b.model_id'), [{ name: 'batches/e1', model: 'model-a' }])
+    assert.deepEqual(await q('SELECT message_id FROM embedding_batch_messages'), [{ message_id: 'm1' }], 'a message that is gone leaves the batch')
+    await assert.rejects(q("INSERT INTO embedding_batch_messages (message_id, batch_name) VALUES ('nowhere', 'batches/e1')"), /foreign key/)
+    await assert.rejects(q("INSERT INTO discord_posts (id, channel_id, author_id, content, created_at) VALUES ('d9', 'nowhere', 'u1', 'x', now())"), /foreign key/)
+    // Every foreign key has an index that starts with its columns (messages.embedding_model_id aside).
+    const unindexed = await q(`
+      SELECT c.conrelid::regclass::text AS tbl, c.conname FROM pg_constraint c
+      WHERE c.contype = 'f' AND NOT EXISTS (
+        SELECT 1 FROM pg_index i WHERE i.indrelid = c.conrelid AND (i.indkey::int2[])[0:cardinality(c.conkey) - 1] @> c.conkey AND (i.indkey::int2[])[0:cardinality(c.conkey) - 1] <@ c.conkey)
+      ORDER BY 1, 2`)
+    assert.deepEqual(unindexed, [{ tbl: 'messages', conname: 'messages_embedding_model_id_fkey' }])
   })
 
   test('server settings become rows', async () => {

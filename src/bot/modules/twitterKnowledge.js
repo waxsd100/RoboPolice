@@ -4,11 +4,10 @@
 // TWITTER_MAX_PAGES pages back, afterwards until posts already stored. Reposts of others are left
 // out; replies are kept. Every TWITTER_REFRESH_HOURS (default 6), one request every 2 seconds.
 //
-// Posts are stored in x_posts. Each month's posts also become one page of the X knowledge tables
-// (x_pages / x_sections / x_facts; title "@account のポスト（2026年10月）", one line per post with its
-// date and URL), so knowledge is taken out of them and they are searched with search_wiki like the
-// wiki, whose tables are separate. Only the months with new posts are written again, and
-// within them only the parts that changed are read again.
+// Posts are stored in x_posts. Each month's posts also become one page of the knowledge tables as
+// source 'x' (title "@account のポスト（2026年10月）", one line per post with its date and URL), so
+// knowledge is taken out of them and they are searched with search_wiki like the wiki. Only the
+// months with new posts are written again, and within them only the parts that changed are read again.
 //
 // FxTwitter is a third-party service, not X's API: it may change or stop. When it fails, nothing
 // stored is lost and the next run tries again.
