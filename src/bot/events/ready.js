@@ -22,6 +22,7 @@ module.exports = {
       require('../modules/summaryBatch').startBatchWatcher() // ...and watches the video summary batches (/youtube summarize)
       require('../modules/wikiKnowledge').startWiki() // ...and reads the community wiki (WIKI_URLS)
       require('../modules/twitterKnowledge').startTwitter() // ...and the streamer's X posts (TWITTER_ACCOUNTS)
+      require('../modules/twitchSync').startTwitch() // ...and the archives of the Twitch channels (TWITCH_CHANNELS)
       // ...and, once, finds the channel of messages stored before channels were recorded.
       require('../../miscellaneous/backfillChannels').startBackfill()
     }

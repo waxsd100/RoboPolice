@@ -197,6 +197,34 @@ function installReplyLengthStore (lengths = {}, personas = {}, debugFooters = {}
 }
 installReplyLengthStore()
 
+// The Twitch store (twitchSync.js), in memory: channels [{ user_id, login, display_name }] and
+// archives { userID: [video] }. Installed when this file loads (with nothing followed), so no test
+// reaches a real database.
+function installTwitchStore ({ channels = [], archives = {} } = {}) {
+  const store = require('../../src/db/interfaces/postgres/twitch')
+  store.setChannels = async list => {
+    channels.splice(0, channels.length, ...list.map(c => ({ user_id: c.id, login: c.login, display_name: c.displayName, description: c.description, synced_at: null })))
+    for (const id of Object.keys(archives)) if (!channels.some(c => c.user_id === id)) delete archives[id]
+  }
+  store.listChannels = async () => channels
+  store.saveArchives = async (userID, videos, { complete = false } = {}) => {
+    const known = archives[userID] || []
+    const added = videos.filter(v => !known.some(k => k.video_id === v.id)).length
+    const rows = videos.map(v => ({ video_id: v.id, user_id: userID, title: v.title, description: v.description, url: v.url, published_at: v.publishedAt, duration: v.duration }))
+    archives[userID] = complete ? rows : [...rows, ...known.filter(k => !rows.some(r => r.video_id === k.video_id))]
+    const channel = channels.find(c => c.user_id === userID)
+    if (channel) channel.synced_at = new Date()
+    return added
+  }
+  store.getArchives = async () => Object.entries(archives).flatMap(([id, list]) => {
+    const c = channels.find(c => c.user_id === id) || {}
+    return list.map(v => ({ ...v, login: c.login, display_name: c.display_name }))
+  }).sort((a, b) => new Date(b.published_at || 0) - new Date(a.published_at || 0))
+  store.getOverview = async () => channels.map(c => ({ ...c, video_count: (archives[c.user_id] || []).length }))
+  return { channels, archives }
+}
+installTwitchStore()
+
 // The bot's load over the past hour (geminiLoad.js), in memory: counts { key: number }. Installed
 // when this file loads, so no test reaches Redis.
 function installLoadStore (counts = new Map()) {
@@ -403,7 +431,7 @@ async function startServer (handler) {
 }
 
 module.exports = {
-  perms, createGuild, createMember, installBot, installYouTubeStore, installQuotaStore, installEmbeddingStore, configureGateway, installGemini, call, submit, lastToolResponses, startServer, installLoreStore, restoreLoreStore, stripUntrusted, unwrapTools, installLoadStore
+  perms, createGuild, createMember, installBot, installYouTubeStore, installQuotaStore, installEmbeddingStore, configureGateway, installGemini, call, submit, lastToolResponses, startServer, installLoreStore, restoreLoreStore, stripUntrusted, unwrapTools, installLoadStore, installTwitchStore
 }
 
 // A fake embedding model: each text points along the axis of the first topic it mentions, so
