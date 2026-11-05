@@ -616,6 +616,7 @@ the secrets if it leaks, so keep it only on the platform and delete it in the co
 | `CLOUDFLARE_AI_GATEWAY_TOKEN` | Optional. Sent as `cf-aig-authorization` for an authenticated gateway |
 | `CLOUDFLARE_AI_GATEWAY_BYOK_ALIAS` | Optional. Name of the Gemini key stored in the gateway (BYOK), sent as `cf-aig-byok-alias`. Unset uses the key named `default` |
 | `GEMINI_API_KEY` | Optional when the key is stored in the gateway (BYOK); otherwise required for drafting from mentions |
+| `BOT_MODEL_NAME` | Optional (default `nobaman llm 3.9 Flash`). What the bot says its model is when asked. The debug line under replies (`%debugfooter`) still names the real models |
 | `GEMINI_MODEL` | Optional. Defaults to `gemini-3.8-flash` (a fixed model rather than the `gemini-flash-latest` alias, so a cache is made for a known model and a new model is a choice) |
 | `GEMINI_THINKING_LEVEL` | Optional (default `high`; `minimal`, `low`, `medium` or `high`). How much Gemini 3 thinks before a mention reply or draft, billed as answer tokens. Not sent to older models |
 | `GEMINI_DEEP_MODEL` | Optional (default `gemini-4-argon`). The stronger model a mention is handed over to when it needs much reasoning or a long text: the reply model calls `think_deeper` first, and this model answers from the request on (it has no explicit cache, so requests go in full). Empty to turn it off |
