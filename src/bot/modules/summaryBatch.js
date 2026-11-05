@@ -133,8 +133,21 @@ async function tell (batch, content) {
 }
 
 // Looks at one batch; stores and reports it when it is done. Resolves to whether it is done.
-async function check (batch) {
-  const data = await geminiSend('GET', batch.name)
+// Gemini keeps a batch for 48 hours: one that still cannot be read after MAX_BATCH_HOURS is given up
+// on, and the channel told.
+const MAX_BATCH_HOURS = 50
+async function check (batch, now = Date.now()) {
+  const age = batch.created_at ? (now - new Date(batch.created_at).getTime()) / 3600000 : 0
+  let data
+  try {
+    data = await geminiSend('GET', batch.name)
+  } catch (e) {
+    if (![400, 403, 404].includes(e.status) && age < MAX_BATCH_HOURS) {
+      await store.noteBatch(batch.name, { error: e.message }).catch(() => {})
+      throw e
+    }
+    data = { metadata: { state: 'BATCH_STATE_EXPIRED' } }
+  }
   const state = stateOf(data)
   if (/SUCCEEDED/.test(state)) {
     const results = await collect(batch, data)
@@ -143,7 +156,12 @@ async function check (batch) {
   } else if (/FAILED|CANCELLED|EXPIRED/.test(state)) {
     await tell(batch, report(batch, [], `Gemini の処理が ${state.replace(/^(BATCH|JOB)_STATE_/, '').toLowerCase()} で終わりました`))
     global.logger.warn(`[SUMMARY]: Batch ${batch.name} ended ${state}: ${JSON.stringify(data.error || data.metadata?.error || '').slice(0, 300)}`)
+  } else if (age >= MAX_BATCH_HOURS) {
+    await geminiSend('POST', `${batch.name}:cancel`).catch(() => {})
+    await tell(batch, report(batch, [], `Gemini の処理が ${Math.round(age)} 時間たっても終わりませんでした`))
+    global.logger.warn(`[SUMMARY]: Batch ${batch.name} still ${state || 'unknown'} after ${Math.round(age)} h; given up on`)
   } else {
+    await store.noteBatch(batch.name, { state: state || 'unknown' }).catch(() => {})
     return false
   }
   await store.deleteBatch(batch.name)

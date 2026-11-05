@@ -123,6 +123,20 @@ describe('stores', { skip: !database.available && 'needs PGHOST' }, () => {
       assert.deepEqual(await q("SELECT * FROM message_attachments WHERE message_id = 'm0'"), [])
     })
 
+    test('an embedding batch keeps where it stands: its state, when last looked at, and the last error', async () => {
+      const store = require('../../src/db/interfaces/postgres/embeddings')
+      await store.saveEmbeddingBatch('batches/s1', 'A', [])
+      let [batch] = (await store.runningEmbeddingBatches()).filter(b => b.name === 'batches/s1')
+      assert.ok(batch.created_at instanceof Date)
+      await store.noteEmbeddingBatch('batches/s1', { state: 'BATCH_STATE_RUNNING' })
+      await store.noteEmbeddingBatch('batches/s1', { error: 'HTTP 500' })
+      const [row] = await q("SELECT state, last_error, checked_at IS NOT NULL AS checked FROM embedding_batches WHERE name = 'batches/s1'")
+      assert.deepEqual(row, { state: 'BATCH_STATE_RUNNING', last_error: 'HTTP 500', checked: true }, 'a failed look keeps the state')
+      await store.deleteEmbeddingBatch('batches/s1')
+      ;[batch] = (await store.runningEmbeddingBatches()).filter(b => b.name === 'batches/s1')
+      assert.equal(batch, undefined)
+    })
+
     test('message embeddings are searched through their message', async () => {
       const store = require('../../src/db/interfaces/postgres/embeddings')
       const pending = await store.pendingMessages(3)

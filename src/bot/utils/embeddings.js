@@ -3,7 +3,7 @@
 //
 // Vectors are DIMENSIONS long (the model is trained so a prefix of its output is a usable
 // embedding), normalized, and handled in the app as signed bytes (each component times 127).
-const { geminiRequest, geminiStream } = require('../modules/eventDrafter')
+const { geminiRequest, geminiStream, geminiSend } = require('../modules/eventDrafter')
 const { forEachArrayItem, textChunks } = require('./jsonItems')
 
 const DEFAULT_EMBEDDING_MODEL = 'gemini-embedding-001'
@@ -114,10 +114,15 @@ async function embeddingBatchResult (batch) {
     else if (key) failed.push(key)
   }, { onString: (key, value) => { if (key === 'state' && /_STATE_/.test(value)) state = value } })
   if (/FAILED|CANCELLED|EXPIRED/.test(state)) return { state: 'failed', detail: state }
-  if (!/SUCCEEDED/.test(state)) return { state: 'running' }
+  if (!/SUCCEEDED/.test(state)) return { state: 'running', detail: state || null }
   // Done, but with no results where they are looked for: sent again rather than marked as handled.
   if (vectors.size === 0 && failed.length === 0) return { state: 'failed', detail: `${state} without results` }
   return { state: 'succeeded', vectors, failed }
 }
 
-module.exports = { submitEmbeddingBatch, embeddingBatchResult, embed, embedQuery, blend, model, similarity, quantize, toVectorLiteral, toBase64, fromBase64, DIMENSIONS, BATCH_SIZE }
+// Asks Gemini to stop a batch (one given up on), best effort.
+async function cancelEmbeddingBatch (batch) {
+  await geminiSend('POST', `${batch}:cancel`).catch(() => {})
+}
+
+module.exports = { cancelEmbeddingBatch, submitEmbeddingBatch, embeddingBatchResult, embed, embedQuery, blend, model, similarity, quantize, toVectorLiteral, toBase64, fromBase64, DIMENSIONS, BATCH_SIZE }
