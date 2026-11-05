@@ -189,6 +189,45 @@ describe('embeddingIndexer', () => {
     }
   })
 
+  test('past messages go in batches of EMBEDDING_BATCH_SIZE, up to EMBEDDING_BATCH_CONCURRENCY at a time', async (t) => {
+    t.mock.method(global.logger, 'info', () => {})
+    const old = new Date(Date.now() - 3 * 24 * 60 * 60 * 1000)
+    const saved = installEmbeddingStore({
+      pending: ['ホラー配信こわかった', 'マイクラのコラボまたやって', '歌枠よかった', '雑談配信いつ？', 'ゲーム大会たのしみ']
+        .map((content, i) => ({ id: `p${i}`, guild_id: '100', channel_id: '201', ts: old, content }))
+    })
+    installEmbeddingModel()
+    let n = 0
+    const submitted = []
+    global.fetch = async (url, init = {}) => {
+      if (String(url).endsWith(':asyncBatchEmbedContent')) {
+        submitted.push(JSON.parse(init.body).batch.inputConfig.requests.requests.map(r => r.metadata.key))
+        return { ok: true, json: async () => ({ name: `batches/b${++n}`, metadata: { state: 'BATCH_STATE_PENDING' } }) }
+      }
+      if (/\/batches\/b\d$/.test(String(url))) {
+        return { ok: true, body: [new TextEncoder().encode(JSON.stringify({ name: 'x', metadata: { state: 'BATCH_STATE_RUNNING' } }))] }
+      }
+      throw new Error(`unexpected ${url}`)
+    }
+    process.env.MESSAGE_EMBEDDINGS = 'true'
+    process.env.EMBEDDING_BATCH_SIZE = '2'
+    process.env.EMBEDDING_BATCH_CONCURRENCY = '2'
+    try {
+      await indexer.indexMessages()
+      assert.deepEqual(submitted, [['p0', 'p1'], ['p2', 'p3']], 'two batches of two')
+      await indexer.indexMessages()
+      assert.equal(submitted.length, 2, 'no third while two run')
+      process.env.EMBEDDING_BATCH_CONCURRENCY = '3'
+      await indexer.indexMessages()
+      assert.deepEqual(submitted[2], ['p4'], 'the rest once there is room')
+      assert.equal(saved.batches.length, 3)
+    } finally {
+      delete process.env.MESSAGE_EMBEDDINGS
+      delete process.env.EMBEDDING_BATCH_SIZE
+      delete process.env.EMBEDDING_BATCH_CONCURRENCY
+    }
+  })
+
   test('a batch that cannot be looked at is noted and tried again, without holding up recent messages; one too old or gone is given up on', async (t) => {
     t.mock.method(global.logger, 'info', () => {})
     const warned = t.mock.method(global.logger, 'warn', () => {})
