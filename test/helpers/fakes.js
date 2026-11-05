@@ -193,6 +193,17 @@ function installReplyLengthStore (lengths = {}, personas = {}, debugFooters = {}
 }
 installReplyLengthStore()
 
+// The bot's load over the past hour (geminiLoad.js), in memory: counts { key: number }. Installed
+// when this file loads, so no test reaches Redis.
+function installLoadStore (counts = new Map()) {
+  const load = require('../../src/bot/utils/geminiLoad')
+  load.store.add = async (key, amount) => counts.set(key, (counts.get(key) || 0) + amount)
+  load.store.get = async keys => keys.map(k => counts.get(k) || 0)
+  load.reset()
+  return counts
+}
+installLoadStore()
+
 // Replaces the Redis counter behind the daily mention limit with an in-memory one.
 // counts: { key: number } (the server caps and the token windows); windows also keep when each
 // token window ends ({ key: Date }), by the `now` given (the clock otherwise).
@@ -388,7 +399,7 @@ async function startServer (handler) {
 }
 
 module.exports = {
-  perms, createGuild, createMember, installBot, installYouTubeStore, installQuotaStore, installEmbeddingStore, configureGateway, installGemini, call, submit, lastToolResponses, startServer, installLoreStore, restoreLoreStore, stripUntrusted, unwrapTools
+  perms, createGuild, createMember, installBot, installYouTubeStore, installQuotaStore, installEmbeddingStore, configureGateway, installGemini, call, submit, lastToolResponses, startServer, installLoreStore, restoreLoreStore, stripUntrusted, unwrapTools, installLoadStore
 }
 
 // A fake embedding model: each text points along the axis of the first topic it mentions, so

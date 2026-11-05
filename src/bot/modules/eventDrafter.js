@@ -5,6 +5,7 @@ const { wrap } = require('../utils/untrusted')
 const { Agent } = require('undici')
 const { gatewayURL, gatewayAuthHeaders, isGatewayConfigured, hasDefaultEndpoint, customBase } = require('../utils/aiGateway')
 const { textChunks } = require('../utils/jsonItems')
+const geminiLoad = require('../utils/geminiLoad')
 const { currentUsage, recordTokens, addTokens, addModel, addFallback } = require('../utils/geminiUsage')
 
 // A fixed model, not an alias such as gemini-flash-latest: an explicit cache (below) is made for one
@@ -412,9 +413,10 @@ let warnedFlexDomain = false
 // the failure (the stronger model's turn is answered by the usual model, runAgent).
 async function geminiPost (path, body, { timeoutMs = GEMINI_TIMEOUT_MS, purpose = 'other', model = '', flex = false, stream = false, standard = false } = {}) {
   const usage = currentUsage()
-  // A user near their limits has every generation of their mention on Flex (mentionQuota.js), but
-  // for image models.
-  if (usage?.flex && /:(stream)?[gG]enerateContent/.test(path) && !/image/i.test(model)) flex = true
+  // A user near their limits has every generation of their mention on Flex (mentionQuota.js), and
+  // when the bot as a whole is busy every generation is, in the background too (geminiLoad.js);
+  // but for image models.
+  if ((usage?.flex || geminiLoad.flexForAll()) && /:(stream)?[gG]enerateContent/.test(path) && !/image/i.test(model)) flex = true
   flex = flex && !standard && flexUsable()
   const url = gatewayURL(`google-ai-studio/v1beta/${path}`, { direct: flex })
   if (flex && customBase() && !hasDefaultEndpoint() && !warnedFlexDomain) {
@@ -461,6 +463,7 @@ async function geminiPost (path, body, { timeoutMs = GEMINI_TIMEOUT_MS, purpose 
   const data = stream ? await streamed(res) : await res.json()
   recordTokens(purpose, model, data?.usageMetadata)
   addTokens(data?.usageMetadata, { model, flex })
+  geminiLoad.record(require('../utils/mentionQuota').costOf(data?.usageMetadata, model, { flex }))
   // The model that answered the reply itself, for the line under it.
   if (purpose.startsWith('mention')) addModel(model, { flex })
   return data
@@ -643,6 +646,8 @@ async function generate (contents, declarations, allowed = null, { deep = false 
     toolConfig: { functionCallingConfig: { mode: 'ANY', ...(allowed ? { allowedFunctionNames: allowed } : {}) } }
   }
   const generationConfig = { temperature: temperature(), ...thinkingConfig(model, deep ? { setting: 'GEMINI_DEEP_THINKING_LEVEL', fallback: 'high' } : undefined) }
+  // The busier the bot as a whole, the less a reply thinks (geminiLoad.js).
+  if (generationConfig.thinkingConfig) generationConfig.thinkingConfig = { ...generationConfig.thinkingConfig, thinkingLevel: geminiLoad.cappedThinking(generationConfig.thinkingConfig.thinkingLevel) }
   if (deep) {
     return callGemini(model, { ...prefix, contents, generationConfig }, { purpose: 'mention-deep', timeoutMs: DEEP_TIMEOUT_MS, flex: process.env.GEMINI_DEEP_FLEX !== 'false', stream: true })
   }
