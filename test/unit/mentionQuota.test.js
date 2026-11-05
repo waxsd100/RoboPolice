@@ -73,15 +73,15 @@ describe('mentionQuota', () => {
     assert.equal((await mentionQuota.take('1', OTHER, at(T0))).allowed, false, 'limited again elsewhere')
   })
 
-  test('past MENTION_FLEX_AT_PERCENT (80) of a window, mentions go to Flex; a server can set its own share, 0 for never', async () => {
-    await mentionQuota.record('1', 110000, at(T0))
-    assert.deepEqual(await mentionQuota.take('1', OWNER, at(T0)), { allowed: true, flex: false }, 'at 73%')
-    await mentionQuota.record('1', 10000, at(T0))
+  test('past MENTION_FLEX_AT_PERCENT (95) of a window, mentions go to Flex; a server can set its own share, 0 for never', async () => {
+    await mentionQuota.record('1', 135000, at(T0))
+    assert.deepEqual(await mentionQuota.take('1', OWNER, at(T0)), { allowed: true, flex: false }, 'at 90%')
+    await mentionQuota.record('1', 7500, at(T0))
     const slow = await mentionQuota.take('1', OWNER, at(T0))
-    assert.equal(slow.flex, true, 'at 80%')
+    assert.equal(slow.flex, true, 'at 95%')
     assert.equal(slow.window, '5h')
-    assert.equal(Math.round(slow.used * 100), 80)
-    assert.equal((await mentionQuota.take('1', OWNER, at(T0), { limits: { flexAt: 90 } })).flex, false, 'the server says 90%')
+    assert.equal(Math.round(slow.used * 100), 95)
+    assert.equal((await mentionQuota.take('1', OWNER, at(T0), { limits: { flexAt: 98 } })).flex, false, 'the server says 98%')
     assert.equal((await mentionQuota.take('1', OWNER, at(T0), { limits: { flexAt: 0 } })).flex, false, 'the server turned it off')
     process.env.MENTION_FLEX_AT_PERCENT = '50'
     assert.equal((await mentionQuota.take('2', OWNER, at(T0))).flex, false, 'someone with no use')
