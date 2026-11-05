@@ -107,12 +107,11 @@ server's history takes disk space: with no retention set and no limit given, all
 | `/stoplogging channel:<チャンネル>` | 指定したチャンネルへのログ出力を止める（`other` ですべて止める） | Webhook の管理・チャンネルの管理 |
 | `/ignorechannel channel-to-ignore:<チャンネル>` | 指定したチャンネルの出来事をログに出さない／出すを切り替える（`optional` で一覧・リセット） | Webhook の管理・チャンネルの管理 |
 | `/logbots` | 他の BOT の操作もログに出すかを切り替える（初期値: 出さない） | Webhook の管理・チャンネルの管理 |
-| `/serverinfo` | サーバーの情報（ロール数・メンバー数・機能など）を表示する | なし |
-| `/userinfo user:<ユーザー>` | ユーザーの情報（参加日・作成日・ロールなど）を表示する | なし |
 | `/clearmydata` | 保存データの削除の方法を表示する | なし |
 | `/invite` | BOT の招待リンクを表示する | なし |
 | `/help event:<イベント> guide:<項目>` | ヘルプを表示する | なし |
-| `/ping` | BOT が動いているか確認する | なし |
+
+コマンドの説明と選択肢は英語と日本語で登録し、Discord の表示言語が日本語の人には日本語で表示されます。返事も同じく、日本語の人には日本語、それ以外の人には英語で返します（`src/bot/utils/i18n.js`。Discord が言語を送らないときは日本語）。サーバーやユーザーの情報、BOT の応答確認は Discord の画面やテキストコマンド（`%serverinfo`・`%userinfo`・`%ping`）で見られるので、スラッシュコマンドにはありません。
 
 `/youtube` の新しいサブコマンドや `/replylength`・`/persona` のような新しいコマンドを追加したときは、下の `%setcmd` でコマンドを登録し直さないと Discord に表示されません。
 

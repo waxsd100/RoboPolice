@@ -6,6 +6,7 @@ const { getEmbedFooter, getAuthorField } = require('../utils/embeds')
 const { NewsThreadChannel, PrivateThreadChannel, PublicThreadChannel } = require('eris')
 const { isCreator } = require('../utils/creatorIds')
 const { hasStaffAccess } = require('../utils/staffAccess')
+const { pick } = require('../utils/i18n') // also keeps each interaction's language
 
 let slashCommands = fs.readdirSync(path.resolve('src', 'bot', 'slashcommands')).map(filename => {
   return require(path.resolve('src', 'bot', 'slashcommands', filename))
@@ -53,9 +54,9 @@ module.exports = {
           if (command.noThread && (interaction.channel instanceof NewsThreadChannel || interaction.channel instanceof PrivateThreadChannel || interaction.channel instanceof PublicThreadChannel)) {
             interaction.createMessage({
               embeds: [{
-                title: '実行できません',
+                title: pick(interaction, { ja: '実行できません', en: 'Cannot run here' }),
                 color: EMBED_COLORS.YELLOW_ORANGE,
-                description: `__${command.name}__ cannot be ran in a thread.`,
+                description: pick(interaction, { ja: `__${command.name}__ はスレッドでは使えません。`, en: `__${command.name}__ cannot be run in a thread.` }),
                 footer: getEmbedFooter(global.bot.user),
                 author: getAuthorField(interaction.member.user),
                 thumbnail: {
@@ -72,9 +73,12 @@ module.exports = {
             if (missingPermissions.length !== 0) {
               interaction.createMessage({
                 embeds: [{
-                  title: '権限が不足しています',
+                  title: pick(interaction, { ja: '権限が足りません', en: 'Missing permissions' }),
                   color: EMBED_COLORS.YELLOW_ORANGE,
-                  description: `You are missing the following permissions to run ${command.name}: ${missingPermissions.map(perm => `\`${perm}\``).join(', ')}`,
+                  description: pick(interaction, {
+                    ja: `${command.name} を使うには次の権限が必要です: ${missingPermissions.map(perm => `\`${perm}\``).join(', ')}`,
+                    en: `You need these permissions to run ${command.name}: ${missingPermissions.map(perm => `\`${perm}\``).join(', ')}`
+                  }),
                   footer: getEmbedFooter(global.bot.user),
                   author: getAuthorField(interaction.member.user),
                   thumbnail: {
@@ -92,9 +96,12 @@ module.exports = {
             if (missingPermissions.length !== 0) {
               interaction.createMessage({
                 embeds: [{
-                  title: 'BOTの権限が不足しています',
+                  title: pick(interaction, { ja: 'BOT の権限が足りません', en: 'The bot is missing permissions' }),
                   color: EMBED_COLORS.YELLOW_ORANGE,
-                  description: `I need the following permissions to run ${command.name}: ${missingPermissions.map(perm => `\`${perm}\``).join(', ')}`,
+                  description: pick(interaction, {
+                    ja: `${command.name} を実行するには、BOT に次の権限が必要です: ${missingPermissions.map(perm => `\`${perm}\``).join(', ')}`,
+                    en: `I need these permissions to run ${command.name}: ${missingPermissions.map(perm => `\`${perm}\``).join(', ')}`
+                  }),
                   footer: getEmbedFooter(global.bot.user),
                   author: getAuthorField(interaction.member.user),
                   thumbnail: {
