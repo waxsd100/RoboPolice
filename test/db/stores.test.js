@@ -75,6 +75,24 @@ describe('stores', { skip: !database.available && 'needs PGHOST' }, () => {
       assert.equal(global.bot.guildSettingsCache.g1.isLogBots(), true)
     })
 
+    test('a server\'s own token limits: set, read back, and back to the default', async () => {
+      // fakes.js puts an in-memory store in place of this one: a fresh copy is the real one.
+      const path = require.resolve('../../src/db/interfaces/postgres/replySettings')
+      delete require.cache[path]
+      const settings = require(path)
+      assert.deepEqual((await settings.getReplySettings('g2')).tokenLimits, { '5h': null, week: null, flexAt: null, unlimited: false })
+      await settings.setTokenLimit('g2', '5h', 300000)
+      await settings.setTokenLimit('g2', 'week', 0)
+      await settings.setTokenLimit('g2', 'flexAt', 70)
+      assert.deepEqual((await settings.getReplySettings('g2')).tokenLimits, { '5h': 300000, week: 0, flexAt: 70, unlimited: false })
+      await settings.setTokenLimit('g2', 'unlimited', true)
+      assert.equal((await settings.getReplySettings('g2')).tokenLimits.unlimited, true)
+      await settings.setTokenLimit('g2', '5h', null)
+      assert.equal((await settings.getReplySettings('g2')).tokenLimits['5h'], null)
+      await assert.rejects(settings.setTokenLimit('g2', 'flexAt', 101), /check constraint/)
+      await assert.rejects(settings.setTokenLimit('g2', 'day', 1), /No token limit day/)
+    })
+
     test('a server made on first use, and its settings go with it', async () => {
       await update().setEventsLogId('g2', 'c1', ['messageDelete'])
       assert.equal((await read().getGuild('g2')).event_logs.messageDelete, 'c1')

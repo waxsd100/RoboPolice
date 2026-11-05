@@ -293,6 +293,38 @@ describe('draft', () => {
     }
   })
 
+  test('when the bot as a whole is busy, replies think less and every generation, the background too, goes to Flex', async (t) => {
+    t.mock.method(global.logger, 'info', () => {})
+    const load = require('../../src/bot/utils/geminiLoad')
+    const { installLoadStore } = require('../helpers/fakes')
+    const { callGemini } = require('../../src/bot/modules/eventDrafter')
+    const counts = installLoadStore()
+    try {
+      counts.set(`gemini-load:${Math.floor(Date.now() / load.BUCKET_MS)}`, 1200000) // 60%
+      await load.refresh()
+      let requests = installGemini([[call('submit_chat_reply', { text: 'やあ' })]])
+      await draft({ request: 'やあ', channelName: 'general', guild, tools, now: NOW })
+      assert.equal(requests[0].body.generationConfig.thinkingConfig.thinkingLevel, 'medium', 'medium at 50%')
+      assert.equal(requests[0].body.serviceTier, undefined)
+
+      counts.set(`gemini-load:${Math.floor(Date.now() / load.BUCKET_MS)}`, 1800000) // 90%
+      load.reset()
+      await load.refresh()
+      requests = installGemini([[call('submit_chat_reply', { text: 'やあ' })]])
+      await draft({ request: 'やあ', channelName: 'general', guild, tools, now: NOW })
+      assert.equal(requests[0].body.generationConfig.thinkingConfig.thinkingLevel, 'low', 'low at 80%')
+      assert.equal(requests[0].body.serviceTier, 'flex')
+      requests = installGemini([[{ text: '知識' }]])
+      await callGemini('gemini-3.5-flash-lite', { contents: [{ role: 'user', parts: [{ text: 'x' }] }] }, { purpose: 'serverLore' })
+      assert.equal(requests[0].body.serviceTier, 'flex', 'the background too')
+      requests = installGemini([[{ inlineData: { mimeType: 'image/png', data: 'AA' } }]])
+      await callGemini('gemini-3.1-flash-image', { contents: [{ role: 'user', parts: [{ text: 'x' }] }] }, { purpose: 'image' })
+      assert.equal(requests[0].body.serviceTier, undefined, 'but not image models')
+    } finally {
+      installLoadStore()
+    }
+  })
+
   test('GEMINI_DEEP_MODEL empty: think_deeper is not offered', async () => {
     process.env.GEMINI_DEEP_MODEL = ''
     try {
