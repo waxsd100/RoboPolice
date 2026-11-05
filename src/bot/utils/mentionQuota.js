@@ -1,13 +1,14 @@
 // How much each user may use the mention assistant, like Claude's usage limits: counted in Gemini
 // tokens, per user across every server, in two windows that start with the user's first use and
-// reset when they run out: five hours (MENTION_TOKEN_LIMIT_5H, default 300,000) and a week
-// (MENTION_TOKEN_LIMIT_WEEK, default 2,000,000). 0 turns one off. Counted in Redis.
+// reset when they run out: five hours (MENTION_TOKEN_LIMIT_5H, default 150,000) and a week
+// (MENTION_TOKEN_LIMIT_WEEK, default 750,000), about what Claude's free plan allows (10 to 20
+// ordinary exchanges in five hours). 0 turns one off. Counted in Redis.
 //
 // What a mention used is added once it is answered, so the mention that crosses a limit is still
 // answered and the next is refused. Every Gemini call made for it counts (lookups, the stronger
 // model, the rewrite), by what it cost on Gemini's price list (costOf): the limits are in tokens of
-// the usual reply model's input ($0.75 a million), so 300,000 is about $0.23 and 2,000,000 about
-// $1.50 of Gemini. The bot's developers (CREATOR_IDS) have no limit.
+// the usual reply model's input ($0.75 a million), so 150,000 is about $0.11 and 750,000 about
+// $0.56 of Gemini. The bot's developers (CREATOR_IDS) have no limit.
 //
 // Other servers than the owner's (priority.js) also have a cap for the whole server per day (Japan
 // time): MENTION_GUILD_DAILY_LIMIT_OTHER mentions (default 30), 0 to turn it off.
@@ -19,8 +20,8 @@ const { isCreator } = require('./creatorIds')
 const { usdOf } = require('./geminiPrices')
 
 const WINDOWS = [
-  { name: '5h', setting: 'MENTION_TOKEN_LIMIT_5H', fallback: 300000, seconds: 5 * 60 * 60, label: '5時間' },
-  { name: 'week', setting: 'MENTION_TOKEN_LIMIT_WEEK', fallback: 2000000, seconds: 7 * 24 * 60 * 60, label: '1週間' }
+  { name: '5h', setting: 'MENTION_TOKEN_LIMIT_5H', fallback: 150000, seconds: 5 * 60 * 60, label: '5時間' },
+  { name: 'week', setting: 'MENTION_TOKEN_LIMIT_WEEK', fallback: 750000, seconds: 7 * 24 * 60 * 60, label: '1週間' }
 ]
 const DEFAULT_OTHER_GUILD_LIMIT = 30
 const TIMEZONE = 'Asia/Tokyo'

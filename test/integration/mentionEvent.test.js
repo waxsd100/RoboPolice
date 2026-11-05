@@ -1110,7 +1110,7 @@ describe('mention → event / forum post (integration)', () => {
     quota.set(`mention-tokens:5h:${REQUESTER}`, WINDOWS[0].fallback)
     installGemini([])
     await mentionEvent.handle(mention(channel, '<@BOT> こんにちは'))
-    assert.match(replies[1].state.content, /^利用上限（5時間あたり 300,000 トークン）に達しました。20:0\dごろ（日本時間）からまた使えます。$/)
+    assert.match(replies[1].state.content, /^利用上限（5時間あたり 150,000 トークン）に達しました。20:0\dごろ（日本時間）からまた使えます。$/)
     process.env.OWNER_GUILD_IDS = '100'
     try {
       await mentionEvent.handle(mention(channel, '<@BOT> こんにちは'))
