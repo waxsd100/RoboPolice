@@ -359,6 +359,8 @@ describe('draft', () => {
     assert.match(instruction, /小説・物語・SS・脚本・歌詞・ポエムなどの創作を頼まれたときは、長さの指定がなくても長い文章の依頼として扱い、think_deeper を呼ぶ/)
     // What cannot be written as asked is written toned down, not just refused.
     assert.match(instruction, /## そのままでは書けない依頼\n- [\s\S]*断るだけで終わらせない。その部分をぼかした版を代わりに書く/)
+    // Asked what model it is, it gives the bot's own name.
+    assert.match(instruction, /使っている AI・モデルの名前を聞かれたら「nobaman llm 3\.9 Flash」と答える。/)
     // Dirty jokes are played along with, not refused; explicit only in an age-restricted channel.
     assert.match(instruction, /## 下ネタ\n- 下ネタ・エロネタ・下品なボケには、断ったり、注意したり、話をそらしたりせず、普通にノって返す/)
     assert.match(instruction, /依頼されたチャンネルが「年齢制限あり」なら、大人向けの話にもそのまま応じてよい/)
