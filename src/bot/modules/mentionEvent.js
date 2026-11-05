@@ -411,9 +411,17 @@ async function handle (message) {
     let reply
     try {
       reply = await message.channel.createMessage({ content: '内容を読み取っています…', ...reference })
-      // Per user across every server, in tokens (mentionQuota.js).
-      const quota = await mentionQuota.take(message.author.id, guild.id)
+      // /replylength, /persona, %debugfooter, %tokenlimit; without them (or the database) as by default.
+      const { replyLength, streamerPersona, debugFooter, tokenLimits } = await replySettingsStore.getReplySettings(guild.id)
+        .catch(() => ({ replyLength: null, streamerPersona: true, debugFooter: false, tokenLimits: {} }))
+      // Per user across every server, in tokens, against this server's limits (mentionQuota.js). Near
+      // a limit, every call goes to Flex inference: slower and half the price.
+      const quota = await mentionQuota.take(message.author.id, guild.id, new Date(), { limits: tokenLimits })
       if (!quota.allowed) throw new StopDrafting(mentionQuota.refusal(quota))
+      if (quota.flex) {
+        usage.flex = true
+        await reply.edit({ content: `利用量が上限の ${Math.floor(quota.used * 100)}% に近づいたので、低速モード（Flex）で考えています…（数分かかることがあります）` }).catch(() => {})
+      }
       usage.onWait = ms => reply.edit({ content: `AI が混み合っているため、${Math.ceil(ms / 1000)} 秒待ってから再試行します…` }).catch(() => {})
       const member = message.member
       const tools = createTools({
@@ -460,10 +468,6 @@ async function handle (message) {
       const pictures = await picturesFor([request, referenced?.text], guild).catch(() => [])
       // A reply brings its conversation in (`referenced`); otherwise only what was just said in the
       // channel that bears on the request (`recent`), never the bot's own earlier replies.
-      // /replylength and /persona; without them (or the database) replies are as by default.
-      // %debugfooter: the line under a reply with the models and tokens, off by default.
-      const { replyLength, streamerPersona, debugFooter } = await replySettingsStore.getReplySettings(guild.id)
-        .catch(() => ({ replyLength: null, streamerPersona: true, debugFooter: false }))
       let result = await draft({
         request,
         referenced,

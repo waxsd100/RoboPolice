@@ -173,18 +173,36 @@ installLoreStore()
 
 // The reply settings (/replylength, /persona), in memory: lengths { guildID: 'long' | 'normal' |
 // 'short' }, personas { guildID: false } for servers that turned the streamer off, debugFooters
-// { guildID: true } for servers that show the debug line. Installed when this file loads, so no test
-// reaches a real database.
-function installReplyLengthStore (lengths = {}, personas = {}, debugFooters = {}) {
+// { guildID: true } for servers that show the debug line, tokenLimits { guildID: { '5h', week,
+// flexAt } } for a server's own limits. Installed when this file loads, so no test reaches a real
+// database.
+function installReplyLengthStore (lengths = {}, personas = {}, debugFooters = {}, tokenLimits = {}) {
   const store = require('../../src/db/interfaces/postgres/replySettings')
-  store.getReplySettings = async guildID => ({ replyLength: lengths[guildID] || null, streamerPersona: personas[guildID] !== false, debugFooter: debugFooters[guildID] === true })
+  store.getReplySettings = async guildID => ({
+    replyLength: lengths[guildID] || null,
+    streamerPersona: personas[guildID] !== false,
+    debugFooter: debugFooters[guildID] === true,
+    tokenLimits: { '5h': null, week: null, flexAt: null, unlimited: false, ...tokenLimits[guildID] }
+  })
+  store.setTokenLimit = async (guildID, which, value) => { tokenLimits[guildID] = { ...tokenLimits[guildID], [which]: value } }
   store.getReplyLength = async guildID => lengths[guildID] || null
   store.setReplyLength = async (guildID, length) => { lengths[guildID] = length }
   store.setStreamerPersona = async (guildID, enabled) => { personas[guildID] = enabled }
   store.setDebugFooter = async (guildID, enabled) => { debugFooters[guildID] = enabled }
-  return { lengths, personas, debugFooters }
+  return { lengths, personas, debugFooters, tokenLimits }
 }
 installReplyLengthStore()
+
+// The bot's load over the past hour (geminiLoad.js), in memory: counts { key: number }. Installed
+// when this file loads, so no test reaches Redis.
+function installLoadStore (counts = new Map()) {
+  const load = require('../../src/bot/utils/geminiLoad')
+  load.store.add = async (key, amount) => counts.set(key, (counts.get(key) || 0) + amount)
+  load.store.get = async keys => keys.map(k => counts.get(k) || 0)
+  load.reset()
+  return counts
+}
+installLoadStore()
 
 // Replaces the Redis counter behind the daily mention limit with an in-memory one.
 // counts: { key: number } (the server caps and the token windows); windows also keep when each
@@ -381,7 +399,7 @@ async function startServer (handler) {
 }
 
 module.exports = {
-  perms, createGuild, createMember, installBot, installYouTubeStore, installQuotaStore, installEmbeddingStore, configureGateway, installGemini, call, submit, lastToolResponses, startServer, installLoreStore, restoreLoreStore, stripUntrusted, unwrapTools
+  perms, createGuild, createMember, installBot, installYouTubeStore, installQuotaStore, installEmbeddingStore, configureGateway, installGemini, call, submit, lastToolResponses, startServer, installLoreStore, restoreLoreStore, stripUntrusted, unwrapTools, installLoadStore
 }
 
 // A fake embedding model: each text points along the axis of the first topic it mentions, so
