@@ -1139,6 +1139,33 @@ describe('mention → event / forum post (integration)', () => {
     assert.equal(quota.get(`mention-tokens:5h:${REQUESTER}`), 2333)
   })
 
+  test('near a limit every call of the mention goes to Flex (slower, half the price), and the server can set its own limits', async (t) => {
+    t.mock.method(global.logger, 'info', () => {})
+    const { installReplyLengthStore } = require('../helpers/fakes')
+    const { channel, replies } = createChannel()
+    quota.set(`mention-tokens:5h:${REQUESTER}`, 130000) // 87% of 150,000
+    const requests = installGemini([[call('submit_chat_reply', { text: 'ゆっくり答えたよ' })]])
+    await mentionEvent.handle(mention(channel, '<@BOT> こんにちは'))
+    assert.equal(replies[0].state.content, 'ゆっくり答えたよ')
+    assert.equal(requests[0].body.serviceTier, 'flex')
+    assert.ok(replies[0].history.some(h => /^利用量が上限の 86% に近づいたので、低速モード（Flex）で考えています/.test(h.content)))
+
+    // This server allows more: not near its limit, so the standard tier.
+    installReplyLengthStore({}, {}, {}, { [channel.guild.id]: { '5h': 1000000 } })
+    try {
+      const again = installGemini([[call('submit_chat_reply', { text: 'やあ' })]])
+      await mentionEvent.handle(mention(channel, '<@BOT> こんにちは'))
+      assert.equal(again[0].body.serviceTier, undefined)
+      // And one that allows less refuses.
+      installReplyLengthStore({}, {}, {}, { [channel.guild.id]: { '5h': 100000 } })
+      installGemini([])
+      await mentionEvent.handle(mention(channel, '<@BOT> こんにちは'))
+      assert.match(replies[2].state.content, /^利用上限（5時間あたり 100,000 トークン）に達しました。/)
+    } finally {
+      installReplyLengthStore()
+    }
+  })
+
   test('outside the owner\'s server, the whole server has 30 mentions a day; the bot\'s developers have no token limit', async () => {
     const { channel, replies } = createChannel()
     const day = require('../../src/bot/utils/mentionQuota').today(new Date())

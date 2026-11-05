@@ -173,16 +173,23 @@ installLoreStore()
 
 // The reply settings (/replylength, /persona), in memory: lengths { guildID: 'long' | 'normal' |
 // 'short' }, personas { guildID: false } for servers that turned the streamer off, debugFooters
-// { guildID: true } for servers that show the debug line. Installed when this file loads, so no test
-// reaches a real database.
-function installReplyLengthStore (lengths = {}, personas = {}, debugFooters = {}) {
+// { guildID: true } for servers that show the debug line, tokenLimits { guildID: { '5h', week,
+// flexAt } } for a server's own limits. Installed when this file loads, so no test reaches a real
+// database.
+function installReplyLengthStore (lengths = {}, personas = {}, debugFooters = {}, tokenLimits = {}) {
   const store = require('../../src/db/interfaces/postgres/replySettings')
-  store.getReplySettings = async guildID => ({ replyLength: lengths[guildID] || null, streamerPersona: personas[guildID] !== false, debugFooter: debugFooters[guildID] === true })
+  store.getReplySettings = async guildID => ({
+    replyLength: lengths[guildID] || null,
+    streamerPersona: personas[guildID] !== false,
+    debugFooter: debugFooters[guildID] === true,
+    tokenLimits: { '5h': null, week: null, flexAt: null, ...tokenLimits[guildID] }
+  })
+  store.setTokenLimit = async (guildID, which, value) => { tokenLimits[guildID] = { ...tokenLimits[guildID], [which]: value } }
   store.getReplyLength = async guildID => lengths[guildID] || null
   store.setReplyLength = async (guildID, length) => { lengths[guildID] = length }
   store.setStreamerPersona = async (guildID, enabled) => { personas[guildID] = enabled }
   store.setDebugFooter = async (guildID, enabled) => { debugFooters[guildID] = enabled }
-  return { lengths, personas, debugFooters }
+  return { lengths, personas, debugFooters, tokenLimits }
 }
 installReplyLengthStore()
 

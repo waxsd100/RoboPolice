@@ -13,7 +13,7 @@ describe('mentionQuota', () => {
   let counts
   beforeEach(() => { counts = installQuotaStore() })
   afterEach(() => {
-    for (const name of ['MENTION_TOKEN_PRICES', 'MENTION_TOKEN_LIMIT_5H', 'MENTION_TOKEN_LIMIT_WEEK', 'MENTION_GUILD_DAILY_LIMIT_OTHER', 'OWNER_GUILD_IDS', 'CREATOR_IDS']) delete process.env[name]
+    for (const name of ['MENTION_FLEX_AT_PERCENT', 'MENTION_TOKEN_PRICES', 'MENTION_TOKEN_LIMIT_5H', 'MENTION_TOKEN_LIMIT_WEEK', 'MENTION_GUILD_DAILY_LIMIT_OTHER', 'OWNER_GUILD_IDS', 'CREATOR_IDS']) delete process.env[name]
   })
 
   test('a response counts by what it cost on Gemini\'s price list, in tokens of the usual model\'s input', () => {
@@ -52,10 +52,34 @@ describe('mentionQuota', () => {
     process.env.MENTION_TOKEN_LIMIT_5H = '0'
     process.env.MENTION_TOKEN_LIMIT_WEEK = '1000'
     await mentionQuota.record('1', 1000, at(T0))
-    assert.equal(counts.has('mention-tokens:5h:1'), false)
+    assert.equal(counts.get('mention-tokens:5h:1'), 1000, 'still counted: another server may limit it')
     assert.equal((await mentionQuota.take('1', OWNER, at(T0))).window, 'week')
     process.env.CREATOR_IDS = '1'
     assert.equal((await mentionQuota.take('1', OWNER, at(T0))).allowed, true)
+  })
+
+  test('a server can have its own limits; use is counted across servers and measured against the server asked in', async () => {
+    await mentionQuota.record('1', 100000, at(T0))
+    assert.equal((await mentionQuota.take('1', OWNER, at(T0), { limits: { '5h': 50000 } })).window, '5h', 'tighter here')
+    assert.equal((await mentionQuota.take('1', OTHER, at(T0), { limits: { '5h': 500000, flexAt: 0 } })).allowed, true, 'looser there')
+    assert.equal((await mentionQuota.take('1', OTHER, at(T0), { limits: { '5h': 0, week: 0 } })).allowed, true, '0: no limit in that server')
+    assert.equal(mentionQuota.windowLimit(mentionQuota.WINDOWS[0], { '5h': null }), 150000, 'null: the default')
+  })
+
+  test('past MENTION_FLEX_AT_PERCENT (80) of a window, mentions go to Flex; a server can set its own share, 0 for never', async () => {
+    await mentionQuota.record('1', 110000, at(T0))
+    assert.deepEqual(await mentionQuota.take('1', OWNER, at(T0)), { allowed: true, flex: false }, 'at 73%')
+    await mentionQuota.record('1', 10000, at(T0))
+    const slow = await mentionQuota.take('1', OWNER, at(T0))
+    assert.equal(slow.flex, true, 'at 80%')
+    assert.equal(slow.window, '5h')
+    assert.equal(Math.round(slow.used * 100), 80)
+    assert.equal((await mentionQuota.take('1', OWNER, at(T0), { limits: { flexAt: 90 } })).flex, false, 'the server says 90%')
+    assert.equal((await mentionQuota.take('1', OWNER, at(T0), { limits: { flexAt: 0 } })).flex, false, 'the server turned it off')
+    process.env.MENTION_FLEX_AT_PERCENT = '50'
+    assert.equal((await mentionQuota.take('2', OWNER, at(T0))).flex, false, 'someone with no use')
+    process.env.CREATOR_IDS = '1'
+    assert.deepEqual(await mentionQuota.take('1', OWNER, at(T0)), { allowed: true, flex: false }, 'the developers are never slowed')
   })
 
   test('outside the owner\'s server, the whole server has 30 mentions a day (Japan time)', async () => {

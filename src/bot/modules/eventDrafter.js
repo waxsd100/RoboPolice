@@ -410,8 +410,12 @@ let warnedFlexDomain = false
 // default endpoint (flexUsable) and also retried on HTTP 503 (no Flex capacity). It is not sent at
 // the standard tier when Flex fails, unless GEMINI_DEEP_FLEX_FALLBACK=true: the caller deals with
 // the failure (the stronger model's turn is answered by the usual model, runAgent).
-async function geminiPost (path, body, { timeoutMs = GEMINI_TIMEOUT_MS, purpose = 'other', model = '', flex = false, stream = false } = {}) {
-  flex = flex && flexUsable()
+async function geminiPost (path, body, { timeoutMs = GEMINI_TIMEOUT_MS, purpose = 'other', model = '', flex = false, stream = false, standard = false } = {}) {
+  const usage = currentUsage()
+  // A user near their limits has every generation of their mention on Flex (mentionQuota.js), but
+  // for image models.
+  if (usage?.flex && /:(stream)?[gG]enerateContent/.test(path) && !/image/i.test(model)) flex = true
+  flex = flex && !standard && flexUsable()
   const url = gatewayURL(`google-ai-studio/v1beta/${path}`, { direct: flex })
   if (flex && customBase() && !hasDefaultEndpoint() && !warnedFlexDomain) {
     warnedFlexDomain = true
@@ -420,7 +424,6 @@ async function geminiPost (path, body, { timeoutMs = GEMINI_TIMEOUT_MS, purpose 
   const headers = geminiHeaders()
   if (flex) body = { ...body, serviceTier: 'flex' }
 
-  const usage = currentUsage()
   let res
   for (let attempt = 0; ; attempt++) {
     if (usage) usage.requests++
@@ -445,12 +448,14 @@ async function geminiPost (path, body, { timeoutMs = GEMINI_TIMEOUT_MS, purpose 
     const why = res.status === 524 ? 'timed out' : 'full'
     global.logger?.info(`[GEMINI]: Flex ${why} for ${model} (HTTP ${res.status}); asking at the standard tier`)
     if (purpose.startsWith('mention')) addFallback(`${model}: Flex ${why} → standard tier`)
-    const { serviceTier, ...standard } = body
-    return geminiPost(path, standard, { timeoutMs, purpose, model, stream })
+    const { serviceTier, ...standardBody } = body
+    return geminiPost(path, standardBody, { timeoutMs, purpose, model, stream, standard: true })
   }
   if (!res.ok) {
     const text = (await res.text()).slice(0, 1000)
-    const hint = res.status === 429 ? rateLimitHint(text) : `AI の呼び出しに失敗しました（HTTP ${res.status}）`
+    const hint = flex && [429, 503, 524].includes(res.status)
+      ? 'AI（Flex）が混み合っていて答えられませんでした。少し時間をおいてお試しください'
+      : res.status === 429 ? rateLimitHint(text) : `AI の呼び出しに失敗しました（HTTP ${res.status}）`
     throw new GeminiError(`Gemini request failed: HTTP ${res.status} ${text}`, hint, null, res.status)
   }
   const data = stream ? await streamed(res) : await res.json()

@@ -10,6 +10,15 @@
 // the usual reply model's input ($0.75 a million), so 150,000 is about $0.11 and 750,000 about
 // $0.56 of Gemini. The bot's developers (CREATOR_IDS) have no limit.
 //
+// A server can have its own limits (%tokenlimit, guilds.token_limit_5h / token_limit_week): the
+// user's use is still counted across every server, and measured against the limits of the server
+// the mention is in.
+//
+// Before a limit is reached, use slows down instead: once a user has used MENTION_FLEX_AT_PERCENT
+// (default 80) of either window, every Gemini call of their mentions goes to Flex inference (half
+// the price, queued for up to minutes), like a speed limit. A server can set its own share
+// (guilds.token_flex_at); 0 turns it off.
+//
 // Other servers than the owner's (priority.js) also have a cap for the whole server per day (Japan
 // time): MENTION_GUILD_DAILY_LIMIT_OTHER mentions (default 30), 0 to turn it off.
 //
@@ -69,18 +78,45 @@ function costOf (meta, model, { flex = false, now = new Date() } = {}) {
   return usdOf(meta, model, { flex, now }) * 1e6 / UNIT_USD_PER_MILLION
 }
 
-// Whether `userID` may have a mention answered now. Resolves to { allowed } or, when not,
-// { allowed: false, scope: 'user', window: '5h' | 'week', label, limit, resetsAt } or
-// { allowed: false, scope: 'guild', limit } for the server's daily cap.
-async function take (userID, guildID = null, now = new Date()) {
-  if (isCreator(userID)) return { allowed: true }
+const DEFAULT_FLEX_AT_PERCENT = 80
+
+// The limit of window `w` in a server with `limits` ({ '5h', week, flexAt }: the server's own,
+// null for the default).
+function windowLimit (w, limits = {}) {
+  const own = limits?.[w.name]
+  return Number.isInteger(own) && own >= 0 ? own : limitOf(w.setting, w.fallback)
+}
+
+// The share (0..1) of a window at which mentions go to Flex; 0 for never.
+function flexAt (limits = {}) {
+  const own = limits?.flexAt
+  const percent = Number.isInteger(own) && own >= 0 && own <= 100 ? own : Math.min(limitOf('MENTION_FLEX_AT_PERCENT', DEFAULT_FLEX_AT_PERCENT), 100)
+  return percent / 100
+}
+
+// Whether `userID` may have a mention answered now, in a server with `limits` (its own, see
+// windowLimit). Resolves to { allowed, flex } (flex: past the share where it slows down to Flex,
+// with `window` and `used` as a share) or, when not, { allowed: false, scope: 'user', window: '5h' |
+// 'week', label, limit, resetsAt } or { allowed: false, scope: 'guild', limit } for the server's
+// daily cap.
+async function take (userID, guildID = null, now = new Date(), { limits = {} } = {}) {
+  if (isCreator(userID)) return { allowed: true, flex: false }
   try {
+    const slowAt = flexAt(limits)
+    let flex = false
+    let slowWindow = null
+    let used = 0
     for (const w of WINDOWS) {
-      const limit = limitOf(w.setting, w.fallback)
+      const limit = windowLimit(w, limits)
       if (!limit) continue
       const { value, resetsInMs } = await store.get(windowKey(userID, w), now)
       if (value >= limit) {
         return { allowed: false, scope: 'user', window: w.name, label: w.label, limit, resetsAt: new Date(now.getTime() + (resetsInMs ?? w.seconds * 1000)) }
+      }
+      if (slowAt && value >= limit * slowAt && value / limit > used) {
+        flex = true
+        slowWindow = w.name
+        used = value / limit
       }
     }
     const guildLimit = isOwnerGuild(guildID) ? 0 : limitOf('MENTION_GUILD_DAILY_LIMIT_OTHER', DEFAULT_OTHER_GUILD_LIMIT)
@@ -88,10 +124,10 @@ async function take (userID, guildID = null, now = new Date()) {
       const count = await store.increment(`mention-quota-guild:${guildID}:${today(now)}`, DAY_TTL_SECONDS)
       if (count > guildLimit) return { allowed: false, scope: 'guild', limit: guildLimit }
     }
-    return { allowed: true }
+    return flex ? { allowed: true, flex, window: slowWindow, used } : { allowed: true, flex: false }
   } catch (e) {
     global.logger.warn(`Mention quota check failed, letting it through: ${e.message}`)
-    return { allowed: true }
+    return { allowed: true, flex: false }
   }
 }
 
@@ -100,9 +136,8 @@ async function record (userID, cost, now = new Date()) {
   const amount = Math.round(cost || 0)
   if (!amount || isCreator(userID)) return
   try {
-    for (const w of WINDOWS) {
-      if (limitOf(w.setting, w.fallback)) await store.add(windowKey(userID, w), amount, w.seconds, now)
-    }
+    // Counted in every window, whatever this server's limits: another server may limit it.
+    for (const w of WINDOWS) await store.add(windowKey(userID, w), amount, w.seconds, now)
   } catch (e) {
     global.logger.warn(`Could not count a mention's tokens: ${e.message}`)
   }
@@ -120,4 +155,4 @@ function refusal (quota, now = new Date()) {
   return `利用上限（${quota.label}あたり ${quota.limit.toLocaleString('en-US')} トークン）に達しました。${at}ごろ（日本時間）からまた使えます。`
 }
 
-module.exports = { take, record, refusal, costOf, UNIT_USD_PER_MILLION, store, today, WINDOWS, DEFAULT_OTHER_GUILD_LIMIT }
+module.exports = { windowLimit, flexAt, DEFAULT_FLEX_AT_PERCENT, take, record, refusal, costOf, UNIT_USD_PER_MILLION, store, today, WINDOWS, DEFAULT_OTHER_GUILD_LIMIT }
