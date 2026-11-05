@@ -59,7 +59,7 @@ exports.commands = [
   },
   {
     name: 'setup',
-    ...describe('Choose the events this channel logs', 'このチャンネルに記録するログイベントを選ぶ'),
+    ...describe('Set the bot up: what this channel logs, and how the assistant replies', 'BOT の設定（このチャンネルに記録するログ、AI の返事）'),
     options: [
       {
         type: SUB_COMMAND,
@@ -75,6 +75,11 @@ exports.commands = [
         type: SUB_COMMAND,
         name: 'list',
         ...describe('List the channels each event is logged to (/stoplogging to stop)', 'イベントごとの出力先チャンネルを表示する（止めるには /stoplogging）')
+      },
+      {
+        type: SUB_COMMAND,
+        name: 'assistant',
+        ...describe('How the assistant replies: as the streamer or the bot, reply length, streams as events', 'AI の返事の設定（話し方、返事の長さ、配信・新着動画のイベント登録）')
       }
     ]
   },

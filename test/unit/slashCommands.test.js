@@ -64,3 +64,71 @@ test('/help answers in the client\'s language', async () => {
   assert.ok(event.description.includes(EVENT_HELP_EN.messageDelete))
   assert.ok((await ask('ja', [{ name: 'event', value: 'messageDelete' }])).description.includes(EVENT_HELP.messageDelete))
 })
+
+test('/setup assistant shows the assistant\'s settings as menus and saves what is chosen at once', async (t) => {
+  const replySettings = require('../../src/db/interfaces/postgres/replySettings')
+  const youtubeDB = require('../../src/db/interfaces/postgres/youtube')
+  const saved = { persona: true, length: null, live: false }
+  t.mock.method(replySettings, 'getReplySettings', async () => ({ replyLength: saved.length, streamerPersona: saved.persona }))
+  t.mock.method(replySettings, 'setStreamerPersona', async (_, on) => { saved.persona = on })
+  t.mock.method(replySettings, 'setReplyLength', async (_, length) => { saved.length = length })
+  t.mock.method(youtubeDB, 'liveEventsOn', async () => saved.live)
+  t.mock.method(youtubeDB, 'setLiveEvents', async (_, on) => { saved.live = on })
+  const events = require('../../src/bot/events/interactionCreate')
+  const answers = [['length', 'short'], ['live', 'on'], ['persona', 'bot']]
+  // One choice per message (its menus share an id before the colon).
+  const answered = new Set()
+  t.mock.method(events, 'awaitCustomID', async id => {
+    const [round, which] = id.split(':')
+    const next = answers[0]
+    if (!next || answered.has(round) || which !== next[0]) return new Promise(() => {})
+    answered.add(round)
+    answers.shift()
+    return { data: { values: [next[1]] } }
+  })
+  t.mock.method(events, 'cancelCustomID', () => {})
+  process.env.YOUTUBE_API_KEY = 'k'
+  global.bot = {
+    user: { id: 'bot' },
+    guilds: { get: () => ({ roles: new Map(), members: { get: () => ({ permissions: { has: () => false } }) } }) }
+  }
+  const shown = []
+  const interaction = {
+    locale: 'ja',
+    guildID: 'g1',
+    member: { user: { id: 'u1' }, roles: [] },
+    channel: { permissionsOf: () => ({ json: { manageGuild: true } }) },
+    createMessage: async m => shown.push(m),
+    editOriginalMessage: async m => shown.push(m)
+  }
+  const setup = require('../../src/bot/slashcommands/setup')
+  try {
+    // It waits for the next choice until a minute without one: stopped here once all are made.
+    await Promise.race([setup.func({ ...interaction, data: { options: [{ name: 'assistant' }] } }), new Promise(resolve => setTimeout(resolve, 500))])
+  } finally {
+    delete process.env.YOUTUBE_API_KEY
+  }
+  const menusOf = m => m.components.map(row => row.components[0])
+  const [first] = shown
+  assert.equal(first.embeds[0].title, 'AI（メンション）の設定')
+  assert.deepEqual(menusOf(first).map(menu => menu.options.find(o => o.default).value), ['streamer', 'long', 'off'], 'the current choices')
+  assert.equal(saved.length, 'short', 'saved at once')
+  assert.match(shown[2].embeds[0].description, /「イベントの管理」権限がない/, 'no events without Manage Events')
+  assert.equal(saved.persona, false)
+  assert.deepEqual(menusOf(shown.at(-1)).map(menu => menu.options.find(o => o.default).value), ['bot', 'short', 'off'])
+})
+
+test('/setup assistant needs Manage Server', async () => {
+  global.bot = { user: { id: 'bot' }, guilds: { get: () => ({ roles: new Map() }) } }
+  const said = []
+  const setup = require('../../src/bot/slashcommands/setup')
+  await setup.func({
+    locale: 'en-US',
+    guildID: 'g1',
+    data: { options: [{ name: 'assistant' }] },
+    member: { user: { id: 'u1' }, roles: [] },
+    channel: { permissionsOf: () => ({ json: {} }) },
+    createMessage: async m => said.push(m)
+  })
+  assert.equal(said[0].content, 'Changing these settings needs Manage Server.')
+})

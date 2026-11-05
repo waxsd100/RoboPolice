@@ -4,6 +4,7 @@ const { setEventsLogId } = require('../../db/interfaces/postgres/update')
 const { EMBED_COLORS, PRESET_EVENT_MAP, ALL_EVENTS } = require('../utils/constants')
 const { getEmbedFooter, getAuthorField } = require('../utils/embeds')
 const { langOf, pick } = require('../utils/i18n')
+const { handleAssistantSetup } = require('../modules/assistantSetup')
 
 // The Japanese text, or its English for an English client.
 const EN = {
@@ -560,6 +561,8 @@ module.exports = {
       await handleIndividualSetup(interaction)
     } else if (interaction.data.options?.find(o => o.name === 'list')) {
       await handleListLogSetup(interaction)
+    } else if (interaction.data.options?.find(o => o.name === 'assistant')) {
+      await handleAssistantSetup(interaction)
     }
   }
 }

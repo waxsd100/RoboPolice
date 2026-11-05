@@ -104,6 +104,7 @@ server's history takes disk space: with no retention set and no limit given, all
 | `/setup via_presets` | よく使うログをまとめて有効にする | Webhook の管理・チャンネルの管理・監査ログの表示 |
 | `/setup via_individual_event` | ログの種類を1つずつ選んで有効にする | 同上 |
 | `/setup list` | ログの出力先チャンネルの一覧を表示する | 同上 |
+| `/setup assistant` | AI（メンション）の設定をまとめて変える。話し方（`/persona`）、返事の長さ（`/replylength`）、配信・新着動画のイベント登録（`/youtube liveevents`。`YOUTUBE_API_KEY` があるとき）を選択メニューで選ぶと、すぐ保存される | 同上＋サーバーの管理 |
 | `/stoplogging channel:<チャンネル>` | 指定したチャンネルへのログ出力を止める（`other` ですべて止める） | Webhook の管理・チャンネルの管理 |
 | `/ignorechannel channel-to-ignore:<チャンネル>` | 指定したチャンネルの出来事をログに出さない／出すを切り替える（`optional` で一覧・リセット） | Webhook の管理・チャンネルの管理 |
 | `/logbots` | 他の BOT の操作もログに出すかを切り替える（初期値: 出さない） | Webhook の管理・チャンネルの管理 |
