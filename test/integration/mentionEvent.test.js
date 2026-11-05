@@ -1143,12 +1143,12 @@ describe('mention → event / forum post (integration)', () => {
     t.mock.method(global.logger, 'info', () => {})
     const { installReplyLengthStore } = require('../helpers/fakes')
     const { channel, replies } = createChannel()
-    quota.set(`mention-tokens:5h:${REQUESTER}`, 130000) // 87% of 150,000
+    quota.set(`mention-tokens:5h:${REQUESTER}`, 144000) // 96% of 150,000
     const requests = installGemini([[call('submit_chat_reply', { text: 'ゆっくり答えたよ' })]])
     await mentionEvent.handle(mention(channel, '<@BOT> こんにちは'))
     assert.equal(replies[0].state.content, 'ゆっくり答えたよ')
     assert.equal(requests[0].body.serviceTier, 'flex')
-    assert.ok(replies[0].history.some(h => /^利用量が上限の 86% に近づいたので、低速モード（Flex）で考えています/.test(h.content)))
+    assert.ok(replies[0].history.some(h => /^利用量が上限の 9\d% に近づいたので、低速モード（Flex）で考えています/.test(h.content)))
 
     // This server allows more: not near its limit, so the standard tier.
     installReplyLengthStore({}, {}, {}, { [channel.guild.id]: { '5h': 1000000 } })

@@ -18,7 +18,7 @@
 // the mention is in.
 //
 // Before a limit is reached, use slows down instead: once a user has used MENTION_FLEX_AT_PERCENT
-// (default 80) of either window, every Gemini call of their mentions goes to Flex inference (half
+// (default 95) of either window, every Gemini call of their mentions goes to Flex inference (half
 // the price, queued for up to minutes), like a speed limit. A server can set its own share
 // (guilds.token_flex_at); 0 turns it off.
 //
@@ -81,7 +81,7 @@ function costOf (meta, model, { flex = false, now = new Date() } = {}) {
   return usdOf(meta, model, { flex, now }) * 1e6 / UNIT_USD_PER_MILLION
 }
 
-const DEFAULT_FLEX_AT_PERCENT = 80
+const DEFAULT_FLEX_AT_PERCENT = 95
 
 // The limit of window `w` in a server with `limits` ({ '5h', week, flexAt }: the server's own,
 // null for the default).
