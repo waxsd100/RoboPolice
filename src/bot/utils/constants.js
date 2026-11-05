@@ -56,6 +56,36 @@ exports.EVENT_HELP = {
   presenceUpdate: 'メンバーがカスタムステータスを変更した際に記録します。禁止ワードや不適切なリンクの監視に有用です。'
 }
 
+// The same in English, for English clients (utils/i18n.js).
+exports.EVENT_HELP_EN = {
+  channelCreate: 'Logged when a text, voice, announcement, category or stage channel is created, with its permission overwrites and who created it.',
+  channelUpdate: 'Logged when a text, voice, announcement, category or stage channel changes: permission overwrites made, changed or removed, bitrate, slowmode and topic, with who changed it and why (if given).',
+  channelDelete: 'Logged when a text, voice, announcement, category or stage channel is deleted, with its permission overwrites, who deleted it and why (if given).',
+  guildBanAdd: 'Logged when a member is banned from the server, with who banned them and why (if given).',
+  guildBanRemove: 'Logged when a member is unbanned, with who unbanned them and why (if given).',
+  guildRoleCreate: 'Logged when a role is created, with who created it, its name, color, whether it can be mentioned, whether it is shown separately, and its permissions.',
+  guildRoleDelete: 'Logged when a role is deleted, with who deleted it, its name, color, whether it could be mentioned, whether it was shown separately, and its permissions.',
+  guildRoleUpdate: 'Logged when a role changes, with who changed it and what changed: name, icon, color, whether it can be mentioned, whether it is shown separately, permissions.',
+  guildUpdate: 'Logged when the server\'s settings change: explicit content filter, NSFW level, AFK settings, banner, notifications, description, icon, two-factor requirement, language, rules channel, community updates channel and vanity URL, with who changed them.',
+  messageDelete: 'Logged when a member deletes their message, or a bot deletes one. Deletions of bots\' messages are not logged by default, to keep spam out (`/logbots` turns them on). Who deleted it is not included (fetching it would run into Discord\'s global rate limit).',
+  messageDeleteBulk: 'Logged when a bot deletes messages in bulk, or messages are deleted along with a ban, with how many were deleted.',
+  messageUpdate: 'Logged when a member edits their message, with a link to it. Edits by bots are not logged (to keep spam out).',
+  guildMemberAdd: 'Logged when someone joins the server, with when their account was made, the invite they used and the server\'s member count.',
+  guildMemberKick: 'Logged when a member is kicked from the server, with who kicked them and why (if given).',
+  guildMemberRemove: 'Logged when a member leaves the server. When they were kicked, guildMemberKick is logged instead.',
+  guildMemberUpdate: 'Logged when a member is given or loses a role, or is timed out, with who did it and why (if given).',
+  guildMemberNickUpdate: 'Logged when a member changes their nickname or has it changed. Only for members the bot already knows (seen speaking), so not every change is logged.',
+  guildMemberVerify: 'Logged when a member passes the server\'s membership screening (agrees to the rules).',
+  voiceChannelLeave: 'Logged when a member leaves a voice channel. Who disconnected them, if someone did, is not included.',
+  voiceChannelJoin: 'Logged when a member joins a voice channel.',
+  voiceStateUpdate: 'Logged when a member is server muted or deafened in a voice channel, with who did it.',
+  voiceChannelSwitch: 'Logged when a member moves to another voice channel. Who moved them, if someone did, is not included.',
+  guildEmojisUpdate: 'Logged when an emoji is added, changed or removed, with the emoji and who did it.',
+  guildMemberBoostUpdate: 'Logged when a member starts or stops boosting the server.',
+  guildStickersUpdate: 'Logged when a sticker is added, changed or removed, with the sticker and who did it.',
+  presenceUpdate: 'Logged when a member changes their custom status. Useful to watch for banned words and bad links.'
+}
+
 exports.EMBED_COLORS = {
   RED: 0xbb2124,
   YELLOW_ORANGE: 0xffaf24,

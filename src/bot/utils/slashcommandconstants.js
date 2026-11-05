@@ -1,340 +1,223 @@
+// The slash commands, as registered with Discord (/setcmds). Each description and choice is in
+// English, with a Japanese translation that Discord shows to Japanese clients
+// (description_localizations, name_localizations); the replies follow the client's language too
+// (utils/i18n.js).
 const ERIS_CONSTANTS = require('eris').Constants
+const { STRING, INTEGER, BOOLEAN, CHANNEL, SUB_COMMAND } = ERIS_CONSTANTS.ApplicationCommandOptionTypes
+
+// A description in English and Japanese.
+const describe = (en, ja) => ({ description: en, description_localizations: { ja } })
+// A choice, named in English and Japanese.
+const choice = (value, en, ja) => ({ name: en, name_localizations: { ja }, value })
+
+// The events /help explains (Discord takes at most 25 choices).
+const HELP_EVENTS = [
+  ['channelCreate', 'Channel Create', 'チャンネル作成'],
+  ['channelUpdate', 'Channel Update', 'チャンネル更新'],
+  ['channelDelete', 'Channel Delete', 'チャンネル削除'],
+  ['guildBanAdd', 'Member Banned', 'メンバーBAN'],
+  ['guildBanRemove', 'Member Unbanned', 'メンバーBAN解除'],
+  ['guildRoleCreate', 'Role Create', 'ロール作成'],
+  ['guildRoleDelete', 'Role Delete', 'ロール削除'],
+  ['guildRoleUpdate', 'Role Update', 'ロール更新'],
+  ['guildUpdate', 'Server Settings Change', 'サーバー設定変更'],
+  ['guildEmojisUpdate', 'Server Emojis Change', 'サーバー絵文字変更'],
+  ['messageDelete', 'Message Delete', 'メッセージ削除'],
+  ['messageDeleteBulk', 'Bulk Message Delete', 'メッセージ一括削除'],
+  ['messageUpdate', 'Message Edit', 'メッセージ編集'],
+  ['guildMemberAdd', 'Member Join', 'メンバー参加'],
+  ['guildMemberKick', 'Member Kick', 'メンバーキック'],
+  ['guildMemberRemove', 'Member Leave', 'メンバー退出'],
+  ['guildMemberNickUpdate', 'Member Nickname Update', 'ニックネーム変更'],
+  ['guildMemberUpdate', 'Member Role Add/Remove', 'ロール付与・剥奪'],
+  ['guildMemberVerify', 'Member Gate Verify', 'メンバー認証通過'],
+  ['voiceChannelLeave', 'Voice Channel Leave', 'ボイス退出'],
+  ['voiceChannelJoin', 'Voice Channel Join', 'ボイス参加'],
+  ['voiceChannelSwitch', 'Voice Channel Moved', 'ボイス移動'],
+  ['voiceStateUpdate', 'Member Voice Muted/Deafened', 'ボイスミュート'],
+  ['presenceUpdate', 'Custom Status Update', 'カスタムステータス変更']
+]
 
 exports.commands = [
   {
-    name: 'ping',
-    description: 'Is the bot still alive? Find out using this!'
-  },
-  {
-    name: 'youtube',
-    description: 'The YouTube channels the assistant knows about (the bot\'s, for every server)',
+    name: 'help',
+    ...describe('How to use the bot: setting it up, and what each log event records', 'BOT の使い方（設定方法、各ログイベントで記録される内容）'),
     options: [
       {
-        type: ERIS_CONSTANTS.ApplicationCommandOptionTypes.SUB_COMMAND,
-        name: 'sync',
-        description: 'Read the channels again (latest videos and lives; from the owner\'s servers)'
+        type: STRING,
+        name: 'event',
+        ...describe('What a log event records', 'ログイベントで記録される内容'),
+        choices: HELP_EVENTS.map(([value, en, ja]) => choice(value, en, ja))
       },
       {
-        type: ERIS_CONSTANTS.ApplicationCommandOptionTypes.SUB_COMMAND,
-        name: 'summarize',
-        description: 'Summarize what the newest videos (or the video at url) say',
-        options: [{
-          type: ERIS_CONSTANTS.ApplicationCommandOptionTypes.INTEGER,
-          name: 'count',
-          description: 'How many of the newest videos (1-50, default 3)',
-          min_value: 1,
-          max_value: 50,
-          required: false
-        }, {
-          type: ERIS_CONSTANTS.ApplicationCommandOptionTypes.BOOLEAN,
-          name: 'force',
-          description: 'Summarize again even if already summarized, replacing the stored summary',
-          required: false
-        }, {
-          type: ERIS_CONSTANTS.ApplicationCommandOptionTypes.STRING,
-          name: 'url',
-          description: 'Summarize this video instead (any public YouTube video link)',
-          required: false
-        }]
-      },
-      {
-        type: ERIS_CONSTANTS.ApplicationCommandOptionTypes.SUB_COMMAND,
-        name: 'liveevents',
-        description: 'Register this channel\'s streams and new uploads as server events automatically',
-        options: [{
-          type: ERIS_CONSTANTS.ApplicationCommandOptionTypes.BOOLEAN,
-          name: 'enabled',
-          description: 'True to turn it on, False to turn it off',
-          required: true
-        }]
-      },
-      {
-        type: ERIS_CONSTANTS.ApplicationCommandOptionTypes.SUB_COMMAND,
-        name: 'show',
-        description: 'Show what is stored'
+        type: STRING,
+        name: 'guide',
+        ...describe('How to set the bot up', 'BOT の設定方法'),
+        choices: [choice('usage', 'Usage', '使い方')]
       }
     ]
-  },
-  {
-    name: 'persona',
-    description: 'Whether the assistant speaks as the streamer in this server (shows the setting without a choice)',
-    options: [{
-      type: ERIS_CONSTANTS.ApplicationCommandOptionTypes.BOOLEAN,
-      name: 'streamer',
-      description: 'True: speak as the streamer (default), False: speak as the server\'s bot',
-      required: false
-    }]
-  },
-  {
-    name: 'replylength',
-    description: 'How long the assistant\'s replies are in this server (shows the setting without a choice)',
-    options: [{
-      type: ERIS_CONSTANTS.ApplicationCommandOptionTypes.STRING,
-      name: 'length',
-      description: 'long: up to about 500 characters (default), normal: fitted to what was said, short: brief',
-      required: false,
-      choices: [
-        { name: 'long (default, up to ~500 characters)', value: 'long' },
-        { name: 'normal (fitted to what was said)', value: 'normal' },
-        { name: 'short (brief)', value: 'short' }
-      ]
-    }]
-  },
-  {
-    name: 'serverinfo',
-    description: 'Shows you information about the server (role count, member count, features)'
   },
   {
     name: 'setup',
-    description: 'Start setting Logger up',
+    ...describe('Set the bot up: what this channel logs, and how the assistant replies', 'BOT の設定（このチャンネルに記録するログ、AI の返事）'),
     options: [
       {
-        type: ERIS_CONSTANTS.ApplicationCommandOptionTypes.SUB_COMMAND,
+        type: SUB_COMMAND,
         name: 'via_presets',
-        description: 'Use this option to enable multiple events at once (joinlog, role, channel, etc)'
+        ...describe('Choose events in groups (members joining, messages, roles, channels…)', 'イベントをまとめて選ぶ（参加・メッセージ・ロール・チャンネルなど）')
       },
       {
-        type: ERIS_CONSTANTS.ApplicationCommandOptionTypes.SUB_COMMAND,
+        type: SUB_COMMAND,
         name: 'via_individual_event',
-        description: 'Use this option to enable events one-by-one, for finer control'
+        ...describe('Choose events one by one', 'イベントを1つずつ選ぶ')
       },
       {
-        type: ERIS_CONSTANTS.ApplicationCommandOptionTypes.SUB_COMMAND,
+        type: SUB_COMMAND,
         name: 'list',
-        description: 'Use this option to list channels used for logging (and /stoplogging to stop them)'
-      }
-    ]
-  },
-  {
-    name: 'userinfo',
-    description: 'See information about you (joined at, creation date, roles)',
-    options: [
-      {
-        type: ERIS_CONSTANTS.ApplicationCommandOptionTypes.USER,
-        name: 'user',
-        description: 'If the bot knows the given user, it presents info for them'
-      }
-    ]
-  },
-  {
-    name: 'clearmydata',
-    description: 'Get information about how to clear your data'
-  },
-  {
-    name: 'ignorechannel',
-    description: 'Toggles logging most events from the channel you choose',
-    options: [
-      {
-        type: ERIS_CONSTANTS.ApplicationCommandOptionTypes.CHANNEL,
-        name: 'channel-to-ignore',
-        description: 'The channel to toggle ignoring',
-        channel_types: [0, 2, 4] // text, voice, category
+        ...describe('List the channels each event is logged to (/stoplogging to stop)', 'イベントごとの出力先チャンネルを表示する（止めるには /stoplogging）')
       },
       {
-        type: ERIS_CONSTANTS.ApplicationCommandOptionTypes.STRING,
-        name: 'optional',
-        description: 'Select to see other ignorechannel options',
-        choices: [
-          {
-            type: ERIS_CONSTANTS.ApplicationCommandOptionTypes.STRING,
-            name: 'list ignored channels',
-            value: 'list'
-          },
-          {
-            type: ERIS_CONSTANTS.ApplicationCommandOptionTypes.STRING,
-            name: 'reset ignored channels',
-            value: 'reset'
-          }
-        ]
+        type: SUB_COMMAND,
+        name: 'assistant',
+        ...describe('How the assistant replies: as the streamer or the bot, reply length, streams as events', 'AI の返事の設定（話し方、返事の長さ、配信・新着動画のイベント登録）')
       }
     ]
   },
   {
     name: 'stoplogging',
-    description: 'Turns off bot logging in the specified channel (or everything)',
+    ...describe('Stop logging to a channel (or everywhere)', 'チャンネルへのログ出力を止める（またはすべて止める）'),
     options: [
       {
-        type: ERIS_CONSTANTS.ApplicationCommandOptionTypes.CHANNEL,
+        type: CHANNEL,
         name: 'channel',
-        description: 'Stop logging any events in the given channel',
+        ...describe('The channel to stop logging to (this one if left out)', '出力を止めるチャンネル（省略するとこのチャンネル）'),
         channel_types: [0, 2, 4] // text, voice, category
       },
       {
-        type: ERIS_CONSTANTS.ApplicationCommandOptionTypes.STRING,
+        type: STRING,
         name: 'other',
-        description: 'Other stoplogging options',
+        ...describe('Stop logging everywhere', 'すべての出力を止める'),
+        choices: [choice('everything', 'Stop logging everything, everywhere', 'すべてのチャンネルへの出力を止める')]
+      }
+    ]
+  },
+  {
+    name: 'ignorechannel',
+    ...describe('Leave a channel out of the logs, or bring it back', 'チャンネルをログの対象から外す（もう一度で戻す）'),
+    options: [
+      {
+        type: CHANNEL,
+        name: 'channel-to-ignore',
+        ...describe('The channel (this one if left out)', '対象のチャンネル（省略するとこのチャンネル）'),
+        channel_types: [0, 2, 4] // text, voice, category
+      },
+      {
+        type: STRING,
+        name: 'optional',
+        ...describe('List or reset the channels left out', '対象外のチャンネルを表示・リセットする'),
         choices: [
-          {
-            type: ERIS_CONSTANTS.ApplicationCommandOptionTypes.STRING,
-            name: 'stop logging anything anywhere (everything)',
-            value: 'everything'
-          }
+          choice('list', 'List the channels left out', '対象外のチャンネルを表示'),
+          choice('reset', 'Bring every channel back', 'すべてのチャンネルを対象に戻す')
         ]
+      }
+    ]
+  },
+  {
+    name: 'logbots',
+    ...describe('Whether edits and deletions of other bots\' messages are logged (default: no)', '他の BOT のメッセージの編集・削除もログに出すかを切り替える（初期値: 出さない）')
+  },
+  {
+    name: 'persona',
+    ...describe('Whether the assistant speaks as the streamer here (shows the setting if left out)', 'AI が配信者として話すかを切り替える（省略すると今の設定を表示）'),
+    options: [{
+      type: BOOLEAN,
+      name: 'streamer',
+      ...describe('True: as the streamer (default), False: as the server\'s bot', 'True: 配信者として（初期値）、False: サーバーの BOT として'),
+      required: false
+    }]
+  },
+  {
+    name: 'replylength',
+    ...describe('How long the assistant\'s replies are here (shows the setting if left out)', 'AI の返事の長さを変える（省略すると今の設定を表示）'),
+    options: [{
+      type: STRING,
+      name: 'length',
+      ...describe('long: up to about 500 characters (default), normal: fitted to the talk, short: brief', 'long: 長め（500文字程度まで、初期値）、normal: 内容に合わせる、short: 短め'),
+      required: false,
+      choices: [
+        choice('long', 'long (default, up to ~500 characters)', '長め（初期値、500文字程度まで）'),
+        choice('normal', 'normal (fitted to what was said)', '内容に合わせる'),
+        choice('short', 'short (brief)', '短め')
+      ]
+    }]
+  },
+  {
+    name: 'youtube',
+    ...describe('The YouTube channels the assistant knows about (shared by every server)', 'AI が知っている YouTube チャンネル（全サーバー共通）'),
+    options: [
+      {
+        type: SUB_COMMAND,
+        name: 'sync',
+        ...describe('Read the channels again (latest videos and streams; from the owner\'s servers)', 'チャンネルを読み直す（最新の動画と配信。オーナーのサーバーからのみ）')
+      },
+      {
+        type: SUB_COMMAND,
+        name: 'summarize',
+        ...describe('Summarize the newest videos (or the video at url)', '新しい動画（または url の動画）の内容を要約する'),
+        options: [{
+          type: INTEGER,
+          name: 'count',
+          ...describe('How many of the newest videos (1-50, default 3)', '新しい順に何本か（1〜50、初期値 3）'),
+          min_value: 1,
+          max_value: 50,
+          required: false
+        }, {
+          type: BOOLEAN,
+          name: 'force',
+          ...describe('Summarize again even if already summarized', '要約済みでも要約し直す'),
+          required: false
+        }, {
+          type: STRING,
+          name: 'url',
+          ...describe('Summarize this video instead (any public YouTube video link)', 'この動画を要約する（公開されている YouTube 動画のリンク）'),
+          required: false
+        }]
+      },
+      {
+        type: SUB_COMMAND,
+        name: 'liveevents',
+        ...describe('Register streams and new uploads as server events automatically', '配信と新着動画をサーバーのイベントに自動で登録する'),
+        options: [{
+          type: BOOLEAN,
+          name: 'enabled',
+          ...describe('True to turn it on, False to turn it off', 'True でオン、False でオフ'),
+          required: true
+        }]
+      },
+      {
+        type: SUB_COMMAND,
+        name: 'show',
+        ...describe('Show what is stored', '保存している内容を表示する')
       }
     ]
   },
   {
     name: 'invite',
-    description: 'Receive an embed with customized invite links for your logging purpose'
+    ...describe('Links to invite the bot, by what it is for', '用途別の BOT の招待リンク')
   },
   {
-    name: 'logbots',
-    description: 'Toggle whether I log other bot actions (DEFAULT: disabled). Does NOT ignore bots deleting messages!'
-  },
-  {
-    name: 'help',
-    description: 'Use to get general bot help (support server, technology)',
-    options: [
-      {
-        type: ERIS_CONSTANTS.ApplicationCommandOptionTypes.STRING,
-        name: 'event',
-        description: 'Get information about a given command',
-        choices: [
-          {
-            type: ERIS_CONSTANTS.ApplicationCommandOptionTypes.STRING,
-            name: 'Channel Create',
-            value: 'channelCreate'
-          },
-          {
-            type: ERIS_CONSTANTS.ApplicationCommandOptionTypes.STRING,
-            name: 'Channel Update',
-            value: 'channelUpdate'
-          },
-          {
-            type: ERIS_CONSTANTS.ApplicationCommandOptionTypes.STRING,
-            name: 'Channel Delete',
-            value: 'channelDelete'
-          },
-          {
-            type: ERIS_CONSTANTS.ApplicationCommandOptionTypes.STRING,
-            name: 'Member Banned',
-            value: 'guildBanAdd'
-          },
-          {
-            type: ERIS_CONSTANTS.ApplicationCommandOptionTypes.STRING,
-            name: 'Member Unbanned',
-            value: 'guildBanRemove'
-          },
-          {
-            type: ERIS_CONSTANTS.ApplicationCommandOptionTypes.STRING,
-            name: 'Role Create',
-            value: 'guildRoleCreate'
-          },
-          {
-            type: ERIS_CONSTANTS.ApplicationCommandOptionTypes.STRING,
-            name: 'Role Delete',
-            value: 'guildRoleDelete'
-          },
-          {
-            type: ERIS_CONSTANTS.ApplicationCommandOptionTypes.STRING,
-            name: 'Role Update',
-            value: 'guildRoleUpdate'
-          },
-          {
-            type: ERIS_CONSTANTS.ApplicationCommandOptionTypes.STRING,
-            name: 'Server Settings Change',
-            value: 'guildUpdate'
-          },
-          {
-            type: ERIS_CONSTANTS.ApplicationCommandOptionTypes.STRING,
-            name: 'Server Emojis Change',
-            value: 'guildEmojisUpdate'
-          },
-          {
-            type: ERIS_CONSTANTS.ApplicationCommandOptionTypes.STRING,
-            name: 'Message Delete',
-            value: 'messageDelete'
-          },
-          {
-            type: ERIS_CONSTANTS.ApplicationCommandOptionTypes.STRING,
-            name: 'Bulk Message Delete',
-            value: 'messageDeleteBulk'
-          },
-          {
-            type: ERIS_CONSTANTS.ApplicationCommandOptionTypes.STRING,
-            name: 'Message Edit',
-            value: 'messageUpdate'
-          },
-          {
-            type: ERIS_CONSTANTS.ApplicationCommandOptionTypes.STRING,
-            name: 'Member Join',
-            value: 'guildMemberAdd'
-          },
-          {
-            type: ERIS_CONSTANTS.ApplicationCommandOptionTypes.STRING,
-            name: 'Member Kick',
-            value: 'guildMemberKick'
-          },
-          {
-            type: ERIS_CONSTANTS.ApplicationCommandOptionTypes.STRING,
-            name: 'Member Leave',
-            value: 'guildMemberRemove'
-          },
-          {
-            type: ERIS_CONSTANTS.ApplicationCommandOptionTypes.STRING,
-            name: 'Member Nickname Update',
-            value: 'guildMemberNickUpdate'
-          },
-          {
-            type: ERIS_CONSTANTS.ApplicationCommandOptionTypes.STRING,
-            name: 'Member Role Add/Remove',
-            value: 'guildMemberUpdate'
-          },
-          {
-            type: ERIS_CONSTANTS.ApplicationCommandOptionTypes.STRING,
-            name: 'Member Gate Verify',
-            value: 'guildMemberVerify'
-          },
-          {
-            type: ERIS_CONSTANTS.ApplicationCommandOptionTypes.STRING,
-            name: 'Voice Channel Leave',
-            value: 'voiceChannelLeave'
-          },
-          {
-            type: ERIS_CONSTANTS.ApplicationCommandOptionTypes.STRING,
-            name: 'Voice Channel Join',
-            value: 'voiceChannelJoin'
-          },
-          {
-            type: ERIS_CONSTANTS.ApplicationCommandOptionTypes.STRING,
-            name: 'Voice Channel Moved',
-            value: 'voiceChannelSwitch'
-          },
-          {
-            type: ERIS_CONSTANTS.ApplicationCommandOptionTypes.STRING,
-            name: 'Member Voice Muted/Deafened',
-            value: 'voiceStateUpdate'
-          },
-          {
-            type: ERIS_CONSTANTS.ApplicationCommandOptionTypes.STRING,
-            name: 'Presence / Custom Status Update',
-            value: 'presenceUpdate'
-          }
-        ]
-      },
-      {
-        type: ERIS_CONSTANTS.ApplicationCommandOptionTypes.STRING,
-        name: 'guide',
-        description: 'Get information on how to set the bot up',
-        choices: [
-          {
-            type: ERIS_CONSTANTS.ApplicationCommandOptionTypes.STRING,
-            name: 'Usage',
-            value: 'usage'
-          }
-        ]
-      }
-    ]
+    name: 'clearmydata',
+    ...describe('How to have your stored data deleted', '保存されている自分のデータを削除してもらう方法')
   }
 ]
 
 exports.developerCommands = [{
   name: 'setcmds',
-  description: '[OWNER ONLY] set logger commands',
+  description: '[OWNER ONLY] register the slash commands',
   options: [{
-    type: ERIS_CONSTANTS.ApplicationCommandOptionTypes.STRING,
+    type: STRING,
     name: 'scope',
-    description: '[OWNER ONLY] scope of commands to set',
+    description: '[OWNER ONLY] where to register them',
     choices: [{
       name: 'Guild',
       value: 'guild'

@@ -22,16 +22,23 @@ function isBeyondRetention (messageID) {
   return Date.now() - messageTimestamp(messageID) > days * 86400000
 }
 
-// Centralized Japanese wording for the two places users are told what happens to their messages
-// (/clearmydata, /help). Keeping it here means an unset MESSAGE_HISTORY_DAYS can never render as
-// the literal string "undefined 日で自動的に削除されます", and both commands stay in sync.
-function retentionDeletionClause () {
+// Centralized wording for the two places users are told what happens to their messages
+// (/clearmydata, /help), in Japanese or English (lang). Keeping it here means an unset
+// MESSAGE_HISTORY_DAYS can never render as the literal string "undefined 日で自動的に削除されます",
+// and both commands stay in sync.
+function retentionDeletionClause (lang = 'ja') {
   const days = getRetentionDays()
+  if (lang === 'en') return days ? `deleted automatically after ${days} days` : 'kept with no time limit (nothing is deleted automatically)'
   return days ? `${days} 日で自動的に削除されます` : '期限を設けず保存されます（自動削除は行われません）'
 }
 
-function retentionWindowClause (botName) {
+function retentionWindowClause (botName, lang = 'ja') {
   const days = getRetentionDays()
+  if (lang === 'en') {
+    return days
+      ? `Messages are kept for ${days} days; when an older one is deleted or edited, the log says its content is past the retention period.`
+      : `${botName} keeps messages with no time limit, so it can show the content of old messages when they are deleted or edited.`
+  }
   return days
     ? `メッセージの保存期間は ${days} 日で、それより古いメッセージを削除・編集した場合は「内容は保持期間外」として記録されます。`
     : `${botName} はメッセージの保存期間に上限を設けていないため、古いメッセージであっても削除・編集時に内容を表示できます。`

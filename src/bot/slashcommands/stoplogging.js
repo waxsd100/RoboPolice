@@ -2,6 +2,7 @@ const Eris = require('eris')
 const { clearEventByID, setAllEventsOneId } = require('../../db/interfaces/postgres/update')
 const { EMBED_COLORS } = require('../utils/constants.js')
 const { getAuthorField, getEmbedFooter } = require('../utils/embeds.js')
+const { pick } = require('../utils/i18n')
 
 module.exports = {
   name: 'stoplogging',
@@ -15,8 +16,8 @@ module.exports = {
       await setAllEventsOneId(interaction.guildID, '')
       interaction.createMessage({
         embeds: [{
-          title: '成功',
-          description: 'すべてのイベントの出力先を解除しました。ログの記録を停止します。',
+          title: pick(interaction, { ja: '成功', en: 'Done' }),
+          description: pick(interaction, { ja: 'すべてのイベントの出力先を解除しました。ログの記録を止めます。', en: 'No event is logged anywhere now: logging has stopped.' }),
           thumbnail: {
             url: interaction.member.user.dynamicAvatarURL(null, 64)
           },
@@ -31,8 +32,8 @@ module.exports = {
       if (eventsLoggingHere.length === 0) {
         interaction.createMessage({
           embeds: [{
-            title: '警告',
-            description: `<#${channelToStopLogging || interaction.channel.id}> に出力しているイベントはありません。現在の設定は \`/setup list\` で確認できます。`,
+            title: pick(interaction, { ja: '警告', en: 'Warning' }),
+            description: pick(interaction, { ja: `<#${channelToStopLogging || interaction.channel.id}> に出力しているイベントはありません。今の設定は \`/setup list\` で確認できます。`, en: `No event is logged to <#${channelToStopLogging || interaction.channel.id}>. See the settings with \`/setup list\`.` }),
             thumbnail: {
               url: interaction.member.user.dynamicAvatarURL(null, 64)
             },
@@ -47,12 +48,12 @@ module.exports = {
       await clearEventByID(interaction.guildID, channelToStopLogging || interaction.channel.id)
       interaction.createMessage({
         embeds: [{
-          description: `All events logging to <#${channelToStopLogging || interaction.channel.id}> (${channelToStopLogging || interaction.channel.id}) の出力先をすべて解除しました。`,
+          description: pick(interaction, { ja: `<#${channelToStopLogging || interaction.channel.id}> (${channelToStopLogging || interaction.channel.id}) への出力をすべて解除しました。`, en: `Nothing is logged to <#${channelToStopLogging || interaction.channel.id}> (${channelToStopLogging || interaction.channel.id}) now.` }),
           thumbnail: {
             url: interaction.member.user.dynamicAvatarURL(null, 64)
           },
           fields: [{
-            name: '解除したイベント',
+            name: pick(interaction, { ja: '解除したイベント', en: 'Events stopped' }),
             value: eventsLoggingHere.join(', ')
           }],
           color: EMBED_COLORS.GREEN,
