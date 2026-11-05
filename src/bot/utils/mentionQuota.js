@@ -10,6 +10,9 @@
 // the usual reply model's input ($0.75 a million), so 150,000 is about $0.11 and 750,000 about
 // $0.56 of Gemini. The bot's developers (CREATOR_IDS) have no limit.
 //
+// A server can have no limits at all (%tokenlimit unlimited, guilds.token_unlimited): its members'
+// use is still counted, but nothing there is refused or slowed down, and it has no daily cap.
+//
 // A server can have its own limits (%tokenlimit, guilds.token_limit_5h / token_limit_week): the
 // user's use is still counted across every server, and measured against the limits of the server
 // the mention is in.
@@ -100,7 +103,8 @@ function flexAt (limits = {}) {
 // 'week', label, limit, resetsAt } or { allowed: false, scope: 'guild', limit } for the server's
 // daily cap.
 async function take (userID, guildID = null, now = new Date(), { limits = {} } = {}) {
-  if (isCreator(userID)) return { allowed: true, flex: false }
+  // The bot's developers, and every member of a server with no limits (%tokenlimit unlimited).
+  if (isCreator(userID) || limits?.unlimited === true) return { allowed: true, flex: false }
   try {
     const slowAt = flexAt(limits)
     let flex = false

@@ -182,7 +182,7 @@ function installReplyLengthStore (lengths = {}, personas = {}, debugFooters = {}
     replyLength: lengths[guildID] || null,
     streamerPersona: personas[guildID] !== false,
     debugFooter: debugFooters[guildID] === true,
-    tokenLimits: { '5h': null, week: null, flexAt: null, ...tokenLimits[guildID] }
+    tokenLimits: { '5h': null, week: null, flexAt: null, unlimited: false, ...tokenLimits[guildID] }
   })
   store.setTokenLimit = async (guildID, which, value) => { tokenLimits[guildID] = { ...tokenLimits[guildID], [which]: value } }
   store.getReplyLength = async guildID => lengths[guildID] || null

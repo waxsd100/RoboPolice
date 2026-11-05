@@ -66,6 +66,13 @@ describe('mentionQuota', () => {
     assert.equal(mentionQuota.windowLimit(mentionQuota.WINDOWS[0], { '5h': null }), 150000, 'null: the default')
   })
 
+  test('a server with no limits (unlimited): nothing refused or slowed, no daily cap, use still counted', async () => {
+    await mentionQuota.record('1', 10 ** 9, at(T0))
+    assert.deepEqual(await mentionQuota.take('1', OTHER, at(T0), { limits: { unlimited: true } }), { allowed: true, flex: false })
+    assert.equal(counts.get(`mention-quota-guild:${OTHER}:2026-10-30`), undefined, 'not counted against the daily cap')
+    assert.equal((await mentionQuota.take('1', OTHER, at(T0))).allowed, false, 'limited again elsewhere')
+  })
+
   test('past MENTION_FLEX_AT_PERCENT (80) of a window, mentions go to Flex; a server can set its own share, 0 for never', async () => {
     await mentionQuota.record('1', 110000, at(T0))
     assert.deepEqual(await mentionQuota.take('1', OWNER, at(T0)), { allowed: true, flex: false }, 'at 73%')
