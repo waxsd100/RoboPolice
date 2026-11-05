@@ -263,6 +263,10 @@ describe('/youtube', () => {
       batchStore.saveBatch = async b => { batches.push({ name: b.name, guild_id: b.guildID, channel_id: b.channelID, requester_id: b.requesterID, video_ids: b.videoIDs, model: b.model }) }
       batchStore.runningBatches = async guildID => batches.filter(b => !guildID || b.guild_id === guildID)
       batchStore.deleteBatch = async name => { batches = batches.filter(b => b.name !== name) }
+      batchStore.noteBatch = async (name, { state = null, error = null } = {}) => {
+        const b = batches.find(b => b.name === name)
+        if (b) Object.assign(b, { state: state ?? b.state, last_error: error })
+      }
     })
 
     // A fake Gemini that takes a batch, says it is running once, then gives `results`.

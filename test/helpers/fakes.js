@@ -97,10 +97,14 @@ function installEmbeddingStore ({ videos = {}, messages = [], pending = [] } = {
   saved.batches = []
   saved.batched = new Set()
   store.saveEmbeddingBatch = async (name, model, ids) => {
-    saved.batches.push({ name, model, message_ids: ids })
+    saved.batches.push({ name, model, message_ids: ids, created_at: new Date() })
     ids.forEach(id => saved.batched.add(id))
   }
   store.runningEmbeddingBatches = async () => saved.batches.map(b => ({ ...b }))
+  store.noteEmbeddingBatch = async (name, { state = null, error = null } = {}) => {
+    const batch = saved.batches.find(b => b.name === name)
+    if (batch) Object.assign(batch, { state: state ?? batch.state, last_error: error, checked: (batch.checked || 0) + 1 })
+  }
   store.deleteEmbeddingBatch = async name => {
     const batch = saved.batches.find(b => b.name === name)
     batch?.message_ids.forEach(id => saved.batched.delete(id))

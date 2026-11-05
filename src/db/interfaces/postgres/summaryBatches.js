@@ -24,4 +24,12 @@ async function deleteBatch (name) {
   await pool.query('DELETE FROM youtube_summary_batches WHERE name = $1', [name])
 }
 
-module.exports = { saveBatch, runningBatches, deleteBatch }
+// Notes where a batch stands (migrations/033_batch_status.sql): Gemini's state, or the error of a
+// look that failed (the state is kept then).
+async function noteBatch (name, { state = null, error = null } = {}) {
+  await pool.query(
+    'UPDATE youtube_summary_batches SET state = coalesce($2, state), last_error = $3, checked_at = now() WHERE name = $1',
+    [name, state, error ? String(error).slice(0, 500) : null])
+}
+
+module.exports = { noteBatch, saveBatch, runningBatches, deleteBatch }

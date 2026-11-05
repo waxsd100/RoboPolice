@@ -56,7 +56,7 @@ async function saveEmbeddingBatch (name, model, messageIDs) {
 // [{ name, model, message_ids }], oldest first.
 async function runningEmbeddingBatches () {
   const rows = await pool.query(
-    `SELECT b.name, em.name AS model, coalesce(array_agg(m.message_id) FILTER (WHERE m.message_id IS NOT NULL), '{}') AS message_ids
+    `SELECT b.name, em.name AS model, b.created_at, coalesce(array_agg(m.message_id) FILTER (WHERE m.message_id IS NOT NULL), '{}') AS message_ids
      FROM embedding_batches b JOIN embedding_models em ON em.id = b.model_id
      LEFT JOIN embedding_batch_messages m ON m.batch_name = b.name
      GROUP BY b.name, em.name, b.created_at ORDER BY b.created_at`)
@@ -64,6 +64,14 @@ async function runningEmbeddingBatches () {
 }
 
 // Drops the batch; its messages not handled meanwhile are pending again.
+// Notes where a batch stands (migrations/033_batch_status.sql): Gemini's state, or the error of a
+// look that failed (the state is kept then).
+async function noteEmbeddingBatch (name, { state = null, error = null } = {}) {
+  await pool.query(
+    'UPDATE embedding_batches SET state = coalesce($2, state), last_error = $3, checked_at = now() WHERE name = $1',
+    [name, state, error ? String(error).slice(0, 500) : null])
+}
+
 async function deleteEmbeddingBatch (name) {
   await pool.query('DELETE FROM embedding_batches WHERE name = $1', [name])
 }
@@ -198,4 +206,4 @@ async function videoScores (guildID, query, model) {
   return Object.fromEntries(rows.rows.map(r => [r.video_id, Number(r.score)]))
 }
 
-module.exports = { saveEmbeddingBatch, runningEmbeddingBatches, deleteEmbeddingBatch, pendingMessages, saveMessageEmbeddings, embeddedMessagesAfter, dropMessageEmbeddings, resetStaleMessageEmbeddings, invalidateMessage, nearestMessages, getMessages, videosForEmbedding, saveVideoEmbedding, hasVideoEmbeddings, videoScores, modelId }
+module.exports = { noteEmbeddingBatch, saveEmbeddingBatch, runningEmbeddingBatches, deleteEmbeddingBatch, pendingMessages, saveMessageEmbeddings, embeddedMessagesAfter, dropMessageEmbeddings, resetStaleMessageEmbeddings, invalidateMessage, nearestMessages, getMessages, videosForEmbedding, saveVideoEmbedding, hasVideoEmbeddings, videoScores, modelId }

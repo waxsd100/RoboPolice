@@ -189,6 +189,47 @@ describe('embeddingIndexer', () => {
     }
   })
 
+  test('a batch that cannot be looked at is noted and tried again, without holding up recent messages; one too old or gone is given up on', async (t) => {
+    t.mock.method(global.logger, 'info', () => {})
+    const warned = t.mock.method(global.logger, 'warn', () => {})
+    const saved = installEmbeddingStore({ pending: [{ id: 'new', guild_id: '100', channel_id: '201', ts: new Date(), content: '今日の配信たのしみ' }] })
+    saved.batches.push({ name: 'batches/old', model: 'gemini-embedding-001', message_ids: ['p1'], created_at: new Date() })
+    saved.batched.add('p1')
+    installEmbeddingModel()
+    const embedOne = global.fetch
+    const asked = []
+    let answer = { ok: false, status: 500, text: async () => 'internal' }
+    global.fetch = async (url, init = {}) => {
+      if (String(url).endsWith(':batchEmbedContents')) return embedOne(url, init)
+      asked.push({ url: String(url), method: init.method })
+      if (String(url).endsWith('/batches/old')) return answer
+      if (String(url).endsWith('/batches/old:cancel')) return { ok: true, json: async () => ({}) }
+      if (String(url).endsWith(':asyncBatchEmbedContent')) return { ok: true, json: async () => ({ name: 'batches/next' }) }
+      throw new Error(`unexpected ${url}`)
+    }
+    process.env.MESSAGE_EMBEDDINGS = 'true'
+    try {
+      assert.equal(await indexer.indexMessages(), 1, 'the recent one is embedded all the same')
+      assert.equal(saved.batches[0].last_error, 'Gemini GET batches/old failed: HTTP 500 internal')
+      assert.match(warned.mock.calls[0].arguments[0], /Could not look at batch batches\/old/)
+
+      // Still running, and older than Gemini keeps a batch: asked to stop, its messages sent again.
+      answer = { ok: true, body: [new TextEncoder().encode(JSON.stringify({ name: 'batches/old', metadata: { state: 'BATCH_STATE_RUNNING' } }))] }
+      await indexer.batchPastMessages(new Date(), Date.now() + 51 * 3600000)
+      assert.ok(asked.some(a => a.url.endsWith('/batches/old:cancel') && a.method === 'POST'))
+      assert.equal(saved.batches.some(b => b.name === 'batches/old'), false)
+      assert.equal(saved.batched.has('p1'), false, 'p1 is pending again')
+
+      // Gone at Gemini: given up on at once.
+      saved.batches.push({ name: 'batches/old', model: 'gemini-embedding-001', message_ids: [], created_at: new Date() })
+      answer = { ok: false, status: 404, text: async () => 'not found' }
+      await indexer.batchPastMessages(new Date())
+      assert.equal(saved.batches.some(b => b.name === 'batches/old'), false)
+    } finally {
+      delete process.env.MESSAGE_EMBEDDINGS
+    }
+  })
+
   test('EMBEDDING_BATCH_AFTER_HOURS=0 embeds every message right away', async () => {
     process.env.EMBEDDING_BATCH_AFTER_HOURS = '0'
     try {
