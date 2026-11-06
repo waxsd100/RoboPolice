@@ -27,3 +27,15 @@ test('%replymodel shows, sets and resets the server\'s model and thinking level;
     installReplyLengthStore()
   }
 })
+
+test('every reply model has a price, is not an image model, and the reply lengths match the prompt\'s', () => {
+  const { REPLY_MODELS, REPLY_LENGTH_CHOICES } = require('../../src/bot/utils/replyOptions')
+  const { PRICES } = require('../../src/bot/utils/geminiPrices')
+  const { REPLY_LENGTHS } = require('../../src/bot/modules/eventDrafter')
+  for (const model of REPLY_MODELS) {
+    const price = PRICES.find(p => p.model === model)
+    assert.ok(price, model)
+    assert.equal(price.imageOutput, undefined, model)
+  }
+  assert.deepEqual(Object.keys(REPLY_LENGTHS), REPLY_LENGTH_CHOICES)
+})
