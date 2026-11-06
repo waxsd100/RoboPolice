@@ -93,6 +93,8 @@ server's history takes disk space: with no retention set and no limit given, all
 
 ### スラッシュコマンド
 
+BOT がサーバーに入った瞬間から、すべてのイベントを記録します。スタッフだけが見られるチャンネル `#robopolice-logs`（`@everyone` から非表示、管理者には見える）を作り、全イベントの出力先にします（BOT にチャンネルの管理と Webhook の管理が必要。ないときは `/setup` で手動設定）。すでにログを設定しているサーバーはそのまま。`AUTO_LOG_CHANNEL=false` で止められます。
+
 | コマンド | 内容 | 必要な権限 |
 |---|---|---|
 | `/youtube sync` | BOT が見ているチャンネルを読み直し、新しい動画と配信の状態を取り込む（普段は自動。オーナーのサーバーからのみ） | サーバーの管理 |
@@ -102,7 +104,7 @@ server's history takes disk space: with no retention set and no limit given, all
 | `/replylength length:<long/normal/short>` | メンションへの返事の長さをサーバーごとに決める。`long`（初期値）は長くても500文字程度、`normal` は内容に合わせて（あいさつは1〜2文、説明は400文字程度まで）、`short` は答えだけを短く（200文字程度まで）。`length` を省くと今の設定を表示する | サーバーの管理 |
 | `/persona streamer:<True/False>` | メンションへの返事で、YouTube チャンネルの配信者本人になりきるか（`True`、初期値）、配信者にはなりきらずサーバーの BOT として話すか（`False`）をサーバーごとに決める。`streamer` を省くと今の設定を表示する | サーバーの管理 |
 | `/assistantrules text:<お願い> clear:<True>` | メンションの返事で AI に守ってほしいこと（避ける話題、使わない言葉、ネタバレの扱いなど、2000文字まで）をサーバーごとに決める。AI はこれと、サーバーのルールのチャンネル（Discord で設定したルールチャンネルと、軽いモデルがチャンネル名・説明から「ルール・必読・はじめに・お願い」などと判断したもの。合わせて最大3つ。チャンネルが変わるまで覚えておき、Gemini が使えないときは名前で判断）の最新20件ずつを読み、それに従って返事をする（システムの指示より厳しくする方向だけ）。省くと今の内容を表示、`clear:True` で消す | サーバーの管理 |
-| `/setup via_presets` | よく使うログをまとめて有効にする | Webhook の管理・チャンネルの管理・監査ログの表示 |
+| `/setup via_presets` | よく使うログをまとめて有効にする。まだ何も出力していないチャンネルでは最初から「すべて」を選んであり、「このまま保存」で全イベントを記録する（`via_individual_event` も同じ） | Webhook の管理・チャンネルの管理・監査ログの表示 |
 | `/setup via_individual_event` | ログの種類を1つずつ選んで有効にする | 同上 |
 | `/setup list` | ログの出力先チャンネルの一覧を表示する | 同上 |
 | `/setup assistant` | AI（メンション）の設定をまとめて変える。話し方（`/persona`）、返事の長さ（`/replylength`）、配信・新着動画のイベント登録（`/youtube liveevents`。`YOUTUBE_API_KEY` があるとき）を選択メニューで選ぶと、すぐ保存される | 同上＋サーバーの管理 |
