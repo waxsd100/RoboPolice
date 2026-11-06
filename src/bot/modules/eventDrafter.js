@@ -531,7 +531,7 @@ async function callGemini (model, body, options) {
 // tokens: `setting` names the environment variable, `fallback` the level without it. Mention
 // replies and drafts think at high (GEMINI_THINKING_LEVEL), video summaries at low
 // (VIDEO_SUMMARY_THINKING_LEVEL), and everything else at low (GEMINI_LIGHT_THINKING_LEVEL). Only sent to Gemini 3 models (older ones refuse the setting).
-const THINKING_LEVELS = ['minimal', 'low', 'medium', 'high']
+const { THINKING_LEVELS } = require('../utils/replyOptions')
 function thinkingConfig (model, { setting = 'GEMINI_THINKING_LEVEL', fallback = 'high' } = {}) {
   if (!/gemini-[3-9]/.test(model)) return {}
   const level = String(process.env[setting] || fallback).toLowerCase()

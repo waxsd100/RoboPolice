@@ -147,6 +147,16 @@ describe('migrations', { skip: !database.available && 'needs PGHOST' }, () => {
     assert.deepEqual(unindexed, [{ tbl: 'messages', conname: 'messages_embedding_model_id_fkey' }])
   })
 
+  test('the reply options are enum types with the same values as replyOptions.js', async () => {
+    const { REPLY_MODELS, THINKING_LEVELS, REPLY_LENGTH_CHOICES } = require('../../src/bot/utils/replyOptions')
+    const values = async type => (await q(`SELECT unnest(enum_range(NULL::${type}))::text AS v`)).map(r => r.v)
+    assert.deepEqual(await values('reply_model'), REPLY_MODELS)
+    assert.deepEqual(await values('thinking_level'), THINKING_LEVELS)
+    assert.deepEqual(await values('reply_length'), REPLY_LENGTH_CHOICES)
+    const types = await q("SELECT column_name, udt_name FROM information_schema.columns WHERE table_name = 'guilds' AND column_name IN ('reply_model', 'reply_thinking', 'reply_length') ORDER BY column_name")
+    assert.deepEqual(types.map(r => [r.column_name, r.udt_name]), [['reply_length', 'reply_length'], ['reply_model', 'reply_model'], ['reply_thinking', 'thinking_level']])
+  })
+
   test('server settings become rows', async () => {
     assert.deepEqual(await q('SELECT guild_id, event, channel_id FROM guild_event_logs ORDER BY event'), [
       { guild_id: 'g1', event: 'messageDelete', channel_id: 'c1' },
