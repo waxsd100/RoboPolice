@@ -1,6 +1,7 @@
 const urlFetcher = require('../utils/urlFetcher')
 const { describeForums } = require('./forumPost')
 const youtubeDB = require('../../db/interfaces/postgres/youtube')
+const twitchDB = require('../../db/interfaces/postgres/twitch')
 const messageDB = require('../../db/interfaces/postgres/read')
 const videoSummary = require('./videoSummary')
 const { linkTimestamps } = require('../utils/youtube')
@@ -132,6 +133,14 @@ const DECLARATIONS = [
   {
     name: 'search_youtube',
     description: 'このサーバーに設定された YouTube チャンネルについて保存している情報（チャンネル概要、最近の動画、配信予定・配信中）を探す。動画・配信・チャンネルについての依頼で使う。query を省くと新しい順に返す。',
+    parameters: {
+      type: 'OBJECT',
+      properties: { query: { type: 'STRING', description: '題名・説明に含まれる語（空白区切りで AND）' } }
+    }
+  },
+  {
+    name: 'search_twitch',
+    description: 'BOT が見ている Twitch チャンネルの過去の配信（アーカイブ）を探す。題名・配信日・長さ・リンクが分かる（中で話した内容は分からない）。Twitch の配信やアーカイブについての依頼で使う。query を省くと新しい順に返す。',
     parameters: {
       type: 'OBJECT',
       properties: { query: { type: 'STRING', description: '題名・説明に含まれる語（空白区切りで AND）' } }
@@ -324,6 +333,9 @@ function createTools ({ guild, member, ask, progress = () => {} }) {
     async search_youtube ({ query }) {
       return searchYouTube(guild.id, query)
     },
+    async search_twitch ({ query }) {
+      return searchTwitch(query)
+    },
     async find_game ({ name, name_en: nameEn }) {
       const names = [name, nameEn].map(n => String(n || '').trim()).filter(Boolean)
       if (!names.length) throw new Error('name が必要です')
@@ -445,6 +457,27 @@ async function searchYouTube (guildID, query) {
     ...(!ranked && matches.length > MAX_YOUTUBE_RESULTS ? [`…ほか ${matches.length - MAX_YOUTUBE_RESULTS} 件（query で絞り込めます）`] : []),
     ...otherLines
   ].filter(Boolean).join('\n')
+}
+
+// The Twitch archives (twitchSync.js) that have every word of `query` in their title or
+// description, newest first.
+async function searchTwitch (query) {
+  const words = String(query || '').toLowerCase().split(/\s+/).filter(Boolean)
+  const [channels, archives] = await Promise.all([twitchDB.getOverview(), twitchDB.getArchives()])
+  if (!channels.length) return 'BOT が見ている Twitch チャンネルはありません'
+  const matches = archives.filter(v => matchesAll(words, `${v.title}\n${v.description || ''}`))
+  const line = v => {
+    const date = v.published_at ? new Date(v.published_at).toISOString().slice(0, 10) : '?'
+    const who = channels.length > 1 ? `【${v.display_name || v.login}】` : ''
+    return `- ${who}${v.title}（配信 ${date}${v.duration ? `、長さ ${v.duration}` : ''}）${v.url}`
+  }
+  return [
+    ...channels.map(c => `チャンネル: ${c.display_name || c.login}（https://www.twitch.tv/${c.login}、アーカイブ ${c.video_count} 件${c.synced_at ? `、取得 ${new Date(c.synced_at).toISOString()}` : '、まだ取得していない'}）${c.description ? `\n  概要: ${c.description.replace(/\s+/g, ' ').slice(0, 200)}` : ''}`),
+    'Twitch はアーカイブを一定期間（7〜60日）で消すため、古い配信は残っていない。',
+    words.length ? `「${query}」に一致したアーカイブ: ${matches.length} 件` : '新しい順のアーカイブ:',
+    ...matches.slice(0, MAX_YOUTUBE_RESULTS).map(line),
+    ...(matches.length > MAX_YOUTUBE_RESULTS ? [`…ほか ${matches.length - MAX_YOUTUBE_RESULTS} 件（query で絞り込めます）`] : [])
+  ].join('\n')
 }
 
 const displayName = m => m.nick || m.user?.globalName || m.globalName || m.username
@@ -691,7 +724,14 @@ async function describeServer (guild, member, requestChannelID, { query = '', co
         '詳しくは search_youtube で調べる'
       ].join('\n')
     : '設定なし')
+  const twitch = await twitchDB.getOverview().catch(() => [])
+  if (twitch.length) {
+    lines.push('', '### Twitch', [
+      ...twitch.map(c => `${c.display_name || c.login}（https://www.twitch.tv/${c.login}、アーカイブ ${c.video_count} 件を保存）`),
+      '過去の配信は search_twitch で調べる'
+    ].join('\n'))
+  }
   return lines.join('\n')
 }
 
-module.exports = { worthSearching, createTools, formatMessage, describeServer, withServerEmojis, withServerChannels, namedChannels, namedMembers, requestChannelInfo, searchYouTube, MESSAGE_LINK, CHANNEL_LINK, StopDrafting }
+module.exports = { worthSearching, createTools, formatMessage, describeServer, withServerEmojis, withServerChannels, namedChannels, namedMembers, requestChannelInfo, searchYouTube, searchTwitch, MESSAGE_LINK, CHANNEL_LINK, StopDrafting }

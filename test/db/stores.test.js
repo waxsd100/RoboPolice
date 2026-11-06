@@ -483,4 +483,23 @@ describe('stores', { skip: !database.available && 'needs PGHOST' }, () => {
       assert.equal(await store().getKnowledge('g1'), null)
     })
   })
+
+  describe('twitch', () => {
+    test('the channels followed and their archives; ones Twitch dropped go with a complete read', async () => {
+      // The fakes replace this store for the other tests: the real one, freshly loaded.
+      delete require.cache[require.resolve('../../src/db/interfaces/postgres/twitch')]
+      const store = require('../../src/db/interfaces/postgres/twitch')
+      await store.setChannels([{ id: '1', login: 'nobaman', displayName: 'のばまん', description: '配信' }, { id: '2', login: 'other' }])
+      const vod = (id, day) => ({ id, title: `配信 ${id}`, url: `https://www.twitch.tv/videos/${id}`, publishedAt: `2026-11-0${day}T00:00:00Z`, duration: '1h', viewCount: 3 })
+      assert.equal(await store.saveArchives('1', [vod('a', 3), vod('b', 2)]), 2)
+      assert.equal(await store.saveArchives('1', [vod('c', 4), vod('a', 3)], { complete: true }), 1)
+      assert.deepEqual((await store.getArchives()).map(v => [v.video_id, v.login]), [['c', 'nobaman'], ['a', 'nobaman']])
+      const overview = await store.getOverview()
+      assert.deepEqual(overview.map(c => [c.login, c.video_count, !!c.synced_at]), [['nobaman', 2, true], ['other', 0, false]])
+      // A channel no longer followed goes with its archives; a login that moved to another account moves.
+      await store.setChannels([{ id: '3', login: 'nobaman' }])
+      assert.deepEqual((await store.listChannels()).map(c => [c.user_id, c.login]), [['3', 'nobaman']])
+      assert.deepEqual(await q('SELECT * FROM twitch_videos'), [])
+    })
+  })
 })
