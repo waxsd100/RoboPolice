@@ -5,41 +5,46 @@ GKE へ移すための手順です。dev は Canine、本番は Canine からの
 
 ```text
 dev  : Canine プロジェクト robopolice（Namespace robopolice、gVisor）
-         + アドオン robopolice-postgres（pgvector）・robopolice-redis
+         + アドオン robopolice-postgres（公式 postgres:18 ＋ 注釈で pgvector）・robopolice-redis
 本番 : prod-robopolice（Config Sync が components/apps/robopolice から同期）
          BOT 1 台（Recreate）＋ postgres ＋ redis。機密は Secret Manager → External Secrets
 ```
 
-> [!IMPORTANT] > **BOT は必ず 1 台で動かします。** 同じ `BOT_TOKEN` で 2 本つながると、ログも返信も二重になります。
+> [!IMPORTANT]
+>
+> **BOT は必ず 1 台で動かします。** 同じ `BOT_TOKEN` で 2 本つながると、ログも返信も二重になります。
 > 昇格ジョブは既定で HPA（最小 2 台）を付けるので、昇格の前に dev の Namespace に
 > `wax100.io/single-replica=true` を付けます（下の 3）。同じ理由で、**dev には本番と別の BOT（テスト用の
 > Discord アプリ）のトークンを使い**、本番の切り替え中は Railway と GKE が同時に動かないようにします（下の 5）。
 
 ## 0. 前提
 
-- k8s-platform に次の 2 つが入っていること（`wax100.io/single-replica` ラベルと、`pgvector/pgvector`
-  イメージの DB バックアップ対応）
+- k8s-platform に次の 2 つが入っていること（`wax100.io/single-replica` ラベルと、PostgreSQL の拡張を注釈で
+  差し込む `wax100.io/postgres-extensions`）
 - 管理者の kubectl コンテキスト `wax100-dev` / `wax100-prod`（k8s-platform の `hack/kubectl-contexts.sh`）
 - テスト用の Discord アプリの BOT トークン（Server Members・Message Content・Presence の各 Intent を有効に）と、
   それを入れたテスト用サーバー
 
 ## 1. DB と Redis（Canine のアドオン）
 
-RoboPolice は pgvector が要ります（`src/db/migrations/009_pgvector.js`）。公式の `postgres` イメージには
-入っていないので、同じチャートでイメージだけ `pgvector/pgvector` にします。
+RoboPolice は pgvector が要ります（`src/db/migrations/009_pgvector.js`）。DB のイメージは公式の `postgres:18` の
+まま替えず、Pod の注釈 `wax100.io/postgres-extensions: "vector"` で pgvector を差し込みます（k8s-platform の Kyverno が、
+Pod の作成時に拡張のファイルを写して `extension_control_path` で読ませる）。ほかの拡張が要るようになったら、
+注釈にカンマ区切りで足します（k8s-platform のカタログ `addons/kyverno/base/configmap-postgres-extensions.yaml` にあるもの）。
+`pgcrypto` などの contrib は公式イメージに入っているので、注釈なしで `CREATE EXTENSION` できます。
 
-| アドオン名            | チャート                                                               | values                                                                                                                      |
-| :-------------------- | :--------------------------------------------------------------------- | :-------------------------------------------------------------------------------------------------------------------------- |
-| `robopolice-postgres` | `groundhog2k/postgres`（`https://groundhog2k.github.io/helm-charts/`） | `image.repository: pgvector/pgvector`・`image.tag: pg17`・`storage.requestedSize: 20Gi`・`settings.superuserPassword.value` |
-| `robopolice-redis`    | `groundhog2k/redis`                                                    | 既定のままでよい（中身は 3 時間で消えるキャッシュなので、永続化は無くてもよい）                                             |
+| アドオン名            | チャート                                                               | values                                                                                                                                              |
+| :-------------------- | :--------------------------------------------------------------------- | :-------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `robopolice-postgres` | `groundhog2k/postgres`（`https://groundhog2k.github.io/helm-charts/`） | `podAnnotations: { wax100.io/postgres-extensions: "vector" }`・`image.tag: "18"`・`storage.requestedSize: 20Gi`・`settings.superuserPassword.value` |
+| `robopolice-redis`    | `groundhog2k/redis`                                                    | 既定のままでよい（中身は 3 時間で消えるキャッシュなので、永続化は無くてもよい）                                                                     |
 
 - **名前は必ず `robopolice-<何か>` にします。** 昇格ジョブがこの名前でアプリと一緒に本番へ持ち込みます
-- `image.tag` は **Railway の PostgreSQL と同じかそれより新しいメジャー版**にします（Railway の DB で
-  `SELECT version();`）。新しい版の `pg_dump` は古いサーバーを読めますが、逆はできません
+- `image.tag` は `18` にします（注釈の拡張は PostgreSQL 18 用。18 以外では Pod の作成が拒否されます）。
+  Railway の PostgreSQL（`SELECT version();`）が 18 以下なら、そのまま移せます（18 の `pg_dump` は古いサーバーを読める）
 - メッセージ履歴は大きくなります。`storage.requestedSize` は Railway の DB の大きさ
   （`SELECT pg_size_pretty(pg_database_size(current_database()));`）の 2 倍程度にします。PVC は後から広げられますが、縮められません
 - Bitnami のチャートは使いません（k8s-platform の `docs/GKE_SETUP_GUIDE.md` の 8.8）
-- バックアップは dev・本番とも毎日自動で取られます（`pgvector/pgvector` も公式 `postgres` と同じ方法）
+- バックアップは dev・本番とも毎日自動で取られます（5432 のポートで DB と見分けるので、注釈の有無にかかわらず取られる）
 
 ## 2. BOT（Canine のプロジェクト）
 
