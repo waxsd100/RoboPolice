@@ -2,7 +2,10 @@
 -- lengths (/replylength) as enum types, in place of text checked against a pattern. The same lists
 -- are in src/bot/utils/replyOptions.js; a model added there needs `ALTER TYPE reply_model ADD VALUE`
 -- here too (test/db/migrations.test.js checks they agree).
-CREATE TYPE reply_model AS ENUM ('gemini-3.8-flash', 'gemini-4-argon', 'gemini-3.5-flash-lite', 'gemini-3.1-flash-lite');
+CREATE TYPE reply_model AS ENUM (
+  'gemini-3.8-flash', 'gemini-4-argon', 'gemini-3.5-flash-lite', 'gemini-3.1-flash-lite',
+  'gemini-3.6-flash', 'gemini-3.1-pro-preview', 'gemini-3-flash-preview', 'gemini-2.5-flash-lite'
+);
 CREATE TYPE thinking_level AS ENUM ('minimal', 'low', 'medium', 'high');
 CREATE TYPE reply_length AS ENUM ('long', 'normal', 'short');
 

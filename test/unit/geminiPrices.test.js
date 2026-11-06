@@ -27,3 +27,13 @@ test('a model not listed is priced as the usual reply model, once warned; MENTIO
   process.env.MENTION_TOKEN_PRICES = 'not json'
   assert.deepEqual(priceOf('gemini-4-argon', now), { input: 2, cached: 0.1, output: 10, imageOutput: 10 })
 })
+
+test('a model that charges more for a long prompt is counted at its long price past it', () => {
+  const { usdOf } = require('../../src/bot/utils/geminiPrices')
+  const now = new Date('2026-11-06T00:00:00Z')
+  const short = usdOf({ promptTokenCount: 100000, candidatesTokenCount: 1000 }, 'gemini-3.1-pro-preview', { now })
+  assert.equal(Math.round(short * 1e6) / 1e6, (100000 * 2 + 1000 * 12) / 1e6)
+  const long = usdOf({ promptTokenCount: 300000, candidatesTokenCount: 1000 }, 'gemini-3.1-pro-preview', { now })
+  assert.equal(Math.round(long * 1e6) / 1e6, (300000 * 4 + 1000 * 18) / 1e6)
+  assert.equal(usdOf({ promptTokenCount: 1e6, candidatesTokenCount: 0 }, 'gemini-2.5-flash-lite', { now }), 0.1)
+})

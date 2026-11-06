@@ -3,7 +3,16 @@
 // migration too (test/db/migrations.test.js checks they agree).
 
 // The models a reply can be written with (%replymodel): text models with a price in geminiPrices.js.
-const REPLY_MODELS = Object.freeze(['gemini-3.8-flash', 'gemini-4-argon', 'gemini-3.5-flash-lite', 'gemini-3.1-flash-lite'])
+const REPLY_MODELS = Object.freeze([
+  'gemini-3.8-flash',
+  'gemini-4-argon',
+  'gemini-3.5-flash-lite',
+  'gemini-3.1-flash-lite',
+  'gemini-3.6-flash',
+  'gemini-3.1-pro-preview',
+  'gemini-3-flash-preview',
+  'gemini-2.5-flash-lite' // no thinking levels: it thinks as it is set (thinkingConfig is left out)
+])
 
 // How much Gemini 3 thinks before answering (%replymodel thinking, GEMINI_*_THINKING_LEVEL).
 const THINKING_LEVELS = Object.freeze(['minimal', 'low', 'medium', 'high'])
