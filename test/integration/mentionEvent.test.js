@@ -865,6 +865,27 @@ describe('mention → event / forum post (integration)', () => {
     }
   })
 
+  test('chat: the model and thinking level set for the server with %replymodel are used', async () => {
+    const { installReplyLengthStore } = require('../helpers/fakes')
+    const { channel } = createChannel()
+    installReplyLengthStore({}, {}, {}, {}, { [channel.guild.id]: { model: 'gemini-3.5-flash-lite', thinking: 'low' } })
+    try {
+      const requests = installGemini([[call('submit_chat_reply', { text: 'やあ' })]])
+      await mentionEvent.handle(mention(channel, '<@BOT> やあ'))
+      const reply = requests.find(r => /gemini-3\.5-flash-lite:streamGenerateContent/.test(r.url))
+      assert.ok(reply, requests.map(r => r.url).join('\n'))
+      assert.equal(reply.body.generationConfig.thinkingConfig.thinkingLevel, 'low')
+    } finally {
+      installReplyLengthStore()
+    }
+    // Without it, the default.
+    const requests = installGemini([[call('submit_chat_reply', { text: 'やあ' })]])
+    await mentionEvent.handle(mention(channel, '<@BOT> やあ'))
+    const reply = requests.find(r => /:streamGenerateContent/.test(r.url))
+    assert.match(reply.url, /gemini-3\.8-flash:streamGenerateContent/)
+    assert.equal(reply.body.generationConfig.thinkingConfig.thinkingLevel, 'high')
+  })
+
   test('chat: a server that turned the streamer off with /persona gets replies as the bot', async () => {
     const { installReplyLengthStore } = require('../helpers/fakes')
     const { PERSONAS } = require('../../src/bot/modules/eventDrafter')

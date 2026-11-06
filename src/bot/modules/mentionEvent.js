@@ -412,7 +412,7 @@ async function handle (message) {
     try {
       reply = await message.channel.createMessage({ content: '内容を読み取っています…', ...reference })
       // /replylength, /persona, %debugfooter, %tokenlimit; without them (or the database) as by default.
-      const { replyLength, streamerPersona, debugFooter, tokenLimits } = await replySettingsStore.getReplySettings(guild.id)
+      const { replyLength, streamerPersona, debugFooter, tokenLimits, replyModel, replyThinking } = await replySettingsStore.getReplySettings(guild.id)
         .catch(() => ({ replyLength: null, streamerPersona: true, debugFooter: false, tokenLimits: {} }))
       // Per user across every server, in tokens, against this server's limits (mentionQuota.js). Near
       // a limit, every call goes to Flex inference: slower and half the price.
@@ -474,6 +474,8 @@ async function handle (message) {
         recent,
         replyLength,
         streamerPersona,
+        model: replyModel || null,
+        thinking: replyThinking || null,
         channelName: message.channel.name,
         channelID: message.channel.id,
         server,

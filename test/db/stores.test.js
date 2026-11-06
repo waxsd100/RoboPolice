@@ -93,6 +93,19 @@ describe('stores', { skip: !database.available && 'needs PGHOST' }, () => {
       await assert.rejects(settings.setTokenLimit('g2', 'day', 1), /No token limit day/)
     })
 
+    test('a server\'s own reply model and thinking level', async () => {
+      delete require.cache[require.resolve('../../src/db/interfaces/postgres/replySettings')]
+      const settings = require('../../src/db/interfaces/postgres/replySettings')
+      assert.equal((await settings.getReplySettings('g2')).replyModel, null)
+      await settings.setReplyModel('g2', 'model', 'gemini-4-argon')
+      await settings.setReplyModel('g2', 'thinking', 'low')
+      const got = await settings.getReplySettings('g2')
+      assert.deepEqual([got.replyModel, got.replyThinking], ['gemini-4-argon', 'low'])
+      await assert.rejects(settings.setReplyModel('g2', 'thinking', 'extreme'), /check constraint/)
+      await settings.setReplyModel('g2', 'model', null)
+      assert.equal((await settings.getReplySettings('g2')).replyModel, null)
+    })
+
     test('a server made on first use, and its settings go with it', async () => {
       await update().setEventsLogId('g2', 'c1', ['messageDelete'])
       assert.equal((await read().getGuild('g2')).event_logs.messageDelete, 'c1')

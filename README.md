@@ -126,6 +126,7 @@ server's history takes disk space: with no retention set and no limit given, all
 | `%reset` | サーバーのログ設定をすべて消す（`yes` と返信して確定） | 管理者 |
 | `%help` / `%info` / `%invite` / `%ping` / `%serverinfo` / `%userinfo` / `%clearmydata` | ヘルプ・BOT の情報・招待リンクなど | だれでも |
 | `%tokenlimit` / `%tokenlimit 5h 300000` / `week 1500000` / `flex 70` / `5h default` / `unlimited on`・`off` | このサーバーのメンションのトークン上限（1人あたり、5時間・1週間）と、低速モード（Flex）に切り替える割合を表示・変更する（0 は上限なし・切り替えなし、`default` で既定に戻す）。`unlimited on` でこのサーバーの制限（上限・低速モード・1日の回数）をすべて外す。使った量はサーバーをまたいで数え、メンションしたサーバーの上限と比べる | `CREATOR_IDS` の人 |
+| `%replymodel` / `%replymodel model gemini-4-argon` / `thinking low` / `model default` | このサーバーのメンションの返事に使うモデルと思考の深さ（`minimal`・`low`・`medium`・`high`）を表示・変更する（`default` で `GEMINI_MODEL`・`GEMINI_THINKING_LEVEL` に戻す）。選べるのは料金表（`geminiPrices.js`・`MENTION_TOKEN_PRICES`）にある画像以外のモデル。高いモデルほど利用者のトークン上限も早く減る。強いモデルに任せるとき（`think_deeper`）のモデルは変わらず、混み合っているときは思考の深さが下がる | `CREATOR_IDS` の人 |
 | `%debugfooter on` / `off` | このサーバーのメンション返信の下に、答えたモデル・使ったトークン・フォールバックを小さい灰色の字で出す（`-# model: gemini-3.8-flash → gemini-4-argon (flex) · tokens: in … (cached …) · out … · thinking … · N Gemini calls · fallback: …`）。初期はオフ。引数なしで今の設定を表示 | `CREATOR_IDS` の人 |
 | `%eval` / `%reload` / `%reindexcommands` | 開発用 | `CREATOR_IDS` の人 |
 
