@@ -643,8 +643,11 @@ const THINK_DEEPER_DECLARATION = {
   parameters: { type: 'OBJECT', properties: { reason: { type: 'STRING', description: 'なぜ強いモデルが要るか（短く）' } }, required: ['reason'] }
 }
 
+// The model mention replies use: the server's own (contents.model, %replymodel), else GEMINI_MODEL.
+const replyModel = contents => contents?.model || process.env.GEMINI_MODEL || DEFAULT_GEMINI_MODEL
+
 async function generate (contents, declarations, allowed = null, { deep = false } = {}) {
-  const model = deep ? deepModel() : (process.env.GEMINI_MODEL || DEFAULT_GEMINI_MODEL)
+  const model = deep ? deepModel() : replyModel(contents)
   const prefix = {
     systemInstruction: { parts: [{ text: systemInstruction() }] },
     tools: [{ functionDeclarations: declarations }],
@@ -652,6 +655,8 @@ async function generate (contents, declarations, allowed = null, { deep = false 
     toolConfig: { functionCallingConfig: { mode: 'ANY', ...(allowed ? { allowedFunctionNames: allowed } : {}) } }
   }
   const generationConfig = { temperature: temperature(), ...thinkingConfig(model, deep ? { setting: 'GEMINI_DEEP_THINKING_LEVEL', fallback: 'high' } : undefined) }
+  // The server's own thinking level (%replymodel), for the usual model only.
+  if (!deep && contents.thinking && generationConfig.thinkingConfig) generationConfig.thinkingConfig = { thinkingLevel: contents.thinking }
   // The busier the bot as a whole, the less a reply thinks (geminiLoad.js).
   if (generationConfig.thinkingConfig) generationConfig.thinkingConfig = { ...generationConfig.thinkingConfig, thinkingLevel: geminiLoad.cappedThinking(generationConfig.thinkingConfig.thinkingLevel) }
   if (deep) {
@@ -696,7 +701,7 @@ async function runAgent (contents, tools, submits = SUBMIT_DECLARATIONS) {
       if (!contents.deep || !(e.blocked || unavailable)) throw e
       // The stronger model refused (its safety filters or policy), or had no Flex capacity: the
       // usual model answers instead, from the request again, and the line under the reply says so.
-      const fallback = process.env.GEMINI_MODEL || DEFAULT_GEMINI_MODEL
+      const fallback = replyModel(contents)
       const why = e.blocked ? `refused (${e.blocked})` : `Flex unavailable (HTTP ${e.status})`
       global.logger?.info(`[GEMINI]: ${deepModel()} ${why}; ${fallback} answers instead`)
       addFallback(`${deepModel()} ${why} → ${fallback}`)
@@ -800,7 +805,8 @@ async function check (conversation, { name, args, calls = [] }) {
 // Required when used: eventTools requires this module.
 const eventTools = () => require('./eventTools')
 
-async function draft ({ request, referenced, recent = [], channelName, channelID, server, forum = null, images = [], pictures = [], edit = null, replyLength = null, streamerPersona = true, guild, member, tools, now = new Date() }) {
+// model, thinking: the server's own model and thinking level (%replymodel); null for the default.
+async function draft ({ request, referenced, recent = [], channelName, channelID, server, forum = null, images = [], pictures = [], edit = null, replyLength = null, streamerPersona = true, model = null, thinking = null, guild, member, tools, now = new Date() }) {
   const combined = pictures.filter(p => p.combined)
   const foreign = pictures.filter(p => !p.combined)
   const notes = [
@@ -825,6 +831,9 @@ async function draft ({ request, referenced, recent = [], channelName, channelID
       : SUBMIT_DECLARATIONS,
     now
   }
+  // Kept with the conversation, so a correction (revise) uses them too.
+  conversation.contents.model = model
+  conversation.contents.thinking = THINKING_LEVELS.includes(thinking) ? thinking : null
   return check(conversation, await runAgent(conversation.contents, tools, conversation.submits))
 }
 
@@ -847,4 +856,4 @@ async function revise (conversation, correction) {
   return check(conversation, await runAgent(conversation.contents, conversation.tools, conversation.submits))
 }
 
-module.exports = { replyTimeoutMs, flexUsable, SAFETY_SETTINGS, withSafetySettings, THINK_DEEPER_DECLARATION, deepModel, REPLY_LENGTHS, DEFAULT_REPLY_LENGTH, PERSONAS, thinkingConfig, cachedPrefix, caches, purgedFor, promptVersion, lightModel, draft, revise, MAX_STEPS, isConfigured, toScheduledEvent, callGemini, geminiRequest, geminiSend, geminiStream, retryTimer, DEFAULT_GEMINI_MODEL, ENTITY_TYPES, GeminiError }
+module.exports = { THINKING_LEVELS, replyTimeoutMs, flexUsable, SAFETY_SETTINGS, withSafetySettings, THINK_DEEPER_DECLARATION, deepModel, REPLY_LENGTHS, DEFAULT_REPLY_LENGTH, PERSONAS, thinkingConfig, cachedPrefix, caches, purgedFor, promptVersion, lightModel, draft, revise, MAX_STEPS, isConfigured, toScheduledEvent, callGemini, geminiRequest, geminiSend, geminiStream, retryTimer, DEFAULT_GEMINI_MODEL, ENTITY_TYPES, GeminiError }

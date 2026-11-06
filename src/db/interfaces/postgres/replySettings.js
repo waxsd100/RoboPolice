@@ -1,20 +1,23 @@
 // How the mention assistant replies in each server: how long (migrations/025_reply_length.sql,
 // /replylength), whether it speaks as the streamer (026_streamer_persona.sql, /persona) and whether
 // its replies end with the debug line (029_debug_footer.sql, %debugfooter), and its own mention
-// token limits (031_guild_token_limits.sql, %tokenlimit).
+// token limits (031_guild_token_limits.sql, %tokenlimit), and its own model and thinking level
+// (036_guild_reply_model.sql, %replymodel).
 const pool = require('../../clients/postgres')
 
 // { replyLength: 'long' | 'normal' | 'short' | null, streamerPersona: boolean, debugFooter: boolean,
 // tokenLimits: { '5h', week, flexAt } (each a number, or null for the default) and unlimited
-// (032_guild_unlimited.sql) } for the server.
+// (032_guild_unlimited.sql), replyModel and replyThinking (null for the default) } for the server.
 async function getReplySettings (guildID) {
-  const rows = await pool.query('SELECT reply_length, streamer_persona, debug_footer, token_limit_5h, token_limit_week, token_flex_at, token_unlimited FROM guilds WHERE id = $1', [guildID])
+  const rows = await pool.query('SELECT reply_length, streamer_persona, debug_footer, token_limit_5h, token_limit_week, token_flex_at, token_unlimited, reply_model, reply_thinking FROM guilds WHERE id = $1', [guildID])
   const row = rows.rows[0]
   return {
     replyLength: row?.reply_length || null,
     streamerPersona: row ? row.streamer_persona !== false : true,
     debugFooter: row?.debug_footer === true,
-    tokenLimits: { '5h': row?.token_limit_5h ?? null, week: row?.token_limit_week ?? null, flexAt: row?.token_flex_at ?? null, unlimited: row?.token_unlimited === true }
+    tokenLimits: { '5h': row?.token_limit_5h ?? null, week: row?.token_limit_week ?? null, flexAt: row?.token_flex_at ?? null, unlimited: row?.token_unlimited === true },
+    replyModel: row?.reply_model || null,
+    replyThinking: row?.reply_thinking || null
   }
 }
 
@@ -53,4 +56,13 @@ async function setTokenLimit (guildID, which, value) {
   await pool.query(`UPDATE guilds SET ${column} = $2 WHERE id = $1`, [guildID, value])
 }
 
-module.exports = { setTokenLimit, getReplySettings, getReplyLength, setReplyLength, setStreamerPersona, setDebugFooter }
+// Sets the server's model (which 'model') or thinking level ('thinking') for mention replies; null
+// for the default.
+async function setReplyModel (guildID, which, value) {
+  const column = { model: 'reply_model', thinking: 'reply_thinking' }[which]
+  if (!column) throw new Error(`No reply setting ${which}`)
+  await ensureGuild(guildID)
+  await pool.query(`UPDATE guilds SET ${column} = $2 WHERE id = $1`, [guildID, value])
+}
+
+module.exports = { setReplyModel, setTokenLimit, getReplySettings, getReplyLength, setReplyLength, setStreamerPersona, setDebugFooter }
