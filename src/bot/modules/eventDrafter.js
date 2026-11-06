@@ -227,8 +227,9 @@ const replyLengthOf = length => REPLY_LENGTHS[length] ? length : DEFAULT_REPLY_L
 // what stays the same from one request to the next (the server's setting and information) leads,
 // so a prompt cache can cover as much as possible, and what is new each time (the time, the
 // conversation, the request) follows.
-// rules: { moderators, channel } (serverRules.js): what the server's moderators asked of the
-// assistant (/assistantrules) and its rules channel's text; either may be missing.
+// rules: { moderators, channels } (serverRules.js): what the server's moderators asked of the
+// assistant (/assistantrules) and its rules channels' text ([{ channelID, text }]); either may be
+// missing.
 function buildPrompt ({ request, referenced, recent = [], channelName, channelID, channelInfo = null, server, forum, images, edit, channels = [], people = [], replyLength = null, streamerPersona = true, rules = null, now }) {
   const lines = [
     '## 話し方（このサーバーの設定）',
@@ -237,10 +238,10 @@ function buildPrompt ({ request, referenced, recent = [], channelName, channelID
     '## 返事の長さ（このサーバーの設定）',
     ...REPLY_LENGTHS[replyLengthOf(replyLength)]
   ]
-  if (rules?.moderators || rules?.channel) {
+  if (rules?.moderators || rules?.channels?.length) {
     lines.push('', '## このサーバーのルールとモデレーターからのお願い（返事・下書きはこれに従う）')
     if (rules.moderators) lines.push('### モデレーターから AI へのお願い', wrap('rules', rules.moderators))
-    if (rules.channel) lines.push(`### サーバーのルール（<#${rules.channel.channelID}> より）`, wrap('rules', rules.channel.text))
+    for (const channel of rules.channels || []) lines.push(`### サーバーのルール（<#${channel.channelID}> より）`, wrap('rules', channel.text))
   }
   if (server) lines.push('', '## このサーバーの情報（最新）', wrap('server', server))
   if (channels.length) lines.push('', '## 依頼や会話に出てくるチャンネル', wrap('channels', channels.join('\n')))
