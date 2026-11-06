@@ -19,6 +19,7 @@ const { CoverImage, MODES } = require('./coverImage')
 const { FORUM_TYPES } = require('./forumPost')
 const postedEdit = require('./postedEdit')
 const replySettingsStore = require('../../db/interfaces/postgres/replySettings')
+const serverRules = require('./serverRules')
 const { EDIT_HINT } = postedEdit
 
 const ANSWER_TIMEOUT_MS = 5 * 60 * 1000
@@ -412,7 +413,7 @@ async function handle (message) {
     try {
       reply = await message.channel.createMessage({ content: '内容を読み取っています…', ...reference })
       // /replylength, /persona, %debugfooter, %tokenlimit; without them (or the database) as by default.
-      const { replyLength, streamerPersona, debugFooter, tokenLimits, replyModel, replyThinking } = await replySettingsStore.getReplySettings(guild.id)
+      const { replyLength, streamerPersona, debugFooter, tokenLimits, replyModel, replyThinking, assistantRules } = await replySettingsStore.getReplySettings(guild.id)
         .catch(() => ({ replyLength: null, streamerPersona: true, debugFooter: false, tokenLimits: {} }))
       // Per user across every server, in tokens, against this server's limits (mentionQuota.js). Near
       // a limit, every call goes to Flex inference: slower and half the price.
@@ -451,7 +452,8 @@ async function handle (message) {
       // Knowledge is looked up by what the members said, not the bot's own earlier replies.
       // What was just being talked about in the channel, as far as it bears on the request
       // (recentTopics.js); not when something the bot made is being changed.
-      const [server, recent] = await Promise.all([
+      // The server's rules and what its moderators asked of the assistant (serverRules.js).
+      const [server, recent, rulesChannel] = await Promise.all([
         describeServer(guild, member, message.channel.id, { query: request, context: referenced?.othersText }).catch(e => {
           global.logger.warn(`Could not describe server ${guild.id}: ${e.message}`)
           return null
@@ -461,7 +463,8 @@ async function handle (message) {
           : relatedRecent(message, request).catch(e => {
             global.logger.warn(`Could not read the recent talk in ${message.channel.id}: ${e.message}`)
             return []
-          })
+          }),
+        serverRules.readRules(guild).catch(() => null)
       ])
       // Combined emojis and other servers' emojis in what was said are shown to the model as
       // images, for this request only.
@@ -474,6 +477,7 @@ async function handle (message) {
         recent,
         replyLength,
         streamerPersona,
+        rules: { moderators: assistantRules || null, channel: rulesChannel },
         model: replyModel || null,
         thinking: replyThinking || null,
         channelName: message.channel.name,
