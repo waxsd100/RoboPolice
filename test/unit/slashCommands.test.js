@@ -132,3 +132,45 @@ test('/setup assistant needs Manage Server', async () => {
   })
   assert.equal(said[0].content, 'Changing these settings needs Manage Server.')
 })
+
+test('/setup chooses every event to begin with in a channel that logs nothing, and "Save as selected" saves it', async (t) => {
+  const update = require('../../src/db/interfaces/postgres/update')
+  const saved = []
+  t.mock.method(update, 'setEventsLogId', async (guildID, channelID, events) => { saved.push([channelID, events]) })
+  const events = require('../../src/bot/events/interactionCreate')
+  let round = 0
+  t.mock.method(events, 'awaitCustomID', async id => {
+    // The first menu: its save button is pressed; after that nothing is chosen.
+    if (round === 0 && id.endsWith(':save')) {
+      round++
+      return {}
+    }
+    return new Promise(() => {})
+  })
+  t.mock.method(events, 'cancelCustomID', () => {})
+  const { ALL_EVENTS } = require('../../src/bot/utils/constants')
+  const logs = Object.fromEntries(ALL_EVENTS.map(e => [e, e === 'messageDelete' ? 'other' : '']))
+  const allPerms = new Proxy({}, { get: () => true })
+  global.bot = {
+    user: { id: 'bot', dynamicAvatarURL: () => 'a', username: 'b', discriminator: '0' },
+    guildSettingsCache: { g1: { getEventLogRaw: () => logs } },
+    getChannel: () => ({ permissionsOf: () => ({ json: allPerms }) })
+  }
+  const shown = []
+  const interaction = {
+    locale: 'ja',
+    guildID: 'g1',
+    channel: { id: 'here' },
+    member: { user: { id: 'u1', dynamicAvatarURL: () => 'a', username: 'u', discriminator: '0' } },
+    data: { options: [{ name: 'via_presets' }] },
+    createMessage: async m => shown.push(m),
+    editOriginalMessage: async m => shown.push(m)
+  }
+  const setup = require('../../src/bot/slashcommands/setup')
+  await Promise.race([setup.func(interaction), new Promise(resolve => setTimeout(resolve, 300))])
+  const [menu, buttons] = shown[0].components
+  assert.ok(menu.components[0].options.find(o => o.value === 'all').default, 'all, to begin with')
+  assert.equal(buttons.components[0].label, 'このまま保存')
+  assert.match(shown[0].embeds[0].description, /最初から「すべて」を選んであります/)
+  assert.deepEqual(saved[0], ['here', ALL_EVENTS], 'every event saved for this channel')
+})
