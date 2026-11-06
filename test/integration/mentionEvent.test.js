@@ -886,6 +886,31 @@ describe('mention → event / forum post (integration)', () => {
     assert.equal(reply.body.generationConfig.thinkingConfig.thinkingLevel, 'high')
   })
 
+  test('chat: the server\'s rules channel and what its moderators asked (/assistantrules) go with the request', async () => {
+    const { installReplyLengthStore } = require('../helpers/fakes')
+    const serverRules = require('../../src/bot/modules/serverRules')
+    const { channel } = createChannel()
+    installReplyLengthStore({}, {}, {}, {}, {}, { [channel.guild.id]: 'ネタバレ禁止' })
+    guild.rulesChannelID = '202'
+    serverRules.reset()
+    try {
+      const requests = installGemini([[call('submit_chat_reply', { text: 'やあ' })]])
+      await mentionEvent.handle(mention(channel, '<@BOT> やあ'))
+      const prompt = requests[0].body.contents[0].parts[0].text
+      assert.match(prompt, /## このサーバーのルールとモデレーターからのお願い（返事・下書きはこれに従う）\n### モデレーターから AI へのお願い\n<untrusted source="rules">\nネタバレ禁止\n<\/untrusted>/)
+      assert.match(prompt, /### サーバーのルール（<#202> より）\n<untrusted source="rules">\nスタッフ会議 11\/5 20時/)
+      assert.ok(prompt.indexOf('## このサーバーのルール') < prompt.indexOf('## 依頼メッセージ'))
+    } finally {
+      delete guild.rulesChannelID
+      serverRules.reset()
+      installReplyLengthStore()
+    }
+    // Neither: no section.
+    const requests = installGemini([[call('submit_chat_reply', { text: 'やあ' })]])
+    await mentionEvent.handle(mention(channel, '<@BOT> やあ'))
+    assert.doesNotMatch(requests[0].body.contents[0].parts[0].text, /このサーバーのルールとモデレーター/)
+  })
+
   test('chat: a server that turned the streamer off with /persona gets replies as the bot', async () => {
     const { installReplyLengthStore } = require('../helpers/fakes')
     const { PERSONAS } = require('../../src/bot/modules/eventDrafter')

@@ -152,6 +152,22 @@ exports.commands = [
     }]
   },
   {
+    name: 'assistantrules',
+    ...describe('What the assistant keeps to here, besides the rules channel (shows it if left out)', 'AI に守ってほしいこと（ルールチャンネル以外に。省略すると今の内容を表示）'),
+    options: [{
+      type: STRING,
+      name: 'text',
+      ...describe('e.g. No spoilers for new games. No politics. (up to 2,000 characters)', '例: 新作ゲームのネタバレはしない。政治の話はしない。（2000文字まで）'),
+      max_length: 2000,
+      required: false
+    }, {
+      type: BOOLEAN,
+      name: 'clear',
+      ...describe('True to remove it', 'True で消す'),
+      required: false
+    }]
+  },
+  {
     name: 'youtube',
     ...describe('The YouTube channels the assistant knows about (shared by every server)', 'AI が知っている YouTube チャンネル（全サーバー共通）'),
     options: [

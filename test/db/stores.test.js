@@ -104,6 +104,11 @@ describe('stores', { skip: !database.available && 'needs PGHOST' }, () => {
       await assert.rejects(settings.setReplyModel('g2', 'thinking', 'extreme'), /check constraint/)
       await settings.setReplyModel('g2', 'model', null)
       assert.equal((await settings.getReplySettings('g2')).replyModel, null)
+      await settings.setAssistantRules('g2', 'ネタバレ禁止')
+      assert.equal((await settings.getReplySettings('g2')).assistantRules, 'ネタバレ禁止')
+      await assert.rejects(settings.setAssistantRules('g2', 'あ'.repeat(2001)), /check constraint/)
+      await settings.setAssistantRules('g2', null)
+      assert.equal((await settings.getReplySettings('g2')).assistantRules, null)
     })
 
     test('a server made on first use, and its settings go with it', async () => {

@@ -2,14 +2,16 @@
 // /replylength), whether it speaks as the streamer (026_streamer_persona.sql, /persona) and whether
 // its replies end with the debug line (029_debug_footer.sql, %debugfooter), and its own mention
 // token limits (031_guild_token_limits.sql, %tokenlimit), and its own model and thinking level
-// (036_guild_reply_model.sql, %replymodel).
+// (036_guild_reply_model.sql, %replymodel), and what its moderators ask the assistant to keep to
+// (037_guild_assistant_rules.sql, /assistantrules).
 const pool = require('../../clients/postgres')
 
 // { replyLength: 'long' | 'normal' | 'short' | null, streamerPersona: boolean, debugFooter: boolean,
 // tokenLimits: { '5h', week, flexAt } (each a number, or null for the default) and unlimited
-// (032_guild_unlimited.sql), replyModel and replyThinking (null for the default) } for the server.
+// (032_guild_unlimited.sql), replyModel and replyThinking (null for the default), assistantRules
+// (text or null) } for the server.
 async function getReplySettings (guildID) {
-  const rows = await pool.query('SELECT reply_length, streamer_persona, debug_footer, token_limit_5h, token_limit_week, token_flex_at, token_unlimited, reply_model, reply_thinking FROM guilds WHERE id = $1', [guildID])
+  const rows = await pool.query('SELECT reply_length, streamer_persona, debug_footer, token_limit_5h, token_limit_week, token_flex_at, token_unlimited, reply_model, reply_thinking, assistant_rules FROM guilds WHERE id = $1', [guildID])
   const row = rows.rows[0]
   return {
     replyLength: row?.reply_length || null,
@@ -17,7 +19,8 @@ async function getReplySettings (guildID) {
     debugFooter: row?.debug_footer === true,
     tokenLimits: { '5h': row?.token_limit_5h ?? null, week: row?.token_limit_week ?? null, flexAt: row?.token_flex_at ?? null, unlimited: row?.token_unlimited === true },
     replyModel: row?.reply_model || null,
-    replyThinking: row?.reply_thinking || null
+    replyThinking: row?.reply_thinking || null,
+    assistantRules: row?.assistant_rules || null
   }
 }
 
@@ -65,4 +68,10 @@ async function setReplyModel (guildID, which, value) {
   await pool.query(`UPDATE guilds SET ${column} = $2 WHERE id = $1`, [guildID, value])
 }
 
-module.exports = { setReplyModel, setTokenLimit, getReplySettings, getReplyLength, setReplyLength, setStreamerPersona, setDebugFooter }
+// Sets what the server's moderators ask the assistant to keep to; null for nothing.
+async function setAssistantRules (guildID, text) {
+  await ensureGuild(guildID)
+  await pool.query('UPDATE guilds SET assistant_rules = $2 WHERE id = $1', [guildID, text])
+}
+
+module.exports = { setAssistantRules, setReplyModel, setTokenLimit, getReplySettings, getReplyLength, setReplyLength, setStreamerPersona, setDebugFooter }
