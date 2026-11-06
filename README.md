@@ -558,6 +558,14 @@ and policies in front of its custom domain (only the bot's service token, and th
 get through). The service token and the custom domain are made in the dashboard; see
 [`infra/cloudflare/README.md`](infra/cloudflare/README.md).
 
+## Running on GKE
+
+To run it on the wax100 GKE platform ([waxsd100/k8s-platform](https://github.com/waxsd100/k8s-platform):
+Canine for dev, promoted to production with GitOps) instead of Railway, including moving the
+Railway database over, follow [`docs/deploy/gke.md`](docs/deploy/gke.md). There the secrets come from
+Secret Manager through External Secrets, so `GCP_SECRETS` and the service account key below are not
+used. The bot must run as **one** replica: two connected with the same token log and reply twice.
+
 ## Secrets in Google Cloud Secret Manager
 
 Secrets can live in Secret Manager instead of on the hosting platform, which then holds only a key
