@@ -1,6 +1,6 @@
 const Eris = require('eris')
 const { v4: uuidv4 } = require('uuid')
-const { setEventsLogId } = require('../../db/interfaces/postgres/update')
+const update = require('../../db/interfaces/postgres/update')
 const { EMBED_COLORS, PRESET_EVENT_MAP, ALL_EVENTS } = require('../utils/constants')
 const { getEmbedFooter, getAuthorField } = require('../utils/embeds')
 const { langOf, pick } = require('../utils/i18n')
@@ -105,12 +105,53 @@ async function returnMissingPerms (channelID, userID, events) {
   return requiredPerms.filter(rp => !logChannelPerms[rp])
 }
 
+// Whether nothing is logged to this channel yet: then every event is chosen to begin with.
+function nothingLogsHere (guildEvents, channelID) {
+  return !Object.values(guildEvents).includes(channelID)
+}
+
+// A button that saves the menu as it is shown (the menu itself only answers when its choice changes).
+function saveRow (interaction, uuid) {
+  return {
+    type: Eris.Constants.ComponentTypes.ACTION_ROW,
+    components: [{
+      type: Eris.Constants.ComponentTypes.BUTTON,
+      style: Eris.Constants.ButtonStyles.PRIMARY,
+      custom_id: `${uuid}:save`,
+      label: pick(interaction, { ja: 'このまま保存', en: 'Save as selected' })
+    }]
+  }
+}
+
+function saveHint (interaction) {
+  return pick(interaction, {
+    ja: '何も記録していないチャンネルでは、最初から「すべて」を選んであります。選んだまま保存するときは「このまま保存」を押してください。',
+    en: 'In a channel that logs nothing yet, "All" is chosen to begin with. Press "Save as selected" to keep what is chosen.'
+  })
+}
+
+// Waits for a choice in the menu or the save button; resolves like the menu's interaction (the
+// button gives what the menu shows as chosen).
+async function awaitChoice (uuid, userID, components) {
+  const { awaitCustomID, cancelCustomID } = require('../events/interactionCreate')
+  const chosen = components[0].components[0].options.filter(o => o.default).map(o => o.value)
+  try {
+    return await Promise.any([
+      awaitCustomID(uuid, userID),
+      awaitCustomID(`${uuid}:save`, userID).then(() => ({ data: { values: chosen } }))
+    ])
+  } finally {
+    cancelCustomID(uuid)
+    cancelCustomID(`${uuid}:save`)
+  }
+}
+
 async function handlePresetSetup (interaction, recursionUUID) {
-  const { awaitCustomID } = require('../events/interactionCreate')
   const guildEvents = global.bot.guildSettingsCache[interaction.guildID].getEventLogRaw()
   const followupUUID = recursionUUID || uuidv4()
+  let components
   try {
-    const components = [{
+    components = [{
       type: Eris.Constants.ComponentTypes.ACTION_ROW,
       components: [{
         type: Eris.Constants.ComponentTypes.SELECT_MENU,
@@ -121,7 +162,7 @@ async function handlePresetSetup (interaction, recursionUUID) {
           label: say(interaction, 'すべて'),
           description: say(interaction, 'すべてのイベントを記録します'),
           value: 'all',
-          default: !Object.keys(guildEvents).find(geKey => guildEvents[geKey] !== interaction.channel.id)
+          default: !Object.keys(guildEvents).find(geKey => guildEvents[geKey] !== interaction.channel.id) || nothingLogsHere(guildEvents, interaction.channel.id)
         }, {
           label: say(interaction, 'チャンネル関連'),
           description: say(interaction, 'チャンネルの作成・削除・更新（名前、権限の上書き）'),
@@ -164,10 +205,10 @@ async function handlePresetSetup (interaction, recursionUUID) {
           default: interaction.channel.id === guildEvents.voiceChannelLeave && interaction.channel.id === guildEvents.voiceChannelSwitch && interaction.channel.id === guildEvents.voiceStateUpdate && interaction.channel.id === guildEvents.voiceChannelJoin
         }]
       }]
-    }]
+    }, saveRow(interaction, followupUUID)]
     const setupEmbed = {
       title: say(interaction, 'ログ設定ユーティリティ'),
-      description: say(interaction, '下の選択メニューから、**このチャンネル**へ出力するイベントのプリセットを選んでください。詳しい使い方は `/help guide: Usage` と `/help` をご覧ください。'),
+      description: `${say(interaction, '下の選択メニューから、**このチャンネル**へ出力するイベントのプリセットを選んでください。詳しい使い方は `/help guide: Usage` と `/help` をご覧ください。')}\n\n${saveHint(interaction)}`,
       color: EMBED_COLORS.PURPLED_BLUE,
       thumbnail: {
         url: interaction.member.user.dynamicAvatarURL(null, 64)
@@ -186,7 +227,7 @@ async function handlePresetSetup (interaction, recursionUUID) {
   let buttonResponse
 
   try {
-    buttonResponse = await awaitCustomID(followupUUID, interaction.member.user.id)
+    buttonResponse = await awaitChoice(followupUUID, interaction.member.user.id, components)
   } catch (_) {
     return
   }
@@ -229,8 +270,8 @@ async function handlePresetSetup (interaction, recursionUUID) {
   }
 
   try {
-    await setEventsLogId(interaction.guildID, interaction.channel.id, eventsToLog)
-    await setEventsLogId(interaction.guildID, '', eventsToRemove)
+    await update.setEventsLogId(interaction.guildID, interaction.channel.id, eventsToLog)
+    await update.setEventsLogId(interaction.guildID, '', eventsToRemove)
   } catch (e) {
     global.logger.error('Setup failure to update guild document settings for guild', interaction.guildID, e)
     return
@@ -239,11 +280,11 @@ async function handlePresetSetup (interaction, recursionUUID) {
 }
 
 async function handleIndividualSetup (interaction, recursionUUID) {
-  const { awaitCustomID } = require('../events/interactionCreate')
   const guildEvents = global.bot.guildSettingsCache[interaction.guildID].getEventLogRaw()
   const followupUUID = recursionUUID || uuidv4()
+  let components
   try {
-    const components = [{
+    components = [{
       type: Eris.Constants.ComponentTypes.ACTION_ROW,
       components: [{
         type: Eris.Constants.ComponentTypes.SELECT_MENU,
@@ -254,7 +295,7 @@ async function handleIndividualSetup (interaction, recursionUUID) {
           label: say(interaction, 'すべて'),
           description: say(interaction, 'すべてのイベントを記録します'),
           value: 'all',
-          default: !Object.keys(guildEvents).find(geKey => guildEvents[geKey] !== interaction.channel.id)
+          default: !Object.keys(guildEvents).find(geKey => guildEvents[geKey] !== interaction.channel.id) || nothingLogsHere(guildEvents, interaction.channel.id)
         },
         {
           label: say(interaction, 'チャンネル作成'),
@@ -459,10 +500,10 @@ async function handleIndividualSetup (interaction, recursionUUID) {
         }
         ]
       }]
-    }]
+    }, saveRow(interaction, followupUUID)]
     const setupEmbed = {
       title: say(interaction, 'ログ設定ユーティリティ'),
-      description: say(interaction, '下の選択メニューから、**このチャンネル**へ出力するイベントを個別に選んでください。詳しい使い方は `/help guide: Usage` と `/help` をご覧ください。'),
+      description: `${say(interaction, '下の選択メニューから、**このチャンネル**へ出力するイベントを個別に選んでください。詳しい使い方は `/help guide: Usage` と `/help` をご覧ください。')}\n\n${saveHint(interaction)}`,
       color: EMBED_COLORS.PURPLED_BLUE,
       thumbnail: {
         url: interaction.member.user.dynamicAvatarURL(null, 64)
@@ -481,7 +522,7 @@ async function handleIndividualSetup (interaction, recursionUUID) {
   let buttonResponse
 
   try {
-    buttonResponse = await awaitCustomID(followupUUID, interaction.member.user.id)
+    buttonResponse = await awaitChoice(followupUUID, interaction.member.user.id, components)
   } catch (_) {
     return
   }
@@ -521,8 +562,8 @@ async function handleIndividualSetup (interaction, recursionUUID) {
   }
 
   try {
-    await setEventsLogId(interaction.guildID, interaction.channel.id, eventsToLog)
-    await setEventsLogId(interaction.guildID, '', eventsToRemove)
+    await update.setEventsLogId(interaction.guildID, interaction.channel.id, eventsToLog)
+    await update.setEventsLogId(interaction.guildID, '', eventsToRemove)
   } catch (e) {
     global.logger.error('Setup failure to update guild document settings for guild', interaction.guildID, e)
     return
