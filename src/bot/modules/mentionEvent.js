@@ -453,7 +453,7 @@ async function handle (message) {
       // What was just being talked about in the channel, as far as it bears on the request
       // (recentTopics.js); not when something the bot made is being changed.
       // The server's rules and what its moderators asked of the assistant (serverRules.js).
-      const [server, recent, rulesChannel] = await Promise.all([
+      const [server, recent, rulesChannels] = await Promise.all([
         describeServer(guild, member, message.channel.id, { query: request, context: referenced?.othersText }).catch(e => {
           global.logger.warn(`Could not describe server ${guild.id}: ${e.message}`)
           return null
@@ -477,7 +477,7 @@ async function handle (message) {
         recent,
         replyLength,
         streamerPersona,
-        rules: { moderators: assistantRules || null, channel: rulesChannel },
+        rules: { moderators: assistantRules || null, channels: rulesChannels || [] },
         model: replyModel || null,
         thinking: replyThinking || null,
         channelName: message.channel.name,

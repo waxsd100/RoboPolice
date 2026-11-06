@@ -230,6 +230,13 @@ function installTwitchStore ({ channels = [], archives = {} } = {}) {
 }
 installTwitchStore()
 
+// Rules channels are picked by their names in tests (serverRules.js), not by Gemini, so no test's
+// scripted Gemini turns are taken by it.
+{
+  const serverRules = require('../../src/bot/modules/serverRules')
+  serverRules.pick = async (guild, channels) => serverRules.byName(channels)
+}
+
 // The bot's load over the past hour (geminiLoad.js), in memory: counts { key: number }. Installed
 // when this file loads, so no test reaches Redis.
 function installLoadStore (counts = new Map()) {

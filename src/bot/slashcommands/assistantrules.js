@@ -2,7 +2,7 @@
 // avoid, words not to use, spoilers…), on top of the server's rules channel, which it reads by
 // itself (serverRules.js). Without options, shows them; `text` sets them; `clear` removes them.
 const { setAssistantRules, getReplySettings } = require('../../db/interfaces/postgres/replySettings')
-const { rulesChannel } = require('../modules/serverRules')
+const { rulesChannels } = require('../modules/serverRules')
 const { langOf } = require('../utils/i18n')
 
 const MAX_CHARS = 2000
@@ -10,11 +10,11 @@ const MAX_CHARS = 2000
 const TEXT = {
   ja: {
     none: 'なし',
-    show: (rules, channel) => [
+    show: (rules, channels) => [
       '**AI へのお願い（このサーバーのモデレーターから）**',
       rules ? `>>> ${rules}` : 'なし（`/assistantrules text:` で設定できます）',
       '',
-      channel ? `サーバーのルールは <#${channel}> から読んで、それにも従います。` : 'ルールのチャンネルが見つからないため、サーバーのルールは読んでいません（Discord のサーバー設定でルールチャンネルを決めるか、「ルール」を含む名前のチャンネルを作ると読みます）。'
+      channels.length ? `サーバーのルールは ${channels.map(id => `<#${id}>`).join('・')} から読んで、それにも従います（チャンネル名と説明から AI が選びました）。` : 'ルールや必読のチャンネルが見つからないため、サーバーのルールは読んでいません（Discord のサーバー設定でルールチャンネルを決めると読みます）。'
     ].join('\n'),
     set: '保存しました。次のメンションから、AI はこれに従って返事をします。',
     cleared: 'AI へのお願いを消しました。',
@@ -23,11 +23,11 @@ const TEXT = {
   },
   en: {
     none: 'none',
-    show: (rules, channel) => [
+    show: (rules, channels) => [
       '**What the moderators ask of the assistant**',
       rules ? `>>> ${rules}` : 'Nothing (set it with `/assistantrules text:`).',
       '',
-      channel ? `It also reads the server's rules in <#${channel}> and keeps to them.` : 'No rules channel was found, so the server\'s rules are not read (set a rules channel in the server settings, or name a channel with "rules").'
+      channels.length ? `It also reads the server's rules in ${channels.map(id => `<#${id}>`).join(', ')} and keeps to them (picked by AI from the channels' names and topics).` : 'No rules or must-read channel was found, so the server\'s rules are not read (set a rules channel in the server settings).'
     ].join('\n'),
     set: 'Saved. The assistant keeps to it from the next mention.',
     cleared: 'Removed what was asked of the assistant.',
@@ -51,8 +51,8 @@ module.exports = {
       if (!rules) {
         const { assistantRules } = await getReplySettings(interaction.guildID)
         const guild = global.bot.guilds.get(interaction.guildID)
-        const channel = guild && rulesChannel(guild)
-        return await interaction.createMessage({ content: text.show(assistantRules, channel?.id), flags: 64 })
+        const channels = guild ? (await rulesChannels(guild).catch(() => [])).map(c => c.id) : []
+        return await interaction.createMessage({ content: text.show(assistantRules, channels), flags: 64 })
       }
       if ([...rules].length > MAX_CHARS) return await interaction.createMessage({ content: text.tooLong, flags: 64 })
       await setAssistantRules(interaction.guildID, rules)
