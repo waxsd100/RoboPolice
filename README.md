@@ -93,6 +93,8 @@ server's history takes disk space: with no retention set and no limit given, all
 
 ### スラッシュコマンド
 
+BOT がサーバーに入った瞬間から、すべてのイベントを記録します。スタッフだけが見られるチャンネル `#robopolice-logs`（`@everyone` から非表示、管理者には見える）を作り、全イベントの出力先にします（BOT にチャンネルの管理と Webhook の管理が必要。ないときは `/setup` で手動設定）。すでにログを設定しているサーバーはそのまま。`AUTO_LOG_CHANNEL=false` で止められます。
+
 | コマンド | 内容 | 必要な権限 |
 |---|---|---|
 | `/youtube sync` | BOT が見ているチャンネルを読み直し、新しい動画と配信の状態を取り込む（普段は自動。オーナーのサーバーからのみ） | サーバーの管理 |
