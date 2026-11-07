@@ -489,21 +489,21 @@ async function handle (message) {
       // (recentTopics.js); not when something the bot made is being changed.
       // The server's rules and what its moderators asked of the assistant (serverRules.js).
       const directR18 = isUncensoredUsable() && isR18Text(request, referenced?.text)
-      const [server, recent, rulesChannels] = directR18
-        ? [null, [], null]
-        : await Promise.all([
-          describeServer(guild, member, message.channel.id, { query: request, context: referenced?.othersText }).catch(e => {
+      const [server, recent, rulesChannels] = await Promise.all([
+        directR18
+          ? null
+          : describeServer(guild, member, message.channel.id, { query: request, context: referenced?.othersText }).catch(e => {
             global.logger.warn(`Could not describe server ${guild.id}: ${e.message}`)
             return null
           }),
-          edit
-            ? []
-            : relatedRecent(message, request).catch(e => {
-              global.logger.warn(`Could not read the recent talk in ${message.channel.id}: ${e.message}`)
-              return []
-            }),
-          serverRules.readRules(guild).catch(() => null)
-        ])
+        edit
+          ? []
+          : relatedRecent(message, request).catch(e => {
+            global.logger.warn(`Could not read the recent talk in ${message.channel.id}: ${e.message}`)
+            return []
+          }),
+        directR18 ? null : serverRules.readRules(guild).catch(() => null)
+      ])
       // Combined emojis and other servers' emojis in what was said are shown to the model as
       // images, for this request only.
       const pictures = directR18 ? [] : await picturesFor([request, referenced?.text], guild).catch(() => [])
