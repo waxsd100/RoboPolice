@@ -839,6 +839,11 @@ describe('explicit cache and thinking', () => {
       assert.equal(r.body.tools, undefined)
       assert.equal(r.body.toolConfig, undefined)
     }
+
+    // Another worker (or after a restart: memory empty, Redis kept) reuses the same Gemini cache.
+    caches.clear({ memoryOnly: true })
+    await draft({ request: '別ワーカー', channelName: 'general', guild, tools: quietTools, now: NOW })
+    assert.equal(requests.filter(r => r.url.endsWith('/cachedContents')).length, 1, 'shared via Redis without creating a duplicate cache')
   })
 
   test('without a cache (too small, turned off) the request goes in full, and making one is not tried again soon', async () => {

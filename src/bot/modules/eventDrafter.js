@@ -6,6 +6,7 @@ const { Agent } = require('undici')
 const { gatewayURL, gatewayAuthHeaders, isGatewayConfigured, hasDefaultEndpoint, customBase } = require('../utils/aiGateway')
 const { textChunks } = require('../utils/jsonItems')
 const geminiLoad = require('../utils/geminiLoad')
+const aiCache = require('../utils/aiCache')
 const { currentUsage, recordTokens, addTokens, addModel, addFallback } = require('../utils/geminiUsage')
 
 // A fixed model, not an alias such as gemini-flash-latest: an explicit cache (below) is made for one
@@ -572,8 +573,22 @@ const CACHE_RETRY_AFTER_ERROR_MS = 5 * 60 * 1000
 const CACHE_LABEL = 'robopolice-mention'
 const MAX_CACHE_LIST_PAGES = 10
 const caches = new Map()
+const rawCachesClear = caches.clear.bind(caches)
+caches.clear = ({ memoryOnly = false } = {}) => {
+  if (!memoryOnly) {
+    for (const key of caches.keys()) aiCache.del(`gemini-cache:${key}`)
+  }
+  rawCachesClear()
+}
 // Versions whose older caches this worker has already deleted.
 const purgedFor = new Set()
+const rawPurgedClear = purgedFor.clear.bind(purgedFor)
+purgedFor.clear = ({ memoryOnly = false } = {}) => {
+  if (!memoryOnly) {
+    for (const version of purgedFor) aiCache.del(`gemini-cache-purged:${version}`)
+  }
+  rawPurgedClear()
+}
 
 function explicitCacheEnabled () {
   return process.env.GEMINI_EXPLICIT_CACHE !== 'false'
@@ -611,24 +626,34 @@ async function purgeStaleCaches (version) {
 }
 
 // The name of a cache holding `prefix` (systemInstruction, tools, toolConfig) for `model`, made if
-// needed; null when there is none to use.
+// needed and shared across workers in Redis; null when there is none to use.
 async function cachedPrefix (model, prefix, now = Date.now()) {
   if (!explicitCacheEnabled()) return null
   const key = hashOf(`${model}\n${JSON.stringify(prefix)}`)
+  const redisKey = `gemini-cache:${key}`
   const version = promptVersion(prefix)
   const known = caches.get(key)
   if (known?.failedAt && now - known.failedAt < known.retryAfter) return null
   if (known?.name && known.expiresAt - now > CACHE_RENEW_BEFORE_MS) return known.name
+  const shared = await aiCache.getJson(redisKey)
+  if (shared?.name && shared.expiresAt - now > CACHE_RENEW_BEFORE_MS) {
+    caches.set(key, shared)
+    return shared.name
+  }
   try {
     const made = await geminiPost('cachedContents', { model: `models/${model}`, displayName: `${CACHE_LABEL}:${version}`, ...prefix, ttl: `${CACHE_TTL_SECONDS}s` }, { purpose: 'cache', model, timeoutMs: 30 * 1000 })
-    caches.set(key, { name: made.name, expiresAt: made.expireTime ? Date.parse(made.expireTime) : now + CACHE_TTL_SECONDS * 1000 })
+    const entry = { name: made.name, expiresAt: made.expireTime ? Date.parse(made.expireTime) : now + CACHE_TTL_SECONDS * 1000 }
+    caches.set(key, entry)
+    await aiCache.setJson(redisKey, entry, Math.max(60, Math.floor((entry.expiresAt - now) / 1000)))
     if (!purgedFor.has(version)) {
       purgedFor.add(version)
-      const purged = await purgeStaleCaches(version).catch(e => {
-        global.logger?.warn(`[GEMINI]: Could not delete the caches of earlier instructions: ${e.message.slice(0, 200)}`)
-        return 0
-      })
-      if (purged) global.logger?.info(`[GEMINI]: Deleted ${purged} cache(s) of earlier instructions`)
+      if (await aiCache.setnx(`gemini-cache-purged:${version}`, '1', 24 * 60 * 60)) {
+        const purged = await purgeStaleCaches(version).catch(e => {
+          global.logger?.warn(`[GEMINI]: Could not delete the caches of earlier instructions: ${e.message.slice(0, 200)}`)
+          return 0
+        })
+        if (purged) global.logger?.info(`[GEMINI]: Deleted ${purged} cache(s) of earlier instructions`)
+      }
     }
     return made.name
   } catch (e) {
@@ -641,7 +666,12 @@ async function cachedPrefix (model, prefix, now = Date.now()) {
 
 // Forgets a cache Gemini no longer has (expired early, or deleted).
 function forgetCache (name) {
-  for (const [key, c] of caches) if (c.name === name) caches.delete(key)
+  for (const [key, c] of caches) {
+    if (c.name === name) {
+      caches.delete(key)
+      aiCache.del(`gemini-cache:${key}`)
+    }
+  }
 }
 
 // Requests that need much reasoning or a long text are answered by a stronger model

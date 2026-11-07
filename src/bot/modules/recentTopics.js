@@ -9,8 +9,10 @@
 // for the messages; embeddings cost little). The bot's own and other bots' messages, commands and
 // noise (messageNoise.js) are left out, so the bot does not carry on from what it said itself.
 // MENTION_RECENT_TOPICS=false turns it off.
-const { embed, embedQuery, model, similarity } = require('../utils/embeddings')
+const crypto = require('crypto')
+const { embed, embedQuery, model, similarity, toBase64, fromBase64 } = require('../utils/embeddings')
 const { embeddableText } = require('../utils/messageNoise')
+const aiCache = require('../utils/aiCache')
 
 const DEFAULT_MESSAGES = 50
 const DEFAULT_HOURS = 12
@@ -18,9 +20,12 @@ const MAX_TOPICS = 8
 const MIN_SCORE = 0.55
 const MAX_CHARS = 200
 const MAX_CACHE = 2000
+const REDIS_TTL_SECONDS = 24 * 60 * 60
 
-// Recent messages in a busy channel are read on every mention; keeping their vectors in memory means
-// each message is embedded at most once instead of again on every turn of a conversation.
+const redisKeyOf = key => `recent-vec:${crypto.createHash('sha256').update(key).digest('hex').slice(0, 24)}`
+
+// Recent messages in a busy channel are read on every mention; keeping their vectors in memory and
+// Redis means each message is embedded at most once across workers and restarts.
 const vectorCache = new Map() // `${model}\n${text}` -> Int8Array
 
 function cachedVector (key) {
@@ -37,7 +42,10 @@ function rememberVector (key, vector) {
   vectorCache.set(key, vector)
 }
 
-function clearCache () {
+function clearCache ({ memoryOnly = false } = {}) {
+  if (!memoryOnly) {
+    for (const key of vectorCache.keys()) aiCache.del(redisKeyOf(key))
+  }
   vectorCache.clear()
 }
 
@@ -67,15 +75,26 @@ async function relatedRecent (message, request, {
     .filter(c => c.text)
   if (!candidates.length) return []
   const currentModel = model()
-  const missingKeys = []
-  const missingTexts = []
+  const l1Missing = []
   const seenMissing = new Set()
   for (const c of candidates) {
     const key = `${currentModel}\n${c.text}`
     if (!cachedVector(key) && !seenMissing.has(key)) {
       seenMissing.add(key)
-      missingKeys.push(key)
-      missingTexts.push(c.text)
+      l1Missing.push({ key, text: c.text })
+    }
+  }
+  const missingKeys = []
+  const missingTexts = []
+  if (l1Missing.length) {
+    const stored = await aiCache.mget(l1Missing.map(item => redisKeyOf(item.key)))
+    for (let i = 0; i < l1Missing.length; i++) {
+      if (stored[i]) {
+        rememberVector(l1Missing[i].key, fromBase64(stored[i]))
+      } else {
+        missingKeys.push(l1Missing[i].key)
+        missingTexts.push(l1Missing[i].text)
+      }
     }
   }
   const [query, fresh] = await Promise.all([
@@ -83,6 +102,9 @@ async function relatedRecent (message, request, {
     missingTexts.length ? embed(missingTexts) : Promise.resolve([])
   ])
   for (let i = 0; i < missingKeys.length; i++) rememberVector(missingKeys[i], fresh[i])
+  if (missingKeys.length) {
+    await aiCache.mset(missingKeys.map((k, i) => [redisKeyOf(k), toBase64(fresh[i])]), REDIS_TTL_SECONDS)
+  }
   const vectors = candidates.map(c => cachedVector(`${currentModel}\n${c.text}`))
   const guild = message.channel.guild
   return candidates

@@ -362,6 +362,24 @@ function installLoadStore (counts = new Map()) {
 }
 installLoadStore()
 
+// Shared Redis cache for AI artifacts (aiCache.js), in memory: entries { key: string }. Installed
+// when this file loads, so no test reaches Redis.
+function installAiCacheStore (entries = new Map()) {
+  const aiCache = require('../../src/bot/utils/aiCache')
+  aiCache.store.get = async key => entries.has(key) ? entries.get(key) : null
+  aiCache.store.mget = async keys => keys.map(k => entries.has(k) ? entries.get(k) : null)
+  aiCache.store.set = async (key, value) => { entries.set(key, String(value)) }
+  aiCache.store.mset = async pairs => { for (const [k, v] of pairs) entries.set(k, String(v)) }
+  aiCache.store.setnx = async (key, value) => {
+    if (entries.has(key)) return false
+    entries.set(key, String(value))
+    return true
+  }
+  aiCache.store.del = async key => { entries.delete(key) }
+  return entries
+}
+installAiCacheStore()
+
 // Replaces the Redis counter behind the daily mention limit with an in-memory one.
 // counts: { key: number } (the server caps and the token windows); windows also keep when each
 // token window ends ({ key: Date }), by the `now` given (the clock otherwise).
@@ -510,6 +528,7 @@ function configureGateway () {
   // Tests script each Gemini call; the explicit cache is tested on its own (eventDrafter.test.js).
   process.env.GEMINI_EXPLICIT_CACHE = 'false'
   delete process.env.VIDEO_SUMMARY_FPS
+  installAiCacheStore()
 }
 
 // A fake Gemini. `turns` is a list of model turns; each is an array of parts, or a function that
@@ -559,7 +578,7 @@ async function startServer (handler) {
 }
 
 module.exports = {
-  perms, createGuild, createMember, installBot, installYouTubeStore, installQuotaStore, installEmbeddingStore, configureGateway, installGemini, call, submit, lastToolResponses, startServer, installLoreStore, restoreLoreStore, stripUntrusted, unwrapTools, installLoadStore, installTwitchStore, installSteamStore
+  perms, createGuild, createMember, installBot, installYouTubeStore, installQuotaStore, installEmbeddingStore, configureGateway, installGemini, call, submit, lastToolResponses, startServer, installLoreStore, restoreLoreStore, stripUntrusted, unwrapTools, installLoadStore, installAiCacheStore, installTwitchStore, installSteamStore
 }
 
 // A fake embedding model: each text points along the axis of the first topic it mentions, so
