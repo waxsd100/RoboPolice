@@ -915,4 +915,95 @@ describe('explicit cache and thinking', () => {
     await callGemini('gemini-3.1-flash-image', { contents: [] })
     assert.equal(requests[2].body.generationConfig, undefined)
   })
+
+  test('when Gemini refuses (blocked) and UNCENSORED_API_URL or UNCENSORED_GATEWAY_PROVIDER is set, hands over to DeepSeek-V4-Pro-Qwen3.5-9B-UNCENSORED-heretic', async (t) => {
+    t.mock.method(global.logger, 'info', () => {})
+    const { uncensoredEndpoint, DEFAULT_UNCENSORED_MODEL } = require('../../src/bot/modules/eventDrafter')
+    process.env.UNCENSORED_API_URL = 'https://api.featherless.ai/v1'
+    process.env.UNCENSORED_API_KEY = 'fl-secret-key'
+    t.after(() => {
+      delete process.env.UNCENSORED_API_URL
+      delete process.env.UNCENSORED_API_KEY
+      delete process.env.UNCENSORED_GATEWAY_PROVIDER
+    })
+    assert.deepEqual(uncensoredEndpoint(), { url: 'https://api.featherless.ai/v1/chat/completions', gateway: false })
+
+    const calls = []
+    global.fetch = async (url, init) => {
+      const body = JSON.parse(init.body)
+      calls.push({ url, headers: init.headers, body })
+      if (/google-ai-studio/.test(url)) {
+        return { ok: true, json: async () => ({ promptFeedback: { blockReason: 'PROHIBITED_CONTENT' } }) }
+      }
+      if (calls.filter(c => /featherless/.test(c.url)).length === 1) {
+        return {
+          ok: true,
+          json: async () => ({
+            choices: [{
+              message: {
+                role: 'assistant',
+                tool_calls: [{ id: 'c1', type: 'function', function: { name: 'lookup', arguments: '{"q":"wiki"}' } }]
+              }
+            }],
+            usage: { prompt_tokens: 200, completion_tokens: 20 }
+          })
+        }
+      }
+      return {
+        ok: true,
+        json: async () => ({
+          choices: [{
+            message: {
+              role: 'assistant',
+              content: '<think>考えています…</think>\n検閲なしの返事だよ！'
+            }
+          }],
+          usage: { prompt_tokens: 250, completion_tokens: 30, completion_tokens_details: { reasoning_tokens: 10 } }
+        })
+      }
+    }
+
+    const result = await draft({ request: 'きわどい質問', channelName: 'general', guild, tools: quietTools, now: NOW })
+    assert.equal(result.kind, 'chat')
+    assert.equal(result.text, '検閲なしの返事だよ！')
+    const uncensoredCalls = calls.filter(c => /featherless/.test(c.url))
+    assert.equal(uncensoredCalls.length, 2)
+    assert.equal(uncensoredCalls[0].url, 'https://api.featherless.ai/v1/chat/completions')
+    assert.equal(uncensoredCalls[0].headers.Authorization, 'Bearer fl-secret-key')
+    assert.equal(uncensoredCalls[0].body.model, DEFAULT_UNCENSORED_MODEL)
+    assert.ok(!uncensoredCalls[0].body.tools.some(tl => tl.function.name === 'think_deeper'))
+    assert.equal(uncensoredCalls[0].body.tools[0].function.parameters.type, 'object')
+    assert.equal(uncensoredCalls[1].body.messages.at(-1).role, 'tool')
+    assert.equal(uncensoredCalls[1].body.messages.at(-1).name, 'lookup')
+
+    process.env.UNCENSORED_GATEWAY_PROVIDER = 'featherless'
+    assert.deepEqual(uncensoredEndpoint(), {
+      url: 'https://gateway.ai.cloudflare.com/v1/acct/gw/custom-featherless/v1/chat/completions',
+      gateway: true
+    })
+
+    // Servers that reject tools/tool_choice with HTTP 400 are retried without tools.
+    delete process.env.UNCENSORED_GATEWAY_PROVIDER
+    let llamaCalls = 0
+    global.fetch = async (url, init) => {
+      const body = JSON.parse(init.body)
+      if (/google-ai-studio/.test(url)) {
+        return { ok: true, json: async () => ({ promptFeedback: { blockReason: 'PROHIBITED_CONTENT' } }) }
+      }
+      llamaCalls++
+      if (body.tools) {
+        return { ok: false, status: 400, text: async () => 'tools not supported without --jinja' }
+      }
+      return {
+        ok: true,
+        json: async () => ({
+          choices: [{ message: { role: 'assistant', content: 'ツールなしでも返事できるよ！' } }]
+        })
+      }
+    }
+    const plainResult = await draft({ request: 'もう一回', channelName: 'general', guild, tools: quietTools, now: NOW })
+    assert.equal(plainResult.kind, 'chat')
+    assert.equal(plainResult.text, 'ツールなしでも返事できるよ！')
+    assert.equal(llamaCalls, 2)
+  })
 })

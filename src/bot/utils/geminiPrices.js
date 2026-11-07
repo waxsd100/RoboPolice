@@ -24,7 +24,8 @@ const PRICES = [
   { model: 'gemini-2.5-flash-lite', input: 0.1, cached: 0.01, output: 0.4 },
   { model: 'gemini-3.1-flash-image', input: 0.5, output: 3, imageOutput: 60 },
   { model: 'gemini-3.1-flash-lite-image', input: 0.25, output: 1.5, imageOutput: 30 },
-  { model: 'gemini-nano-banana-2.1', input: 1.5, output: 7.5, imageOutput: 30 }
+  { model: 'gemini-nano-banana-2.1', input: 1.5, output: 7.5, imageOutput: 30 },
+  { model: 'xtools-at/DeepSeek-V4-Pro-Qwen3.5-9B-UNCENSORED-heretic', input: 0.28, cached: 0.14, output: 0.28 }
 ]
 // A model not in the list is priced as the usual reply model.
 const FALLBACK_MODEL = 'gemini-3.8-flash'

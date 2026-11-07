@@ -733,7 +733,203 @@ const THINK_DEEPER_DECLARATION = {
 // The model mention replies use: the server's own (contents.model, %replymodel), else GEMINI_MODEL.
 const replyModel = contents => contents?.model || process.env.GEMINI_MODEL || DEFAULT_GEMINI_MODEL
 
-async function generate (contents, declarations, allowed = null, { deep = false } = {}) {
+// When Google refuses to answer a mention (PROHIBITED_CONTENT, SAFETY, …) and an OpenAI-compatible
+// uncensored endpoint is configured (UNCENSORED_API_URL or UNCENSORED_GATEWAY_PROVIDER), the
+// conversation is handed over to UNCENSORED_MODEL (by default
+// xtools-at/DeepSeek-V4-Pro-Qwen3.5-9B-UNCENSORED-heretic) from the request again.
+const DEFAULT_UNCENSORED_MODEL = 'xtools-at/DeepSeek-V4-Pro-Qwen3.5-9B-UNCENSORED-heretic'
+function uncensoredModel () {
+  return String(process.env.UNCENSORED_MODEL || '').trim() || DEFAULT_UNCENSORED_MODEL
+}
+
+function uncensoredEndpoint () {
+  const slug = String(process.env.UNCENSORED_GATEWAY_PROVIDER || '').trim()
+  if (slug && isGatewayConfigured()) return { url: gatewayURL(`custom-${slug}/v1/chat/completions`), gateway: true }
+  const raw = String(process.env.UNCENSORED_API_URL || '').trim()
+  if (!raw) return null
+  const base = (/^https?:\/\//i.test(raw) ? raw : `https://${raw}`).replace(/\/+$/, '')
+  const url = /\/chat\/completions$/i.test(base)
+    ? base
+    : /\/v1(?:thinking)?$/i.test(base) ? `${base}/chat/completions` : `${base}/v1/chat/completions`
+  return { url, gateway: false }
+}
+
+function isUncensoredConfigured () {
+  return !!uncensoredEndpoint()
+}
+
+function toJsonSchema (schema) {
+  if (!schema || typeof schema !== 'object') return schema
+  const out = { ...schema }
+  if (typeof out.type === 'string') out.type = out.type.toLowerCase()
+  if (out.properties) {
+    out.properties = Object.fromEntries(Object.entries(out.properties).map(([k, v]) => [k, toJsonSchema(v)]))
+  }
+  if (out.items) out.items = toJsonSchema(out.items)
+  return out
+}
+
+function toOpenAITools (declarations, allowed = null) {
+  const active = allowed ? declarations.filter(d => allowed.includes(d.name)) : declarations
+  return active.map(d => ({
+    type: 'function',
+    function: {
+      name: d.name,
+      description: d.description,
+      parameters: toJsonSchema(d.parameters)
+    }
+  }))
+}
+
+function toOpenAIMessages (system, contents) {
+  const messages = [{ role: 'system', content: system }]
+  let pendingCallIds = []
+  for (const turn of contents) {
+    const parts = turn.parts || []
+    if (turn.role === 'model') {
+      const text = parts.filter(p => typeof p.text === 'string' && !p.thought).map(p => p.text).join('\n')
+      const calls = parts.filter(p => p.functionCall)
+      pendingCallIds = calls.map((p, i) => `call_${i}_${p.functionCall.name}`)
+      const msg = { role: 'assistant', content: text || null }
+      if (calls.length) {
+        msg.tool_calls = calls.map((p, i) => ({
+          id: pendingCallIds[i],
+          type: 'function',
+          function: { name: p.functionCall.name, arguments: JSON.stringify(p.functionCall.args || {}) }
+        }))
+      }
+      messages.push(msg)
+      continue
+    }
+    const responses = parts.filter(p => p.functionResponse)
+    responses.forEach((p, i) => {
+      const id = pendingCallIds[i] || `call_${i}_${p.functionResponse.name}`
+      messages.push({
+        role: 'tool',
+        tool_call_id: id,
+        name: p.functionResponse.name,
+        content: JSON.stringify(p.functionResponse.response ?? {})
+      })
+    })
+    const other = parts.filter(p => !p.functionResponse && !p.thought)
+    if (other.length) {
+      const hasImages = other.some(p => p.inlineData)
+      if (hasImages) {
+        messages.push({
+          role: 'user',
+          content: other.map(p => p.inlineData
+            ? { type: 'image_url', image_url: { url: `data:${p.inlineData.mimeType};base64,${p.inlineData.data}` } }
+            : { type: 'text', text: String(p.text || '') })
+        })
+      } else {
+        messages.push({ role: 'user', content: other.map(p => p.text || '').join('\n') })
+      }
+    }
+  }
+  return messages
+}
+
+function parseUncensoredParts (msg, declarations, allowed = null) {
+  const parts = []
+  for (const tc of msg?.tool_calls || []) {
+    const name = tc?.function?.name
+    if (!name) continue
+    let args = tc.function.arguments || {}
+    if (typeof args === 'string') {
+      try { args = JSON.parse(args) } catch (_) { args = {} }
+    }
+    parts.push({ functionCall: { name, args: args && typeof args === 'object' ? args : {} } })
+  }
+  if (!parts.length && typeof msg?.content === 'string') {
+    const stripped = msg.content.replace(/<think>[\s\S]*?<\/think>/gi, '').trim()
+    for (const m of stripped.matchAll(/<tool_call>\s*([\s\S]*?)\s*<\/tool_call>/gi)) {
+      try {
+        const parsed = JSON.parse(m[1])
+        if (parsed?.name) {
+          const args = typeof parsed.arguments === 'string' ? JSON.parse(parsed.arguments) : (parsed.arguments || parsed.args || {})
+          parts.push({ functionCall: { name: parsed.name, args: args && typeof args === 'object' ? args : {} } })
+        }
+      } catch (_) {}
+    }
+    const text = stripped.replace(/<tool_call>[\s\S]*?<\/tool_call>/gi, '').trim()
+    const canSubmitChat = (!allowed || allowed.includes(SUBMIT_CHAT_DECLARATION.name)) && declarations.some(d => d.name === SUBMIT_CHAT_DECLARATION.name)
+    if (!parts.length && text && canSubmitChat) {
+      parts.push({ functionCall: { name: SUBMIT_CHAT_DECLARATION.name, args: { text } } })
+    }
+  }
+  return parts
+}
+
+async function callUncensored (contents, declarations, allowed = null, { timeoutMs = replyTimeoutMs() } = {}) {
+  const endpoint = uncensoredEndpoint()
+  if (!endpoint) throw new GeminiError('Uncensored endpoint is not configured', 'AI の呼び出しに失敗しました')
+  const model = uncensoredModel()
+  const headers = { 'Content-Type': 'application/json', ...(endpoint.gateway ? gatewayAuthHeaders() : {}) }
+  if (process.env.UNCENSORED_API_KEY) headers.Authorization = `Bearer ${process.env.UNCENSORED_API_KEY}`
+  if (endpoint.gateway && process.env.CLOUDFLARE_AI_GATEWAY_BYOK_ALIAS) headers['cf-aig-byok-alias'] = process.env.CLOUDFLARE_AI_GATEWAY_BYOK_ALIAS
+  const body = {
+    model,
+    messages: toOpenAIMessages(systemInstruction(), contents),
+    temperature: temperature(),
+    tools: toOpenAITools(declarations, allowed),
+    tool_choice: allowed && allowed.length === 1
+      ? { type: 'function', function: { name: allowed[0] } }
+      : 'required'
+  }
+  const usage = currentUsage()
+  const send = async payload => {
+    let r
+    for (let attempt = 0; ; attempt++) {
+      if (usage) usage.requests++
+      r = await fetch(endpoint.url, {
+        method: 'POST',
+        headers,
+        signal: AbortSignal.timeout(timeoutMs),
+        dispatcher: dispatcherFor(timeoutMs),
+        body: JSON.stringify(payload)
+      })
+      if (r.status !== 429 || attempt === MAX_RETRIES) return r
+      const wait = retryDelayMs(r.headers?.get?.('retry-after'), attempt)
+      await r.text().catch(() => {})
+      if (usage) {
+        usage.retries++
+        await usage.onWait(wait)
+      }
+      await retryTimer.sleep(wait)
+    }
+  }
+  let res = await send(body)
+  if (res.status === 400 && body.tools?.length) {
+    await res.text().catch(() => {})
+    const { tools: _t, tool_choice: _tc, ...plainBody } = body
+    res = await send(plainBody)
+  }
+  if (!res.ok) {
+    const text = (await res.text()).slice(0, 1000)
+    throw new GeminiError(`Uncensored request failed: HTTP ${res.status} ${text}`, `AI の呼び出しに失敗しました（HTTP ${res.status}）`, null, res.status)
+  }
+  const data = await res.json()
+  const usageMeta = data?.usage
+    ? {
+        promptTokenCount: data.usage.prompt_tokens || 0,
+        cachedContentTokenCount: data.usage.prompt_tokens_details?.cached_tokens || 0,
+        candidatesTokenCount: data.usage.completion_tokens || 0,
+        thoughtsTokenCount: data.usage.completion_tokens_details?.reasoning_tokens || 0
+      }
+    : undefined
+  recordTokens('mention-uncensored', model, usageMeta)
+  addTokens(usageMeta, { model, flex: false })
+  geminiLoad.record(require('../utils/mentionQuota').costOf(usageMeta, model, { flex: false }))
+  addModel(model, { flex: false })
+  const parts = parseUncensoredParts(data?.choices?.[0]?.message, declarations, allowed)
+  if (!parts.length) {
+    throw new GeminiError(`Uncensored model returned no content: ${JSON.stringify(data).slice(0, 1000)}`, 'AI から応答がありませんでした')
+  }
+  return { role: 'model', parts }
+}
+
+async function generate (contents, declarations, allowed = null, { deep = false, uncensored = false } = {}) {
+  if (uncensored) return callUncensored(contents, declarations, allowed)
   const model = deep ? deepModel() : replyModel(contents)
   const prefix = {
     systemInstruction: { parts: [{ text: systemInstruction() }] },
@@ -772,9 +968,9 @@ async function generate (contents, declarations, allowed = null, { deep = false 
 const FLEX_UNAVAILABLE = [429, 503, 524]
 
 async function runAgent (contents, tools, submits = SUBMIT_DECLARATIONS) {
-  // Not offered again once the stronger model refused this conversation.
-  const offered = deepModel() && !contents.deepRefused ? [THINK_DEEPER_DECLARATION] : []
-  const declarationsFor = () => [...tools.declarations, ...(contents.deep ? [] : offered), ...submits]
+  // Not offered again once the stronger model or the uncensored fallback took over this conversation.
+  const offered = deepModel() && !contents.deepRefused && !contents.uncensored ? [THINK_DEEPER_DECLARATION] : []
+  const declarationsFor = () => [...tools.declarations, ...(contents.deep || contents.uncensored ? [] : offered), ...submits]
   const start = contents.length
   const steps = maxSteps()
   for (let step = 0; step < steps; step++) {
@@ -783,24 +979,38 @@ async function runAgent (contents, tools, submits = SUBMIT_DECLARATIONS) {
     if (last && step > 0) contents[contents.length - 1].parts.push({ text: LAST_STEP_NOTE })
     let content
     try {
-      content = await generate(contents, declarationsFor(), last ? submits.map(d => d.name) : null, { deep: !!contents.deep })
+      content = await generate(contents, declarationsFor(), last ? submits.map(d => d.name) : null, { deep: !!contents.deep, uncensored: !!contents.uncensored })
     } catch (e) {
       const unavailable = FLEX_UNAVAILABLE.includes(e.status)
-      if (!contents.deep || !(e.blocked || unavailable)) throw e
-      // The stronger model refused (its safety filters or policy), or had no Flex capacity: the
-      // usual model answers instead, from the request again, and the line under the reply says so.
-      const fallback = replyModel(contents)
-      const why = e.blocked ? `refused (${e.blocked})` : `Flex unavailable (HTTP ${e.status})`
-      global.logger?.info(`[GEMINI]: ${deepModel()} ${why}; ${fallback} answers instead`)
-      addFallback(`${deepModel()} ${why} → ${fallback}`)
-      contents.splice(start)
-      contents.deep = false
-      contents.deepRefused = true
-      offered.length = 0
-      step = -1
-      continue
+      if (contents.deep && (e.blocked || unavailable)) {
+        // The stronger model refused (its safety filters or policy), or had no Flex capacity: the
+        // usual model answers instead, from the request again, and the line under the reply says so.
+        const fallback = replyModel(contents)
+        const why = e.blocked ? `refused (${e.blocked})` : `Flex unavailable (HTTP ${e.status})`
+        global.logger?.info(`[GEMINI]: ${deepModel()} ${why}; ${fallback} answers instead`)
+        addFallback(`${deepModel()} ${why} → ${fallback}`)
+        contents.splice(start)
+        contents.deep = false
+        contents.deepRefused = true
+        offered.length = 0
+        step = -1
+        continue
+      }
+      if (!contents.uncensored && e.blocked && isUncensoredConfigured()) {
+        const failed = contents.deep ? deepModel() : replyModel(contents)
+        const fallback = uncensoredModel()
+        global.logger?.info(`[GEMINI]: ${failed} refused (${e.blocked}); ${fallback} answers instead`)
+        addFallback(`${failed} refused (${e.blocked}) → ${fallback}`)
+        contents.splice(start)
+        contents.deep = false
+        contents.uncensored = true
+        offered.length = 0
+        step = -1
+        continue
+      }
+      throw e
     }
-    const handOver = !contents.deep && offered.length && content.parts.some(p => p.functionCall?.name === THINK_DEEPER_DECLARATION.name)
+    const handOver = !contents.deep && !contents.uncensored && offered.length && content.parts.some(p => p.functionCall?.name === THINK_DEEPER_DECLARATION.name)
     if (handOver) {
       // The stronger model starts this turn again from the request: one model's thought
       // signatures are not another's, so nothing of this model's turn goes with it.
@@ -947,4 +1157,4 @@ async function revise (conversation, correction) {
   return check(conversation, await runAgent(conversation.contents, conversation.tools, conversation.submits))
 }
 
-module.exports = { THINKING_LEVELS, SERVICE_TIERS, defaultTaskConfig, resolveTaskConfig, replyTimeoutMs, flexUsable, SAFETY_SETTINGS, withSafetySettings, THINK_DEEPER_DECLARATION, deepModel, REPLY_LENGTHS, DEFAULT_REPLY_LENGTH, PERSONAS, thinkingConfig, cachedPrefix, caches, purgedFor, promptVersion, lightModel, extractModel, DEFAULT_EXTRACT_MODEL, draft, revise, MAX_STEPS, isConfigured, toScheduledEvent, callGemini, geminiRequest, geminiSend, geminiStream, retryTimer, DEFAULT_GEMINI_MODEL, ENTITY_TYPES, GeminiError }
+module.exports = { THINKING_LEVELS, SERVICE_TIERS, defaultTaskConfig, resolveTaskConfig, replyTimeoutMs, flexUsable, SAFETY_SETTINGS, withSafetySettings, THINK_DEEPER_DECLARATION, deepModel, DEFAULT_UNCENSORED_MODEL, uncensoredModel, uncensoredEndpoint, isUncensoredConfigured, callUncensored, REPLY_LENGTHS, DEFAULT_REPLY_LENGTH, PERSONAS, thinkingConfig, cachedPrefix, caches, purgedFor, promptVersion, lightModel, extractModel, DEFAULT_EXTRACT_MODEL, draft, revise, MAX_STEPS, isConfigured, toScheduledEvent, callGemini, geminiRequest, geminiSend, geminiStream, retryTimer, DEFAULT_GEMINI_MODEL, ENTITY_TYPES, GeminiError }
