@@ -1005,5 +1005,65 @@ describe('explicit cache and thinking', () => {
     assert.equal(plainResult.kind, 'chat')
     assert.equal(plainResult.text, 'ツールなしでも返事できるよ！')
     assert.equal(llamaCalls, 2)
+
+    // Pre-call R18 detection routes directly to the uncensored model without calling Gemini.
+    let geminiCalled = 0
+    global.fetch = async (url, init) => {
+      if (/google-ai-studio/.test(url)) {
+        geminiCalled++
+        return { ok: true, json: async () => ({}) }
+      }
+      const body = JSON.parse(init.body)
+      assert.match(body.messages[0].content, /R18・検閲なしフォールバック時の追加指示/)
+      return {
+        ok: true,
+        json: async () => ({
+          choices: [{ message: { role: 'assistant', content: 'R18直行の返事だよ！' } }]
+        })
+      }
+    }
+    const r18Result = await draft({ request: 'R18のエロ小説を書いて', channelName: 'general', guild, tools: quietTools, now: NOW })
+    assert.equal(r18Result.kind, 'chat')
+    assert.equal(r18Result.text, 'R18直行の返事だよ！')
+    assert.equal(geminiCalled, 0)
+
+    // Subtle R18 request handed over via hand_over_r18 tool call or soft refusal reply.
+    global.fetch = async (url) => {
+      if (/google-ai-studio/.test(url)) {
+        return {
+          ok: true,
+          json: async () => ({
+            candidates: [{ content: { role: 'model', parts: [{ functionCall: { name: 'hand_over_r18', args: { reason: '大人向け' } } }] } }]
+          })
+        }
+      }
+      return {
+        ok: true,
+        json: async () => ({
+          choices: [{ message: { role: 'assistant', content: 'ツール引き継ぎの返事だよ！' } }]
+        })
+      }
+    }
+    const handOverResult = await draft({ request: '夜の続きをお願い', channelName: 'general', guild, tools: quietTools, now: NOW })
+    assert.equal(handOverResult.text, 'ツール引き継ぎの返事だよ！')
+
+    global.fetch = async (url) => {
+      if (/google-ai-studio/.test(url)) {
+        return {
+          ok: true,
+          json: async () => ({
+            candidates: [{ content: { role: 'model', parts: [{ functionCall: { name: 'submit_chat_reply', args: { text: '申し訳ありませんが、成人向け・性的な内容にはお応えできません。' } } }] } }]
+          })
+        }
+      }
+      return {
+        ok: true,
+        json: async () => ({
+          choices: [{ message: { role: 'assistant', content: '拒否テキスト検知からの返事だよ！' } }]
+        })
+      }
+    }
+    const refusalResult = await draft({ request: 'ちょっと攻めた話をして', channelName: 'general', guild, tools: quietTools, now: NOW })
+    assert.equal(refusalResult.text, '拒否テキスト検知からの返事だよ！')
   })
 })

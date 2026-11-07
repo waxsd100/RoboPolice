@@ -733,13 +733,39 @@ const THINK_DEEPER_DECLARATION = {
 // The model mention replies use: the server's own (contents.model, %replymodel), else GEMINI_MODEL.
 const replyModel = contents => contents?.model || process.env.GEMINI_MODEL || DEFAULT_GEMINI_MODEL
 
-// When Google refuses to answer a mention (PROHIBITED_CONTENT, SAFETY, …) and an OpenAI-compatible
-// uncensored endpoint is configured (UNCENSORED_API_URL or UNCENSORED_GATEWAY_PROVIDER), the
-// conversation is handed over to UNCENSORED_MODEL (by default
-// xtools-at/DeepSeek-V4-Pro-Qwen3.5-9B-UNCENSORED-heretic) from the request again.
+// When R18 / adult content is detected or Google refuses to answer a mention (PROHIBITED_CONTENT,
+// SAFETY, …) and an OpenAI-compatible uncensored endpoint is configured (UNCENSORED_API_URL or
+// UNCENSORED_GATEWAY_PROVIDER), the conversation is handed over to UNCENSORED_MODEL (by default
+// xtools-at/DeepSeek-V4-Pro-Qwen3.5-9B-UNCENSORED-heretic).
 const DEFAULT_UNCENSORED_MODEL = 'xtools-at/DeepSeek-V4-Pro-Qwen3.5-9B-UNCENSORED-heretic'
 function uncensoredModel () {
   return String(process.env.UNCENSORED_MODEL || '').trim() || DEFAULT_UNCENSORED_MODEL
+}
+
+const HAND_OVER_R18_DECLARATION = {
+  name: 'hand_over_r18',
+  description: 'R18・成人向け・性的な描写や露骨なエロネタ・官能小説など、大人向けの内容を求められていて、そのままでは書けない（またはぼかす必要がある）と判断したとき、ほかのツールより先に呼ぶ。呼ぶと、ここからは検閲なしのモデルが引き継いで答える。',
+  parameters: { type: 'OBJECT', properties: { reason: { type: 'STRING', description: 'なぜ引き継ぐか（短く）' } }, required: ['reason'] }
+}
+
+const R18_PATTERN = /(?:^|[^a-z0-9])(?:r-?18|nsfw)(?:$|[^a-z0-9])|18禁|成人向け|アダルト|官能(?:小説|的)?|エロ(?:小説|ss|話|ネタ|画像|会話|台詞|セリフ|展開|描写|プレイ|ゲー|動画|本|漫画|同人)|えっち(?:な|しよ|して|しよう)|エッチ(?:な|しよ|して|しよう)|濡れ場|セックス|性行為|性交|交尾|中出し|射精|絶頂|オーガズム|オナニー|自慰|フェラ(?:チオ)?|パイズリ|手コキ|足コキ|素股|潮吹き|愛液|勃起|ちんこ|ちんぽ|チンポ|まんこ|マンコ|おまんこ|クリトリス|アナル|淫語|喘ぎ(?:声)?|凌辱|調教|輪姦|レイプ|催眠エロ|触手(?:責め|プレイ)|全裸|裸に|服を脱が|下着を脱/i
+function isR18Text (...texts) {
+  return texts.some(t => typeof t === 'string' && R18_PATTERN.test(t))
+}
+
+const REFUSAL_REPLY_PATTERN = /(?:性的|成人向け|アダルト|r-?18|18禁|露骨な描写|不適切|ポリシー|ガイドライン|安全上の理由)[\s\S]{0,60}(?:お応えでき|答えられ|書けま|作成でき|対応でき|控えさせて|お断り)|(?:お応えでき|答えられ|書けま|作成でき|対応でき)(?:ません|かねます)[\s\S]{0,40}(?:性的|成人向け|アダルト|r-?18|18禁|露骨|ポリシー|ガイドライン)/i
+function isRefusalReply (text) {
+  return typeof text === 'string' && REFUSAL_REPLY_PATTERN.test(text)
+}
+
+function uncensoredSystemInstruction () {
+  return [
+    systemInstruction(),
+    '',
+    '## R18・検閲なしフォールバック時の追加指示',
+    '- このリクエストは R18（成人向け）または検閲ブロックにより、検閲なしモデル（あなた）へ引き継がれました。',
+    '- 上の「そのままでは書けない依頼」にある「ぼかした版を代わりに書く」「露骨な描写は書かない」という制限は適用しません。成人向け・R18・エロネタ・官能表現の依頼にも、ぼかしたり断ったりせず、キャラクターと話し方を保ったまま直接応えてください（ただし未成年を性的に扱うものだけは引き続き扱いません）。'
+  ].join('\n')
 }
 
 function uncensoredEndpoint () {
@@ -869,7 +895,7 @@ async function callUncensored (contents, declarations, allowed = null, { timeout
   if (endpoint.gateway && process.env.CLOUDFLARE_AI_GATEWAY_BYOK_ALIAS) headers['cf-aig-byok-alias'] = process.env.CLOUDFLARE_AI_GATEWAY_BYOK_ALIAS
   const body = {
     model,
-    messages: toOpenAIMessages(systemInstruction(), contents),
+    messages: toOpenAIMessages(uncensoredSystemInstruction(), contents),
     temperature: temperature(),
     tools: toOpenAITools(declarations, allowed),
     tool_choice: allowed && allowed.length === 1
@@ -969,7 +995,10 @@ const FLEX_UNAVAILABLE = [429, 503, 524]
 
 async function runAgent (contents, tools, submits = SUBMIT_DECLARATIONS) {
   // Not offered again once the stronger model or the uncensored fallback took over this conversation.
-  const offered = deepModel() && !contents.deepRefused && !contents.uncensored ? [THINK_DEEPER_DECLARATION] : []
+  const offered = [
+    ...(deepModel() && !contents.deepRefused && !contents.uncensored ? [THINK_DEEPER_DECLARATION] : []),
+    ...(isUncensoredConfigured() && !contents.uncensored ? [HAND_OVER_R18_DECLARATION] : [])
+  ]
   const declarationsFor = () => [...tools.declarations, ...(contents.deep || contents.uncensored ? [] : offered), ...submits]
   const start = contents.length
   const steps = maxSteps()
@@ -981,6 +1010,18 @@ async function runAgent (contents, tools, submits = SUBMIT_DECLARATIONS) {
     try {
       content = await generate(contents, declarationsFor(), last ? submits.map(d => d.name) : null, { deep: !!contents.deep, uncensored: !!contents.uncensored })
     } catch (e) {
+      if (!contents.uncensored && e.blocked && isUncensoredConfigured()) {
+        const failed = contents.deep ? deepModel() : replyModel(contents)
+        const fallback = uncensoredModel()
+        global.logger?.info(`[GEMINI]: ${failed} refused (${e.blocked}); ${fallback} answers instead`)
+        addFallback(`${failed} refused (${e.blocked}) → ${fallback}`)
+        contents.splice(start)
+        contents.deep = false
+        contents.uncensored = true
+        offered.length = 0
+        step = -1
+        continue
+      }
       const unavailable = FLEX_UNAVAILABLE.includes(e.status)
       if (contents.deep && (e.blocked || unavailable)) {
         // The stronger model refused (its safety filters or policy), or had no Flex capacity: the
@@ -996,19 +1037,20 @@ async function runAgent (contents, tools, submits = SUBMIT_DECLARATIONS) {
         step = -1
         continue
       }
-      if (!contents.uncensored && e.blocked && isUncensoredConfigured()) {
-        const failed = contents.deep ? deepModel() : replyModel(contents)
-        const fallback = uncensoredModel()
-        global.logger?.info(`[GEMINI]: ${failed} refused (${e.blocked}); ${fallback} answers instead`)
-        addFallback(`${failed} refused (${e.blocked}) → ${fallback}`)
-        contents.splice(start)
-        contents.deep = false
-        contents.uncensored = true
-        offered.length = 0
-        step = -1
-        continue
-      }
       throw e
+    }
+    const r18HandOver = !contents.uncensored && isUncensoredConfigured() && content.parts.some(p => p.functionCall?.name === HAND_OVER_R18_DECLARATION.name)
+    if (r18HandOver) {
+      const fromModel = contents.deep ? deepModel() : replyModel(contents)
+      const fallback = uncensoredModel()
+      global.logger?.info(`[GEMINI]: ${fromModel} R18 handover; ${fallback} answers instead`)
+      addFallback(`${fromModel} R18 handover → ${fallback}`)
+      contents.splice(start)
+      contents.deep = false
+      contents.uncensored = true
+      offered.length = 0
+      step = -1
+      continue
     }
     const handOver = !contents.deep && !contents.uncensored && offered.length && content.parts.some(p => p.functionCall?.name === THINK_DEEPER_DECLARATION.name)
     if (handOver) {
@@ -1025,6 +1067,18 @@ async function runAgent (contents, tools, submits = SUBMIT_DECLARATIONS) {
     contents.push(content)
     const calls = content.parts.filter(p => p.functionCall).map(p => p.functionCall)
     const submitted = calls.find(c => submits.some(d => d.name === c.name))
+    if (submitted && !contents.uncensored && isUncensoredConfigured() && submitted.name === SUBMIT_CHAT_DECLARATION.name && isRefusalReply(submitted.args?.text)) {
+      const fromModel = contents.deep ? deepModel() : replyModel(contents)
+      const fallback = uncensoredModel()
+      global.logger?.info(`[GEMINI]: ${fromModel} refused in reply (R18); ${fallback} answers instead`)
+      addFallback(`${fromModel} refused (R18) → ${fallback}`)
+      contents.splice(start)
+      contents.deep = false
+      contents.uncensored = true
+      offered.length = 0
+      step = -1
+      continue
+    }
     // `calls` is kept: a correction must answer every call of this turn, not just the submit.
     if (submitted) return { name: submitted.name, args: submitted.args || {}, calls }
     if (calls.length === 0) throw new GeminiError(`Gemini answered without a tool call: ${JSON.stringify(content).slice(0, 1000)}`, 'AI の応答の形式が想定と違いました')
@@ -1135,6 +1189,13 @@ async function draft ({ request, referenced, recent = [], channelName, channelID
   conversation.contents.model = model
   conversation.contents.thinking = THINKING_LEVELS.includes(thinking) ? thinking : null
   conversation.contents.tier = SERVICE_TIERS.includes(tier) ? tier : null
+  if (isUncensoredConfigured() && isR18Text(request, referenced?.text)) {
+    const initial = replyModel(conversation.contents)
+    const fallback = uncensoredModel()
+    global.logger?.info(`[GEMINI]: R18 detected in request; ${fallback} answers instead of ${initial}`)
+    addFallback(`${initial} R18 detected → ${fallback}`)
+    conversation.contents.uncensored = true
+  }
   return check(conversation, await runAgent(conversation.contents, tools, conversation.submits))
 }
 
@@ -1154,7 +1215,15 @@ async function revise (conversation, correction) {
       }
     }))
   })
+  if (!conversation.contents.uncensored && isUncensoredConfigured() && isR18Text(correction)) {
+    const initial = replyModel(conversation.contents)
+    const fallback = uncensoredModel()
+    global.logger?.info(`[GEMINI]: R18 detected in revision; ${fallback} answers instead of ${initial}`)
+    addFallback(`${initial} R18 detected → ${fallback}`)
+    conversation.contents.deep = false
+    conversation.contents.uncensored = true
+  }
   return check(conversation, await runAgent(conversation.contents, conversation.tools, conversation.submits))
 }
 
-module.exports = { THINKING_LEVELS, SERVICE_TIERS, defaultTaskConfig, resolveTaskConfig, replyTimeoutMs, flexUsable, SAFETY_SETTINGS, withSafetySettings, THINK_DEEPER_DECLARATION, deepModel, DEFAULT_UNCENSORED_MODEL, uncensoredModel, uncensoredEndpoint, isUncensoredConfigured, callUncensored, REPLY_LENGTHS, DEFAULT_REPLY_LENGTH, PERSONAS, thinkingConfig, cachedPrefix, caches, purgedFor, promptVersion, lightModel, extractModel, DEFAULT_EXTRACT_MODEL, draft, revise, MAX_STEPS, isConfigured, toScheduledEvent, callGemini, geminiRequest, geminiSend, geminiStream, retryTimer, DEFAULT_GEMINI_MODEL, ENTITY_TYPES, GeminiError }
+module.exports = { THINKING_LEVELS, SERVICE_TIERS, defaultTaskConfig, resolveTaskConfig, replyTimeoutMs, flexUsable, SAFETY_SETTINGS, withSafetySettings, THINK_DEEPER_DECLARATION, HAND_OVER_R18_DECLARATION, isR18Text, isRefusalReply, deepModel, DEFAULT_UNCENSORED_MODEL, uncensoredModel, uncensoredEndpoint, isUncensoredConfigured, callUncensored, REPLY_LENGTHS, DEFAULT_REPLY_LENGTH, PERSONAS, thinkingConfig, cachedPrefix, caches, purgedFor, promptVersion, lightModel, extractModel, DEFAULT_EXTRACT_MODEL, draft, revise, MAX_STEPS, isConfigured, toScheduledEvent, callGemini, geminiRequest, geminiSend, geminiStream, retryTimer, DEFAULT_GEMINI_MODEL, ENTITY_TYPES, GeminiError }
