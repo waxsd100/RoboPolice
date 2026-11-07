@@ -781,25 +781,33 @@ function uncensoredSystemInstruction ({ compact = false } = {}) {
   return [base, '', ...extra].join('\n')
 }
 
-const MAX_UNCENSORED_CONVERSATION_CHARS = 1000
-const MAX_UNCENSORED_RECENT_CHARS = 600
-const MAX_UNCENSORED_MEMBERS_CHARS = 400
+const MAX_UNCENSORED_CONVERSATION_CHARS = 500
+const MAX_UNCENSORED_RECENT_CHARS = 350
+const MAX_UNCENSORED_MEMBERS_CHARS = 200
 
 function compactUncensoredText (text) {
   if (typeof text !== 'string') return ''
-  return text
+  const hasConversation = /<untrusted source="conversation">/.test(text)
+  let out = text
     .replace(/\n## このサーバーのルールとモデレーターからのお願い[\s\S]*?(?=\n## このサーバーの情報|\n## 依頼や会話に出てくるチャンネル|\n依頼されたチャンネル:)/, '')
     .replace(/\n## このサーバーの情報（最新）\n<untrusted source="server">[\s\S]*?<\/untrusted>/, '')
     .replace(/\n## 依頼や会話に出てくるチャンネル[\s\S]*?(?=\n## |\n依頼されたチャンネル:)/, '')
+    .replace(/\n現在日時: [^\n]+/, '')
     .replace(/(<untrusted source="members">\n?)([\s\S]*?)(\n?<\/untrusted>)/, (whole, open, body, close) =>
       body.length > MAX_UNCENSORED_MEMBERS_CHARS ? `${open}${body.slice(0, MAX_UNCENSORED_MEMBERS_CHARS)}${close}` : whole
     )
-    .replace(/(<untrusted source="recent">\n?)([\s\S]*?)(\n?<\/untrusted>)/, (whole, open, body, close) =>
+  if (hasConversation) {
+    out = out
+      .replace(/\n## 依頼されたチャンネルの最近の会話[\s\S]*?<\/untrusted>/, '')
+      .replace(/(<untrusted source="conversation">\n?)([\s\S]*?)(\n?<\/untrusted>)/, (whole, open, body, close) =>
+        body.length > MAX_UNCENSORED_CONVERSATION_CHARS ? `${open}${body.slice(-MAX_UNCENSORED_CONVERSATION_CHARS)}${close}` : whole
+      )
+  } else {
+    out = out.replace(/(<untrusted source="recent">\n?)([\s\S]*?)(\n?<\/untrusted>)/, (whole, open, body, close) =>
       body.length > MAX_UNCENSORED_RECENT_CHARS ? `${open}${body.slice(-MAX_UNCENSORED_RECENT_CHARS)}${close}` : whole
     )
-    .replace(/(<untrusted source="conversation">\n?)([\s\S]*?)(\n?<\/untrusted>)/, (whole, open, body, close) =>
-      body.length > MAX_UNCENSORED_CONVERSATION_CHARS ? `${open}${body.slice(-MAX_UNCENSORED_CONVERSATION_CHARS)}${close}` : whole
-    )
+  }
+  return out
 }
 
 function isLocalUncensoredUrl (url) {
@@ -1068,7 +1076,8 @@ function parseUncensoredParts (msg, declarations, allowed = null) {
 }
 
 const UNCENSORED_SAMPLING_PARAMS = {
-  max_tokens: 600,
+  max_tokens: 350,
+  stream: true,
   top_p: 0.9,
   top_k: 40,
   repeat_penalty: 1.1,
@@ -1077,7 +1086,73 @@ const UNCENSORED_SAMPLING_PARAMS = {
   chat_template_kwargs: { enable_thinking: false }
 }
 
-async function callUncensored (contents, declarations, allowed = null, { timeoutMs = Math.max(replyTimeoutMs(), 300 * 1000) } = {}) {
+function trimIncompleteSentence (text) {
+  const s = String(text || '').trim()
+  if (!s || /[。！？…」』）)\n]$/.test(s)) return s
+  const minCut = Math.floor(s.length * 0.5)
+  for (let i = s.length - 1; i >= minCut; i--) {
+    if (/[。！？…」』\n]/.test(s[i])) return s.slice(0, i + 1).trim()
+  }
+  return s
+}
+
+async function readUncensoredResponse (res, { softTimeoutMs = 200 * 1000 } = {}) {
+  if (!res.body) return res.json()
+  const startedAt = Date.now()
+  let rawAll = ''
+  let buffer = ''
+  let content = ''
+  let reasoning = ''
+  let usage = null
+  let sawSse = false
+  let cutEarly = false
+  const takeLine = line => {
+    const m = line.match(/^data:\s*(.*)$/)
+    if (!m) return
+    sawSse = true
+    const payload = m[1].trim()
+    if (!payload || payload === '[DONE]') return
+    let chunk
+    try { chunk = JSON.parse(payload) } catch (_) { return }
+    const choice = chunk.choices?.[0]
+    if (choice?.delta) {
+      if (typeof choice.delta.content === 'string') content += choice.delta.content
+      if (typeof choice.delta.reasoning_content === 'string') reasoning += choice.delta.reasoning_content
+    } else if (choice?.message) {
+      if (typeof choice.message.content === 'string') content += choice.message.content
+      if (typeof choice.message.reasoning_content === 'string') reasoning += choice.message.reasoning_content
+    }
+    if (chunk.usage) usage = chunk.usage
+  }
+  try {
+    for await (const text of textChunks(res)) {
+      rawAll += text
+      buffer += text
+      const lines = buffer.split(/\r?\n/)
+      buffer = lines.pop()
+      lines.forEach(takeLine)
+      if (sawSse && content.trim().length >= 80 && Date.now() - startedAt >= softTimeoutMs) {
+        cutEarly = true
+        await res.body.cancel?.().catch(() => {})
+        break
+      }
+    }
+    takeLine(buffer)
+  } catch (e) {
+    if (!sawSse || content.trim().length < 20) throw e
+    cutEarly = true
+  }
+  if (!sawSse) {
+    try { return JSON.parse(rawAll) } catch (_) { return {} }
+  }
+  const finalContent = cutEarly ? trimIncompleteSentence(content) : content
+  return {
+    choices: [{ message: { role: 'assistant', content: finalContent, ...(reasoning ? { reasoning_content: reasoning } : {}) } }],
+    ...(usage ? { usage } : {})
+  }
+}
+
+async function callUncensored (contents, declarations, allowed = null, { timeoutMs = Math.max(replyTimeoutMs(), 420 * 1000) } = {}) {
   const endpoint = uncensoredEndpoint()
   if (!endpoint) throw new GeminiError('Uncensored endpoint is not configured', 'AI の呼び出しに失敗しました')
   const model = uncensoredModel()
@@ -1122,14 +1197,15 @@ async function callUncensored (contents, declarations, allowed = null, { timeout
   }
   const buildMinimalBody = () => {
     const compactMsgs = toOpenAIMessages(uncensoredSystemInstruction({ compact: true }), contents, { compact: true })
-      .map(m => m.role === 'user' && typeof m.content === 'string' && m.content.length > 1200
-        ? { ...m, content: m.content.slice(-1200) }
+      .map(m => m.role === 'user' && typeof m.content === 'string' && m.content.length > 800
+        ? { ...m, content: m.content.slice(-800) }
         : m)
     return {
       model,
       messages: compactMsgs,
       temperature: 0.8,
-      max_tokens: 400,
+      max_tokens: 280,
+      stream: true,
       chat_template_kwargs: { enable_thinking: false }
     }
   }
@@ -1142,12 +1218,12 @@ async function callUncensored (contents, declarations, allowed = null, { timeout
     const text = (await res.text()).slice(0, 1000)
     throw new GeminiError(`Uncensored request failed: HTTP ${res.status} ${text}`, `AI の呼び出しに失敗しました（HTTP ${res.status}）`, null, res.status)
   }
-  let data = await res.json()
+  let data = await readUncensoredResponse(res)
   let parts = parseUncensoredParts(data?.choices?.[0]?.message, declarations, allowed)
   if (!parts.length && useCompact) {
     const retryRes = await send(buildMinimalBody())
     if (retryRes.ok) {
-      data = await retryRes.json()
+      data = await readUncensoredResponse(retryRes)
       parts = parseUncensoredParts(data?.choices?.[0]?.message, declarations, allowed)
     }
   }
