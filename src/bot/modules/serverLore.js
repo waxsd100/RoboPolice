@@ -16,7 +16,7 @@
 const crypto = require('crypto')
 const { embed, model } = require('../utils/embeddings')
 const { isGatewayConfigured } = require('../utils/aiGateway')
-const { callGemini, lightModel } = require('./eventDrafter')
+const { callGemini, extractModel, thinkingConfig } = require('./eventDrafter')
 const { withoutCharCount } = require('../utils/textClean')
 const { looksLikeInjection } = require('../utils/untrusted')
 const { publicChannels } = require('./discordKnowledge')
@@ -131,9 +131,10 @@ const FACT_SCHEMA = {
 }
 
 async function generate (text, config) {
-  const content = await callGemini(lightModel(), {
+  const m = extractModel()
+  const content = await callGemini(m, {
     contents: [{ role: 'user', parts: [{ text }] }],
-    generationConfig: config
+    generationConfig: { ...config, ...thinkingConfig(m, { setting: 'GEMINI_EXTRACT_THINKING_LEVEL', fallback: 'minimal' }) }
   }, { timeoutMs: 2 * 60 * 1000, purpose: 'serverLore', flex: true })
   return content.parts.map(p => p.text || '').join('')
 }

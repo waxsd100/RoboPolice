@@ -12,7 +12,7 @@ test('the rules channels: the one set in Discord first, then those the model pic
   t.mock.method(drafter, 'isConfigured', () => true)
   const asked = []
   t.mock.method(drafter, 'callGemini', async (model, body, options) => {
-    asked.push({ model, text: body.contents[0].parts[0].text, purpose: options.purpose, flex: options.flex })
+    asked.push({ model, text: body.contents[0].parts[0].text, thinking: body.generationConfig.thinkingConfig?.thinkingLevel, purpose: options.purpose, flex: options.flex })
     return { parts: [{ text: '300000000000000003, 999999999999999999, 300000000000000002' }] }
   })
   const channels = [
@@ -24,12 +24,17 @@ test('the rules channels: the one set in Discord first, then those the model pic
   const guild = guildWith(channels, '300000000000000001')
   const picked = await serverRules.rulesChannels(guild, { pick: serverRules.askModel })
   assert.deepEqual(picked.map(c => c.id), ['300000000000000001', '300000000000000003', '300000000000000002'], 'Discord\'s own first; an ID not in the server is dropped')
+  assert.equal(asked[0].model, 'gemini-3.1-flash-lite')
+  assert.equal(asked[0].thinking, 'minimal')
   assert.equal(asked[0].purpose, 'serverRules')
-  assert.equal(asked[0].flex, true)
+  assert.equal(asked[0].flex, undefined, 'runs on Standard tier so mention replies do not wait on Flex')
   assert.match(asked[0].text, /300000000000000002: #📌はじめに — 最初に読んでね/)
   assert.doesNotMatch(asked[0].text, /#vc/, 'voice channels are not offered')
   await serverRules.rulesChannels(guild, { pick: serverRules.askModel })
   assert.equal(asked.length, 1, 'kept')
+  serverRules.reset({ memoryOnly: true })
+  await serverRules.rulesChannels(guild, { pick: serverRules.askModel })
+  assert.equal(asked.length, 1, 'reused from Redis across worker restarts')
   channels.push({ id: '300000000000000005', name: 'new', type: 0 })
   const changed = guildWith(channels, '300000000000000001')
   await serverRules.rulesChannels(changed, { pick: serverRules.askModel })
