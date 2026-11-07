@@ -36,7 +36,7 @@ async function officialPage (name) {
     }],
     tools: [{ google_search: {} }],
     generationConfig: { temperature: 0 }
-  }, { timeoutMs: 30 * 1000, purpose: 'gameLinks', flex: true })
+  }, { timeoutMs: 30 * 1000, purpose: 'gameLinks' })
   const url = content.parts.map(p => p.text || '').join('').match(/https?:\/\/[^\s)」"'<>]+/)?.[0]
   if (!url) return null
   // Only a page that opens: a model can name a URL that does not exist.

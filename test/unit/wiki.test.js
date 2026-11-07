@@ -197,7 +197,9 @@ describe('extractFacts', () => {
       { kind: 'term', name: 'のば描き', aliases: [], content: 'ファンアートのこと' }
     ])
     const { generationConfig, contents, serviceTier } = requests[0].body
+    assert.match(requests[0].url, /gemini-3\.1-flash-lite:generateContent/)
     assert.equal(serviceTier, 'flex')
+    assert.equal(generationConfig.thinkingConfig.thinkingLevel, 'minimal')
     assert.equal(generationConfig.responseMimeType, 'application/json')
     assert.deepEqual(generationConfig.responseSchema.items.properties.kind.enum, ['character', 'quote', 'term'])
     assert.match(contents[0].parts[0].text, /ページ: のばまんのキャラクター\n見出し: よつろん\n本文:\nのばまんのアイコンのキャラクター。/)

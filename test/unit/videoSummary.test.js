@@ -75,7 +75,7 @@ describe('videos too long for one request', () => {
     assert.match(requests[2].body.contents[0].parts[1].text, /2:00:00〜4:00:00 の部分だけ/)
     assert.match(requests[1].url, /gemini-3.8-flash:generateContent/)
     assert.match(requests.at(-1).url, /gemini-3.5-flash-lite:generateContent/, 'putting the parts together needs no video model')
-    assert.equal(requests.at(-1).body.serviceTier, 'flex')
+    assert.equal(requests.at(-1).body.serviceTier, undefined)
     assert.equal(summary, '[0:00] 挨拶\n[1:05:00] 告知\n[2:10:00] ゲーム開始\n[4:00:30] 締め')
     assert.equal(store.summaries[100].longStream1, summary)
   })

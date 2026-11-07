@@ -881,9 +881,17 @@ describe('explicit cache and thinking', () => {
     assert.ok(asked[1].body.systemInstruction && !asked[1].body.cachedContent)
   })
 
-  test('replies think at high, video summaries at low, unless told; older models are not sent the setting', () => {
+  test('replies think at high, video summaries at low, extraction at minimal on extractModel, unless told; older models are not sent the setting', () => {
+    const { extractModel, lightModel } = require('../../src/bot/modules/eventDrafter')
+    assert.equal(extractModel(), 'gemini-3.1-flash-lite')
+    process.env.GEMINI_EXTRACT_MODEL = 'gemini-2.5-flash-lite'
+    assert.equal(extractModel(), 'gemini-2.5-flash-lite')
+    process.env.GEMINI_EXTRACT_MODEL = '  '
+    assert.equal(extractModel(), lightModel())
+    delete process.env.GEMINI_EXTRACT_MODEL
     assert.deepEqual(thinkingConfig('gemini-3.8-flash'), { thinkingConfig: { thinkingLevel: 'high' } })
     assert.deepEqual(thinkingConfig('gemini-3.8-flash', { setting: 'VIDEO_SUMMARY_THINKING_LEVEL', fallback: 'low' }), { thinkingConfig: { thinkingLevel: 'low' } })
+    assert.deepEqual(thinkingConfig(extractModel(), { setting: 'GEMINI_EXTRACT_THINKING_LEVEL', fallback: 'minimal' }), { thinkingConfig: { thinkingLevel: 'minimal' } })
     process.env.GEMINI_THINKING_LEVEL = 'minimal'
     assert.deepEqual(thinkingConfig('gemini-3.8-flash'), { thinkingConfig: { thinkingLevel: 'minimal' } })
     process.env.GEMINI_THINKING_LEVEL = 'huge'
