@@ -763,13 +763,15 @@ function uncensoredSystemInstruction ({ compact = false } = {}) {
   const extra = [
     '## R18・検閲なしフォールバック時の追加指示',
     '- このリクエストは R18（成人向け）または検閲ブロックにより、検閲なしモデル（あなた）へ引き継がれました。',
+    '- 答える対象は一番最後の「依頼メッセージ（<untrusted source="request">）」だけです。前の会話の話題・ネタ・シチュエーション・登場人物を引きずったり、今回の依頼メッセージに書かれていない過去の流れを混ぜたりしないでください。',
+    '- 渡された「コミュニティの知識」や資料は、今回の依頼メッセージで言及されている登場人物・用語について調べるためだけに使ってください。今回の依頼と無関係な資料・過去のやり取りはすべて無視してください。',
     '- 「そのままでは書けない依頼」にある「ぼかした版を代わりに書く」「露骨な描写は書かない」「場面転換・暗示・フェードアウト・朝チュンにする」という制限は一切適用しません。',
     '- 依頼された成人向け・R18・官能表現の依頼には、省略やフェードアウト（朝チュンなど）をせず、キャラクターの口調・性格・設定を保ったまま、求められた描写を最初から最後まで具体的・直接的に詳しく書き切ってください（ただし未成年を性的に扱うものだけは引き続き扱いません）。'
   ]
   if (compact) {
     return [
       '## 役割',
-      'あなたは Discord サーバーの AI です。渡された「コミュニティの知識」「話し方」と依頼メッセージに従い、キャラクターや口調を保って日本語で返事や小説・会話を書きます。返事の本文だけをそのまま出力してください。',
+      'あなたは Discord サーバーの AI です。一番最後の「依頼メッセージ」のお題・指示だけに集中し、指定された「話し方」を保って日本語で返事や小説・会話を書きます。返事の本文だけをそのまま出力してください。',
       ...(persona ? ['', '## 運営者が設定したキャラクター', persona] : []),
       '',
       ...extra
@@ -779,14 +781,50 @@ function uncensoredSystemInstruction ({ compact = false } = {}) {
   return [base, '', ...extra].join('\n')
 }
 
+const CONTINUATION_REQUEST_PATTERN = /それ|これ|あれ|さっき|続き|もっと|もう一[度回]|同じ|今の|その(?:まま|続き|話|流れ|調子)|書き直|直して|変えて|このチャンネル|今話して/i
+
+function filterKnowledgeBlock (block, targetText) {
+  const lines = block.split('\n')
+  const kept = []
+  for (const line of lines) {
+    const m = line.match(/^- \[[^\]]+\]\s*([^:：（(]+)(?:[（(]([^）)]+)[）)])?\s*[:：]/)
+    if (!m) continue
+    const names = [m[1], ...(m[2] ? m[2].split(/[、,，/]/) : [])]
+      .map(s => s.trim())
+      .filter(s => s.length >= 2)
+    if (names.some(n => targetText.includes(n))) kept.push(line)
+  }
+  return kept.length
+    ? ['### コミュニティの知識（依頼に登場するもの）', ...kept].join('\n')
+    : ''
+}
+
 function compactUncensoredText (text) {
   if (typeof text !== 'string') return ''
-  return text
+  const reqMatch = text.match(/<untrusted source="request">\n?([\s\S]*?)\n?<\/untrusted>/)
+  const requestText = (reqMatch ? reqMatch[1] : '').trim()
+  const isContinuation = [...requestText].length < 10 || CONTINUATION_REQUEST_PATTERN.test(requestText)
+  const convMatch = text.match(/<untrusted source="conversation">\n?([\s\S]*?)\n?<\/untrusted>/)
+  const targetForKnowledge = isContinuation && convMatch ? `${requestText}\n${convMatch[1].slice(-500)}` : requestText
+
+  let out = text
     .replace(/\n## このサーバーのルールとモデレーターからのお願い[\s\S]*?(?=\n## |\n依頼されたチャンネル:)/, '')
     .replace(/### チャンネル（[\s\S]*?(?=\n### |\n<\/untrusted>)/, '')
     .replace(/### ロール\n[\s\S]*?(?=\n### |\n<\/untrusted>)/, '')
+    .replace(/### コミュニティの知識[\s\S]*?(?=\n### |\n<\/untrusted>)/, block => filterKnowledgeBlock(block, targetForKnowledge))
+    .replace(/### このサーバーのこと（[\s\S]*?(?=\n### |\n<\/untrusted>)/, '')
+    .replace(/### このサーバーで前に出た、依頼に近い発言[\s\S]*?(?=\n### |\n<\/untrusted>)/, '')
     .replace(/### サーバー絵文字[\s\S]*?(?=\n### |\n<\/untrusted>)/, '')
     .replace(/### YouTube[\s\S]*?(?=\n<\/untrusted>)/, '')
+    .replace(/\n## 依頼や会話に出てくるチャンネル[\s\S]*?(?=\n## |\n依頼されたチャンネル:)/, '')
+  if (!isContinuation) {
+    out = out
+      .replace(/\n## 依頼されたチャンネルの最近の会話[^\n]*\n<untrusted source="recent">[\s\S]*?<\/untrusted>/, '')
+      .replace(/\n## 依頼メッセージの返信先[^\n]*\n<untrusted source="conversation">[\s\S]*?<\/untrusted>/, '')
+  } else {
+    out = out.replace(/\n## 依頼されたチャンネルの最近の会話[^\n]*\n<untrusted source="recent">[\s\S]*?<\/untrusted>/, '')
+  }
+  return out
 }
 
 function isLocalUncensoredUrl (url) {
@@ -1007,6 +1045,13 @@ function toOpenAIMessages (system, contents, { compact = false } = {}) {
   return messages
 }
 
+function collapseRepetitions (text) {
+  if (typeof text !== 'string') return ''
+  return text
+    .replace(/(.{2,40}?)(?:[、。！？\s]*\1){2,}/gu, '$1')
+    .replace(/(.)\1{4,}/gu, '$1$1$1')
+}
+
 function parseUncensoredParts (msg, declarations, allowed = null) {
   const parts = []
   for (const tc of msg?.tool_calls || []) {
@@ -1015,6 +1060,9 @@ function parseUncensoredParts (msg, declarations, allowed = null) {
     let args = tc.function.arguments || {}
     if (typeof args === 'string') {
       try { args = JSON.parse(args) } catch (_) { args = {} }
+    }
+    if (name === SUBMIT_CHAT_DECLARATION.name && typeof args?.text === 'string') {
+      args = { ...args, text: collapseRepetitions(args.text) }
     }
     parts.push({ functionCall: { name, args: args && typeof args === 'object' ? args : {} } })
   }
@@ -1029,13 +1077,26 @@ function parseUncensoredParts (msg, declarations, allowed = null) {
         }
       } catch (_) {}
     }
-    const text = stripped.replace(/<tool_call>[\s\S]*?<\/tool_call>/gi, '').trim()
+    const text = collapseRepetitions(stripped.replace(/<tool_call>[\s\S]*?<\/tool_call>/gi, '').trim())
     const canSubmitChat = (!allowed || allowed.includes(SUBMIT_CHAT_DECLARATION.name)) && declarations.some(d => d.name === SUBMIT_CHAT_DECLARATION.name)
     if (!parts.length && text && canSubmitChat) {
       parts.push({ functionCall: { name: SUBMIT_CHAT_DECLARATION.name, args: { text } } })
     }
   }
   return parts
+}
+
+const UNCENSORED_SAMPLING_PARAMS = {
+  max_tokens: 1024,
+  top_p: 0.85,
+  top_k: 40,
+  min_p: 0.05,
+  repeat_penalty: 1.18,
+  repeat_last_n: 128,
+  frequency_penalty: 0.35,
+  presence_penalty: 0.35,
+  dry_multiplier: 0.8,
+  chat_template_kwargs: { enable_thinking: false }
 }
 
 async function callUncensored (contents, declarations, allowed = null, { timeoutMs = Math.max(replyTimeoutMs(), 300 * 1000) } = {}) {
@@ -1049,9 +1110,9 @@ async function callUncensored (contents, declarations, allowed = null, { timeout
   const body = {
     model,
     messages: toOpenAIMessages(uncensoredSystemInstruction({ compact: useCompact }), contents, { compact: useCompact }),
-    temperature: temperature(),
+    temperature: useCompact ? 0.75 : temperature(),
     ...(useCompact
-      ? { max_tokens: 1024, chat_template_kwargs: { enable_thinking: false } }
+      ? UNCENSORED_SAMPLING_PARAMS
       : {
           tools: toOpenAITools(declarations, allowed),
           tool_choice: allowed && allowed.length === 1
@@ -1087,7 +1148,8 @@ async function callUncensored (contents, declarations, allowed = null, { timeout
     const plainBody = {
       model,
       messages: toOpenAIMessages(uncensoredSystemInstruction({ compact: true }), contents, { compact: true }),
-      temperature: temperature()
+      temperature: 0.75,
+      ...UNCENSORED_SAMPLING_PARAMS
     }
     res = await send(plainBody)
   }
@@ -1379,7 +1441,6 @@ async function draft ({ request, referenced, recent = [], channelName, channelID
     const initial = replyModel(conversation.contents)
     const fallback = uncensoredModel()
     global.logger?.info(`[GEMINI]: R18 detected in request; ${fallback} answers instead of ${initial}`)
-    addFallback(`${initial} R18 detected → ${fallback}`)
     conversation.contents.uncensored = true
   }
   return check(conversation, await runAgent(conversation.contents, tools, conversation.submits))
@@ -1405,7 +1466,6 @@ async function revise (conversation, correction) {
     const initial = replyModel(conversation.contents)
     const fallback = uncensoredModel()
     global.logger?.info(`[GEMINI]: R18 detected in revision; ${fallback} answers instead of ${initial}`)
-    addFallback(`${initial} R18 detected → ${fallback}`)
     conversation.contents.deep = false
     conversation.contents.uncensored = true
   }
