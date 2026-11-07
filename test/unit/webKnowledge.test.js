@@ -20,6 +20,7 @@ describe('webKnowledge', () => {
     const requests = installGemini([[{ text: '## 概要\nポッキーが主催する実況者グループ。（50文字）\n\n## メンバー\nポッキー、のばまん\n\n## 出典\nhttps://example.com/a' }]])
     assert.equal(await web.refresh({ now: NOW }), 1, 'the one looked up a day ago is not looked up again')
     assert.deepEqual(requests[0].body.tools, [{ google_search: {} }])
+    assert.equal(requests[0].body.serviceTier, 'flex')
     assert.match(requests[0].body.contents[0].parts[0].text, /今日は 2026-11-01 です。[\s\S]*ぽみそしる（のばまんが所属する実況者グループ）[\s\S]*出典/)
     assert.equal(pages[0].url, 'topic:ぽみそしる', 'kept under its name, so rewording the explanation keeps the page')
     assert.equal(pages[0].title, '「ぽみそしる」について（Web 検索で調べたもの、2026-11-01 時点）')

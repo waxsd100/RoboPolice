@@ -108,7 +108,7 @@ async function extractFacts (section) {
   const content = await callGemini(lightModel(), {
     contents: [{ role: 'user', parts: [{ text: `${EXTRACT_PROMPT}\n\nページ: ${section.title}\n見出し: ${section.heading}\n本文:\n${section.text}` }] }],
     generationConfig: { temperature: 0, responseMimeType: 'application/json', responseSchema: FACT_SCHEMA }
-  }, { timeoutMs: 60 * 1000, purpose: 'wikiFacts' })
+  }, { timeoutMs: 2 * 60 * 1000, purpose: 'wikiFacts', flex: true })
   const raw = JSON.parse(content.parts.map(p => p.text || '').join('') || '[]')
   return (Array.isArray(raw) ? raw : [])
     .filter(f => KINDS.includes(f?.kind) && String(f.name || '').trim() && String(f.content || '').trim())

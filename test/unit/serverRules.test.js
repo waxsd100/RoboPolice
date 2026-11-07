@@ -12,7 +12,7 @@ test('the rules channels: the one set in Discord first, then those the model pic
   t.mock.method(drafter, 'isConfigured', () => true)
   const asked = []
   t.mock.method(drafter, 'callGemini', async (model, body, options) => {
-    asked.push({ model, text: body.contents[0].parts[0].text, purpose: options.purpose })
+    asked.push({ model, text: body.contents[0].parts[0].text, purpose: options.purpose, flex: options.flex })
     return { parts: [{ text: '300000000000000003, 999999999999999999, 300000000000000002' }] }
   })
   const channels = [
@@ -25,6 +25,7 @@ test('the rules channels: the one set in Discord first, then those the model pic
   const picked = await serverRules.rulesChannels(guild, { pick: serverRules.askModel })
   assert.deepEqual(picked.map(c => c.id), ['300000000000000001', '300000000000000003', '300000000000000002'], 'Discord\'s own first; an ID not in the server is dropped')
   assert.equal(asked[0].purpose, 'serverRules')
+  assert.equal(asked[0].flex, true)
   assert.match(asked[0].text, /300000000000000002: #📌はじめに — 最初に読んでね/)
   assert.doesNotMatch(asked[0].text, /#vc/, 'voice channels are not offered')
   await serverRules.rulesChannels(guild, { pick: serverRules.askModel })

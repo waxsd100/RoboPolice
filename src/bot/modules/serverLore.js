@@ -134,7 +134,7 @@ async function generate (text, config) {
   const content = await callGemini(lightModel(), {
     contents: [{ role: 'user', parts: [{ text }] }],
     generationConfig: config
-  }, { timeoutMs: 90 * 1000, purpose: 'serverLore' })
+  }, { timeoutMs: 2 * 60 * 1000, purpose: 'serverLore', flex: true })
   return content.parts.map(p => p.text || '').join('')
 }
 

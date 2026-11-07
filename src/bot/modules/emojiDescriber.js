@@ -75,7 +75,7 @@ async function describeEmoji (emoji, context = {}) {
     contents: [{ role: 'user', parts }],
     // Fewer tokens per image: emojis and the pictures they are compared with are small.
     generationConfig: { temperature: 0.2, mediaResolution: 'MEDIA_RESOLUTION_LOW' }
-  }, { timeoutMs: 30 * 1000, purpose: 'emoji' })
+  }, { timeoutMs: 60 * 1000, purpose: 'emoji', flex: true })
   const text = withoutCharCount(content.parts.map(p => p.text || '').join('').replace(/\s+/g, ' ').trim())
   if (!text) throw new Error('Gemini returned no description')
   return text.slice(0, MAX_DESCRIPTION)

@@ -167,6 +167,7 @@ describe('describeEmoji', () => {
       '説明する絵文字「:Yotsuron_happy:」の画像', Buffer.from('https://cdn.discordapp.com/emojis/1.png?size=96').toString('base64')
     ])
     assert.equal(body.generationConfig.mediaResolution, 'MEDIA_RESOLUTION_LOW')
+    assert.equal(body.serviceTier, 'flex')
   })
 
   test('names in the emoji\'s name are found by name or other name, ignoring case', () => {

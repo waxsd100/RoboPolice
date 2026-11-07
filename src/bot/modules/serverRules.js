@@ -61,7 +61,7 @@ async function askModel (guild, channels) {
       }]
     }],
     generationConfig: { temperature: 0 }
-  }, { timeoutMs: 30 * 1000, purpose: 'serverRules' })
+  }, { timeoutMs: 30 * 1000, purpose: 'serverRules', flex: true })
   const answer = (content?.parts || []).map(p => p.text || '').join('')
   const known = new Set(channels.map(c => c.id))
   return [...new Set(answer.match(/\d{15,21}/g) || [])].filter(id => known.has(id)).slice(0, MAX_CHANNELS)

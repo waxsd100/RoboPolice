@@ -196,7 +196,8 @@ describe('extractFacts', () => {
       { kind: 'character', name: 'よつろん', aliases: ['yotsuron'], content: '頭に四葉の笑顔のキャラクター' },
       { kind: 'term', name: 'のば描き', aliases: [], content: 'ファンアートのこと' }
     ])
-    const { generationConfig, contents } = requests[0].body
+    const { generationConfig, contents, serviceTier } = requests[0].body
+    assert.equal(serviceTier, 'flex')
     assert.equal(generationConfig.responseMimeType, 'application/json')
     assert.deepEqual(generationConfig.responseSchema.items.properties.kind.enum, ['character', 'quote', 'term'])
     assert.match(contents[0].parts[0].text, /ページ: のばまんのキャラクター\n見出し: よつろん\n本文:\nのばまんのアイコンのキャラクター。/)
