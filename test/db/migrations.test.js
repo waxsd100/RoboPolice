@@ -171,6 +171,14 @@ describe('migrations', { skip: !database.available && 'needs PGHOST' }, () => {
     assert.deepEqual(await q('SELECT id, log_bots FROM guilds ORDER BY id'), [{ id: 'g1', log_bots: true }, { id: 'g2', log_bots: false }])
     const columns = (await q("SELECT column_name FROM information_schema.columns WHERE table_name = 'guilds' ORDER BY column_name")).map(r => r.column_name)
     assert.deepEqual(columns, ['assistant_rules', 'debug_footer', 'details_updated_at', 'icon_url', 'id', 'joined_at', 'log_bots', 'member_count', 'name', 'owner_id', 'reply_length', 'reply_model', 'reply_thinking', 'streamer_persona', 'token_flex_at', 'token_limit_5h', 'token_limit_week', 'token_unlimited', 'youtube_live_events'])
+    assert.deepEqual(await q("SELECT task, model, thinking, tier FROM guild_ai_models WHERE guild_id = 'g1' ORDER BY task"), [
+      { task: 'reply', model: 'gemini-3.8-flash', thinking: 'high', tier: 'standard' },
+      { task: 'rules', model: 'gemini-3.1-flash-lite', thinking: 'minimal', tier: 'standard' },
+      { task: 'blurb', model: 'gemini-3.5-flash-lite', thinking: 'low', tier: 'standard' },
+      { task: 'light', model: 'gemini-3.5-flash-lite', thinking: 'low', tier: 'flex' },
+      { task: 'extract', model: 'gemini-3.1-flash-lite', thinking: 'minimal', tier: 'flex' },
+      { task: 'summary', model: 'gemini-3.8-flash', thinking: 'low', tier: 'flex' }
+    ])
   })
 
   test('image URLs become rows', async () => {
@@ -246,6 +254,23 @@ describe('migrations', { skip: !database.available && 'needs PGHOST' }, () => {
     assert.deepEqual((await q('SELECT video_id FROM youtube_videos WHERE embedding IS NOT NULL')), [{ video_id: 'v1' }])
     const indexes = (await q("SELECT indexname FROM pg_indexes WHERE indexdef LIKE '%hnsw%' ORDER BY indexname")).map(r => r.indexname)
     assert.deepEqual(indexes, ['messages_embedding_hnsw'])
+  })
+
+  test('every table and column has a schema comment', async () => {
+    const uncommentedTables = await q(`
+      SELECT c.relname AS tbl FROM pg_class c
+      JOIN pg_namespace n ON n.oid = c.relnamespace
+      WHERE n.nspname = 'public' AND c.relkind = 'r' AND coalesce(obj_description(c.oid, 'pg_class'), '') = ''
+      ORDER BY 1`)
+    assert.deepEqual(uncommentedTables, [])
+    const uncommentedCols = await q(`
+      SELECT c.relname AS tbl, a.attname AS col FROM pg_attribute a
+      JOIN pg_class c ON c.oid = a.attrelid
+      JOIN pg_namespace n ON n.oid = c.relnamespace
+      WHERE n.nspname = 'public' AND c.relkind = 'r' AND a.attnum > 0 AND NOT a.attisdropped
+        AND coalesce(col_description(c.oid, a.attnum), '') = ''
+      ORDER BY 1, 2`)
+    assert.deepEqual(uncommentedCols, [])
   })
 
   test('what a server stores refers to it; rows of servers the bot left are dropped', async () => {
