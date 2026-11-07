@@ -248,6 +248,23 @@ describe('migrations', { skip: !database.available && 'needs PGHOST' }, () => {
     assert.deepEqual(indexes, ['messages_embedding_hnsw'])
   })
 
+  test('every table and column has a schema comment', async () => {
+    const uncommentedTables = await q(`
+      SELECT c.relname AS tbl FROM pg_class c
+      JOIN pg_namespace n ON n.oid = c.relnamespace
+      WHERE n.nspname = 'public' AND c.relkind = 'r' AND coalesce(obj_description(c.oid, 'pg_class'), '') = ''
+      ORDER BY 1`)
+    assert.deepEqual(uncommentedTables, [])
+    const uncommentedCols = await q(`
+      SELECT c.relname AS tbl, a.attname AS col FROM pg_attribute a
+      JOIN pg_class c ON c.oid = a.attrelid
+      JOIN pg_namespace n ON n.oid = c.relnamespace
+      WHERE n.nspname = 'public' AND c.relkind = 'r' AND a.attnum > 0 AND NOT a.attisdropped
+        AND coalesce(col_description(c.oid, a.attnum), '') = ''
+      ORDER BY 1, 2`)
+    assert.deepEqual(uncommentedCols, [])
+  })
+
   test('what a server stores refers to it; rows of servers the bot left are dropped', async () => {
     assert.deepEqual((await q('SELECT id FROM messages ORDER BY id')).map(r => r.id), ['m1', 'm2', 'm4'], 'm3 was of a server with no settings; m4 has no server recorded')
     assert.deepEqual(await q('SELECT name FROM embedding_models'), [{ name: 'model-a' }])
