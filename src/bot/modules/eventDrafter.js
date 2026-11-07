@@ -1417,7 +1417,6 @@ async function draft ({ request, referenced, recent = [], channelName, channelID
     const initial = replyModel(conversation.contents)
     const fallback = uncensoredModel()
     global.logger?.info(`[GEMINI]: R18 detected in request; ${fallback} answers instead of ${initial}`)
-    addFallback(`${initial} R18 detected → ${fallback}`)
     conversation.contents.uncensored = true
   }
   return check(conversation, await runAgent(conversation.contents, tools, conversation.submits))
@@ -1443,7 +1442,6 @@ async function revise (conversation, correction) {
     const initial = replyModel(conversation.contents)
     const fallback = uncensoredModel()
     global.logger?.info(`[GEMINI]: R18 detected in revision; ${fallback} answers instead of ${initial}`)
-    addFallback(`${initial} R18 detected → ${fallback}`)
     conversation.contents.deep = false
     conversation.contents.uncensored = true
   }

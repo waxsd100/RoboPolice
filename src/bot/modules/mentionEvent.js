@@ -1,6 +1,6 @@
 const Eris = require('eris')
 const { v4: uuidv4 } = require('uuid')
-const { draft, revise, isConfigured, ENTITY_TYPES } = require('./eventDrafter')
+const { draft, revise, isConfigured, isUncensoredUsable, isR18Text, ENTITY_TYPES } = require('./eventDrafter')
 const { createTools, describeServer, withServerEmojis, withServerChannels, StopDrafting } = require('./eventTools')
 const { withLinkCards } = require('../utils/linkCards')
 const { safeLinks } = require('../utils/linkSafety')
@@ -488,18 +488,19 @@ async function handle (message) {
       // What was just being talked about in the channel, as far as it bears on the request
       // (recentTopics.js); not when something the bot made is being changed.
       // The server's rules and what its moderators asked of the assistant (serverRules.js).
+      const directR18 = isUncensoredUsable() && isR18Text(request, referenced?.text)
       const [server, recent, rulesChannels] = await Promise.all([
-        describeServer(guild, member, message.channel.id, { query: request, context: referenced?.othersText }).catch(e => {
+        describeServer(guild, member, message.channel.id, { query: request, context: directR18 ? '' : referenced?.othersText }).catch(e => {
           global.logger.warn(`Could not describe server ${guild.id}: ${e.message}`)
           return null
         }),
-        edit
+        edit || directR18
           ? []
           : relatedRecent(message, request).catch(e => {
             global.logger.warn(`Could not read the recent talk in ${message.channel.id}: ${e.message}`)
             return []
           }),
-        serverRules.readRules(guild).catch(() => null)
+        directR18 ? null : serverRules.readRules(guild).catch(() => null)
       ])
       // Combined emojis and other servers' emojis in what was said are shown to the model as
       // images, for this request only.
