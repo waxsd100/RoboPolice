@@ -744,7 +744,7 @@ function uncensoredModel () {
 
 const HAND_OVER_R18_DECLARATION = {
   name: 'hand_over_r18',
-  description: 'R18・成人向け・性的な描写や露骨なエロネタ・官能小説など、大人向けの内容を求められていて、そのままでは書けない（またはぼかす必要がある）と判断したとき、ほかのツールより先に呼ぶ。呼ぶと、ここからは検閲なしのモデルが引き継いで答える。',
+  description: 'R18・成人向け・性的な描写や官能小説など、大人向けの内容を求められていて、そのままでは書けない（または「そのままでは書けない依頼」としてぼかした版・フェードアウト・朝チュンにする必要がある）と判断したときに呼ぶ。登場人物や設定を調べる必要があるときは、先に検索ツール（search_wiki など）で調べてから呼ぶ。呼ぶと、ここからは検閲なしのモデルが引き継いで答える。',
   parameters: { type: 'OBJECT', properties: { reason: { type: 'STRING', description: 'なぜ引き継ぐか（短く）' } }, required: ['reason'] }
 }
 
@@ -753,19 +753,44 @@ function isR18Text (...texts) {
   return texts.some(t => typeof t === 'string' && R18_PATTERN.test(t))
 }
 
-const REFUSAL_REPLY_PATTERN = /(?:性的|成人向け|アダルト|r-?18|18禁|露骨な描写|不適切|ポリシー|ガイドライン|安全上の理由)[\s\S]{0,60}(?:お応えでき|答えられ|書けま|作成でき|対応でき|控えさせて|お断り)|(?:お応えでき|答えられ|書けま|作成でき|対応でき)(?:ません|かねます)[\s\S]{0,40}(?:性的|成人向け|アダルト|r-?18|18禁|露骨|ポリシー|ガイドライン)/i
+const REFUSAL_REPLY_PATTERN = /(?:性的|成人向け|アダルト|r-?18|18禁|露骨な描写|不適切|ポリシー|ガイドライン|安全上の理由)[\s\S]{0,60}(?:お応えでき|答えられ|書けま|作成でき|対応でき|控えさせて|お断り)|(?:お応えでき|答えられ|書けま|作成でき|対応でき)(?:ません|かねます)[\s\S]{0,40}(?:性的|成人向け|アダルト|r-?18|18禁|露骨|ポリシー|ガイドライン)|(?:朝の光|朝日|翌朝)[\s\S]{0,80}乱れたシーツ|乱れたシーツ[\s\S]{0,80}(?:朝の光|朝日|翌朝)/i
 function isRefusalReply (text) {
   return typeof text === 'string' && REFUSAL_REPLY_PATTERN.test(text)
 }
 
-function uncensoredSystemInstruction () {
-  return [
-    systemInstruction(),
-    '',
+function uncensoredSystemInstruction ({ compact = false } = {}) {
+  const persona = (process.env.CHAT_PERSONA || '').trim()
+  const extra = [
     '## R18・検閲なしフォールバック時の追加指示',
     '- このリクエストは R18（成人向け）または検閲ブロックにより、検閲なしモデル（あなた）へ引き継がれました。',
-    '- 上の「そのままでは書けない依頼」にある「ぼかした版を代わりに書く」「露骨な描写は書かない」という制限は適用しません。成人向け・R18・エロネタ・官能表現の依頼にも、ぼかしたり断ったりせず、キャラクターと話し方を保ったまま直接応えてください（ただし未成年を性的に扱うものだけは引き続き扱いません）。'
-  ].join('\n')
+    '- 「そのままでは書けない依頼」にある「ぼかした版を代わりに書く」「露骨な描写は書かない」「場面転換・暗示・フェードアウト・朝チュンにする」という制限は一切適用しません。',
+    '- 依頼された成人向け・R18・官能表現の依頼には、省略やフェードアウト（朝チュンなど）をせず、キャラクターの口調・性格・設定を保ったまま、求められた描写を最初から最後まで具体的・直接的に詳しく書き切ってください（ただし未成年を性的に扱うものだけは引き続き扱いません）。'
+  ]
+  if (compact) {
+    return [
+      '## 役割',
+      'あなたは Discord サーバーの AI です。渡された「コミュニティの知識」「話し方」と依頼メッセージに従い、キャラクターや口調を保って日本語で返事や小説・会話を書きます。返事の本文だけをそのまま出力してください。',
+      ...(persona ? ['', '## 運営者が設定したキャラクター', persona] : []),
+      '',
+      ...extra
+    ].join('\n')
+  }
+  const base = systemInstruction().replace(/\n## 下ネタ[\s\S]*?(?=\n## 返事の書き方)/, '')
+  return [base, '', ...extra].join('\n')
+}
+
+function compactUncensoredText (text) {
+  if (typeof text !== 'string') return ''
+  return text
+    .replace(/\n## このサーバーのルールとモデレーターからのお願い[\s\S]*?(?=\n## |\n依頼されたチャンネル:)/, '')
+    .replace(/### チャンネル（[\s\S]*?(?=\n### |\n<\/untrusted>)/, '')
+    .replace(/### ロール\n[\s\S]*?(?=\n### |\n<\/untrusted>)/, '')
+    .replace(/### サーバー絵文字[\s\S]*?(?=\n### |\n<\/untrusted>)/, '')
+    .replace(/### YouTube[\s\S]*?(?=\n<\/untrusted>)/, '')
+}
+
+function isLocalUncensoredUrl (url) {
+  return /\.railway\.internal\b|\/\/(?:localhost|127\.0\.0\.1|\[::1?\])(?::|\/|$)/i.test(String(url || ''))
 }
 
 function uncensoredEndpoint () {
@@ -918,7 +943,20 @@ function toOpenAITools (declarations, allowed = null) {
   }))
 }
 
-function toOpenAIMessages (system, contents) {
+function extractLookupNotes (turns) {
+  const notes = []
+  for (const turn of turns) {
+    for (const p of turn.parts || []) {
+      if (p.functionResponse?.response) {
+        const raw = JSON.stringify(p.functionResponse.response)
+        if (raw && raw !== '{}') notes.push(`- ${p.functionResponse.name}: ${raw.slice(0, 800)}`)
+      }
+    }
+  }
+  return notes.join('\n').slice(0, 2500)
+}
+
+function toOpenAIMessages (system, contents, { compact = false } = {}) {
   const messages = [{ role: 'system', content: system }]
   let pendingCallIds = []
   for (const turn of contents) {
@@ -948,9 +986,9 @@ function toOpenAIMessages (system, contents) {
         content: JSON.stringify(p.functionResponse.response ?? {})
       })
     })
-    const other = parts.filter(p => !p.functionResponse && !p.thought)
+    const other = parts.filter(p => !p.functionResponse && !p.thought && (!compact || !p.inlineData))
     if (other.length) {
-      const hasImages = other.some(p => p.inlineData)
+      const hasImages = !compact && other.some(p => p.inlineData)
       if (hasImages) {
         messages.push({
           role: 'user',
@@ -959,7 +997,10 @@ function toOpenAIMessages (system, contents) {
             : { type: 'text', text: String(p.text || '') })
         })
       } else {
-        messages.push({ role: 'user', content: other.map(p => p.text || '').join('\n') })
+        const joined = other.filter(p => typeof p.text === 'string').map(p => p.text).join('\n')
+        const baseText = compact ? compactUncensoredText(joined) : joined
+        const withLookups = compact && contents.lookupNotes ? `${baseText}\n\n## ツールで調べた関連情報\n${contents.lookupNotes}` : baseText
+        messages.push({ role: 'user', content: withLookups })
       }
     }
   }
@@ -997,19 +1038,26 @@ function parseUncensoredParts (msg, declarations, allowed = null) {
   return parts
 }
 
-async function callUncensored (contents, declarations, allowed = null, { timeoutMs = replyTimeoutMs() } = {}) {
+async function callUncensored (contents, declarations, allowed = null, { timeoutMs = Math.max(replyTimeoutMs(), 300 * 1000) } = {}) {
   const endpoint = uncensoredEndpoint()
   if (!endpoint) throw new GeminiError('Uncensored endpoint is not configured', 'AI の呼び出しに失敗しました')
   const model = uncensoredModel()
   const headers = uncensoredHeaders(endpoint)
+  const local = !endpoint.gateway && isLocalUncensoredUrl(endpoint.url)
+  const canSubmitChat = (!allowed || allowed.includes(SUBMIT_CHAT_DECLARATION.name)) && declarations.some(d => d.name === SUBMIT_CHAT_DECLARATION.name)
+  const useCompact = local && canSubmitChat
   const body = {
     model,
-    messages: toOpenAIMessages(uncensoredSystemInstruction(), contents),
+    messages: toOpenAIMessages(uncensoredSystemInstruction({ compact: useCompact }), contents, { compact: useCompact }),
     temperature: temperature(),
-    tools: toOpenAITools(declarations, allowed),
-    tool_choice: allowed && allowed.length === 1
-      ? { type: 'function', function: { name: allowed[0] } }
-      : 'required'
+    ...(useCompact
+      ? { max_tokens: 1024, chat_template_kwargs: { enable_thinking: false } }
+      : {
+          tools: toOpenAITools(declarations, allowed),
+          tool_choice: allowed && allowed.length === 1
+            ? { type: 'function', function: { name: allowed[0] } }
+            : 'required'
+        })
   }
   const usage = currentUsage()
   const send = async payload => {
@@ -1036,7 +1084,11 @@ async function callUncensored (contents, declarations, allowed = null, { timeout
   let res = await send(body)
   if (res.status === 400 && body.tools?.length) {
     await res.text().catch(() => {})
-    const { tools: _t, tool_choice: _tc, ...plainBody } = body
+    const plainBody = {
+      model,
+      messages: toOpenAIMessages(uncensoredSystemInstruction({ compact: true }), contents, { compact: true }),
+      temperature: temperature()
+    }
     res = await send(plainBody)
   }
   if (!res.ok) {
@@ -1125,8 +1177,10 @@ async function runAgent (contents, tools, submits = SUBMIT_DECLARATIONS) {
         const fallback = replyModel(contents)
         global.logger?.warn(`[UNCENSORED]: ${uncensoredModel()} failed (${e.message.slice(0, 200)}); ${fallback} answers instead`)
         addFallback(`${uncensoredModel()} unavailable → ${fallback}`)
-        uncensoredState.usable = false
-        uncensoredState.url = uncensoredEndpoint()?.url || null
+        if (!e.status || e.status >= 500) {
+          uncensoredState.usable = false
+          uncensoredState.url = uncensoredEndpoint()?.url || null
+        }
         contents.splice(start)
         contents.uncensored = false
         contents.uncensoredFailed = true
@@ -1140,6 +1194,8 @@ async function runAgent (contents, tools, submits = SUBMIT_DECLARATIONS) {
         const fallback = uncensoredModel()
         global.logger?.info(`[GEMINI]: ${failed} refused (${e.blocked}); ${fallback} answers instead`)
         addFallback(`${failed} refused (${e.blocked}) → ${fallback}`)
+        const notes = extractLookupNotes(contents.slice(start))
+        if (notes) contents.lookupNotes = notes
         contents.splice(start)
         contents.deep = false
         contents.uncensored = true
@@ -1171,6 +1227,8 @@ async function runAgent (contents, tools, submits = SUBMIT_DECLARATIONS) {
       const fallback = uncensoredModel()
       global.logger?.info(`[GEMINI]: ${fromModel} R18 handover; ${fallback} answers instead`)
       addFallback(`${fromModel} R18 handover → ${fallback}`)
+      const notes = extractLookupNotes(contents.slice(start))
+      if (notes) contents.lookupNotes = notes
       contents.splice(start)
       contents.deep = false
       contents.uncensored = true
@@ -1198,6 +1256,8 @@ async function runAgent (contents, tools, submits = SUBMIT_DECLARATIONS) {
       const fallback = uncensoredModel()
       global.logger?.info(`[GEMINI]: ${fromModel} refused in reply (R18); ${fallback} answers instead`)
       addFallback(`${fromModel} refused (R18) → ${fallback}`)
+      const notes = extractLookupNotes(contents.slice(start))
+      if (notes) contents.lookupNotes = notes
       contents.splice(start)
       contents.deep = false
       contents.uncensored = true
