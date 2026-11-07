@@ -17,7 +17,9 @@ module.exports = async (event, type) => {
           await cacheGuild(guildId)
         }
 
-        const logChannel = global.bot.guildSettingsCache[guildId].event_logs[event.name] && global.bot.getChannel(global.bot.guildSettingsCache[guildId].event_logs[event.name])
+        const eventLogs = global.bot.guildSettingsCache[guildId].event_logs
+        const logChannelId = eventLogs[event.name] || (event.name === 'guildMemberUpdate' && (eventLogs.guildMemberNickUpdate || eventLogs.guildMemberVerify || eventLogs.guildMemberBoostUpdate))
+        const logChannel = logChannelId && global.bot.getChannel(logChannelId)
         if (!logChannel) return
 
         const botPerms = logChannel.permissionsOf(global.bot.user.id).json
@@ -32,7 +34,7 @@ module.exports = async (event, type) => {
         }
 
         if (guildId !== true && !global.bot.guildSettingsCache[guildId]) return // true means skip guildsettings fetch
-        if (guildId !== true && global.bot.guildSettingsCache[guildId].eventIsDisabled(event.name)) return
+        if (guildId !== true && event.name !== 'guildMemberUpdate' && global.bot.guildSettingsCache[guildId].eventIsDisabled(event.name)) return
         await event.handle.apply(this, args)
       }
     })

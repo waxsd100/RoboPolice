@@ -52,13 +52,13 @@ function createStore (source) {
 
   // Deletes the pages of the wiki at `root` that a full read no longer found.
   async function deletePagesExcept (root, urls) {
-    const result = await pool.query('DELETE FROM knowledge_pages WHERE source = $1 AND url LIKE $2 AND NOT (url = ANY($3))', [source, `${root}%`, urls])
+    const result = await pool.query('DELETE FROM knowledge_pages WHERE source = $1 AND starts_with(url, $2) AND NOT (url = ANY($3))', [source, root, urls])
     return result.rowCount || 0
   }
 
   // When the wiki at `root` was last read (null if never).
   async function lastRead (root) {
-    const rows = await pool.query('SELECT max(fetched_at) AS at FROM knowledge_pages WHERE source = $1 AND url LIKE $2', [source, `${root}%`])
+    const rows = await pool.query('SELECT max(fetched_at) AS at FROM knowledge_pages WHERE source = $1 AND starts_with(url, $2)', [source, root])
     return rows.rows[0]?.at || null
   }
 

@@ -211,24 +211,31 @@ async function endUpload (guild, record, now = new Date()) {
 // Checks one channel for the servers `guildIDs` (those this worker hosts that turned events on):
 // new streams and uploads, and the state of the ones being followed. The channel's videos are read
 // once for all of them. Resolves to the number of events changed.
+const checkingChannels = new Set()
 async function checkChannel (channelID, guildIDs, now = new Date()) {
-  const guilds = guildIDs.map(id => global.bot.guilds.get(id)).filter(Boolean)
-  if (guilds.length === 0) return 0
-  const since = new Date(now.getTime() - hoursSetting('UPLOAD_EVENT_MAX_AGE_HOURS', DEFAULT_UPLOAD_MAX_AGE_HOURS) * 3600 * 1000)
-  const [known, liveIds, recent] = await Promise.all([youtubeDB.getVideoIds(channelID), youtubeDB.getLiveVideoIds(channelID), youtubeDB.recentVideoIds(channelID, since)])
-  const recordsOf = new Map(await Promise.all(guilds.map(async g => [g.id, await youtubeDB.getLiveEvents(g.id, channelID)])))
-  const fresh = (await feedVideoIds(channelID)).filter(id => !known.has(id))
-  const records = [...recordsOf.values()]
-  const open = records.flatMap(r => Object.entries(r).filter(([, e]) => e.status === 'scheduled' || e.status === 'active').map(([id]) => id))
-  // Recent uploads some server has no event for yet (another worker may have stored them first).
-  const unannounced = uploadEventsEnabled() ? recent.filter(id => records.some(r => !r[id])) : []
-  const ids = [...new Set([...fresh, ...liveIds, ...open, ...unannounced])]
-  if (ids.length === 0) return 0
-  const videos = await fetchVideos(ids, process.env.YOUTUBE_API_KEY)
-  await youtubeDB.upsertVideos(channelID, videos)
-  let changed = 0
-  for (const guild of guilds) changed += await updateGuild(guild, ids, new Map(videos.map(v => [v.id, v])), recordsOf.get(guild.id))
-  return changed
+  if (checkingChannels.has(channelID)) return 0
+  checkingChannels.add(channelID)
+  try {
+    const guilds = guildIDs.map(id => global.bot.guilds.get(id)).filter(Boolean)
+    if (guilds.length === 0) return 0
+    const since = new Date(now.getTime() - hoursSetting('UPLOAD_EVENT_MAX_AGE_HOURS', DEFAULT_UPLOAD_MAX_AGE_HOURS) * 3600 * 1000)
+    const [known, liveIds, recent] = await Promise.all([youtubeDB.getVideoIds(channelID), youtubeDB.getLiveVideoIds(channelID), youtubeDB.recentVideoIds(channelID, since)])
+    const recordsOf = new Map(await Promise.all(guilds.map(async g => [g.id, await youtubeDB.getLiveEvents(g.id, channelID)])))
+    const fresh = (await feedVideoIds(channelID)).filter(id => !known.has(id))
+    const records = [...recordsOf.values()]
+    const open = records.flatMap(r => Object.entries(r).filter(([, e]) => e.status === 'scheduled' || e.status === 'active').map(([id]) => id))
+    // Recent uploads some server has no event for yet (another worker may have stored them first).
+    const unannounced = uploadEventsEnabled() ? recent.filter(id => records.some(r => !r[id])) : []
+    const ids = [...new Set([...fresh, ...liveIds, ...open, ...unannounced])]
+    if (ids.length === 0) return 0
+    const videos = await fetchVideos(ids, process.env.YOUTUBE_API_KEY)
+    await youtubeDB.upsertVideos(channelID, videos)
+    let changed = 0
+    for (const guild of guilds) changed += await updateGuild(guild, ids, new Map(videos.map(v => [v.id, v])), recordsOf.get(guild.id))
+    return changed
+  } finally {
+    checkingChannels.delete(channelID)
+  }
 }
 
 // One server's events for the channel's videos `ids` (byId: their current state from YouTube).

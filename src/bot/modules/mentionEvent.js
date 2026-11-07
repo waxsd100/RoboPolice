@@ -106,10 +106,45 @@ function withFooter (content, footer) {
 
 // A chat reply's text with only the links that came up in the conversation (the request, what it
 // replies to, what the tools read): linkSafety.js. Links left out are logged.
-function checkedLinks (result, guild) {
-  const { text, removed } = safeLinks(result.text, result.conversation?.contents)
+function checkedText (text, result, guild) {
+  if (!text) return text
+  const { text: clean, removed } = safeLinks(text, result.conversation?.contents)
   if (removed.length) global.logger.warn(`[INJECTION]: Left out link(s) that came from nowhere in a reply in ${guild.id}: ${removed.join(' ').slice(0, 300)}`)
-  return text
+  return clean
+}
+
+function checkedLinks (result, guild) {
+  return checkedText(result.text, result, guild)
+}
+
+function checkedDraft (result, guild) {
+  if (result.kind === 'event' && result.event) {
+    const description = checkedText(result.event.description, result, guild)
+    const location = result.event.entity_metadata?.location
+      ? checkedText(result.event.entity_metadata.location, result, guild)
+      : undefined
+    return {
+      ...result,
+      event: {
+        ...result.event,
+        ...(description !== undefined ? { description } : {}),
+        ...(location !== undefined ? { entity_metadata: { ...result.event.entity_metadata, location } } : {})
+      }
+    }
+  }
+  if (result.kind === 'forum' && result.post?.message?.content) {
+    return {
+      ...result,
+      post: {
+        ...result.post,
+        message: {
+          ...result.post.message,
+          content: checkedText(result.post.message.content, result, guild)
+        }
+      }
+    }
+  }
+  return result
 }
 
 // Talking to the bot: mentioning it, or replying to its answer.
@@ -522,6 +557,7 @@ async function handle (message) {
           await editReply(reply, { content: failure(result.error), embeds: [], components: [] }, null)
           return
         }
+        result = checkedDraft(result, guild)
 
         const kind = KINDS[result.kind]
         if (!cover) {

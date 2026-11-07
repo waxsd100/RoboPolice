@@ -32,8 +32,9 @@ function callbackURL () {
 function validSignature (body, header, secret = process.env.YOUTUBE_WEBSUB_SECRET) {
   const [algorithm, given] = String(header || '').split('=')
   if (!['sha1', 'sha256'].includes(algorithm) || !given) return false
-  const expected = crypto.createHmac(algorithm, secret).update(body).digest('hex')
-  return expected.length === given.length && crypto.timingSafeEqual(Buffer.from(expected), Buffer.from(given))
+  const expected = Buffer.from(crypto.createHmac(algorithm, secret).update(body).digest('hex'))
+  const actual = Buffer.from(given)
+  return expected.length === actual.length && crypto.timingSafeEqual(expected, actual)
 }
 
 // The channel and video a notification is about (an Atom entry), or null.
@@ -65,7 +66,8 @@ async function handle (req, res, { store, relay = n => broadcast({ type: 'youtub
       return
     }
     if (mode === 'subscribe') {
-      const lease = Number(url.searchParams.get('hub.lease_seconds')) || LEASE_SECONDS
+      const rawLease = Number(url.searchParams.get('hub.lease_seconds'))
+      const lease = Number.isFinite(rawLease) && rawLease > 0 ? Math.min(rawLease, LEASE_SECONDS * 2) : LEASE_SECONDS
       await store.saveWebsub(channelID, new Date(Date.now() + lease * 1000))
     }
     res.writeHead(200, { 'Content-Type': 'text/plain' }).end(challenge)

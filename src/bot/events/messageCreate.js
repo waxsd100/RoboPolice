@@ -8,10 +8,12 @@ module.exports = {
   name: 'messageCreate',
   type: 'on',
   handle: async message => {
-    if (message.type === 23 || message.type === 24 || message.author.bot || !message.member) return // do not log automod actions
-    await commandHandler(message)
-    mentionEvent.handle(message).catch(e => global.logger.error(e))
-    discordKnowledge.onMessage(message).catch(e => global.logger.warn(`[DISCORD]: ${e.message}`))
+    if (message.type === 23 || message.type === 24 || !message.author || !message.member) return // do not log automod actions
+    if (!message.author.bot) {
+      await commandHandler(message)
+      mentionEvent.handle(message).catch(e => global.logger.error(e))
+      discordKnowledge.onMessage(message).catch(e => global.logger.warn(`[DISCORD]: ${e.message}`))
+    }
     if (message.author.id === global.bot.user.id) return // dump logs made by the bot
     let guildSettings = global.bot.guildSettingsCache[message.channel.guild.id]
     if (!guildSettings) {

@@ -61,7 +61,7 @@ describe('websub', () => {
     const body = `<feed><entry><yt:videoId>abcdefghijk</yt:videoId><yt:channelId>${UC}</yt:channelId></entry></feed>`
     const relayed = []
     const relay = n => relayed.push(n)
-    for (const signature of [sign(body), undefined, sign(body, 'wrong')]) {
+    for (const signature of [sign(body), undefined, sign(body, 'wrong'), `sha1=${'あ'.repeat(40)}`]) {
       const res = response()
       await websub.handle(request('POST', '/youtube/websub', { body, headers: signature ? { 'x-hub-signature': signature } : {} }), res, { store, relay })
       assert.equal(res.status, 204)

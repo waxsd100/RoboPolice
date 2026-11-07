@@ -19,33 +19,12 @@ module.exports = {
         }
       }]
     })
-    let i = 0
     let complete = false
-    global.bot.on('messageCreate', async function temp (m) {
-      if (i === 0) {
-        const timeout = setTimeout(() => {
-          global.bot.removeListener('messageCreate', temp)
-          if (!complete) {
-            message.channel.createMessage({
-              embeds: [{
-                description: '10秒以内に *yes* の返信がありませんでした。',
-                color: 3553599,
-                timestamp: new Date(),
-                footer: {
-                  icon_url: global.bot.user.avatarURL,
-                  text: `${global.bot.user.username}#${global.bot.user.discriminator}`
-                },
-                author: {
-                  name: `${message.author.username}#${message.author.discriminator}`,
-                  icon_url: message.author.avatarURL
-                }
-              }]
-            })
-            msg.delete()
-          }
-        }, 10000)
-      }
+    const temp = async function (m) {
       if (m.channel.id === message.channel.id && m.author.id === message.author.id && m.content.toLowerCase() === 'yes' && !complete) {
+        complete = true
+        clearTimeout(timeout)
+        global.bot.removeListener('messageCreate', temp)
         message.channel.createMessage({
           embeds: [{
             description: 'サーバーの設定をリセットします。',
@@ -61,14 +40,33 @@ module.exports = {
             }
           }]
         })
-        complete = true
         await createGuild(message.channel.guild)
         await resetGuild(message.channel.guild.id)
         await cacheGuild(message.channel.guild.id)
-        return
       }
-      i = i + 1
-    })
+    }
+    const timeout = setTimeout(() => {
+      global.bot.removeListener('messageCreate', temp)
+      if (!complete) {
+        message.channel.createMessage({
+          embeds: [{
+            description: '10秒以内に *yes* の返信がありませんでした。',
+            color: 3553599,
+            timestamp: new Date(),
+            footer: {
+              icon_url: global.bot.user.avatarURL,
+              text: `${global.bot.user.username}#${global.bot.user.discriminator}`
+            },
+            author: {
+              name: `${message.author.username}#${message.author.discriminator}`,
+              icon_url: message.author.avatarURL
+            }
+          }]
+        })
+        msg.delete()
+      }
+    }, 10000)
+    global.bot.on('messageCreate', temp)
   },
   name: 'reset',
   quickHelp: 'このサーバーに保存されている設定をすべてリセットします。ログ機能を停止・初期化したい場合に使用してください。',

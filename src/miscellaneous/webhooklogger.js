@@ -4,7 +4,7 @@ require('dotenv').config()
 let globalHookErrors = 0
 
 setInterval(() => {
-  globalHookErrors-- // This timeout exists so that if the shard manager starts to spew errors, I don't get IP banned from Discord.
+  if (globalHookErrors > 0) globalHookErrors-- // This timeout exists so that if the shard manager starts to spew errors, I don't get IP banned from Discord.
 }, 5000)
 
 function fatal (message) {
@@ -114,4 +114,5 @@ if (!process.env.DISCORD_WEBHOOK_URL) {
   exports.warn = () => { }
   exports.generic = () => { }
   exports.fatal = () => { }
+  exports.custom = () => { }
 }

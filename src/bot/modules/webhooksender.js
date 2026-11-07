@@ -23,18 +23,21 @@ module.exports = async pkg => {
     await global.redis.del(`webhook-${guildSettings.getEventByName(pkg.eventName)}`)
     await setEventsByChannelID(pkg.guildID, '', [pkg.eventName])
     await cacheGuild(pkg.guildID)
+    return
   }
-  if (!global.bot.getChannel(guildSettings.getEventByName(pkg.eventName))?.permissionsOf(global.bot.user.id).json.manageWebhooks || !global.bot.getChannel(guildSettings.getEventByName(pkg.eventName)).permissionsOf(global.bot.user.id).json.viewAuditLog) return
-  const webhook = await webhookCache.getWebhook(guildSettings.getEventByName(pkg.eventName))
+  if (!global.bot.getChannel(guildSettings.getEventByName(pkg.eventName))?.permissionsOf(global.bot.user.id).json.manageWebhooks || !global.bot.getChannel(guildSettings.getEventByName(pkg.eventName))?.permissionsOf(global.bot.user.id).json.viewAuditLog) return
+  let webhook = await webhookCache.getWebhook(guildSettings.getEventByName(pkg.eventName))
   let webhookID, webhookToken
+  if (!webhook && guildSettings.getEventByName(pkg.eventName)) {
+    await guildWebhookCacher(pkg.guildID, guildSettings.getEventByName(pkg.eventName))
+    webhook = await webhookCache.getWebhook(guildSettings.getEventByName(pkg.eventName))
+  }
   if (webhook) {
     const split = webhook.split('|')
     webhookID = split[0]
     webhookToken = split[1]
   }
-  if (!webhook && guildSettings.getEventByName(pkg.eventName)) {
-    await guildWebhookCacher(pkg.guildID, guildSettings.getEventByName(pkg.eventName))
-  } else if (webhook && !guildSettings.eventIsDisabled(pkg.eventName)) {
+  if (webhook && !guildSettings.eventIsDisabled(pkg.eventName)) {
     if (!pkg.embeds[0].footer && !pkg.noFooter) {
       pkg.embeds[0].footer = {
         text: `${global.bot.user.username}#${global.bot.user.discriminator}`,
