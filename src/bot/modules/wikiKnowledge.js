@@ -13,7 +13,7 @@ const urlFetcher = require('../utils/urlFetcher')
 const { parseWikiPage } = require('../utils/wikiPage')
 const { embed, embedQuery, model } = require('../utils/embeddings')
 const { isGatewayConfigured } = require('../utils/aiGateway')
-const { callGemini, lightModel } = require('./eventDrafter')
+const { callGemini, extractModel, thinkingConfig } = require('./eventDrafter')
 const { withoutCharCount } = require('../utils/textClean')
 const { looksLikeInjection } = require('../utils/untrusted')
 const store = require('../../db/interfaces/postgres/wiki')
@@ -105,9 +105,10 @@ const FACT_SCHEMA = {
 
 // The knowledge in one part: [{ kind, name, aliases, content }].
 async function extractFacts (section) {
-  const content = await callGemini(lightModel(), {
+  const m = extractModel()
+  const content = await callGemini(m, {
     contents: [{ role: 'user', parts: [{ text: `${EXTRACT_PROMPT}\n\nページ: ${section.title}\n見出し: ${section.heading}\n本文:\n${section.text}` }] }],
-    generationConfig: { temperature: 0, responseMimeType: 'application/json', responseSchema: FACT_SCHEMA }
+    generationConfig: { temperature: 0, responseMimeType: 'application/json', responseSchema: FACT_SCHEMA, ...thinkingConfig(m, { setting: 'GEMINI_EXTRACT_THINKING_LEVEL', fallback: 'minimal' }) }
   }, { timeoutMs: 2 * 60 * 1000, purpose: 'wikiFacts', flex: true })
   const raw = JSON.parse(content.parts.map(p => p.text || '').join('') || '[]')
   return (Array.isArray(raw) ? raw : [])

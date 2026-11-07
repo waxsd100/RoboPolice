@@ -75,6 +75,8 @@ describe('refreshGuild', () => {
     const requests = installGemini([[{ text: JSON.stringify(facts) }], [{ text: 'ゆるくて、語尾に「w」が多い' }]])
     const result = await lore.refreshGuild(guild(), { now: NOW, log: () => {} })
     assert.deepEqual(result, { extracted: 1, removed: 0 })
+    assert.match(requests[0].url, /gemini-3\.1-flash-lite:generateContent/)
+    assert.equal(requests[0].body.generationConfig.thinkingConfig.thinkingLevel, 'minimal')
     assert.equal(requests[0].body.serviceTier, 'flex')
     assert.equal(requests[1].body.serviceTier, 'flex')
     const prompt = requests[0].body.contents[0].parts[0].text

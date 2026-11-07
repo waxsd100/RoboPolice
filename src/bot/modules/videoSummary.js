@@ -125,7 +125,7 @@ async function summarizeParts (guildID, videoID, seconds, partSeconds, { flex = 
   const merged = await backgroundQueue.run(guildID, () => callGemini(lightModel(), {
     contents: [{ role: 'user', parts: [{ text: `次は1本の長い動画を時間で分けて要約したものです。これを1つの要約にまとめてください（長くても1500文字程度まで。文字数は書かない）。話題の順に箇条書きにし、各項目の先頭の [時間] は書き換えずにそのまま残してください。告知・日時・出演者・URL など具体的な情報は残してください。\n\n${parts.join('\n\n')}` }] }],
     generationConfig: { temperature: 0.2 }
-  }, { timeoutMs: 2 * 60 * 1000, purpose: 'videoSummary', flex: true, defaultSafety: true }))
+  }, { timeoutMs: 2 * 60 * 1000, purpose: 'videoSummary', flex, defaultSafety: true }))
   return textOf(merged)
 }
 

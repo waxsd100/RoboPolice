@@ -67,7 +67,7 @@ async function askGemini (video, thumbnail) {
   const content = await callGemini(lightModel(), {
     contents: [{ role: 'user', parts }],
     generationConfig: { temperature: 0.3, responseMimeType: 'application/json', responseSchema: SCHEMA }
-  }, { timeoutMs: TIMEOUT_MS, purpose: 'streamBlurb', flex: true })
+  }, { timeoutMs: TIMEOUT_MS, purpose: 'streamBlurb' })
   const answer = JSON.parse(content.parts.map(p => p.text || '').join('') || '{}')
   const blurb = withoutCharCount(String(answer.blurb || '').trim()).slice(0, MAX_BLURB) || null
   const named = (Array.isArray(answer.games) ? answer.games : [])

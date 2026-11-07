@@ -484,13 +484,21 @@ async function geminiPost (path, body, { timeoutMs = GEMINI_TIMEOUT_MS, purpose 
   return data
 }
 
-// The lighter, cheaper model for work in the background (taking knowledge out of pages, describing
-// emojis, short blurbs): GEMINI_LIGHT_MODEL, by default gemini-3.5-flash-lite; empty to use
-// GEMINI_MODEL for everything.
+// The lighter, cheaper model for work in the background (describing emojis, short blurbs):
+// GEMINI_LIGHT_MODEL, by default gemini-3.5-flash-lite; empty to use GEMINI_MODEL for everything.
 const DEFAULT_LIGHT_MODEL = 'gemini-3.5-flash-lite'
 function lightModel () {
   const light = process.env.GEMINI_LIGHT_MODEL ?? DEFAULT_LIGHT_MODEL
   return light || process.env.GEMINI_MODEL || DEFAULT_GEMINI_MODEL
+}
+
+// The ultra-light model for structured extraction and picking (taking knowledge out of pages and
+// server history, picking rules channels): GEMINI_EXTRACT_MODEL, by default gemini-3.1-flash-lite;
+// empty to use lightModel().
+const DEFAULT_EXTRACT_MODEL = 'gemini-3.1-flash-lite'
+function extractModel () {
+  const extract = (process.env.GEMINI_EXTRACT_MODEL ?? DEFAULT_EXTRACT_MODEL).trim()
+  return extract || lightModel()
 }
 
 // One generateContent call through the gateway. Returns the first candidate's content. A call that
@@ -869,4 +877,4 @@ async function revise (conversation, correction) {
   return check(conversation, await runAgent(conversation.contents, conversation.tools, conversation.submits))
 }
 
-module.exports = { THINKING_LEVELS, replyTimeoutMs, flexUsable, SAFETY_SETTINGS, withSafetySettings, THINK_DEEPER_DECLARATION, deepModel, REPLY_LENGTHS, DEFAULT_REPLY_LENGTH, PERSONAS, thinkingConfig, cachedPrefix, caches, purgedFor, promptVersion, lightModel, draft, revise, MAX_STEPS, isConfigured, toScheduledEvent, callGemini, geminiRequest, geminiSend, geminiStream, retryTimer, DEFAULT_GEMINI_MODEL, ENTITY_TYPES, GeminiError }
+module.exports = { THINKING_LEVELS, replyTimeoutMs, flexUsable, SAFETY_SETTINGS, withSafetySettings, THINK_DEEPER_DECLARATION, deepModel, REPLY_LENGTHS, DEFAULT_REPLY_LENGTH, PERSONAS, thinkingConfig, cachedPrefix, caches, purgedFor, promptVersion, lightModel, extractModel, DEFAULT_EXTRACT_MODEL, draft, revise, MAX_STEPS, isConfigured, toScheduledEvent, callGemini, geminiRequest, geminiSend, geminiStream, retryTimer, DEFAULT_GEMINI_MODEL, ENTITY_TYPES, GeminiError }
