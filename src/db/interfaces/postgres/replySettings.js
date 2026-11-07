@@ -1,27 +1,59 @@
-// How the mention assistant replies in each server: how long (migrations/025_reply_length.sql,
-// /replylength), whether it speaks as the streamer (026_streamer_persona.sql, /persona) and whether
-// its replies end with the debug line (029_debug_footer.sql, %debugfooter), and its own mention
-// token limits (031_guild_token_limits.sql, %tokenlimit), and its own model and thinking level
-// (036_guild_reply_model.sql, %replymodel), and what its moderators ask the assistant to keep to
+// How the mention assistant and background AI tasks run in each server: how long replies are
+// (migrations/025_reply_length.sql, /replylength), whether it speaks as the streamer
+// (026_streamer_persona.sql, /persona), whether its replies end with the debug line
+// (029_debug_footer.sql, %debugfooter), its own mention token limits (031_guild_token_limits.sql,
+// %tokenlimit), its own model, thinking level and service tier per task (036_guild_reply_model.sql,
+// 040_guild_ai_models.sql, %replymodel), and what its moderators ask the assistant to keep to
 // (037_guild_assistant_rules.sql, /assistantrules).
 const pool = require('../../clients/postgres')
+const { AI_TASKS } = require('../../../bot/utils/replyOptions')
 
 // { replyLength: 'long' | 'normal' | 'short' | null, streamerPersona: boolean, debugFooter: boolean,
-// tokenLimits: { '5h', week, flexAt } (each a number, or null for the default) and unlimited
-// (032_guild_unlimited.sql), replyModel and replyThinking (null for the default), assistantRules
-// (text or null) } for the server.
+// tokenLimits: { '5h', week, flexAt, unlimited }, replyModel and replyThinking (null for the
+// default), aiModels: { [task]: { model, thinking, tier } }, assistantRules (text or null) }.
 async function getReplySettings (guildID) {
-  const rows = await pool.query('SELECT reply_length, streamer_persona, debug_footer, token_limit_5h, token_limit_week, token_flex_at, token_unlimited, reply_model, reply_thinking, assistant_rules FROM guilds WHERE id = $1', [guildID])
+  const [rows, taskRows] = await Promise.all([
+    pool.query('SELECT reply_length, streamer_persona, debug_footer, token_limit_5h, token_limit_week, token_flex_at, token_unlimited, reply_model, reply_thinking, assistant_rules FROM guilds WHERE id = $1', [guildID]),
+    pool.query('SELECT task, model, thinking, tier FROM guild_ai_models WHERE guild_id = $1', [guildID])
+  ])
   const row = rows.rows[0]
+  const aiModels = {}
+  for (const r of taskRows.rows) {
+    aiModels[r.task] = { model: r.model || null, thinking: r.thinking || null, tier: r.tier || null }
+  }
+  if ((row?.reply_model || row?.reply_thinking) && !aiModels.reply) {
+    aiModels.reply = { model: row.reply_model || null, thinking: row.reply_thinking || null, tier: null }
+  } else if (aiModels.reply) {
+    aiModels.reply.model = aiModels.reply.model || row?.reply_model || null
+    aiModels.reply.thinking = aiModels.reply.thinking || row?.reply_thinking || null
+  }
   return {
     replyLength: row?.reply_length || null,
     streamerPersona: row ? row.streamer_persona !== false : true,
     debugFooter: row?.debug_footer === true,
     tokenLimits: { '5h': row?.token_limit_5h ?? null, week: row?.token_limit_week ?? null, flexAt: row?.token_flex_at ?? null, unlimited: row?.token_unlimited === true },
-    replyModel: row?.reply_model || null,
-    replyThinking: row?.reply_thinking || null,
+    replyModel: aiModels.reply?.model || row?.reply_model || null,
+    replyThinking: aiModels.reply?.thinking || row?.reply_thinking || null,
+    aiModels,
     assistantRules: row?.assistant_rules || null
   }
+}
+
+async function getTaskModel (guildID, task) {
+  if (!AI_TASKS.includes(task)) return null
+  if (guildID) {
+    const { rows } = await pool.query('SELECT model, thinking, tier FROM guild_ai_models WHERE guild_id = $1 AND task = $2', [guildID, task])
+    if (rows[0]) return { model: rows[0].model || null, thinking: rows[0].thinking || null, tier: rows[0].tier || null }
+    if (task === 'reply') {
+      const g = await pool.query('SELECT reply_model, reply_thinking FROM guilds WHERE id = $1', [guildID])
+      if (g.rows[0]?.reply_model || g.rows[0]?.reply_thinking) {
+        return { model: g.rows[0].reply_model || null, thinking: g.rows[0].reply_thinking || null, tier: null }
+      }
+    }
+    return null
+  }
+  const { rows } = await pool.query('SELECT model, thinking, tier FROM guild_ai_models WHERE task = $1 ORDER BY guild_id LIMIT 1', [task])
+  return rows[0] ? { model: rows[0].model || null, thinking: rows[0].thinking || null, tier: rows[0].tier || null } : null
 }
 
 async function getReplyLength (guildID) {
@@ -59,13 +91,34 @@ async function setTokenLimit (guildID, which, value) {
   await pool.query(`UPDATE guilds SET ${column} = $2 WHERE id = $1`, [guildID, value])
 }
 
-// Sets the server's model (which 'model') or thinking level ('thinking') for mention replies; null
-// for the default.
-async function setReplyModel (guildID, which, value) {
-  const column = { model: 'reply_model', thinking: 'reply_thinking' }[which]
-  if (!column) throw new Error(`No reply setting ${which}`)
+const TASK_COLUMNS = { model: 'model', thinking: 'thinking', tier: 'tier' }
+async function setTaskModel (guildID, task, which, value) {
+  if (!AI_TASKS.includes(task)) throw new Error(`No AI task ${task}`)
+  if (which === 'all') {
+    await ensureGuild(guildID)
+    await pool.query('DELETE FROM guild_ai_models WHERE guild_id = $1 AND task = $2', [guildID, task])
+    if (task === 'reply') await pool.query('UPDATE guilds SET reply_model = NULL, reply_thinking = NULL WHERE id = $1', [guildID])
+    return
+  }
+  const col = TASK_COLUMNS[which]
+  if (!col) throw new Error(`No reply setting ${which}`)
   await ensureGuild(guildID)
-  await pool.query(`UPDATE guilds SET ${column} = $2 WHERE id = $1`, [guildID, value])
+  await pool.query(
+    `INSERT INTO guild_ai_models (guild_id, task, ${col}) VALUES ($1, $2, $3)
+     ON CONFLICT (guild_id, task) DO UPDATE SET ${col} = EXCLUDED.${col}`,
+    [guildID, task, value]
+  )
+  await pool.query('DELETE FROM guild_ai_models WHERE guild_id = $1 AND task = $2 AND model IS NULL AND thinking IS NULL AND tier IS NULL', [guildID, task])
+  if (task === 'reply' && (which === 'model' || which === 'thinking')) {
+    const guildCol = which === 'model' ? 'reply_model' : 'reply_thinking'
+    await pool.query(`UPDATE guilds SET ${guildCol} = $2 WHERE id = $1`, [guildID, value])
+  }
+}
+
+// Sets the server's model ('model'), thinking level ('thinking') or tier ('tier') for mention
+// replies; null for the default.
+async function setReplyModel (guildID, which, value) {
+  return setTaskModel(guildID, 'reply', which, value)
 }
 
 // Sets what the server's moderators ask the assistant to keep to; null for nothing.
@@ -74,4 +127,4 @@ async function setAssistantRules (guildID, text) {
   await pool.query('UPDATE guilds SET assistant_rules = $2 WHERE id = $1', [guildID, text])
 }
 
-module.exports = { setAssistantRules, setReplyModel, setTokenLimit, getReplySettings, getReplyLength, setReplyLength, setStreamerPersona, setDebugFooter }
+module.exports = { setAssistantRules, setReplyModel, setTaskModel, getTaskModel, setTokenLimit, getReplySettings, getReplyLength, setReplyLength, setStreamerPersona, setDebugFooter }

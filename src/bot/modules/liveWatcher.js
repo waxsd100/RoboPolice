@@ -303,7 +303,8 @@ async function summarizeArchives (guildID) {
     const [archive] = await youtubeDB.archivesToSummarize(guildID)
     if (!archive) return null
     await youtubeDB.recordArchiveAttempt(archive.video_id)
-    await require('./videoSummary').summarizeVideo(guildID, archive.url, { flex: true })
+    const { flex } = await require('./eventDrafter').resolveTaskConfig('summary', guildID)
+    await require('./videoSummary').summarizeVideo(guildID, archive.url, { flex })
     global.logger.info(`[LIVE]: Summarized the archive of ${archive.video_id} in ${guildID}`)
     return archive.video_id
   } catch (e) {

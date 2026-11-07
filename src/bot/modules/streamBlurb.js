@@ -2,7 +2,7 @@
 // Made from what is known before it starts: its title, its description and its thumbnail. Gemini
 // can't watch a stream that is still live, so the contents themselves are summarized once its
 // archive is up (summarizeArchives in liveWatcher.js).
-const { callGemini, lightModel } = require('./eventDrafter')
+const { callGemini, resolveTaskConfig } = require('./eventDrafter')
 const { isGatewayConfigured } = require('../utils/aiGateway')
 const { withoutCharCount } = require('../utils/textClean')
 const backgroundQueue = require('../utils/backgroundQueue')
@@ -54,26 +54,27 @@ function enabled () {
 async function describeStream (video, thumbnail = null, guildID = null) {
   if (!enabled()) return null
   try {
-    return await backgroundQueue.run(guildID, () => askGemini(video, thumbnail), { maxWaitMs: MAX_WAIT_MS })
+    return await backgroundQueue.run(guildID, () => askGemini(video, thumbnail, guildID), { maxWaitMs: MAX_WAIT_MS })
   } catch (e) {
     global.logger.warn(`[LIVE]: Could not describe ${video.id}: ${e.message}`)
     return null
   }
 }
 
-async function askGemini (video, thumbnail) {
+async function askGemini (video, thumbnail, guildID = null) {
   const parts = [{ text: `${PROMPT}\n\nタイトル: ${video.title}\n概要欄:\n${(video.description || '（なし）').slice(0, 3000)}` }]
   if (thumbnail) parts.push({ inlineData: { mimeType: thumbnail.mimeType || 'image/jpeg', data: thumbnail.buffer.toString('base64') } })
-  const content = await callGemini(lightModel(), {
+  const { model: m, thinking, flex } = await resolveTaskConfig('blurb', guildID)
+  const content = await callGemini(m, {
     contents: [{ role: 'user', parts }],
-    generationConfig: { temperature: 0.3, responseMimeType: 'application/json', responseSchema: SCHEMA }
-  }, { timeoutMs: TIMEOUT_MS, purpose: 'streamBlurb' })
+    generationConfig: { temperature: 0.3, responseMimeType: 'application/json', responseSchema: SCHEMA, ...thinking }
+  }, { timeoutMs: TIMEOUT_MS, purpose: 'streamBlurb', ...(flex ? { flex: true } : {}) })
   const answer = JSON.parse(content.parts.map(p => p.text || '').join('') || '{}')
   const blurb = withoutCharCount(String(answer.blurb || '').trim()).slice(0, MAX_BLURB) || null
   const named = (Array.isArray(answer.games) ? answer.games : [])
     .filter(g => String(g?.name || '').trim())
     .map(g => ({ name: String(g.name).trim(), nameEn: String(g.name_en || '').trim() || null }))
-  const links = await gameLinks.linksFor(named, { log: m => global.logger.warn(`[LIVE]: ${m}`) })
+  const links = await gameLinks.linksFor(named, { guildID, log: m => global.logger.warn(`[LIVE]: ${m}`) })
   const games = await withMentions(named, links)
   return blurb || games.length ? { blurb, games } : null
 }

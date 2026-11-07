@@ -48,7 +48,7 @@ function byName (channels) {
 // The light model picks the channels members are to read first. Resolves to their IDs.
 async function askModel (guild, channels) {
   const list = channels.map(c => `${c.id}: #${c.name}${c.topic ? ` — ${String(c.topic).replace(/\s+/g, ' ').slice(0, 100)}` : ''}`).join('\n')
-  const m = drafter().extractModel()
+  const { model: m, thinking, flex } = await drafter().resolveTaskConfig('rules', guild.id)
   const content = await drafter().callGemini(m, {
     contents: [{
       role: 'user',
@@ -64,8 +64,8 @@ async function askModel (guild, channels) {
         ].join('\n')
       }]
     }],
-    generationConfig: { temperature: 0, ...drafter().thinkingConfig(m, { setting: 'GEMINI_EXTRACT_THINKING_LEVEL', fallback: 'minimal' }) }
-  }, { timeoutMs: 30 * 1000, purpose: 'serverRules' })
+    generationConfig: { temperature: 0, ...thinking }
+  }, { timeoutMs: 30 * 1000, purpose: 'serverRules', ...(flex ? { flex: true } : {}) })
   const answer = (content?.parts || []).map(p => p.text || '').join('')
   const known = new Set(channels.map(c => c.id))
   return [...new Set(answer.match(/\d{15,21}/g) || [])].filter(id => known.has(id)).slice(0, MAX_CHANNELS)

@@ -542,11 +542,49 @@ async function callGemini (model, body, options) {
 // tokens: `setting` names the environment variable, `fallback` the level without it. Mention
 // replies and drafts think at high (GEMINI_THINKING_LEVEL), video summaries at low
 // (VIDEO_SUMMARY_THINKING_LEVEL), and everything else at low (GEMINI_LIGHT_THINKING_LEVEL). Only sent to Gemini 3 models (older ones refuse the setting).
-const { THINKING_LEVELS } = require('../utils/replyOptions')
+const { THINKING_LEVELS, SERVICE_TIERS } = require('../utils/replyOptions')
+const replySettings = () => require('../../db/interfaces/postgres/replySettings')
+
 function thinkingConfig (model, { setting = 'GEMINI_THINKING_LEVEL', fallback = 'high' } = {}) {
   if (!/gemini-[3-9]/.test(model)) return {}
   const level = String(process.env[setting] || fallback).toLowerCase()
   return THINKING_LEVELS.includes(level) ? { thinkingConfig: { thinkingLevel: level } } : {}
+}
+
+function defaultTaskConfig (task) {
+  const entry = (model, thinkingSetting, thinkingFallback, tier) => ({
+    model,
+    thinkingSetting,
+    thinkingFallback,
+    thinking: String(process.env[thinkingSetting] || thinkingFallback).toLowerCase(),
+    tier
+  })
+  switch (task) {
+    case 'rules':
+      return entry(extractModel(), 'GEMINI_EXTRACT_THINKING_LEVEL', 'minimal', 'standard')
+    case 'blurb':
+      return entry(lightModel(), 'GEMINI_LIGHT_THINKING_LEVEL', 'low', 'standard')
+    case 'light':
+      return entry(lightModel(), 'GEMINI_LIGHT_THINKING_LEVEL', 'low', 'flex')
+    case 'extract':
+      return entry(extractModel(), 'GEMINI_EXTRACT_THINKING_LEVEL', 'minimal', 'flex')
+    case 'summary':
+      return entry(process.env.GEMINI_MODEL || DEFAULT_GEMINI_MODEL, 'VIDEO_SUMMARY_THINKING_LEVEL', 'low', 'flex')
+    case 'reply':
+    default:
+      return entry(process.env.GEMINI_MODEL || DEFAULT_GEMINI_MODEL, 'GEMINI_THINKING_LEVEL', 'high', 'standard')
+  }
+}
+
+async function resolveTaskConfig (task, guildID = null) {
+  const def = defaultTaskConfig(task)
+  const custom = await replySettings().getTaskModel?.(guildID, task)?.catch?.(() => null)
+  const model = custom?.model || def.model
+  const thinking = custom?.thinking && THINKING_LEVELS.includes(custom.thinking)
+    ? (/gemini-[3-9]/.test(model) ? { thinkingConfig: { thinkingLevel: custom.thinking } } : {})
+    : thinkingConfig(model, { setting: def.thinkingSetting, fallback: def.thinkingFallback })
+  const tier = custom?.tier && SERVICE_TIERS.includes(custom.tier) ? custom.tier : def.tier
+  return { model, thinking, tier, flex: tier === 'flex' }
 }
 
 // allowed: the only functions the model may call this turn (all of them when omitted).
@@ -711,18 +749,19 @@ async function generate (contents, declarations, allowed = null, { deep = false 
   if (deep) {
     return callGemini(model, { ...prefix, contents, generationConfig }, { purpose: 'mention-deep', timeoutMs: DEEP_TIMEOUT_MS, flex: process.env.GEMINI_DEEP_FLEX !== 'false', stream: true })
   }
+  const replyFlex = contents.tier === 'flex'
   // The last step, limited to submitting (allowed), has its own toolConfig: sent in full, since a
   // request that uses a cache cannot set one.
   const cache = allowed ? null : await cachedPrefix(model, prefix)
   if (cache) {
     try {
-      return await callGemini(model, { cachedContent: cache, contents, generationConfig }, { purpose: 'mention', timeoutMs: replyTimeoutMs(), stream: true })
+      return await callGemini(model, { cachedContent: cache, contents, generationConfig }, { purpose: 'mention', timeoutMs: replyTimeoutMs(), flex: replyFlex, stream: true })
     } catch (e) {
       if (!/cachedContent|CachedContent|cached content/i.test(e.message) || e.blocked) throw e
       forgetCache(cache) // gone on Gemini's side: once more in full
     }
   }
-  return callGemini(model, { ...prefix, contents, generationConfig }, { purpose: 'mention', timeoutMs: replyTimeoutMs(), stream: true })
+  return callGemini(model, { ...prefix, contents, generationConfig }, { purpose: 'mention', timeoutMs: replyTimeoutMs(), flex: replyFlex, stream: true })
 }
 
 // Runs the model with the read-only tools until it submits a draft, appending every turn to
@@ -856,8 +895,8 @@ async function check (conversation, { name, args, calls = [] }) {
 // Required when used: eventTools requires this module.
 const eventTools = () => require('./eventTools')
 
-// model, thinking: the server's own model and thinking level (%replymodel); null for the default.
-async function draft ({ request, referenced, recent = [], channelName, channelID, server, forum = null, images = [], pictures = [], edit = null, replyLength = null, streamerPersona = true, rules = null, model = null, thinking = null, guild, member, tools, now = new Date() }) {
+// model, thinking, tier: the server's own model, thinking level and tier (%replymodel); null for the default.
+async function draft ({ request, referenced, recent = [], channelName, channelID, server, forum = null, images = [], pictures = [], edit = null, replyLength = null, streamerPersona = true, rules = null, model = null, thinking = null, tier = null, guild, member, tools, now = new Date() }) {
   const combined = pictures.filter(p => p.combined)
   const foreign = pictures.filter(p => !p.combined)
   const notes = [
@@ -885,6 +924,7 @@ async function draft ({ request, referenced, recent = [], channelName, channelID
   // Kept with the conversation, so a correction (revise) uses them too.
   conversation.contents.model = model
   conversation.contents.thinking = THINKING_LEVELS.includes(thinking) ? thinking : null
+  conversation.contents.tier = SERVICE_TIERS.includes(tier) ? tier : null
   return check(conversation, await runAgent(conversation.contents, tools, conversation.submits))
 }
 
@@ -907,4 +947,4 @@ async function revise (conversation, correction) {
   return check(conversation, await runAgent(conversation.contents, conversation.tools, conversation.submits))
 }
 
-module.exports = { THINKING_LEVELS, replyTimeoutMs, flexUsable, SAFETY_SETTINGS, withSafetySettings, THINK_DEEPER_DECLARATION, deepModel, REPLY_LENGTHS, DEFAULT_REPLY_LENGTH, PERSONAS, thinkingConfig, cachedPrefix, caches, purgedFor, promptVersion, lightModel, extractModel, DEFAULT_EXTRACT_MODEL, draft, revise, MAX_STEPS, isConfigured, toScheduledEvent, callGemini, geminiRequest, geminiSend, geminiStream, retryTimer, DEFAULT_GEMINI_MODEL, ENTITY_TYPES, GeminiError }
+module.exports = { THINKING_LEVELS, SERVICE_TIERS, defaultTaskConfig, resolveTaskConfig, replyTimeoutMs, flexUsable, SAFETY_SETTINGS, withSafetySettings, THINK_DEEPER_DECLARATION, deepModel, REPLY_LENGTHS, DEFAULT_REPLY_LENGTH, PERSONAS, thinkingConfig, cachedPrefix, caches, purgedFor, promptVersion, lightModel, extractModel, DEFAULT_EXTRACT_MODEL, draft, revise, MAX_STEPS, isConfigured, toScheduledEvent, callGemini, geminiRequest, geminiSend, geminiStream, retryTimer, DEFAULT_GEMINI_MODEL, ENTITY_TYPES, GeminiError }
