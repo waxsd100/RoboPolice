@@ -784,9 +784,10 @@ function isUncensoredConfigured () {
   return !!uncensoredEndpoint()
 }
 
-const UNCENSORED_CHECK_TIMEOUT_MS = 15 * 1000
+const UNCENSORED_CHECK_TIMEOUT_MS = 60 * 1000
+const UNCENSORED_MODELS_TIMEOUT_MS = 10 * 1000
 const UNCENSORED_RETRY_INTERVAL_MS = 60 * 1000
-const UNCENSORED_MAX_STARTUP_CHECKS = 10
+const UNCENSORED_MAX_STARTUP_CHECKS = 20
 const uncensoredState = { usable: null, url: null, checkedAt: 0, error: null }
 
 function isUncensoredUsable () {
@@ -803,9 +804,12 @@ function uncensoredHeaders (endpoint) {
   return headers
 }
 
-// Probes the uncensored endpoint at startup (and after a failure) with a 1-token chat completion so
-// the logs show right away whether it can be reached and the model can answer.
-async function checkUncensoredConnection ({ timeoutMs = UNCENSORED_CHECK_TIMEOUT_MS } = {}) {
+// Probes the uncensored endpoint at startup (and after a failure) so the logs show right away
+// whether it can be reached and the model is loaded. For direct OpenAI-compatible servers
+// (such as llama-server on Railway), it first checks GET /v1/models which responds in <10ms
+// without running 9B CPU inference; if that returns 404/405 (or on AI Gateway), it falls back
+// to a 1-token POST /v1/chat/completions.
+async function checkUncensoredConnection ({ timeoutMs = UNCENSORED_CHECK_TIMEOUT_MS, notifyWarn = true } = {}) {
   const endpoint = uncensoredEndpoint()
   if (!endpoint) {
     uncensoredState.usable = null
@@ -815,25 +819,47 @@ async function checkUncensoredConnection ({ timeoutMs = UNCENSORED_CHECK_TIMEOUT
   }
   const model = uncensoredModel()
   try {
-    const res = await fetch(endpoint.url, {
-      method: 'POST',
-      headers: uncensoredHeaders(endpoint),
-      signal: AbortSignal.timeout(timeoutMs),
-      dispatcher: dispatcherFor(timeoutMs),
-      body: JSON.stringify({
-        model,
-        messages: [{ role: 'user', content: 'ping' }],
-        max_tokens: 1,
-        temperature: 0
+    let verified = false
+    if (!endpoint.gateway && /\/chat\/completions$/.test(endpoint.url)) {
+      const modelsUrl = endpoint.url.replace(/\/chat\/completions$/, '/models')
+      const probeTimeout = Math.min(timeoutMs, UNCENSORED_MODELS_TIMEOUT_MS)
+      const modelsRes = await fetch(modelsUrl, {
+        method: 'GET',
+        headers: uncensoredHeaders(endpoint),
+        signal: AbortSignal.timeout(probeTimeout),
+        dispatcher: dispatcherFor(probeTimeout)
       })
-    })
-    if (!res.ok) {
-      const text = (await res.text().catch(() => '')).slice(0, 300)
-      throw new Error(`HTTP ${res.status}${text ? ` ${text}` : ''}`)
+      if (modelsRes.ok) {
+        const modelsData = await modelsRes.json()
+        if (Array.isArray(modelsData?.data) || Array.isArray(modelsData?.models) || Array.isArray(modelsData?.choices)) {
+          verified = true
+        }
+      } else if (modelsRes.status !== 404 && modelsRes.status !== 405) {
+        const text = (await modelsRes.text().catch(() => '')).slice(0, 300)
+        throw new Error(`HTTP ${modelsRes.status}${text ? ` ${text}` : ''}`)
+      }
     }
-    const data = await res.json()
-    if (!Array.isArray(data?.choices) || data.choices.length === 0) {
-      throw new Error(`Unexpected response: ${JSON.stringify(data).slice(0, 300)}`)
+    if (!verified) {
+      const res = await fetch(endpoint.url, {
+        method: 'POST',
+        headers: uncensoredHeaders(endpoint),
+        signal: AbortSignal.timeout(timeoutMs),
+        dispatcher: dispatcherFor(timeoutMs),
+        body: JSON.stringify({
+          model,
+          messages: [{ role: 'user', content: 'ping' }],
+          max_tokens: 1,
+          temperature: 0
+        })
+      })
+      if (!res.ok) {
+        const text = (await res.text().catch(() => '')).slice(0, 300)
+        throw new Error(`HTTP ${res.status}${text ? ` ${text}` : ''}`)
+      }
+      const data = await res.json()
+      if (!Array.isArray(data?.choices) || data.choices.length === 0) {
+        throw new Error(`Unexpected response: ${JSON.stringify(data).slice(0, 300)}`)
+      }
     }
     uncensoredState.usable = true
     uncensoredState.url = endpoint.url
@@ -851,7 +877,7 @@ async function checkUncensoredConnection ({ timeoutMs = UNCENSORED_CHECK_TIMEOUT
     uncensoredState.error = reason
     const msg = `[UNCENSORED]: Startup check failed for ${model} (${endpoint.url}): ${reason} — R18 / uncensored fallback is disabled until it responds`
     global.logger?.warn(msg)
-    global.webhook?.warn?.(msg)
+    if (notifyWarn) global.webhook?.warn?.(msg)
     return { configured: true, usable: false, model, url: endpoint.url, error: reason }
   }
 }
@@ -860,7 +886,7 @@ function startUncensoredCheck () {
   let attempts = 0
   const run = async () => {
     attempts++
-    const res = await checkUncensoredConnection()
+    const res = await checkUncensoredConnection({ notifyWarn: attempts === 1 })
     if (res.configured && !res.usable && attempts < UNCENSORED_MAX_STARTUP_CHECKS) {
       const timer = setTimeout(run, UNCENSORED_RETRY_INTERVAL_MS)
       timer.unref?.()
