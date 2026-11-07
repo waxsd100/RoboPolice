@@ -2,6 +2,7 @@ const urlFetcher = require('../utils/urlFetcher')
 const { describeForums } = require('./forumPost')
 const youtubeDB = require('../../db/interfaces/postgres/youtube')
 const twitchDB = require('../../db/interfaces/postgres/twitch')
+const steamDB = require('../../db/interfaces/postgres/steam')
 const messageDB = require('../../db/interfaces/postgres/read')
 const videoSummary = require('./videoSummary')
 const { linkTimestamps } = require('../utils/youtube')
@@ -144,6 +145,17 @@ const DECLARATIONS = [
     parameters: {
       type: 'OBJECT',
       properties: { query: { type: 'STRING', description: '題名・説明に含まれる語（空白区切りで AND）' } }
+    }
+  },
+  {
+    name: 'search_steam',
+    description: 'BOT が見ている配信者の Steam アカウントについて保存している情報（プロフィール、所持・プレイ済みゲーム一覧とプレイ時間、最近遊んだゲーム、書いたレビュー、ウィッシュリスト）を探す。Steam や所持ゲーム・プレイ時間・レビュー・ウィッシュリストについての依頼で使う。query を省くとプレイ時間順のゲームと最近のレビューを返す。',
+    parameters: {
+      type: 'OBJECT',
+      properties: {
+        query: { type: 'STRING', description: 'ゲーム名・英語名・レビュー本文に含まれる語（空白区切りで AND）。省略可' },
+        section: { type: 'STRING', enum: ['all', 'games', 'reviews', 'wishlist'], description: '調べる対象（省略すると所持ゲームとレビューを中心に返す。ウィッシュリストを見たいときは wishlist）' }
+      }
     }
   }
 ]
@@ -336,6 +348,9 @@ function createTools ({ guild, member, ask, progress = () => {} }) {
     async search_twitch ({ query }) {
       return searchTwitch(query)
     },
+    async search_steam ({ query, section }) {
+      return searchSteam(query, section)
+    },
     async find_game ({ name, name_en: nameEn }) {
       const names = [name, nameEn].map(n => String(n || '').trim()).filter(Boolean)
       if (!names.length) throw new Error('name が必要です')
@@ -478,6 +493,95 @@ async function searchTwitch (query) {
     ...matches.slice(0, MAX_YOUTUBE_RESULTS).map(line),
     ...(matches.length > MAX_YOUTUBE_RESULTS ? [`…ほか ${matches.length - MAX_YOUTUBE_RESULTS} 件（query で絞り込めます）`] : [])
   ].join('\n')
+}
+
+const MAX_STEAM_GAMES = 25
+const MAX_STEAM_REVIEWS = 15
+const MAX_STEAM_WISHLIST = 25
+
+// The streamer's Steam profile, owned/played games, reviews and wishlist (steamSync.js).
+async function searchSteam (query, section = 'all') {
+  const words = String(query || '').toLowerCase().split(/\s+/).filter(Boolean)
+  const [profiles, games, reviews, wishlist] = await Promise.all([
+    steamDB.getOverview(),
+    steamDB.getGames(),
+    steamDB.getReviews(),
+    steamDB.getWishlist()
+  ])
+  if (!profiles.length) return 'BOT が見ている Steam アカウントはありません'
+
+  const profileUrl = p => `https://steamcommunity.com/${p.custom_url ? `id/${p.custom_url}` : `profiles/${p.steam_id}`}`
+  const whoPrefix = p => profiles.length > 1 ? `【${p.persona_name || p.account_ref}】` : ''
+
+  const matchedGames = games.filter(g => matchesAll(words, `${g.name}\n${g.name_en || ''}\n${g.app_id}`))
+  const matchedReviews = reviews.filter(r => matchesAll(words, `${r.name || ''}\n${r.name_en || ''}\n${r.content}\n${r.app_id}`))
+  const matchedWishlist = wishlist.filter(w => matchesAll(words, `${w.name}\n${w.name_en || ''}\n${w.app_id}`))
+
+  const formatGame = g => {
+    const en = g.name_en && g.name_en !== g.name ? ` / ${g.name_en}` : ''
+    const hours = Number.isFinite(g.playtime_hours) ? `${g.playtime_hours}時間` : '時間不明'
+    const recent = Number.isFinite(g.recent_hours) && g.recent_hours > 0 ? `、直近2週間 ${g.recent_hours}時間` : ''
+    const first = g.first_played_at ? `、初プレイ ${new Date(g.first_played_at).toISOString().slice(0, 10)}` : ''
+    return `- ${whoPrefix(g)}${g.name}${en}（総プレイ ${hours}${recent}${first}）https://store.steampowered.com/app/${g.app_id}/`
+  }
+
+  const formatReview = r => {
+    const label = r.recommended ? 'おすすめ' : 'おすすめしない'
+    const hours = Number.isFinite(r.hours_on_record) ? `、${r.hours_on_record}時間` : ''
+    const posted = r.posted ? `、投稿 ${r.posted}` : ''
+    const text = (r.content || '').replace(/\s+/g, ' ').slice(0, 300)
+    return `- ${whoPrefix(r)}【${r.name || `App ${r.app_id}`}】${label}${hours}${posted} ${r.url}\n  ${text}`
+  }
+
+  const formatWish = w => {
+    const en = w.name_en && w.name_en !== w.name ? ` / ${w.name_en}` : ''
+    const added = w.added_at ? `（追加 ${new Date(w.added_at).toISOString().slice(0, 10)}）` : ''
+    return `- ${whoPrefix(w)}${w.name}${en}${added} https://store.steampowered.com/app/${w.app_id}/`
+  }
+
+  const lines = [
+    ...profiles.map(p => [
+      `アカウント: ${p.persona_name || p.account_ref}（${profileUrl(p)}、SteamID: ${p.steam_id}${p.level ? `、Lv.${p.level}` : ''}${p.member_since ? `、登録 ${p.member_since}` : ''}）`,
+      `  所持・プレイ確認ゲーム: ${p.stored_game_count} 本保存${p.game_count ? `（プロフィール上の所持総数 ${p.game_count} 本）` : ''}、レビュー: ${p.review_count} 件、ウィッシュリスト: ${p.stored_wishlist_count} 本保存${p.wishlist_count ? `（総数 ${p.wishlist_count} 本）` : ''}${p.synced_at ? `、取得 ${new Date(p.synced_at).toISOString()}` : ''}`,
+      p.summary ? `  自己紹介: ${p.summary.replace(/\s+/g, ' ').slice(0, 200)}` : ''
+    ].filter(Boolean).join('\n'))
+  ]
+
+  const recentGames = !words.length && section !== 'reviews' && section !== 'wishlist'
+    ? games.filter(g => Number.isFinite(g.recent_hours) && g.recent_hours > 0)
+    : []
+  if (recentGames.length) {
+    lines.push('', `直近2週間にプレイしたゲーム（${recentGames.length} 本）:`, ...recentGames.map(formatGame))
+  }
+
+  if (section === 'all' || section === 'games') {
+    lines.push(
+      '',
+      words.length ? `「${query}」に一致した所持・プレイ済みゲーム: ${matchedGames.length} 本` : 'プレイ時間が多い順の所持・プレイ済みゲーム:',
+      ...matchedGames.slice(0, MAX_STEAM_GAMES).map(formatGame),
+      ...(matchedGames.length > MAX_STEAM_GAMES ? [`…ほか ${matchedGames.length - MAX_STEAM_GAMES} 本（query で絞り込めます）`] : [])
+    )
+  }
+
+  if (section === 'all' || section === 'reviews') {
+    lines.push(
+      '',
+      words.length ? `「${query}」に一致した Steam レビュー: ${matchedReviews.length} 件` : `Steam レビュー（全 ${reviews.length} 件）:`,
+      ...matchedReviews.slice(0, MAX_STEAM_REVIEWS).map(formatReview),
+      ...(matchedReviews.length > MAX_STEAM_REVIEWS ? [`…ほか ${matchedReviews.length - MAX_STEAM_REVIEWS} 件（query や section: "reviews" で絞り込めます）`] : [])
+    )
+  }
+
+  if (section === 'wishlist' || (section === 'all' && words.length && matchedWishlist.length)) {
+    lines.push(
+      '',
+      words.length ? `「${query}」に一致したウィッシュリスト: ${matchedWishlist.length} 本` : `ウィッシュリスト（新しい順、保存 ${wishlist.length} 本）:`,
+      ...matchedWishlist.slice(0, MAX_STEAM_WISHLIST).map(formatWish),
+      ...(matchedWishlist.length > MAX_STEAM_WISHLIST ? [`…ほか ${matchedWishlist.length - MAX_STEAM_WISHLIST} 本（query で絞り込めます）`] : [])
+    )
+  }
+
+  return lines.join('\n')
 }
 
 const displayName = m => m.nick || m.user?.globalName || m.globalName || m.username
@@ -731,7 +835,14 @@ async function describeServer (guild, member, requestChannelID, { query = '', co
       '過去の配信は search_twitch で調べる'
     ].join('\n'))
   }
+  const steam = await steamDB.getOverview().catch(() => [])
+  if (steam.length) {
+    lines.push('', '### Steam', [
+      ...steam.map(p => `${p.persona_name || p.account_ref}（https://steamcommunity.com/${p.custom_url ? `id/${p.custom_url}` : `profiles/${p.steam_id}`}、所持・プレイ確認ゲーム ${p.stored_game_count} 本${p.game_count ? `／所持総数 ${p.game_count} 本` : ''}・レビュー ${p.review_count} 件・ウィッシュリスト ${p.stored_wishlist_count} 本を保存）`),
+      '持っているゲーム・プレイ時間・レビュー・ウィッシュリストは search_steam で調べる'
+    ].join('\n'))
+  }
   return lines.join('\n')
 }
 
-module.exports = { worthSearching, createTools, formatMessage, describeServer, withServerEmojis, withServerChannels, namedChannels, namedMembers, requestChannelInfo, searchYouTube, searchTwitch, MESSAGE_LINK, CHANNEL_LINK, StopDrafting }
+module.exports = { worthSearching, createTools, formatMessage, describeServer, withServerEmojis, withServerChannels, namedChannels, namedMembers, requestChannelInfo, searchYouTube, searchTwitch, searchSteam, MESSAGE_LINK, CHANNEL_LINK, StopDrafting }

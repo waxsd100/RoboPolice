@@ -17,7 +17,11 @@ test('a setting not set is its default; set, even to nothing, it is what was set
     else process.env.TWITTER_ACCOUNTS = saved
   }
   assert.equal(DEFAULTS.WIKI_URLS, 'https://novamanhikoushiki.memo.wiki/')
+  assert.equal(DEFAULTS.YOUTUBE_CHANNELS, 'UCTW2tw0Mhho72MojB1L48IQ,UCz7pNw3UkTF9WQjHcYpFD9g,UCyXNrveRNcAYbG3QAQ7WFag')
+  assert.equal(DEFAULTS.TWITCH_CHANNELS, 'nobaman')
+  assert.equal(DEFAULTS.STEAM_ACCOUNTS, 'nobaman')
   assert.equal(DEFAULTS.DISCORD_KNOWLEDGE_USERS, '615170548187791365')
+  assert.match(DEFAULTS.KNOWLEDGE_URLS, /https:\/\/nobaman\.com\/.*https:\/\/note\.com\/uuum_official\/n\/nfa60a1881da8/)
   assert.match(DEFAULTS.KNOWLEDGE_TOPICS, /^ぽみそしる（.*）,トマスコ（.*）$/)
   assert.match(DEFAULTS.KNOWLEDGE_TOPICS, /ぽみそしる（[^）]*ポッキー・赤髪のとも・カンタ（水溜りボンド）・まひとくん。・のばまん・ちはやYT・ふうはや・ネフライト・おらふくん・あきピヨ/)
 })

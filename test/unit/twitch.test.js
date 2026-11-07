@@ -39,7 +39,8 @@ beforeEach(() => {
   twitch.reset()
 })
 afterEach(() => {
-  for (const name of ['TWITCH_CLIENT_ID', 'TWITCH_CLIENT_SECRET', 'TWITCH_CHANNELS']) delete process.env[name]
+  for (const name of ['TWITCH_CLIENT_ID', 'TWITCH_CLIENT_SECRET']) delete process.env[name]
+  process.env.TWITCH_CHANNELS = ''
 })
 
 test('off without the app\'s credentials or channels', () => {

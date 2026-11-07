@@ -522,4 +522,54 @@ describe('stores', { skip: !database.available && 'needs PGHOST' }, () => {
       assert.deepEqual(await q('SELECT * FROM twitch_videos'), [])
     })
   })
+
+  describe('steam', () => {
+    test('the accounts followed, their games, reviews, wishlist and cached app names', async () => {
+      delete require.cache[require.resolve('../../src/db/interfaces/postgres/steam')]
+      const store = require('../../src/db/interfaces/postgres/steam')
+      await store.setProfiles([
+        { steamId: '76561198995446647', accountRef: 'nobaman', personaName: 'Nobaman', customUrl: 'nobaman', level: 70, gameCount: 752 },
+        { steamId: '76561198000000000', accountRef: 'other' }
+      ])
+      await store.saveApps([{ appId: 570, name: 'Dota 2', nameEn: 'Dota 2' }, { appId: 255710, name: 'Cities: Skylines', nameEn: 'Cities: Skylines' }])
+      const known = await store.knownApps([570, 999999])
+      assert.deepEqual(known.get(570), { name: 'Dota 2', nameEn: 'Dota 2' })
+      assert.equal(known.has(999999), false)
+
+      const res1 = await store.saveAccountData('76561198995446647', {
+        profile: { personaName: 'Nobaman', wishlistCount: 1 },
+        games: [
+          { appId: 570, name: 'Dota 2', playtimeHours: 1000, recentHours: 2 },
+          { appId: 255710, name: 'Cities: Skylines', playtimeHours: 50 }
+        ],
+        reviews: [
+          { appId: 570, name: 'Dota 2', recommended: true, hoursOnRecord: 1000, posted: '2023年5月', content: '神ゲー', url: 'https://steamcommunity.com/id/nobaman/recommended/570/' }
+        ],
+        wishlist: [
+          { appId: 1091500, name: 'サイバーパンク2077', nameEn: 'Cyberpunk 2077', priority: 1, addedAt: new Date('2026-01-01T00:00:00Z') }
+        ]
+      })
+      assert.deepEqual(res1, { newGames: 2, newReviews: 1 })
+
+      // Playtime only grows on re-sync; games accumulate.
+      const res2 = await store.saveAccountData('76561198995446647', {
+        games: [{ appId: 570, name: 'Dota 2', playtimeHours: 800, recentHours: null }],
+        reviews: [{ appId: 570, name: 'Dota 2', recommended: true, hoursOnRecord: 1000, posted: '2023年5月', content: '神ゲー', url: 'https://steamcommunity.com/id/nobaman/recommended/570/' }]
+      })
+      assert.deepEqual(res2, { newGames: 0, newReviews: 0 })
+      const games = await store.getGames()
+      assert.deepEqual(games.map(g => [g.app_id, g.playtime_hours]), [[570, 1000], [255710, 50]])
+      const overview = await store.getOverview()
+      assert.deepEqual(overview.map(p => [p.account_ref, p.stored_game_count, p.review_count, p.stored_wishlist_count]), [
+        ['nobaman', 2, 1, 1],
+        ['other', 0, 0, 0]
+      ])
+
+      // Dropping an account cascades to its games, reviews and wishlist.
+      await store.setProfiles([{ steamId: '76561198000000000', accountRef: 'other' }])
+      assert.deepEqual(await q('SELECT * FROM steam_games'), [])
+      assert.deepEqual(await q('SELECT * FROM steam_reviews'), [])
+      assert.deepEqual(await q('SELECT * FROM steam_wishlist'), [])
+    })
+  })
 })

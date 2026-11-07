@@ -59,7 +59,7 @@ async function getJSON (url, { fetchImpl = fetch, wait = sleep } = {}) {
 // A post as stored, or null for a repost of someone else's.
 function toPost (t, account) {
   if (t.reposted_by || String(t.author?.screen_name || '').toLowerCase() !== account.toLowerCase()) return null
-  return {
+  const out = {
     id: String(t.id),
     account,
     url: t.url || `https://x.com/${account}/status/${t.id}`,
@@ -67,6 +67,37 @@ function toPost (t, account) {
     createdAt: new Date(t.created_timestamp ? t.created_timestamp * 1000 : t.created_at),
     replyTo: t.replying_to?.screen_name || null,
     mediaUrls: [...(t.media?.photos || []), ...(t.media?.videos || [])].map(m => m.url).filter(Boolean)
+  }
+  if (t.author?.description) {
+    Object.defineProperty(out, 'authorProfile', {
+      value: {
+        name: t.author.name || account,
+        screenName: t.author.screen_name || account,
+        description: String(t.author.description).trim(),
+        location: t.author.location || null,
+        website: t.author.website?.url || null,
+        followers: Number.isInteger(t.author.followers) ? t.author.followers : null,
+        joined: t.author.joined || null
+      }
+    })
+  }
+  return out
+}
+
+function profilePage (account, author) {
+  const lines = [
+    `名前: ${author.name} (@${author.screenName})`,
+    `自己紹介: ${author.description}`,
+    author.location ? `場所: ${author.location}` : '',
+    author.website ? `Webサイト: ${author.website}` : '',
+    Number.isInteger(author.followers) ? `フォロワー数: ${author.followers}` : '',
+    author.joined ? `アカウント作成日: ${String(author.joined).slice(0, 10)}` : '',
+    `URL: https://x.com/${account}`
+  ].filter(Boolean)
+  return {
+    url: `https://x.com/${account}#profile`,
+    title: `@${account} のプロフィール`,
+    sections: [{ heading: `@${account} のプロフィール`, text: lines.join('\n'), images: [] }]
   }
 }
 
@@ -122,6 +153,11 @@ async function refresh ({ fetchJSON } = {}) {
     for (const account of accounts()) {
       const known = await store.knownIds(account)
       const posts = await readTimeline(account, { known, ...(fetchJSON ? { fetchJSON, delay: 0 } : {}) })
+      const author = posts.find(p => p.authorProfile)?.authorProfile
+      if (author) {
+        const prof = profilePage(account, author)
+        await knowledgeStore.savePage(prof.url, prof.title, prof.sections)
+      }
       const fresh = await store.savePosts(posts)
       for (const month of new Set(fresh.map(p => monthOf(p.createdAt)))) {
         const page = monthSections(account, month, await store.postsOfMonth(account, month))
@@ -147,4 +183,4 @@ function startTwitter () {
   return setInterval(() => refresh(), setting('TWITTER_REFRESH_HOURS', DEFAULT_REFRESH_HOURS) * 3600 * 1000)
 }
 
-module.exports = { startTwitter, refresh, readTimeline, getJSON, toPost, monthSections, accounts, enabled }
+module.exports = { startTwitter, refresh, readTimeline, getJSON, toPost, profilePage, monthSections, accounts, enabled }
