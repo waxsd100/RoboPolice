@@ -60,6 +60,13 @@ test('reuses cached embeddings of recent messages across mentions, embedding onl
   const third = await relatedRecent(mention, '怖いゲームある？', { now: NOW, getMessages })
   assert.deepEqual(third, ['- [21:00] くらじー（<@10>）: ホラーゲームもやりたい'])
   assert.deepEqual(batches.map(b => b.requests.map(r => r.content.parts[0].text)), [['怖いゲームある？'], ['ホラーゲームもやりたい']])
+
+  // Another worker or a restarted worker (memory cleared, Redis kept) reuses vectors from Redis.
+  clearCache({ memoryOnly: true })
+  batches.length = 0
+  const fromRedis = await relatedRecent(mention, '怖いゲームある？', { now: NOW, getMessages })
+  assert.deepEqual(fromRedis, ['- [21:00] くらじー（<@10>）: ホラーゲームもやりたい'])
+  assert.deepEqual(batches.map(b => b.requests.map(r => r.content.parts[0].text)), [['怖いゲームある？']], 'loaded from Redis without re-embedding messages')
 })
 
 test('nothing when nothing is close, the request says nothing, or it is turned off', async () => {

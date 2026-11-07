@@ -37,6 +37,13 @@ describe('linksFor', () => {
     ])
     assert.deepEqual(searched, ['エーペックスレジェンズ', 'Apex Legends', 'ポケモンレジェンズ Z-A'])
     assert.equal(read.mock.calls[0].arguments[0], 'https://www.pokemon.co.jp/ex/legends_za/')
+
+    // Repeated lookup uses Redis without calling Steam or Gemini again.
+    searched.length = 0
+    installGemini([])
+    const cachedLinks = await gameLinks.linksFor([{ name: 'エーペックスレジェンズ', nameEn: 'Apex Legends' }, { name: 'ポケモンレジェンズ Z-A', nameEn: null }])
+    assert.deepEqual(cachedLinks, links)
+    assert.deepEqual(searched, [])
   })
 
   test('a page that does not open, or none found, is left out; GAME_LINKS=false turns it off', async (t) => {

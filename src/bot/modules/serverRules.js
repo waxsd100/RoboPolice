@@ -12,6 +12,7 @@
 // Each channel's latest RULES_MESSAGES messages, oldest first, with the text of their embeds (rules
 // are often posted by a bot), up to MAX_RULES_CHARS in all, read again at most every CACHE_MS.
 const crypto = require('crypto')
+const aiCache = require('../utils/aiCache')
 
 const RULES_MESSAGES = 20
 const MAX_RULES_CHARS = 3000
@@ -19,11 +20,13 @@ const MAX_CHANNELS = 3
 const MAX_CANDIDATES = 150
 const CACHE_MS = 60 * 60 * 1000
 const RETRY_PICK_MS = 60 * 60 * 1000
+const REDIS_PICK_TTL_SECONDS = 7 * 24 * 60 * 60
 const RULES_NAME = /ルール|規約|必読|はじめに|始めに|rule|readme|start-?here/i
 const TEXT_TYPES = [0, 5, 15] // text, announcement, forum
 
 const picks = new Map() // guildID -> { signature, ids, at, failed }
 const texts = new Map() // guildID -> { at, key, channels }
+const redisKeyOf = guildID => `server-rules-pick:${guildID}`
 
 const drafter = () => require('./eventDrafter')
 
@@ -73,6 +76,13 @@ async function rulesChannels (guild, { now = Date.now(), pick = module.exports.p
   const channels = candidates(guild)
   const signature = signatureOf(channels)
   let known = picks.get(guild.id)
+  if (!known) {
+    const cached = await aiCache.getJson(redisKeyOf(guild.id))
+    if (cached?.signature === signature && Array.isArray(cached.ids)) {
+      known = { signature, ids: cached.ids, at: now, failed: false }
+      picks.set(guild.id, known)
+    }
+  }
   const stale = !known || known.signature !== signature || (known.failed && now - known.at >= RETRY_PICK_MS)
   if (stale) {
     let ids
@@ -90,7 +100,10 @@ async function rulesChannels (guild, { now = Date.now(), pick = module.exports.p
     if (failed) ids = byName(channels)
     known = { signature, ids, at: now, failed }
     picks.set(guild.id, known)
-    if (!failed) global.logger?.info(`[RULES]: ${guild.id} rules channels: ${ids.join(', ') || 'none'}`)
+    if (!failed) {
+      await aiCache.setJson(redisKeyOf(guild.id), { signature, ids }, REDIS_PICK_TTL_SECONDS)
+      global.logger?.info(`[RULES]: ${guild.id} rules channels: ${ids.join(', ') || 'none'}`)
+    }
   }
   const set = guild.rulesChannelID && guild.channels?.get(guild.rulesChannelID)
   const ids = [...new Set([...(set ? [set.id] : []), ...known.ids])].slice(0, MAX_CHANNELS)
@@ -130,7 +143,10 @@ async function readRules (guild, { getMessages = (id, options) => global.bot.get
 }
 
 // For tests.
-function reset () {
+function reset ({ memoryOnly = false } = {}) {
+  if (!memoryOnly) {
+    for (const guildID of picks.keys()) aiCache.del(redisKeyOf(guildID))
+  }
   picks.clear()
   texts.clear()
 }
