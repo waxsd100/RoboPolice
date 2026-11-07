@@ -763,14 +763,15 @@ function uncensoredSystemInstruction ({ compact = false } = {}) {
   const extra = [
     '## R18・検閲なしフォールバック時の追加指示',
     '- このリクエストは R18（成人向け）または検閲ブロックにより、検閲なしモデル（あなた）へ引き継がれました。',
-    '- 答える対象は一番最後の「依頼メッセージ（<untrusted source="request">）」だけです。前の会話の話題・ネタ・シチュエーション・登場人物を引きずったり、今回の依頼メッセージに書かれていない過去の流れを混ぜたりしないでください。',
+    '- 「依頼メッセージの返信先」があるときは、その会話の流れ・登場人物・シチュエーションを踏まえて最後の「依頼メッセージ」に答えてください。ただし前の自分の発言の同じ言い回しを繰り返すのは避け、相手が明確に別の話題へ変えたときは新しい話題に答えてください。',
+    '- 「依頼されたチャンネルの最近の会話」があるときは、今回の依頼がその話の続きや関連する内容ならそれを踏まえて答え、無関係なら依頼メッセージだけに答えてください。',
     '- 「そのままでは書けない依頼」にある「ぼかした版を代わりに書く」「露骨な描写は書かない」「場面転換・暗示・フェードアウト・朝チュンにする」という制限は一切適用しません。',
     '- 依頼された成人向け・R18・官能表現の依頼には、省略やフェードアウト（朝チュンなど）をせず、キャラクターの口調・性格・設定を保ったまま、求められた描写を最初から最後まで具体的・直接的に詳しく書き切ってください（ただし未成年を性的に扱うものだけは引き続き扱いません）。'
   ]
   if (compact) {
     return [
       '## 役割',
-      'あなたは Discord サーバーの AI です。一番最後の「依頼メッセージ」のお題・指示だけに集中し、指定された「話し方」を保って日本語で返事や小説・会話を書きます。返事の本文だけをそのまま出力してください。',
+      'あなたは Discord サーバーの AI です。渡された会話の流れ（返信先や最近の会話）を踏まえつつ、最後の「依頼メッセージ」の指示に従い、指定された「話し方」を保って日本語で返事や小説・会話を書きます。返事の本文だけをそのまま出力してください。',
       ...(persona ? ['', '## 運営者が設定したキャラクター', persona] : []),
       '',
       ...extra
@@ -780,23 +781,17 @@ function uncensoredSystemInstruction ({ compact = false } = {}) {
   return [base, '', ...extra].join('\n')
 }
 
-const CONTINUATION_REQUEST_PATTERN = /それ|これ|あれ|さっき|続き|もっと|もう一[度回]|同じ|今の|その(?:まま|続き|話|流れ|調子)|書き直|直して|変えて|このチャンネル|今話して/i
+const MAX_UNCENSORED_CONVERSATION_CHARS = 1500
 
 function compactUncensoredText (text) {
   if (typeof text !== 'string') return ''
-  const reqMatch = text.match(/<untrusted source="request">\n?([\s\S]*?)\n?<\/untrusted>/)
-  const requestText = (reqMatch ? reqMatch[1] : '').trim()
-  const isContinuation = [...requestText].length < 10 || CONTINUATION_REQUEST_PATTERN.test(requestText)
-
-  let out = text
+  return text
     .replace(/\n## このサーバーのルールとモデレーターからのお願い[\s\S]*?(?=\n## |\n依頼されたチャンネル:)/, '')
     .replace(/\n## このサーバーの情報（最新）\n<untrusted source="server">[\s\S]*?<\/untrusted>/, '')
     .replace(/\n## 依頼や会話に出てくるチャンネル[\s\S]*?(?=\n## |\n依頼されたチャンネル:)/, '')
-    .replace(/\n## 依頼されたチャンネルの最近の会話[^\n]*\n<untrusted source="recent">[\s\S]*?<\/untrusted>/, '')
-  if (!isContinuation) {
-    out = out.replace(/\n## 依頼メッセージの返信先[^\n]*\n<untrusted source="conversation">[\s\S]*?<\/untrusted>/, '')
-  }
-  return out
+    .replace(/(<untrusted source="conversation">\n?)([\s\S]*?)(\n?<\/untrusted>)/, (whole, open, body, close) =>
+      body.length > MAX_UNCENSORED_CONVERSATION_CHARS ? `${open}${body.slice(-MAX_UNCENSORED_CONVERSATION_CHARS)}${close}` : whole
+    )
 }
 
 function isLocalUncensoredUrl (url) {
