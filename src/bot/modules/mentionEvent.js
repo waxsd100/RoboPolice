@@ -489,22 +489,24 @@ async function handle (message) {
       // (recentTopics.js); not when something the bot made is being changed.
       // The server's rules and what its moderators asked of the assistant (serverRules.js).
       const directR18 = isUncensoredUsable() && isR18Text(request, referenced?.text)
-      const [server, recent, rulesChannels] = await Promise.all([
-        describeServer(guild, member, message.channel.id, { query: request, context: directR18 ? '' : referenced?.othersText }).catch(e => {
-          global.logger.warn(`Could not describe server ${guild.id}: ${e.message}`)
-          return null
-        }),
-        edit || directR18
-          ? []
-          : relatedRecent(message, request).catch(e => {
-            global.logger.warn(`Could not read the recent talk in ${message.channel.id}: ${e.message}`)
-            return []
+      const [server, recent, rulesChannels] = directR18
+        ? [null, [], null]
+        : await Promise.all([
+          describeServer(guild, member, message.channel.id, { query: request, context: referenced?.othersText }).catch(e => {
+            global.logger.warn(`Could not describe server ${guild.id}: ${e.message}`)
+            return null
           }),
-        directR18 ? null : serverRules.readRules(guild).catch(() => null)
-      ])
+          edit
+            ? []
+            : relatedRecent(message, request).catch(e => {
+              global.logger.warn(`Could not read the recent talk in ${message.channel.id}: ${e.message}`)
+              return []
+            }),
+          serverRules.readRules(guild).catch(() => null)
+        ])
       // Combined emojis and other servers' emojis in what was said are shown to the model as
       // images, for this request only.
-      const pictures = await picturesFor([request, referenced?.text], guild).catch(() => [])
+      const pictures = directR18 ? [] : await picturesFor([request, referenced?.text], guild).catch(() => [])
       // A reply brings its conversation in (`referenced`); otherwise only what was just said in the
       // channel that bears on the request (`recent`), never the bot's own earlier replies.
       let result = await draft({
@@ -513,7 +515,7 @@ async function handle (message) {
         recent,
         replyLength,
         streamerPersona,
-        rules: { moderators: assistantRules || null, channels: rulesChannels || [] },
+        rules: directR18 ? null : { moderators: assistantRules || null, channels: rulesChannels || [] },
         model: replyModel || null,
         thinking: replyThinking || null,
         tier: aiModels?.reply?.tier || null,
