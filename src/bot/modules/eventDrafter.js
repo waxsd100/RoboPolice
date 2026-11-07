@@ -784,6 +784,91 @@ function isUncensoredConfigured () {
   return !!uncensoredEndpoint()
 }
 
+const UNCENSORED_CHECK_TIMEOUT_MS = 15 * 1000
+const UNCENSORED_RETRY_INTERVAL_MS = 60 * 1000
+const UNCENSORED_MAX_STARTUP_CHECKS = 10
+const uncensoredState = { usable: null, url: null, checkedAt: 0, error: null }
+
+function isUncensoredUsable () {
+  const endpoint = uncensoredEndpoint()
+  if (!endpoint) return false
+  if (uncensoredState.url === endpoint.url && uncensoredState.usable === false) return false
+  return true
+}
+
+function uncensoredHeaders (endpoint) {
+  const headers = { 'Content-Type': 'application/json', ...(endpoint.gateway ? gatewayAuthHeaders() : {}) }
+  if (process.env.UNCENSORED_API_KEY) headers.Authorization = `Bearer ${process.env.UNCENSORED_API_KEY}`
+  if (endpoint.gateway && process.env.CLOUDFLARE_AI_GATEWAY_BYOK_ALIAS) headers['cf-aig-byok-alias'] = process.env.CLOUDFLARE_AI_GATEWAY_BYOK_ALIAS
+  return headers
+}
+
+// Probes the uncensored endpoint at startup (and after a failure) with a 1-token chat completion so
+// the logs show right away whether it can be reached and the model can answer.
+async function checkUncensoredConnection ({ timeoutMs = UNCENSORED_CHECK_TIMEOUT_MS } = {}) {
+  const endpoint = uncensoredEndpoint()
+  if (!endpoint) {
+    uncensoredState.usable = null
+    uncensoredState.url = null
+    global.logger?.info('[UNCENSORED]: Not configured (set UNCENSORED_API_URL to enable uncensored / R18 fallback)')
+    return { configured: false, usable: false }
+  }
+  const model = uncensoredModel()
+  try {
+    const res = await fetch(endpoint.url, {
+      method: 'POST',
+      headers: uncensoredHeaders(endpoint),
+      signal: AbortSignal.timeout(timeoutMs),
+      dispatcher: dispatcherFor(timeoutMs),
+      body: JSON.stringify({
+        model,
+        messages: [{ role: 'user', content: 'ping' }],
+        max_tokens: 1,
+        temperature: 0
+      })
+    })
+    if (!res.ok) {
+      const text = (await res.text().catch(() => '')).slice(0, 300)
+      throw new Error(`HTTP ${res.status}${text ? ` ${text}` : ''}`)
+    }
+    const data = await res.json()
+    if (!Array.isArray(data?.choices) || data.choices.length === 0) {
+      throw new Error(`Unexpected response: ${JSON.stringify(data).slice(0, 300)}`)
+    }
+    uncensoredState.usable = true
+    uncensoredState.url = endpoint.url
+    uncensoredState.checkedAt = Date.now()
+    uncensoredState.error = null
+    const msg = `[UNCENSORED]: Connected and ready (${model} at ${endpoint.url})`
+    global.logger?.info(msg)
+    global.webhook?.generic?.(msg)
+    return { configured: true, usable: true, model, url: endpoint.url }
+  } catch (e) {
+    const reason = (e?.message || String(e)).slice(0, 300)
+    uncensoredState.usable = false
+    uncensoredState.url = endpoint.url
+    uncensoredState.checkedAt = Date.now()
+    uncensoredState.error = reason
+    const msg = `[UNCENSORED]: Startup check failed for ${model} (${endpoint.url}): ${reason} — R18 / uncensored fallback is disabled until it responds`
+    global.logger?.warn(msg)
+    global.webhook?.warn?.(msg)
+    return { configured: true, usable: false, model, url: endpoint.url, error: reason }
+  }
+}
+
+function startUncensoredCheck () {
+  let attempts = 0
+  const run = async () => {
+    attempts++
+    const res = await checkUncensoredConnection()
+    if (res.configured && !res.usable && attempts < UNCENSORED_MAX_STARTUP_CHECKS) {
+      const timer = setTimeout(run, UNCENSORED_RETRY_INTERVAL_MS)
+      timer.unref?.()
+    }
+  }
+  return run()
+}
+
 function toJsonSchema (schema) {
   if (!schema || typeof schema !== 'object') return schema
   const out = { ...schema }
@@ -890,9 +975,7 @@ async function callUncensored (contents, declarations, allowed = null, { timeout
   const endpoint = uncensoredEndpoint()
   if (!endpoint) throw new GeminiError('Uncensored endpoint is not configured', 'AI の呼び出しに失敗しました')
   const model = uncensoredModel()
-  const headers = { 'Content-Type': 'application/json', ...(endpoint.gateway ? gatewayAuthHeaders() : {}) }
-  if (process.env.UNCENSORED_API_KEY) headers.Authorization = `Bearer ${process.env.UNCENSORED_API_KEY}`
-  if (endpoint.gateway && process.env.CLOUDFLARE_AI_GATEWAY_BYOK_ALIAS) headers['cf-aig-byok-alias'] = process.env.CLOUDFLARE_AI_GATEWAY_BYOK_ALIAS
+  const headers = uncensoredHeaders(endpoint)
   const body = {
     model,
     messages: toOpenAIMessages(uncensoredSystemInstruction(), contents),
@@ -935,6 +1018,8 @@ async function callUncensored (contents, declarations, allowed = null, { timeout
     throw new GeminiError(`Uncensored request failed: HTTP ${res.status} ${text}`, `AI の呼び出しに失敗しました（HTTP ${res.status}）`, null, res.status)
   }
   const data = await res.json()
+  uncensoredState.usable = true
+  uncensoredState.url = endpoint.url
   const usageMeta = data?.usage
     ? {
         promptTokenCount: data.usage.prompt_tokens || 0,
@@ -997,7 +1082,7 @@ async function runAgent (contents, tools, submits = SUBMIT_DECLARATIONS) {
   // Not offered again once the stronger model or the uncensored fallback took over this conversation.
   const offered = [
     ...(deepModel() && !contents.deepRefused && !contents.uncensored ? [THINK_DEEPER_DECLARATION] : []),
-    ...(isUncensoredConfigured() && !contents.uncensored ? [HAND_OVER_R18_DECLARATION] : [])
+    ...(isUncensoredUsable() && !contents.uncensored && !contents.uncensoredFailed ? [HAND_OVER_R18_DECLARATION] : [])
   ]
   const declarationsFor = () => [...tools.declarations, ...(contents.deep || contents.uncensored ? [] : offered), ...submits]
   const start = contents.length
@@ -1010,7 +1095,21 @@ async function runAgent (contents, tools, submits = SUBMIT_DECLARATIONS) {
     try {
       content = await generate(contents, declarationsFor(), last ? submits.map(d => d.name) : null, { deep: !!contents.deep, uncensored: !!contents.uncensored })
     } catch (e) {
-      if (!contents.uncensored && e.blocked && isUncensoredConfigured()) {
+      if (contents.uncensored && !contents.geminiBlocked) {
+        const fallback = replyModel(contents)
+        global.logger?.warn(`[UNCENSORED]: ${uncensoredModel()} failed (${e.message.slice(0, 200)}); ${fallback} answers instead`)
+        addFallback(`${uncensoredModel()} unavailable → ${fallback}`)
+        uncensoredState.usable = false
+        uncensoredState.url = uncensoredEndpoint()?.url || null
+        contents.splice(start)
+        contents.uncensored = false
+        contents.uncensoredFailed = true
+        const idx = offered.indexOf(HAND_OVER_R18_DECLARATION)
+        if (idx !== -1) offered.splice(idx, 1)
+        step = -1
+        continue
+      }
+      if (!contents.uncensored && e.blocked && isUncensoredUsable() && !contents.uncensoredFailed) {
         const failed = contents.deep ? deepModel() : replyModel(contents)
         const fallback = uncensoredModel()
         global.logger?.info(`[GEMINI]: ${failed} refused (${e.blocked}); ${fallback} answers instead`)
@@ -1018,6 +1117,7 @@ async function runAgent (contents, tools, submits = SUBMIT_DECLARATIONS) {
         contents.splice(start)
         contents.deep = false
         contents.uncensored = true
+        contents.geminiBlocked = true
         offered.length = 0
         step = -1
         continue
@@ -1039,7 +1139,7 @@ async function runAgent (contents, tools, submits = SUBMIT_DECLARATIONS) {
       }
       throw e
     }
-    const r18HandOver = !contents.uncensored && isUncensoredConfigured() && content.parts.some(p => p.functionCall?.name === HAND_OVER_R18_DECLARATION.name)
+    const r18HandOver = !contents.uncensored && isUncensoredUsable() && !contents.uncensoredFailed && content.parts.some(p => p.functionCall?.name === HAND_OVER_R18_DECLARATION.name)
     if (r18HandOver) {
       const fromModel = contents.deep ? deepModel() : replyModel(contents)
       const fallback = uncensoredModel()
@@ -1067,7 +1167,7 @@ async function runAgent (contents, tools, submits = SUBMIT_DECLARATIONS) {
     contents.push(content)
     const calls = content.parts.filter(p => p.functionCall).map(p => p.functionCall)
     const submitted = calls.find(c => submits.some(d => d.name === c.name))
-    if (submitted && !contents.uncensored && isUncensoredConfigured() && submitted.name === SUBMIT_CHAT_DECLARATION.name && isRefusalReply(submitted.args?.text)) {
+    if (submitted && !contents.uncensored && isUncensoredUsable() && !contents.uncensoredFailed && submitted.name === SUBMIT_CHAT_DECLARATION.name && isRefusalReply(submitted.args?.text)) {
       const fromModel = contents.deep ? deepModel() : replyModel(contents)
       const fallback = uncensoredModel()
       global.logger?.info(`[GEMINI]: ${fromModel} refused in reply (R18); ${fallback} answers instead`)
@@ -1189,7 +1289,7 @@ async function draft ({ request, referenced, recent = [], channelName, channelID
   conversation.contents.model = model
   conversation.contents.thinking = THINKING_LEVELS.includes(thinking) ? thinking : null
   conversation.contents.tier = SERVICE_TIERS.includes(tier) ? tier : null
-  if (isUncensoredConfigured() && isR18Text(request, referenced?.text)) {
+  if (isUncensoredUsable() && isR18Text(request, referenced?.text)) {
     const initial = replyModel(conversation.contents)
     const fallback = uncensoredModel()
     global.logger?.info(`[GEMINI]: R18 detected in request; ${fallback} answers instead of ${initial}`)
@@ -1215,7 +1315,7 @@ async function revise (conversation, correction) {
       }
     }))
   })
-  if (!conversation.contents.uncensored && isUncensoredConfigured() && isR18Text(correction)) {
+  if (!conversation.contents.uncensored && isUncensoredUsable() && isR18Text(correction)) {
     const initial = replyModel(conversation.contents)
     const fallback = uncensoredModel()
     global.logger?.info(`[GEMINI]: R18 detected in revision; ${fallback} answers instead of ${initial}`)
@@ -1226,4 +1326,4 @@ async function revise (conversation, correction) {
   return check(conversation, await runAgent(conversation.contents, conversation.tools, conversation.submits))
 }
 
-module.exports = { THINKING_LEVELS, SERVICE_TIERS, defaultTaskConfig, resolveTaskConfig, replyTimeoutMs, flexUsable, SAFETY_SETTINGS, withSafetySettings, THINK_DEEPER_DECLARATION, HAND_OVER_R18_DECLARATION, isR18Text, isRefusalReply, deepModel, DEFAULT_UNCENSORED_MODEL, uncensoredModel, uncensoredEndpoint, isUncensoredConfigured, callUncensored, REPLY_LENGTHS, DEFAULT_REPLY_LENGTH, PERSONAS, thinkingConfig, cachedPrefix, caches, purgedFor, promptVersion, lightModel, extractModel, DEFAULT_EXTRACT_MODEL, draft, revise, MAX_STEPS, isConfigured, toScheduledEvent, callGemini, geminiRequest, geminiSend, geminiStream, retryTimer, DEFAULT_GEMINI_MODEL, ENTITY_TYPES, GeminiError }
+module.exports = { THINKING_LEVELS, SERVICE_TIERS, defaultTaskConfig, resolveTaskConfig, replyTimeoutMs, flexUsable, SAFETY_SETTINGS, withSafetySettings, THINK_DEEPER_DECLARATION, HAND_OVER_R18_DECLARATION, isR18Text, isRefusalReply, deepModel, DEFAULT_UNCENSORED_MODEL, uncensoredModel, uncensoredEndpoint, isUncensoredConfigured, isUncensoredUsable, checkUncensoredConnection, startUncensoredCheck, uncensoredState, callUncensored, REPLY_LENGTHS, DEFAULT_REPLY_LENGTH, PERSONAS, thinkingConfig, cachedPrefix, caches, purgedFor, promptVersion, lightModel, extractModel, DEFAULT_EXTRACT_MODEL, draft, revise, MAX_STEPS, isConfigured, toScheduledEvent, callGemini, geminiRequest, geminiSend, geminiStream, retryTimer, DEFAULT_GEMINI_MODEL, ENTITY_TYPES, GeminiError }

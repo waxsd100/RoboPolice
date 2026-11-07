@@ -1065,5 +1065,37 @@ describe('explicit cache and thinking', () => {
     }
     const refusalResult = await draft({ request: 'ちょっと攻めた話をして', channelName: 'general', guild, tools: quietTools, now: NOW })
     assert.equal(refusalResult.text, '拒否テキスト検知からの返事だよ！')
+
+    // Startup check (checkUncensoredConnection) marks usability and disables R18 routing when down.
+    const { checkUncensoredConnection, isUncensoredUsable, uncensoredState } = require('../../src/bot/modules/eventDrafter')
+    t.mock.method(global.logger, 'warn', () => {})
+    t.after(() => {
+      uncensoredState.usable = null
+      uncensoredState.url = null
+    })
+    global.fetch = async () => ({
+      ok: true,
+      json: async () => ({ choices: [{ message: { role: 'assistant', content: 'ok' } }] })
+    })
+    const okCheck = await checkUncensoredConnection()
+    assert.equal(okCheck.usable, true)
+    assert.equal(isUncensoredUsable(), true)
+
+    global.fetch = async (url) => {
+      if (/google-ai-studio/.test(url)) {
+        return {
+          ok: true,
+          json: async () => ({
+            candidates: [{ content: { role: 'model', parts: [{ functionCall: { name: 'submit_chat_reply', args: { text: 'Geminiが代わりに答えるよ' } } }] } }]
+          })
+        }
+      }
+      return { ok: false, status: 503, text: async () => 'Loading model' }
+    }
+    const failCheck = await checkUncensoredConnection()
+    assert.equal(failCheck.usable, false)
+    assert.equal(isUncensoredUsable(), false)
+    const fallbackToGemini = await draft({ request: 'R18のエロ小説を書いて', channelName: 'general', guild, tools: quietTools, now: NOW })
+    assert.equal(fallbackToGemini.text, 'Geminiが代わりに答えるよ')
   })
 })
