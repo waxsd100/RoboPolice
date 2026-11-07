@@ -1045,6 +1045,13 @@ function toOpenAIMessages (system, contents, { compact = false } = {}) {
   return messages
 }
 
+function collapseRepetitions (text) {
+  if (typeof text !== 'string') return ''
+  return text
+    .replace(/(.{2,40}?)(?:[、。！？\s]*\1){2,}/gu, '$1')
+    .replace(/(.)\1{4,}/gu, '$1$1$1')
+}
+
 function parseUncensoredParts (msg, declarations, allowed = null) {
   const parts = []
   for (const tc of msg?.tool_calls || []) {
@@ -1053,6 +1060,9 @@ function parseUncensoredParts (msg, declarations, allowed = null) {
     let args = tc.function.arguments || {}
     if (typeof args === 'string') {
       try { args = JSON.parse(args) } catch (_) { args = {} }
+    }
+    if (name === SUBMIT_CHAT_DECLARATION.name && typeof args?.text === 'string') {
+      args = { ...args, text: collapseRepetitions(args.text) }
     }
     parts.push({ functionCall: { name, args: args && typeof args === 'object' ? args : {} } })
   }
@@ -1067,13 +1077,26 @@ function parseUncensoredParts (msg, declarations, allowed = null) {
         }
       } catch (_) {}
     }
-    const text = stripped.replace(/<tool_call>[\s\S]*?<\/tool_call>/gi, '').trim()
+    const text = collapseRepetitions(stripped.replace(/<tool_call>[\s\S]*?<\/tool_call>/gi, '').trim())
     const canSubmitChat = (!allowed || allowed.includes(SUBMIT_CHAT_DECLARATION.name)) && declarations.some(d => d.name === SUBMIT_CHAT_DECLARATION.name)
     if (!parts.length && text && canSubmitChat) {
       parts.push({ functionCall: { name: SUBMIT_CHAT_DECLARATION.name, args: { text } } })
     }
   }
   return parts
+}
+
+const UNCENSORED_SAMPLING_PARAMS = {
+  max_tokens: 1024,
+  top_p: 0.85,
+  top_k: 40,
+  min_p: 0.05,
+  repeat_penalty: 1.18,
+  repeat_last_n: 128,
+  frequency_penalty: 0.35,
+  presence_penalty: 0.35,
+  dry_multiplier: 0.8,
+  chat_template_kwargs: { enable_thinking: false }
 }
 
 async function callUncensored (contents, declarations, allowed = null, { timeoutMs = Math.max(replyTimeoutMs(), 300 * 1000) } = {}) {
@@ -1087,9 +1110,9 @@ async function callUncensored (contents, declarations, allowed = null, { timeout
   const body = {
     model,
     messages: toOpenAIMessages(uncensoredSystemInstruction({ compact: useCompact }), contents, { compact: useCompact }),
-    temperature: temperature(),
+    temperature: useCompact ? 0.75 : temperature(),
     ...(useCompact
-      ? { max_tokens: 1024, chat_template_kwargs: { enable_thinking: false } }
+      ? UNCENSORED_SAMPLING_PARAMS
       : {
           tools: toOpenAITools(declarations, allowed),
           tool_choice: allowed && allowed.length === 1
@@ -1125,7 +1148,8 @@ async function callUncensored (contents, declarations, allowed = null, { timeout
     const plainBody = {
       model,
       messages: toOpenAIMessages(uncensoredSystemInstruction({ compact: true }), contents, { compact: true }),
-      temperature: temperature()
+      temperature: 0.75,
+      ...UNCENSORED_SAMPLING_PARAMS
     }
     res = await send(plainBody)
   }
