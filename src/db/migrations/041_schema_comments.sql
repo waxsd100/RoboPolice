@@ -74,6 +74,7 @@ COMMENT ON COLUMN guild_emojis.name IS 'カスタム絵文字の名前';
 COMMENT ON COLUMN guild_emojis.animated IS 'アニメーション絵文字かどうか';
 COMMENT ON COLUMN guild_emojis.described_name IS '説明文を生成した時点の絵文字名（リネーム検知用）';
 COMMENT ON COLUMN guild_emojis.description IS 'AIが画像と名前から生成した絵文字の見た目・使い所の説明文';
+COMMENT ON COLUMN guild_emojis.context_hash IS '説明文を生成した時点の知識コンテキストのハッシュ値（再生成判定用）';
 COMMENT ON COLUMN guild_emojis.embedding IS '説明文の512次元ベクトル埋め込み（意味検索用）';
 COMMENT ON COLUMN guild_emojis.model_id IS '埋め込み生成に使用したモデルID（embedding_models.id）';
 COMMENT ON COLUMN guild_emojis.updated_at IS '絵文字情報または説明文の最終更新日時';
