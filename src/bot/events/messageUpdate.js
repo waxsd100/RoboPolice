@@ -17,6 +17,7 @@ module.exports = {
     if (newMessage.author.id === global.bot.user.id) return
     discordKnowledge.onMessage(newMessage).catch(e => global.logger.warn(`[DISCORD]: ${e.message}`))
     if (!isFreshEdit(newMessage)) return
+    if (global.bot.guildSettingsCache[newMessage.channel.guild.id]?.isChannelIgnored(newMessage.channel.id)) return
     const member = newMessage.channel.guild.members.get(newMessage.author.id) // this member "should" be in cache at all times
     oldMessage = await getMessageFromBatch(newMessage.id)
     if (!oldMessage) {
@@ -107,7 +108,7 @@ module.exports = {
       let imagesRemoved = false
       if (oldMessage.attachment_urls.length) {
         const oldImageUrls = oldMessage.attachment_urls
-        newAttachmentImages = newMessage.attachments.filter(attachment => attachment.content_type.startsWith("image"))
+        const newAttachmentImages = (newMessage.attachments || []).filter(attachment => attachment.content_type?.startsWith('image'))
         if (oldImageUrls.length > newAttachmentImages.length) {
           // Removed at least one image from the message
           imagesRemoved = true

@@ -6,8 +6,9 @@ module.exports = {
   handle: async (member, oldState) => {
     const state = member.voiceState
     const channel = member.guild.channels.get(state.channelID)
-    if (!state.channelID || oldState.channelID) return
+    if (!oldState || !state.channelID || oldState.channelID) return
     if ((state.selfDeaf !== oldState.selfDeaf) || (state.selfMute !== oldState.selfMute)) return
+    if (state.mute === oldState.mute && state.deaf === oldState.deaf) return
     if (global.bot.guildSettingsCache[member.guild.id].isChannelIgnored(state.channelID)) return
     const voiceStateUpdateEvent = {
       guildID: member.guild.id,

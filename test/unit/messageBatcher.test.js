@@ -28,4 +28,22 @@ describe('messageBatcher', () => {
     assert.equal(batcher.getMessage('secret'), undefined)
     assert.deepEqual(batcher.getChannelMessages('301'), [])
   })
+
+  test('deleting a message while its batch transaction is in flight removes it before COMMIT', async (t) => {
+    const sent = []
+    t.mock.method(pool, 'getPostgresClient', async () => ({
+      query: async (sql, params) => {
+        sent.push(params ? [sql, params] : sql)
+        if (typeof sql === 'string' && sql.startsWith('INSERT INTO messages')) {
+          batcher.removeMessage('in-flight-del')
+        }
+      },
+      release () {}
+    }))
+    await batcher.addItem(['in-flight-del', '1', '消される発言', [], '2026-10-29T00:00:00.000Z', '301', '100'])
+    const count = await batcher.submitBatch(10)
+    assert.equal(count, 1)
+    assert.deepEqual(sent.at(-2), ['DELETE FROM messages WHERE id = ANY($1)', [['in-flight-del']]])
+    assert.equal(sent.at(-1), 'COMMIT')
+  })
 })

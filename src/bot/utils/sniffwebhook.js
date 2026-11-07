@@ -5,10 +5,13 @@ module.exports = webhookID => { // use to find bad shared webhooks
       count: 100
     })
     stream.on('data', resultKeys => {
+      if (!resultKeys.length) return
       stream.pause()
       global.redis.mget(resultKeys).then(bigMGETValues => {
-        if (bigMGETValues.find(v => v.startsWith(webhookID))) {
-          const owningKey = resultKeys[bigMGETValues.indexOf(bigMGETValues.find(v => v.startsWith(webhookID)))]
+        const matchIndex = bigMGETValues.findIndex(v => v?.startsWith(webhookID))
+        if (matchIndex !== -1) {
+          const owningKey = resultKeys[matchIndex]
+          stream.destroy()
           resolve(owningKey)
         } else {
           stream.resume()

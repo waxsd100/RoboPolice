@@ -78,8 +78,11 @@ async function backfill ({ pool, get, log = () => {} }) {
   const pending = new Set((await pool.query('SELECT id FROM messages WHERE channel_id IS NULL')).rows.map(r => r.id))
   if (pending.size === 0) return { filled: 0, remaining: 0 }
   const oldest = (await pool.query('SELECT min(ts) AS ts FROM messages WHERE channel_id IS NULL')).rows[0].ts
+  const minSnowflake = [...pending].filter(id => /^\d+$/.test(id)).reduce((min, id) => !min || BigInt(id) < min ? BigInt(id) : min, null)
+  const snowflakeMs = minSnowflake !== null && minSnowflake >= (DISCORD_EPOCH << 22n) ? Number((minSnowflake >> 22n) + DISCORD_EPOCH) : null
+  const oldestMs = oldest && snowflakeMs ? Math.min(new Date(oldest).getTime(), snowflakeMs) : (oldest ? new Date(oldest).getTime() : (snowflakeMs ?? Date.now()))
   // A little before the oldest stored time: a message is stored when the bot sees it, just after it is sent.
-  const since = new Date(new Date(oldest).getTime() - 60 * 60 * 1000)
+  const since = new Date(oldestMs - 60 * 60 * 1000)
   const oldestID = snowflakeAt(since)
   let filled = 0
   for (const { id: guildID } of (await pool.query('SELECT id FROM guilds')).rows) {

@@ -2,4 +2,8 @@
 .github
 node_modules
 .env
+.env.*
 docs
+robopolice-key.json
+infra
+test

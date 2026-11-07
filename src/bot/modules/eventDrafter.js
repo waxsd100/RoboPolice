@@ -518,10 +518,12 @@ async function callGemini (model, body, options) {
     if (thinking.thinkingConfig) body = { ...body, generationConfig: { ...body.generationConfig, ...thinking } }
   }
   const data = await geminiRequest(model, 'generateContent', body, options)
-  const content = data.candidates?.[0]?.content
-  if (!content?.parts?.length) {
-    const finish = data.candidates?.[0]?.finishReason
-    const blocked = data.promptFeedback?.blockReason || (BLOCKING_FINISH_REASONS.includes(finish) ? finish : null)
+  const candidate = data.candidates?.[0]
+  const content = candidate?.content
+  const finish = candidate?.finishReason
+  const blocked = data.promptFeedback?.blockReason || (BLOCKING_FINISH_REASONS.includes(finish) ? finish : null)
+  const hasAnswer = content?.parts?.some(p => !p.thought)
+  if (!content?.parts?.length || (blocked && !hasAnswer)) {
     throw new GeminiError(`Gemini returned no content: ${JSON.stringify(data).slice(0, 1000)}`, 'AI から応答がありませんでした', blocked)
   }
   return content
@@ -718,6 +720,7 @@ async function runAgent (contents, tools, submits = SUBMIT_DECLARATIONS) {
       contents.deep = false
       contents.deepRefused = true
       offered.length = 0
+      step = -1
       continue
     }
     const handOver = !contents.deep && offered.length && content.parts.some(p => p.functionCall?.name === THINK_DEEPER_DECLARATION.name)
@@ -728,6 +731,7 @@ async function runAgent (contents, tools, submits = SUBMIT_DECLARATIONS) {
       contents.deep = true
       global.logger?.info(`[GEMINI]: Handing a request over to ${deepModel()}`)
       await tools.progress?.(DEEP_PROGRESS)
+      step = -1
       continue
     }
     // Echo the model turn back unchanged: newer models attach thought signatures to it.

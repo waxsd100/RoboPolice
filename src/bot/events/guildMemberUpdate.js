@@ -105,10 +105,10 @@ module.exports = {
         if (possibleRoleLog.after.$remove.length !== 0) possibleRoleLog.after.$remove.forEach(r => removed.push(r))
       }
       if (added.length !== 0) {
-        roleColor = guild.roles.find(r => r.id === added[0].id).color
+        roleColor = guild.roles.find(r => r.id === added[0].id)?.color
       }
       if (removed.length !== 0) {
-        roleColor = guild.roles.find(r => r.id === removed[0].id).color
+        roleColor = guild.roles.find(r => r.id === removed[0].id)?.color
       }
       // Add a + or - emoji when roles are manipulated for a user, stringify it, and assign a field value to it.
       guildMemberUpdate.embeds[0].fields = [{

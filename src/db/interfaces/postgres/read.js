@@ -25,7 +25,8 @@ async function getGuild (guildID) {
   if (doc.rows.length === 0) {
     if (global.bot.guilds.get(guildID)) {
       await createGuild(global.bot.guilds.get(guildID))
-      return await getGuild(guildID)
+      const created = await pool.query(`${GUILD_SETTINGS} WHERE g.id = $1`, [guildID])
+      return created.rows[0] ? toSettings(created.rows[0]) : undefined
     }
     return undefined
   }

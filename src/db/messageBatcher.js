@@ -16,9 +16,15 @@ async function addItem (messageAsArray) {
   }
 }
 
+const inFlightDeleted = new Set()
+let inFlightCount = 0
+
 // A batch row: [id, author_id, content, [image URLs], ts, channel_id, guild_id]
 async function submitBatch (batchSize) {
   const toSubmit = batch.splice(0, batchSize)
+  if (toSubmit.length === 0) return 0
+  const batchIds = new Set(toSubmit.map(row => row[0]))
+  inFlightCount++
   const attachments = toSubmit.flatMap(row => row[3].map((url, position) => [row[0], position, url]))
   const poolClient = await pool.getPostgresClient()
   try {
@@ -38,15 +44,22 @@ async function submitBatch (batchSize) {
          ON CONFLICT DO NOTHING`,
         attachments))
     }
+    const deletedDuringSubmit = [...batchIds].filter(id => inFlightDeleted.has(id))
+    if (deletedDuringSubmit.length) {
+      await poolClient.query('DELETE FROM messages WHERE id = ANY($1)', [deletedDuringSubmit])
+      deletedDuringSubmit.forEach(id => inFlightDeleted.delete(id))
+    }
     await poolClient.query('COMMIT')
   } catch (e) {
     await poolClient.query('ROLLBACK').catch(() => {})
     throw e
   } finally {
+    inFlightCount--
+    if (inFlightCount === 0) inFlightDeleted.clear()
     poolClient.release()
   }
   global.timesSubmitted += 1
-  global.totalMessagesSubmitted += batchSize
+  global.totalMessagesSubmitted += toSubmit.length
 
   const msg = `Submitted ${toSubmit.length} messages within batch #${global.timesSubmitted} (${global.totalMessagesSubmitted} total).`;
   global.logger.info(msg)
@@ -104,6 +117,7 @@ function getChannelMessages (channelID) {
 function removeMessage (messageID) {
   const index = batch.findIndex(m => m[0] === messageID)
   if (index !== -1) batch.splice(index, 1)
+  else if (inFlightCount > 0) inFlightDeleted.add(messageID)
 }
 
 exports.getMessage = getMessage

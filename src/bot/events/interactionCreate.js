@@ -67,9 +67,12 @@ module.exports = {
             }).catch(() => {})
             return
           }
-          if (command.userPerms && command.userPerms.length !== 0 && !isCreator(interaction.member.user.id) && !hasStaffAccess(interaction.member.roles, global.bot.guilds.get(interaction.guildID))) {
+          const subcommand = interaction.data.options?.find(o => o.type === 1 || !('value' in o))?.name
+          const userPerms = command.subcommandPerms?.[subcommand]?.userPerms ?? command.userPerms
+          const botPerms = command.subcommandPerms?.[subcommand]?.botPerms ?? command.botPerms
+          if (userPerms && userPerms.length !== 0 && !isCreator(interaction.member.user.id) && !hasStaffAccess(interaction.member.roles, global.bot.guilds.get(interaction.guildID))) {
             const userChannelPerms = interaction.channel.permissionsOf(interaction.member.user.id).json
-            const missingPermissions = command.userPerms.filter(bpName => !userChannelPerms[bpName])
+            const missingPermissions = userPerms.filter(bpName => !userChannelPerms[bpName])
             if (missingPermissions.length !== 0) {
               interaction.createMessage({
                 embeds: [{
@@ -90,9 +93,9 @@ module.exports = {
               return
             }
           }
-          if (command.botPerms && command.botPerms.length !== 0) {
+          if (botPerms && botPerms.length !== 0) {
             const botChannelPermissions = interaction.channel.permissionsOf(global.bot.user.id).json
-            const missingPermissions = command.botPerms.filter(bpName => !botChannelPermissions[bpName])
+            const missingPermissions = botPerms.filter(bpName => !botChannelPermissions[bpName])
             if (missingPermissions.length !== 0) {
               interaction.createMessage({
                 embeds: [{

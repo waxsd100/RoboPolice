@@ -592,8 +592,11 @@ async function handleListLogSetup (interaction) {
 
 module.exports = {
   name: 'setup',
-  userPerms: ['manageWebhooks', 'manageChannels', 'viewAuditLogs'],
-  botPerms: ['manageWebhooks', 'viewAuditLogs'],
+  userPerms: ['manageWebhooks', 'manageChannels', 'viewAuditLog'],
+  botPerms: ['manageWebhooks', 'viewAuditLog'],
+  subcommandPerms: {
+    assistant: { userPerms: [], botPerms: [] }
+  },
   noThread: true,
   func: async interaction => {
     if (interaction.data.options?.find(o => o.name === 'via_presets')) {

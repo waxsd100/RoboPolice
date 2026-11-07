@@ -33,7 +33,7 @@ const eventList = [
 module.exports = {
   func: async (message, suffix) => {
     const botPerms = message.channel.permissionsOf(global.bot.user.id).json
-    if (!botPerms.manageWebhooks || !botPerms.viewAuditLogs) {
+    if (!botPerms.manageWebhooks || !botPerms.viewAuditLog) {
       message.channel.createMessage('setchannel の実行には「ウェブフックの管理」と「監査ログを表示」の権限が必要です。設定したログチャンネルへメッセージを送るために必須です。').catch(_ => {})
       message.addReaction('❌').catch(_ => {})
       return
@@ -61,7 +61,7 @@ module.exports = {
   \`${process.env.GLOBAL_BOT_PREFIX}setchannel guildMemberAdd, guildMemberRemove, guildMemberKick\` <- 参加・退出・キックを出力 **（招待コードの記録には __チャンネルの管理とサーバー管理__ の権限が必要です。これが無いと Discord が招待情報を送信しません）**
   \`${process.env.GLOBAL_BOT_PREFIX}setchannel anyevent\` <- イベントを個別に指定して出力。複数指定はカンマ区切り。指定できるイベント:
   \`\`\`${eventList.toString(',')}\`\`\``, // 4 characters away from max embed length
-  perms: ['manageWebhooks', 'manageChannels', 'viewAuditLogs'],
+  perms: ['manageWebhooks', 'manageChannels', 'viewAuditLog'],
   noThread: true,
   category: 'Logging'
 }

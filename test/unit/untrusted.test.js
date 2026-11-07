@@ -47,5 +47,13 @@ describe('safeLinks', () => {
     const fromPage = [{ parts: [{ functionResponse: { response: { result: 'https://evil.example/login' } } }] }]
     assert.equal(safeLinks('[discord.com](https://evil.example/login)', fromPage).text, '[discord.com](https://evil.example/login)（行き先: evil.example）')
     assert.equal(safeLinks('[example.com のページ](https://www.example.com/event)', [{ t: 'https://www.example.com/event' }]).text, '[example.com のページ](https://www.example.com/event)')
+    const fromParenPage = [{ t: 'https://evil.example/path_(1)' }]
+    assert.equal(safeLinks('[google.com](https://evil.example/path_(1))', fromParenPage).text, '[google.com](https://evil.example/path_(1))（行き先: evil.example）')
+  })
+
+  test('cannot be bypassed with stray ]( prefixes, parentheses or multiline labels', () => {
+    const r1 = safeLinks('](https://evil.example/a) [google.com](https://evil.example/b_(1)) [\nラベル](https://evil.example/c)', sources)
+    assert.equal(r1.text, '](（リンクは省きました）) google.com \nラベル')
+    assert.deepEqual(r1.removed, ['https://evil.example/b_(1)', 'https://evil.example/c', 'https://evil.example/a'])
   })
 })

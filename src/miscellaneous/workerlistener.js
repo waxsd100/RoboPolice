@@ -26,13 +26,12 @@ module.exports = async worker => {
   worker.on('disconnect', () => {
     console.error(`[${worker.rangeForShard}] IPC disconnected!`)
     global.webhook.error(`[${worker.rangeForShard}] IPC disconnected!`)
-    process.exit(1)
   })
 
   worker.on('exit', code => {
     if (code === 0) {
-      global.logger.info(`Worker ${worker.id} hosting ${worker.shardStart}-${worker.shardStart} successfully killed.`)
-      global.webhook.generic(`Worker ${worker.id} hosting ${worker.shardStart}-${worker.shardStart} successfully killed.`)
+      global.logger.info(`Worker ${worker.id} hosting ${worker.shardStart}-${worker.shardEnd} successfully killed.`)
+      global.webhook.generic(`Worker ${worker.id} hosting ${worker.shardStart}-${worker.shardEnd} successfully killed.`)
     } else if (workerCrashes[worker.rangeForShard] >= 2) {
       global.logger.error(`Worker ${worker.id} hosting ${worker.rangeForShard} will not be respawned due to a detected boot loop.`)
       global.webhook.fatal(`Worker ${worker.id} hosting ${worker.rangeForShard} will not be respawned due to a detected boot loop. | ${worker.id}`)
@@ -56,7 +55,7 @@ module.exports = async worker => {
       setTimeout(() => {
         if (workerCrashes[worker.rangeForShard] === 1) delete workerCrashes[worker.rangeForShard]
         else workerCrashes[worker.rangeForShard]--
-      })
+      }, 60000)
     }
   })
 }

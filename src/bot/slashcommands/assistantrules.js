@@ -49,10 +49,22 @@ module.exports = {
       }
       const rules = String(option('text') || '').trim()
       if (!rules) {
-        const { assistantRules } = await getReplySettings(interaction.guildID)
-        const guild = global.bot.guilds.get(interaction.guildID)
-        const channels = guild ? (await rulesChannels(guild).catch(() => [])).map(c => c.id) : []
-        return await interaction.createMessage({ content: text.show(assistantRules, channels), flags: 64 })
+        let deferred = false
+        const timer = typeof interaction.defer === 'function'
+          ? setTimeout(() => { deferred = true; interaction.defer(64).catch(() => {}) }, 1500)
+          : null
+        timer?.unref?.()
+        try {
+          const { assistantRules } = await getReplySettings(interaction.guildID)
+          const guild = global.bot.guilds.get(interaction.guildID)
+          const channels = guild ? (await rulesChannels(guild).catch(() => [])).map(c => c.id) : []
+          const content = text.show(assistantRules, channels)
+          return deferred && typeof interaction.editOriginalMessage === 'function'
+            ? await interaction.editOriginalMessage({ content })
+            : await interaction.createMessage({ content, flags: 64 })
+        } finally {
+          if (timer) clearTimeout(timer)
+        }
       }
       if ([...rules].length > MAX_CHARS) return await interaction.createMessage({ content: text.tooLong, flags: 64 })
       await setAssistantRules(interaction.guildID, rules)

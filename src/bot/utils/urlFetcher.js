@@ -18,14 +18,24 @@ for (const [subnet, prefix] of [
   ['0.0.0.0', 8], ['10.0.0.0', 8], ['100.64.0.0', 10], ['127.0.0.0', 8], ['169.254.0.0', 16],
   ['172.16.0.0', 12], ['192.0.0.0', 24], ['192.168.0.0', 16], ['198.18.0.0', 15], ['224.0.0.0', 4], ['240.0.0.0', 4]
 ]) blockedAddresses.addSubnet(subnet, prefix, 'ipv4')
-for (const [subnet, prefix] of [['::', 128], ['::1', 128], ['fc00::', 7], ['fe80::', 10], ['ff00::', 8]]) {
+for (const [subnet, prefix] of [
+  ['::', 128], ['::1', 128], ['::', 96], ['100::', 64], ['64:ff9b::', 96], ['64:ff9b:1::', 48],
+  ['2002::', 16], ['fc00::', 7], ['fe80::', 10], ['ff00::', 8]
+]) {
   blockedAddresses.addSubnet(subnet, prefix, 'ipv6')
 }
 
 function isBlockedAddress (address, family) {
   if (family === 6 || family === 'IPv6') {
-    const mapped = address.toLowerCase().match(/^::ffff:(\d+\.\d+\.\d+\.\d+)$/)
+    const lower = address.toLowerCase()
+    const mapped = lower.match(/^::(?:ffff:)?(\d+\.\d+\.\d+\.\d+)$/)
     if (mapped) return blockedAddresses.check(mapped[1], 'ipv4')
+    const hexMapped = lower.match(/^::ffff:([0-9a-f]{1,4}):([0-9a-f]{1,4})$/)
+    if (hexMapped) {
+      const hi = parseInt(hexMapped[1], 16)
+      const lo = parseInt(hexMapped[2], 16)
+      return blockedAddresses.check(`${(hi >> 8) & 0xff}.${hi & 0xff}.${(lo >> 8) & 0xff}.${lo & 0xff}`, 'ipv4')
+    }
     return blockedAddresses.check(address, 'ipv6')
   }
   return blockedAddresses.check(address, 'ipv4')
@@ -69,24 +79,31 @@ function request (url, isBlocked, kind) {
       headers: { 'User-Agent': 'RoboPolice (+https://github.com/waxsd100/RoboPolice)', Accept: kind.accept }
     }, res => {
       if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
+        clearTimeout(deadline)
         res.resume()
         return resolve({ redirect: new URL(res.headers.location, url) })
       }
       if (res.statusCode !== 200) {
+        clearTimeout(deadline)
         res.resume()
         return reject(new Error(`HTTP ${res.statusCode}`))
       }
       const contentType = res.headers['content-type'] || ''
       if (!kind.types.test(contentType)) {
+        clearTimeout(deadline)
         res.resume()
         return reject(new Error(`対応していない形式です (${contentType || '不明'})`))
       }
       const chunks = []
       let size = 0
-      const done = () => resolve({ body: Buffer.concat(chunks), contentType })
+      const done = () => {
+        clearTimeout(deadline)
+        resolve({ body: Buffer.concat(chunks), contentType })
+      }
       res.on('data', chunk => {
         size += chunk.length
         if (size > kind.maxBytes) {
+          clearTimeout(deadline)
           // Settle before destroying, since destroying emits an error.
           if (kind.truncate) {
             chunks.push(chunk.subarray(0, chunk.length - (size - kind.maxBytes)))
@@ -100,10 +117,12 @@ function request (url, isBlocked, kind) {
         chunks.push(chunk)
       })
       res.on('end', done)
-      res.on('error', reject)
+      res.on('error', err => { clearTimeout(deadline); reject(err) })
     })
+    const deadline = setTimeout(() => req.destroy(new Error('タイムアウトしました')), FETCH_TIMEOUT_MS)
+    deadline.unref?.()
     req.on('timeout', () => req.destroy(new Error('タイムアウトしました')))
-    req.on('error', reject)
+    req.on('error', err => { clearTimeout(deadline); reject(err) })
   })
 }
 

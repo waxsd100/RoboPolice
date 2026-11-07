@@ -86,10 +86,9 @@ function sendBulkLog (senderPkg, embeds, guildSettings) {
       // global.webhook.warn(`Got ${e.code} while sending webhook to ${senderPkg.guildID} (${global.bot.guilds.get(senderPkg.guildID) ? global.bot.guilds.get(senderPkg.guildID).name : 'Could not find guild!'})`)
     }
     if (e.code == '10015') { // Webhook doesn't exist anymore.
-      await global.redis.del(`webhook-${guildSettings.getEventByName(senderPkg.eventName)}`)
-      await setEventsByChannelID(senderPkg.guildID, '', [senderPkg.eventName])
-      await cacheGuild(senderPkg.guildID)
-      return await guildWebhookCacher(senderPkg.guildID, guildSettings.getEventByName(senderPkg.eventName))
+      const channelID = guildSettings.getEventByName(senderPkg.eventName)
+      await global.redis.del(`webhook-${channelID}`)
+      return await guildWebhookCacher(senderPkg.guildID, channelID)
     } else {
       console.error('Error while sending a message over webhook!', e, senderPkg, senderPkg.embeds[0].fields)
     }

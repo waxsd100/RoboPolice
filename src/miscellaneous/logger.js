@@ -4,7 +4,7 @@ module.exports = {
   startup: (...info) => console.log(chalk`${new Date().toUTCString()} {bold.whiteBright.bgBlue STARTUP} `, ...info),
   fatal: (...info) => {
     console.log(chalk`${new Date().toUTCString()} {bold.white.bgRed FATAL}: `, ...info)
-    process.exit()
+    process.exit(1)
   },
   error: (...info) => {
     console.log(chalk`${new Date().toUTCString()} {bold.red ERROR}: `, ...info)

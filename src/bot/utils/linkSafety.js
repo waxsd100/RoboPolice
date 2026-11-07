@@ -3,8 +3,8 @@
 // bot post a link out of nowhere, and a link whose text names one site while it goes to another
 // shows where it really goes.
 
-const URL_PATTERN = /https?:\/\/[^\s<>()[\]"'`]+/gi
-const MASKED = /\[([^\]\n]+)\]\(<?(https?:\/\/[^\s<>()]+)>?\)/g
+const URL_PATTERN = /https?:\/\/(?:[^\s<>()[\]"'`]|\([^\s<>()[\]"'`]*\))+/gi
+const MASKED = /\[([^\]]+)\]\((?:<(https?:\/\/[^\s<>]+)>|(https?:\/\/(?:[^\s<>()]|\([^\s<>()]*\))+))\)/gi
 // A domain written in a link's text (example.com, www.example.co.jp).
 const DOMAIN = /\b((?:[a-z0-9-]+\.)+[a-z]{2,})\b/i
 
@@ -41,23 +41,27 @@ function safeLinks (text, ...sources) {
   const known = urlsIn(...sources)
   const knownVideos = new Set([...known].map(videoIdOf).filter(Boolean))
   const removed = []
-  let out = String(text || '').replace(MASKED, (whole, label, url) => {
+  const kept = []
+  let out = String(text || '').replace(MASKED, (whole, label, bracketedUrl, bareUrl) => {
+    const url = bracketedUrl || bareUrl
     if (!isKnown(url, known, knownVideos)) {
       removed.push(url)
       return label
     }
     const named = label.match(DOMAIN)?.[1]?.replace(/^www\./, '').toLowerCase()
     const host = hostOf(url)
-    if (named && host && named !== host && !host.endsWith(`.${named}`)) return `${whole}（行き先: ${host}）`
-    return whole
+    const rendered = named && host && named !== host && !host.endsWith(`.${named}`)
+      ? `${whole}（行き先: ${host}）`
+      : whole
+    return `\0MASKED_${kept.push(rendered) - 1}\0`
   })
   // Bare links outside the masked ones.
-  out = out.replace(/(\]\(<?)?(https?:\/\/[^\s<>()[\]"'`]+)/gi, (whole, inMasked, url) => {
-    if (inMasked) return whole
-    if (isKnown(url, known, knownVideos)) return whole
+  out = out.replace(URL_PATTERN, url => {
+    if (isKnown(url, known, knownVideos)) return url
     removed.push(url)
     return '（リンクは省きました）'
   })
+  out = out.replace(/\0MASKED_(\d+)\0/g, (_, i) => kept[Number(i)])
   return { text: out, removed }
 }
 

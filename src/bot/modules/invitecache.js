@@ -23,12 +23,8 @@ module.exports = {
   },
   insertInvite: async (guildID, invite) => {
     const invites = await module.exports.getCachedInvites(guildID)
-    if (!invites) {
-      await global.redis.set(`linvites-${guildID}`, JSON.stringify([module.exports.formatInvite(invite, true)]), 'EX', CACHE_TTL_SECONDS)
-    } else {
-      invites.push(module.exports.formatInvite(invite, false))
-      await global.redis.set(`linvites-${guildID}`, JSON.stringify(invites.map(i => module.exports.formatInvite(i, true))), 'EX', CACHE_TTL_SECONDS)
-    }
+    invites.push(module.exports.formatInvite(invite, false))
+    await global.redis.set(`linvites-${guildID}`, JSON.stringify(invites.map(i => module.exports.formatInvite(i, true))), 'EX', CACHE_TTL_SECONDS)
   },
   deleteInvite: async (guildID, code) => {
     const guildInvites = await module.exports.getCachedInvites(guildID)
@@ -36,7 +32,7 @@ module.exports = {
     if (!inviteToDelete) return // no more work to be done
     guildInvites.splice(guildInvites.indexOf(inviteToDelete), 1)
     await global.redis.set(`linvites-${guildID}`, JSON.stringify(guildInvites.map(i => {
-      i.code = aes.encrypt(code)
+      i.code = aes.encrypt(i.code)
       return i
     })), 'EX', CACHE_TTL_SECONDS)
   },
@@ -44,7 +40,7 @@ module.exports = {
     if (!invite) throw new Error('Invite given to be stripped is null-ish')
     return {
       code: doEncrypt ? aes.encrypt(invite.code) : invite.code, // for formatting invites in guildMemberAdd
-      channel: invite.channel && invite.channel.id, // lazy condition
+      channel: typeof invite.channel === 'string' ? invite.channel : (invite.channel && invite.channel.id), // lazy condition
       uses: `${invite.uses}${invite.maxUses ? `/${invite.maxUses}` : ''}`
     }
   }

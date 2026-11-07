@@ -7,11 +7,12 @@ describe('isBlockedAddress', () => {
   for (const [address, family] of [
     ['127.0.0.1', 4], ['10.1.2.3', 4], ['172.16.0.1', 4], ['192.168.1.1', 4], ['169.254.169.254', 4],
     ['100.64.0.1', 4], ['0.0.0.0', 4], ['224.0.0.1', 4],
-    ['::1', 6], ['::', 6], ['fd00::1', 6], ['fe80::1', 6], ['::ffff:127.0.0.1', 6], ['::ffff:10.0.0.1', 6]
+    ['::1', 6], ['::', 6], ['fd00::1', 6], ['fe80::1', 6], ['::ffff:127.0.0.1', 6], ['::ffff:10.0.0.1', 6],
+    ['::127.0.0.1', 6], ['::ffff:7f00:1', 6], ['64:ff9b::127.0.0.1', 6], ['2002:7f00:1::', 6]
   ]) {
     test(`blocks ${address}`, () => assert.equal(isBlockedAddress(address, family), true))
   }
-  for (const [address, family] of [['8.8.8.8', 4], ['1.1.1.1', 4], ['2001:4860:4860::8888', 6], ['::ffff:8.8.8.8', 6]]) {
+  for (const [address, family] of [['8.8.8.8', 4], ['1.1.1.1', 4], ['2001:4860:4860::8888', 6], ['::ffff:8.8.8.8', 6], ['::ffff:808:808', 6]]) {
     test(`allows ${address}`, () => assert.equal(isBlockedAddress(address, family), false))
   }
   test('accepts the IPv6 family as dns.lookup reports it', () => {

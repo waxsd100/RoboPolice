@@ -1,41 +1,27 @@
 const util = require('util')
+const { redact } = require('../utils/redact')
+
+function formatEval (val) {
+  let str = redact(typeof val === 'string' ? val : util.inspect(val, { depth: 1 }))
+  if (str.length > 1900) str = `${str.slice(0, 1897)}...`
+  return '```xl\n' + str + '\n```'
+}
 
 module.exports = {
   func: async (message, suffix) => {
     try { // This eval command is from https://github.com/TheSharks/WildBeast/ because I really like their method
       const returned = eval(suffix)
-      let str = util.inspect(returned, {
-        depth: 1
-      })
-      if (str.length > 1900) {
-        str = `${str.substr(0, 1897)}...`
-      }
-      str = str.replace(new RegExp(process.env.BOT_TOKEN, 'gi'), '( ͡° ͜ʖ ͡°)')
-      message.channel.createMessage('```xl\n' + str + '\n```').then(ms => {
+      message.channel.createMessage(formatEval(returned)).then(ms => {
         if (returned !== undefined && returned !== null && typeof returned.then === 'function') {
           returned.then(() => {
-            str = util.inspect(returned, {
-              depth: 1
-            })
-            if (str.length > 1900) {
-              str = str.substr(0, 1897)
-              str = str + '...'
-            }
-            ms.edit('```xl\n' + str + '\n```')
+            ms.edit(formatEval(returned))
           }, e => {
-            str = util.inspect(e, {
-              depth: 1
-            })
-            if (str.length > 1900) {
-              str = str.substr(0, 1897)
-              str = str + '...'
-            }
-            ms.edit('```xl\n' + str + '\n```')
+            ms.edit(formatEval(e))
           })
         }
       }).catch(() => { })
     } catch (e) {
-      message.channel.createMessage('```xl\n' + e + '\n```').catch(() => { })
+      message.channel.createMessage(formatEval(e)).catch(() => { })
     }
   },
   name: 'eval',
