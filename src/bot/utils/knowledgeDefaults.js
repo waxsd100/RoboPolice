@@ -6,10 +6,24 @@ const DEFAULTS = {
   WIKI_URLS: 'https://novamanhikoushiki.memo.wiki/',
   // twitterKnowledge.js
   TWITTER_ACCOUNTS: 'nobamangames',
-  // youtubeSync.js: the channels the bot follows, for every server (のばまんゲームス, のばまん・ロー・エフォート)
-  YOUTUBE_CHANNELS: 'UCTW2tw0Mhho72MojB1L48IQ,UCz7pNw3UkTF9WQjHcYpFD9g',
+  // youtubeSync.js: the channels the bot follows, for every server (のばまんゲームス, のばまん・ロー・エフォート, のばまん)
+  YOUTUBE_CHANNELS: 'UCTW2tw0Mhho72MojB1L48IQ,UCz7pNw3UkTF9WQjHcYpFD9g,UCyXNrveRNcAYbG3QAQ7WFag',
+  // twitchSync.js: the streamer's Twitch channel
+  TWITCH_CHANNELS: 'nobaman',
+  // steamSync.js: the streamer's Steam account (https://steamcommunity.com/id/nobaman/)
+  STEAM_ACCOUNTS: 'nobaman',
   // discordKnowledge.js: のばまん's own account
   DISCORD_KNOWLEDGE_USERS: '615170548187791365',
+  // webKnowledge.js: public pages about the streamer (official site and UUUM interviews on note.com)
+  KNOWLEDGE_URLS: [
+    'https://nobaman.com/',
+    'https://nobaman.com/snstoka/',
+    'https://note.com/uuum_official/n/nfa60a1881da8',
+    'https://note.com/uuum_official/n/n75d680f657a9',
+    'https://note.com/uuum_official/n/n5a7bf5634bc0',
+    'https://note.com/uuum_official/n/nac7c246a0c00',
+    'https://note.com/uuum_official/n/nd6208d4d0f75'
+  ].join(','),
   // webKnowledge.js
   KNOWLEDGE_TOPICS: [
     // The members as found when this was written (2026-11): looked up again every week, so changes

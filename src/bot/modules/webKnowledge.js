@@ -11,6 +11,7 @@ const { knowledgeSetting } = require('../utils/knowledgeDefaults')
 const { callGemini, lightModel } = require('./eventDrafter')
 const { isGatewayConfigured } = require('../utils/aiGateway')
 const { withoutCharCount } = require('../utils/textClean')
+const urlFetcher = require('../utils/urlFetcher')
 const backgroundQueue = require('../utils/backgroundQueue')
 const store = require('../../db/interfaces/postgres/webKnowledge')
 
@@ -23,8 +24,12 @@ function topics () {
   return [...new Set(String(knowledgeSetting('KNOWLEDGE_TOPICS')).split(/[,\n]/).map(s => s.trim()).filter(Boolean))]
 }
 
+function urls () {
+  return [...new Set(String(knowledgeSetting('KNOWLEDGE_URLS')).split(/[,\n]/).map(s => s.trim()).filter(s => /^https?:\/\//i.test(s)))]
+}
+
 function enabled () {
-  return topics().length !== 0
+  return topics().length !== 0 || urls().length !== 0
 }
 
 function refreshHours () {
@@ -63,6 +68,17 @@ function parts (text) {
   return out
 }
 
+// Reads a public web page (KNOWLEDGE_URLS) directly and stores its text in parts.
+async function readUrl (url, { fetchPage = urlFetcher.fetchPageText } = {}) {
+  const page = await fetchPage(url)
+  const text = String(page.text || '').trim()
+  if (!text) throw new Error(`empty page at ${url}`)
+  const title = text.match(/^タイトル:\s*(.+)$/m)?.[1]?.trim() || url
+  const sections = parts(text).map((t, i) => ({ heading: `${title} ${i + 1}`, text: t, images: [] }))
+  await store.savePage(url, title, sections)
+  return sections.length
+}
+
 // Looks the topic up and stores what was found. Resolves to how many parts were written.
 async function lookUp (topic, now = new Date()) {
   const content = await backgroundQueue.run(null, () => callGemini(lightModel(), {
@@ -78,32 +94,43 @@ async function lookUp (topic, now = new Date()) {
   return sections.length
 }
 
-// Looks up the topics not looked up within WEB_REFRESH_HOURS, and drops the pages of topics no
-// longer named. One that fails is tried again at the next check. Resolves to how many were looked up.
+// Looks up the topics and URLs not read within WEB_REFRESH_HOURS, and drops the pages of topics no
+// longer named. One that fails is tried again at the next check. Resolves to how many were read.
 let running = false
-async function refresh ({ force = false, now = new Date(), log = m => global.logger.warn(m) } = {}) {
-  // With no topics, pages looked up before stay until topics are named again.
-  if (running || !enabled() || !isGatewayConfigured()) return 0
+async function refresh ({ force = false, now = new Date(), fetchPage, log = m => global.logger.warn(m) } = {}) {
+  if (running || !enabled()) return 0
   running = true
   try {
-    const wanted = topics()
     let done = 0
-    for (const topic of wanted) {
-      const last = await store.lastRead(urlOf(topic))
+    for (const url of urls()) {
+      const last = await store.lastRead(url)
       if (!force && last && now - new Date(last) < refreshHours() * 3600 * 1000) continue
       try {
-        await lookUp(topic, now)
+        await readUrl(url, { fetchPage })
         done++
       } catch (e) {
-        log(`[WEB]: Could not look up ${topic}: ${e.message}`)
+        log(`[WEB]: Could not read ${url}: ${e.message}`)
       }
     }
-    await store.deletePagesExcept(PREFIX, wanted.map(urlOf))
-    if (done) global.logger.info(`[WEB]: Looked up ${done} topic(s)`)
+    const wanted = topics()
+    if (wanted.length && isGatewayConfigured()) {
+      for (const topic of wanted) {
+        const last = await store.lastRead(urlOf(topic))
+        if (!force && last && now - new Date(last) < refreshHours() * 3600 * 1000) continue
+        try {
+          await lookUp(topic, now)
+          done++
+        } catch (e) {
+          log(`[WEB]: Could not look up ${topic}: ${e.message}`)
+        }
+      }
+      await store.deletePagesExcept(PREFIX, wanted.map(urlOf))
+    }
+    if (done) global.logger.info(`[WEB]: Looked up ${done} topic(s)/page(s)`)
     return done
   } finally {
     running = false
   }
 }
 
-module.exports = { refresh, lookUp, topics, enabled, parts }
+module.exports = { refresh, lookUp, readUrl, topics, urls, enabled, parts }

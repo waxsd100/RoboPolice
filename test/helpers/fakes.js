@@ -5,7 +5,7 @@ const http = require('http')
 process.env.AES_KEY = process.env.AES_KEY || 'test-aes-key'
 // The knowledge features have defaults for the real community (knowledgeDefaults.js); tests turn
 // them off unless they set one.
-for (const name of ['WIKI_URLS', 'TWITTER_ACCOUNTS', 'DISCORD_KNOWLEDGE_USERS', 'KNOWLEDGE_TOPICS', 'YOUTUBE_CHANNELS']) process.env[name] ??= ''
+for (const name of ['WIKI_URLS', 'TWITTER_ACCOUNTS', 'DISCORD_KNOWLEDGE_USERS', 'KNOWLEDGE_TOPICS', 'KNOWLEDGE_URLS', 'YOUTUBE_CHANNELS', 'TWITCH_CHANNELS', 'STEAM_ACCOUNTS']) process.env[name] ??= ''
 global.logger = global.logger || { info () {}, warn () {}, error () {}, debug () {}, startup () {}, fatal () {} }
 global.webhook = global.webhook || { generic () {}, warn () {}, error () {}, fatal () {} }
 
@@ -230,6 +230,120 @@ function installTwitchStore ({ channels = [], archives = {} } = {}) {
 }
 installTwitchStore()
 
+// The Steam store (steamSync.js), in memory: profiles, apps, games, reviews and wishlist.
+// Installed when this file loads (with nothing followed), so no test reaches a real database.
+function installSteamStore ({ profiles = [], apps = new Map(), games = {}, reviews = {}, wishlist = {} } = {}) {
+  const store = require('../../src/db/interfaces/postgres/steam')
+  store.setProfiles = async list => {
+    profiles.splice(0, profiles.length, ...list.map(p => ({
+      steam_id: p.steamId,
+      account_ref: p.accountRef,
+      persona_name: p.personaName || null,
+      custom_url: p.customUrl || null,
+      summary: p.summary || null,
+      member_since: p.memberSince || null,
+      level: p.level ?? null,
+      game_count: p.gameCount ?? null,
+      wishlist_count: p.wishlistCount ?? null,
+      synced_at: null
+    })))
+    for (const id of Object.keys(games)) if (!profiles.some(p => p.steam_id === id)) delete games[id]
+    for (const id of Object.keys(reviews)) if (!profiles.some(p => p.steam_id === id)) delete reviews[id]
+    for (const id of Object.keys(wishlist)) if (!profiles.some(p => p.steam_id === id)) delete wishlist[id]
+  }
+  store.listProfiles = async () => profiles
+  store.knownApps = async ids => {
+    const out = new Map()
+    for (const id of ids) if (apps.has(id)) out.set(id, apps.get(id))
+    return out
+  }
+  store.saveApps = async list => {
+    for (const a of list) apps.set(a.appId, { name: a.name, nameEn: a.nameEn || null })
+  }
+  store.saveAccountData = async (steamId, { profile = {}, games: gList = [], reviews: rList = null, wishlist: wList = null } = {}) => {
+    const existingGames = games[steamId] || []
+    const existingReviews = reviews[steamId] || []
+    const newGames = gList.filter(g => !existingGames.some(e => e.app_id === g.appId)).length
+    const newReviews = Array.isArray(rList) ? rList.filter(r => !existingReviews.some(e => e.app_id === r.appId)).length : 0
+
+    const byApp = new Map(existingGames.map(g => [g.app_id, g]))
+    for (const g of gList) {
+      const prev = byApp.get(g.appId)
+      const prevHours = prev && Number.isFinite(prev.playtime_hours) ? prev.playtime_hours : null
+      const nextHours = Number.isFinite(g.playtimeHours) ? g.playtimeHours : null
+      byApp.set(g.appId, {
+        steam_id: steamId,
+        app_id: g.appId,
+        name: g.name,
+        name_en: g.nameEn || prev?.name_en || null,
+        playtime_hours: prevHours !== null && nextHours !== null ? Math.max(prevHours, nextHours) : (nextHours ?? prevHours),
+        recent_hours: Number.isFinite(g.recentHours) ? g.recentHours : null,
+        first_played_at: g.firstPlayedAt || prev?.first_played_at || null,
+        last_played_at: g.lastPlayedAt || prev?.last_played_at || null
+      })
+    }
+    games[steamId] = [...byApp.values()]
+
+    if (Array.isArray(rList)) {
+      reviews[steamId] = rList.map((r, position) => ({
+        steam_id: steamId,
+        app_id: r.appId,
+        name: r.name || null,
+        recommended: Boolean(r.recommended),
+        hours_on_record: Number.isFinite(r.hoursOnRecord) ? r.hoursOnRecord : null,
+        posted: r.posted || null,
+        content: r.content,
+        url: r.url,
+        position
+      }))
+    }
+
+    if (Array.isArray(wList)) {
+      wishlist[steamId] = wList.map(w => ({
+        steam_id: steamId,
+        app_id: w.appId,
+        name: w.name,
+        name_en: w.nameEn || null,
+        priority: w.priority ?? null,
+        added_at: w.addedAt || null
+      }))
+    }
+
+    const p = profiles.find(p => p.steam_id === steamId)
+    if (p) {
+      if (profile.personaName) p.persona_name = profile.personaName
+      if (profile.customUrl) p.custom_url = profile.customUrl
+      if (profile.summary) p.summary = profile.summary
+      if (profile.memberSince) p.member_since = profile.memberSince
+      if (Number.isInteger(profile.level)) p.level = profile.level
+      if (Number.isInteger(profile.gameCount)) p.game_count = profile.gameCount
+      if (Number.isInteger(profile.wishlistCount)) p.wishlist_count = profile.wishlistCount
+      p.synced_at = new Date()
+    }
+    return { newGames, newReviews }
+  }
+  store.getOverview = async () => profiles.map(p => ({
+    ...p,
+    stored_game_count: (games[p.steam_id] || []).length,
+    review_count: (reviews[p.steam_id] || []).length,
+    stored_wishlist_count: (wishlist[p.steam_id] || []).length
+  }))
+  store.getGames = async () => Object.entries(games).flatMap(([id, list]) => {
+    const p = profiles.find(p => p.steam_id === id) || {}
+    return list.map(g => ({ ...g, account_ref: p.account_ref, persona_name: p.persona_name, custom_url: p.custom_url }))
+  }).sort((a, b) => (b.playtime_hours ?? -1) - (a.playtime_hours ?? -1) || a.app_id - b.app_id)
+  store.getReviews = async () => Object.entries(reviews).flatMap(([id, list]) => {
+    const p = profiles.find(p => p.steam_id === id) || {}
+    return list.map(r => ({ ...r, account_ref: p.account_ref, persona_name: p.persona_name, custom_url: p.custom_url }))
+  }).sort((a, b) => (a.position ?? 0) - (b.position ?? 0))
+  store.getWishlist = async () => Object.entries(wishlist).flatMap(([id, list]) => {
+    const p = profiles.find(p => p.steam_id === id) || {}
+    return list.map(w => ({ ...w, account_ref: p.account_ref, persona_name: p.persona_name, custom_url: p.custom_url }))
+  }).sort((a, b) => new Date(b.added_at || 0) - new Date(a.added_at || 0) || a.app_id - b.app_id)
+  return { profiles, apps, games, reviews, wishlist }
+}
+installSteamStore()
+
 // Rules channels are picked by their names in tests (serverRules.js), not by Gemini, so no test's
 // scripted Gemini turns are taken by it.
 {
@@ -443,7 +557,7 @@ async function startServer (handler) {
 }
 
 module.exports = {
-  perms, createGuild, createMember, installBot, installYouTubeStore, installQuotaStore, installEmbeddingStore, configureGateway, installGemini, call, submit, lastToolResponses, startServer, installLoreStore, restoreLoreStore, stripUntrusted, unwrapTools, installLoadStore, installTwitchStore
+  perms, createGuild, createMember, installBot, installYouTubeStore, installQuotaStore, installEmbeddingStore, configureGateway, installGemini, call, submit, lastToolResponses, startServer, installLoreStore, restoreLoreStore, stripUntrusted, unwrapTools, installLoadStore, installTwitchStore, installSteamStore
 }
 
 // A fake embedding model: each text points along the axis of the first topic it mentions, so

@@ -6,7 +6,7 @@ const store = require('../../src/db/interfaces/postgres/webKnowledge')
 const web = require('../../src/bot/modules/webKnowledge')
 
 const NOW = new Date('2026-11-01T03:00:00Z')
-afterEach(() => { process.env.KNOWLEDGE_TOPICS = ''; delete process.env.WEB_REFRESH_HOURS })
+afterEach(() => { process.env.KNOWLEDGE_TOPICS = ''; process.env.KNOWLEDGE_URLS = ''; delete process.env.WEB_REFRESH_HOURS })
 
 describe('webKnowledge', () => {
   test('looks each topic up with Google Search and stores it as a page with its date', async (t) => {
@@ -25,6 +25,22 @@ describe('webKnowledge', () => {
     assert.equal(pages[0].title, '「ぽみそしる」について（Web 検索で調べたもの、2026-11-01 時点）')
     assert.match(pages[0].sections[0].text, /^## 概要\nポッキーが主催する実況者グループ。\n\n## メンバー/)
     assert.deepEqual(removed.mock.calls[0].arguments, ['topic:', ['topic:ぽみそしる', 'topic:トマスコ']])
+  })
+
+  test('reads KNOWLEDGE_URLS directly and stores them in parts', async (t) => {
+    process.env.KNOWLEDGE_URLS = 'https://note.com/uuum_official/n/nfa60a1881da8'
+    t.mock.method(store, 'lastRead', async () => null)
+    const pages = []
+    t.mock.method(store, 'savePage', async (url, title, sections) => pages.push({ url, title, sections }))
+    t.mock.method(global.logger, 'info', () => {})
+    const done = await web.refresh({
+      now: NOW,
+      fetchPage: async url => ({ url, text: 'タイトル: のばまんインタビュー\n\n本文:\n不思議な魅力のゲーム実況者。' })
+    })
+    assert.equal(done, 1)
+    assert.equal(pages[0].url, 'https://note.com/uuum_official/n/nfa60a1881da8')
+    assert.equal(pages[0].title, 'のばまんインタビュー')
+    assert.match(pages[0].sections[0].text, /不思議な魅力のゲーム実況者/)
   })
 
   test('a failure is logged and tried again next time; nothing without topics', async (t) => {

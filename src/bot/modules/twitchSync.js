@@ -3,13 +3,14 @@
 // shard 0, so the mention assistant can answer about past streams (search_twitch). Only the list:
 // title, date, length and link. Twitch does not let anyone else read a video's content, so there is
 // no summary of what was said. Needs TWITCH_CLIENT_ID and TWITCH_CLIENT_SECRET.
+const { knowledgeSetting } = require('../utils/knowledgeDefaults')
 const twitch = require('../utils/twitch')
 const store = require('../../db/interfaces/postgres/twitch')
 
 const DEFAULT_SYNC_MINUTES = 60
 
 function logins () {
-  return String(process.env.TWITCH_CHANNELS || '').split(',').map(s => s.trim().toLowerCase().replace(/^@/, '')).filter(l => /^\w{2,25}$/.test(l))
+  return String(knowledgeSetting('TWITCH_CHANNELS')).split(',').map(s => s.trim().toLowerCase().replace(/^@/, '')).filter(l => /^\w{2,25}$/.test(l))
 }
 
 function enabled () {

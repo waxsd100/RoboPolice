@@ -23,6 +23,7 @@ module.exports = {
       require('../modules/wikiKnowledge').startWiki() // ...and reads the community wiki (WIKI_URLS)
       require('../modules/twitterKnowledge').startTwitter() // ...and the streamer's X posts (TWITTER_ACCOUNTS)
       require('../modules/twitchSync').startTwitch() // ...and the archives of the Twitch channels (TWITCH_CHANNELS)
+      require('../modules/steamSync').startSteam() // ...and the games and reviews of the Steam accounts (STEAM_ACCOUNTS)
       // ...and, once, finds the channel of messages stored before channels were recorded.
       require('../../miscellaneous/backfillChannels').startBackfill()
     }

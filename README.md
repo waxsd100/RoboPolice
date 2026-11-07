@@ -209,9 +209,22 @@ With `KNOWLEDGE_TOPICS` set (comma-separated or one per line, each with what it 
 `ぽみそしる（のばまんが所属する実況者グループ）`), topics the wiki and the posts say little about are
 looked up on the web (`src/bot/modules/webKnowledge.js`): Gemini searches each with Google Search
 once every `WEB_REFRESH_HOURS` (default 168) and sums up what it found (members, when it started,
-what it does, official links) with its sources and the date. That is stored in the knowledge tables as
-source `web`, its knowledge taken out and searched with `search_wiki` like the rest;
-the model says it is what was found as of that date, not certain fact.
+what it does, official links) with its sources and the date. Public web pages listed in
+`KNOWLEDGE_URLS` (such as official interviews on `note.com` and `nobaman.com`) are also read every
+`WEB_REFRESH_HOURS`. Both are stored in the knowledge tables as source `web`, their knowledge taken
+out and searched with `search_wiki` like the rest; the model says it is what was found as of that
+date, not certain fact.
+
+With `STEAM_ACCOUNTS` set (comma-separated Steam vanity URLs or 17-digit SteamID64s; default
+`nobaman`), the streamer's public Steam profile, owned/played games, reviews and wishlist are read
+every `STEAM_SYNC_MINUTES` (default 360) by the worker owning shard 0 (`src/bot/modules/steamSync.js`).
+This works without a Steam Web API key by combining Steam Community XML/HTML (`/?xml=1`,
+`/recommended/`, `/badges/`), Steam Replay (`ISaleFeatureService/GetUserYearInReview/v1`),
+`IWishlistService/GetWishlist/v1` and `IStoreBrowseService/GetItems/v1` (and also uses
+`IPlayerService/GetOwnedGames/v1` when `STEAM_API_KEY` is set). Stored in `steam_profiles`,
+`steam_apps`, `steam_games`, `steam_reviews` and `steam_wishlist`; the model searches them with
+`search_steam`, and the streamer's Steam reviews are also written to `knowledge_pages` (source `web`)
+so their opinions and quotes are extracted and searched with `search_wiki`.
 
 Each emoji is described once from its image and name by Gemini (what it shows, when to use it) and
 stored with an embedding of that description in `guild_emojis` (`src/bot/modules/emojiDescriber.js`).
