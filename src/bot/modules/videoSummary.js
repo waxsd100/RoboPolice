@@ -100,24 +100,24 @@ async function lengthOf (videoID) {
   return durationSeconds(video?.duration)
 }
 
-async function summarizeInParts (guildID, videoID) {
+async function summarizeInParts (guildID, videoID, { flex = false } = {}) {
   const seconds = await lengthOf(videoID)
   if (!seconds) throw new GeminiError(`${videoID} is too long for one request and its length is unknown`, '動画が長すぎて一度に読めず、長さも分からないため要約できませんでした')
   for (const [i, partSeconds] of PART_SECONDS.entries()) {
     try {
-      return await summarizeParts(guildID, videoID, seconds, partSeconds)
+      return await summarizeParts(guildID, videoID, seconds, partSeconds, { flex })
     } catch (e) {
       if (!TOO_LONG.test(e.message) || i === PART_SECONDS.length - 1) throw e
     }
   }
 }
 
-async function summarizeParts (guildID, videoID, seconds, partSeconds) {
+async function summarizeParts (guildID, videoID, seconds, partSeconds, { flex = false } = {}) {
   const parts = []
   for (let start = 0; start < seconds; start += partSeconds) {
     const end = Math.min(seconds, start + partSeconds)
     const prompt = `${PROMPT}\n\nこれは長い動画の ${fmt(start)}〜${fmt(end)} の部分だけです。この部分だけを要約し、時間はこの部分の最初を [0:00] として書いてください。`
-    const content = await backgroundQueue.run(guildID, () => askVideo(videoID, prompt, { start, end }))
+    const content = await backgroundQueue.run(guildID, () => askVideo(videoID, prompt, { start, end }, { flex }))
     parts.push(`### ${fmt(start)}〜${fmt(end)}\n${shiftTimestamps(textOf(content), start)}`)
   }
   if (parts.length === 1) return parts[0].split('\n').slice(1).join('\n')
@@ -125,13 +125,13 @@ async function summarizeParts (guildID, videoID, seconds, partSeconds) {
   const merged = await backgroundQueue.run(guildID, () => callGemini(lightModel(), {
     contents: [{ role: 'user', parts: [{ text: `次は1本の長い動画を時間で分けて要約したものです。これを1つの要約にまとめてください（長くても1500文字程度まで。文字数は書かない）。話題の順に箇条書きにし、各項目の先頭の [時間] は書き換えずにそのまま残してください。告知・日時・出演者・URL など具体的な情報は残してください。\n\n${parts.join('\n\n')}` }] }],
     generationConfig: { temperature: 0.2 }
-  }, { timeoutMs: 2 * 60 * 1000, purpose: 'videoSummary', defaultSafety: true }))
+  }, { timeoutMs: 2 * 60 * 1000, purpose: 'videoSummary', flex: true, defaultSafety: true }))
   return textOf(merged)
 }
 
 // onStart is called just before Gemini is asked, i.e. only when the requester will have to wait.
 // force: summarize again even if a summary is stored, replacing it.
-// flex: asked on Flex inference (a command's newest or short videos: summaryBatch.js).
+// flex: asked on Flex inference (a command's newest or short videos: summaryBatch.js, or a stream archive: liveWatcher.js).
 async function summarizeVideo (guildID, url, { onStart = () => {}, force = false, flex = false } = {}) {
   const videoID = parseVideoId(url)
   if (!videoID) throw new Error('YouTube の動画リンクではありません')
@@ -150,7 +150,7 @@ async function summarizeVideo (guildID, url, { onStart = () => {}, force = false
   } catch (e) {
     if (!TOO_LONG.test(e.message)) throw e
     global.logger.info(`[SUMMARY]: ${videoID} is too long for one request; summarizing it in parts`)
-    text = await summarizeInParts(guildID, videoID)
+    text = await summarizeInParts(guildID, videoID, { flex })
   }
   const summary = await storeSummary(guildID, videoID, text)
   return { videoID, summary, cached: false }

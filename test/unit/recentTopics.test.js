@@ -1,7 +1,7 @@
 const { test, afterEach } = require('node:test')
 const assert = require('node:assert/strict')
 const { configureGateway, installEmbeddingModel } = require('../helpers/fakes')
-const { relatedRecent } = require('../../src/bot/modules/recentTopics')
+const { relatedRecent, clearCache } = require('../../src/bot/modules/recentTopics')
 
 const NOW = Date.parse('2026-11-04T12:00:00Z') // 21:00 in Japan
 const MIN = 60 * 1000
@@ -10,6 +10,7 @@ const mention = { id: '900', channel: { id: 'c1', guild } }
 const msg = (id, minutesAgo, content, author = { id: '10', username: 'kuraji' }) => ({ id, timestamp: NOW - minutesAgo * MIN, content, author })
 
 afterEach(() => {
+  clearCache()
   for (const name of ['MENTION_RECENT_TOPICS', 'MENTION_RECENT_HOURS', 'MENTION_RECENT_MESSAGES']) delete process.env[name]
 })
 
@@ -34,6 +35,31 @@ test('the recent messages close to the request, oldest first, with who said them
   assert.deepEqual(lines, ['- [20:59] くらじー（<@10>）: マイクラの建築どうする？'])
   // The request as a query, the candidates as documents: no bot, command, noise or old message among them.
   assert.deepEqual(batches.map(b => b.requests.map(r => r.content.parts[0].text)), [['さっきのマイクラの話だけどどう思う？'], ['マイクラの建築どうする？', '今日の晩ごはん何にしよ']])
+})
+
+test('reuses cached embeddings of recent messages across mentions, embedding only new messages', async () => {
+  configureGateway()
+  const batches = installEmbeddingModel()
+  const history = [
+    msg('6', 1, 'マイクラの建築どうする？'),
+    msg('5', 2, '今日の晩ごはん何にしよ')
+  ]
+  const getMessages = async () => history
+  await relatedRecent(mention, 'マイクラの話', { now: NOW, getMessages })
+  assert.equal(batches.length, 2, 'first mention embeds query + 2 candidate messages')
+
+  // Second mention with the same channel history: only the query is embedded.
+  batches.length = 0
+  const again = await relatedRecent(mention, 'マイクラの建築について', { now: NOW, getMessages })
+  assert.deepEqual(again, ['- [20:59] くらじー（<@10>）: マイクラの建築どうする？'])
+  assert.deepEqual(batches.map(b => b.requests.map(r => r.content.parts[0].text)), [['マイクラの建築について']], 'cached messages are not embedded again')
+
+  // One new message arrives: only the query and the 1 new message are embedded.
+  batches.length = 0
+  history.unshift(msg('7', 0, 'ホラーゲームもやりたい'))
+  const third = await relatedRecent(mention, '怖いゲームある？', { now: NOW, getMessages })
+  assert.deepEqual(third, ['- [21:00] くらじー（<@10>）: ホラーゲームもやりたい'])
+  assert.deepEqual(batches.map(b => b.requests.map(r => r.content.parts[0].text)), [['怖いゲームある？'], ['ホラーゲームもやりたい']])
 })
 
 test('nothing when nothing is close, the request says nothing, or it is turned off', async () => {

@@ -20,7 +20,8 @@ async function chunkHashes (guildID) {
   return Object.fromEntries(rows.rows.map(r => [`${r.channel_id}|${r.week}`, r.text_hash]))
 }
 
-// Replaces what was taken out of a chunk: [{ kind, name, content }].
+// Replaces what was taken out of a chunk: [{ kind, name, content }]. Pieces of knowledge that did
+// not change keep their embedding.
 async function saveChunk (guildID, channelID, week, textHash, facts) {
   const client = await pool.getPostgresClient()
   try {
@@ -29,11 +30,17 @@ async function saveChunk (guildID, channelID, week, textHash, facts) {
       `INSERT INTO guild_lore_chunks (guild_id, channel_id, week, text_hash) VALUES ($1, $2, $3, $4)
        ON CONFLICT (guild_id, channel_id, week) DO UPDATE SET text_hash = $4, extracted_at = now()`,
       [guildID, channelID, week, textHash])
+    const prev = (await client.query(
+      'SELECT kind, name, content, embedding::text AS embedding, model_id FROM guild_lore_facts WHERE guild_id = $1 AND channel_id = $2 AND week = $3',
+      [guildID, channelID, week])).rows
+    const keyOf = f => `${f.kind}\n${f.name}\n${f.content}`
+    const byKey = new Map(prev.filter(r => r.embedding).map(r => [keyOf(r), r]))
     await client.query('DELETE FROM guild_lore_facts WHERE guild_id = $1 AND channel_id = $2 AND week = $3', [guildID, channelID, week])
     for (const f of facts) {
+      const kept = byKey.get(keyOf(f))
       await client.query(
-        'INSERT INTO guild_lore_facts (guild_id, channel_id, week, kind, name, content) VALUES ($1, $2, $3, $4, $5, $6)',
-        [guildID, channelID, week, f.kind, f.name, f.content])
+        'INSERT INTO guild_lore_facts (guild_id, channel_id, week, kind, name, content, embedding, model_id) VALUES ($1, $2, $3, $4, $5, $6, $7::halfvec, $8)',
+        [guildID, channelID, week, f.kind, f.name, f.content, kept?.embedding || null, kept?.model_id || null])
     }
     await client.query('COMMIT')
   } catch (e) {

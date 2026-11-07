@@ -34,6 +34,7 @@ describe('describeStream', () => {
     assert.deepEqual(described, { blurb: 'ゲストと一緒にマイクラで城を建てる配信。', games: [{ name: 'マインクラフト', url: 'https://www.minecraft.net/' }] })
     assert.deepEqual(looked.mock.calls[0].arguments[0], [{ name: 'マインクラフト', nameEn: 'Minecraft' }])
     assert.equal(requests[0].body.generationConfig.responseMimeType, 'application/json')
+    assert.equal(requests[0].body.serviceTier, 'flex')
     const [text, image] = requests[0].body.contents[0].parts
     assert.match(text.text, /タイトル: 【マイクラ】城を建てる\n概要欄:\n今日はみんなで城づくり/)
     assert.deepEqual(image, { inlineData: { mimeType: 'image/jpeg', data: Buffer.from('jpeg').toString('base64') } })
@@ -106,6 +107,7 @@ describe('summarizing a stream\'s archive', () => {
     const requests = installGemini([[{ text: '配信の要約' }]])
     assert.equal(await liveWatcher.summarizeArchives('100'), 'live0000001')
     assert.match(requests[0].body.contents[0].parts[0].fileData.fileUri, /watch\?v=live0000001$/)
+    assert.equal(requests[0].body.serviceTier, 'flex', 'stream archives are summarized on Flex')
     assert.equal(store.summaries[100].live0000001, '配信の要約')
     assert.equal(await liveWatcher.summarizeArchives('100'), null, 'nothing left')
   })

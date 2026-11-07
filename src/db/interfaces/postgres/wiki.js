@@ -127,18 +127,30 @@ function createStore (source) {
     return rows.rows
   }
 
-  // Replaces what was taken out of a part: [{ kind, name, aliases, content }].
+  // Replaces what was taken out of a part: [{ kind, name, aliases, content }]. Pieces of knowledge
+  // that did not change keep their embedding.
   async function saveFacts (url, position, textHash, facts) {
     const client = await pool.getPostgresClient()
     try {
       await client.query('BEGIN')
+      const prev = (await client.query(
+        `SELECT f.kind, f.name, ${ALIASES} AS aliases, f.content, f.embedding::text AS embedding, f.model_id
+         FROM knowledge_facts f WHERE f.source = $1 AND f.url = $2 AND f.position = $3`,
+        [source, url, position])).rows
+      const keyOf = (f, aliases) => `${f.kind}\n${f.name}\n${aliases.join('\n')}\n${f.content}`
+      const byKey = new Map(prev.filter(r => r.embedding).map(r => [keyOf(r, r.aliases || []), r]))
       await client.query('DELETE FROM knowledge_facts WHERE source = $1 AND url = $2 AND position = $3', [source, url, position])
       for (const f of facts) {
+        const aliases = (f.aliases || []).filter(Boolean)
+        const kept = byKey.get(keyOf(f, aliases))
         await client.query(
-          `WITH fact AS (INSERT INTO knowledge_facts (source, url, position, kind, name, content) VALUES ($1, $2, $3, $4, $5, $6) RETURNING id)
+          `WITH fact AS (
+             INSERT INTO knowledge_facts (source, url, position, kind, name, content, embedding, model_id)
+             VALUES ($1, $2, $3, $4, $5, $6, $8::halfvec, $9) RETURNING id
+           )
            INSERT INTO knowledge_fact_aliases (fact_id, alias_position, alias)
            SELECT fact.id, a.n - 1, a.alias FROM fact, unnest($7::text[]) WITH ORDINALITY AS a (alias, n)`,
-          [source, url, position, f.kind, f.name, f.content, (f.aliases || []).filter(Boolean)])
+          [source, url, position, f.kind, f.name, f.content, aliases, kept?.embedding || null, kept?.model_id || null])
       }
       await client.query('UPDATE knowledge_sections SET facts_hash = $4 WHERE source = $1 AND url = $2 AND position = $3', [source, url, position, textHash])
       await client.query('COMMIT')

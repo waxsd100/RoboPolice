@@ -88,7 +88,7 @@ async function collect (batch, data) {
       if (failure) {
         // Too long for one request: in parts, the usual way.
         if (!videoSummary.TOO_LONG.test(failure)) throw new GeminiError(`Batch summary of ${videoID} failed: ${failure}`, `AI が要約できませんでした（${failure.slice(0, 100)}）`)
-        const { summary } = await videoSummary.summarizeVideo(batch.guild_id, `https://www.youtube.com/watch?v=${videoID}`, { force: true })
+        const { summary } = await videoSummary.summarizeVideo(batch.guild_id, `https://www.youtube.com/watch?v=${videoID}`, { force: true, flex: true })
         results.push({ videoID, summary, error: null })
         continue
       }

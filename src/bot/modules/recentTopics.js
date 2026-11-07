@@ -9,7 +9,7 @@
 // for the messages; embeddings cost little). The bot's own and other bots' messages, commands and
 // noise (messageNoise.js) are left out, so the bot does not carry on from what it said itself.
 // MENTION_RECENT_TOPICS=false turns it off.
-const { embed, embedQuery, similarity } = require('../utils/embeddings')
+const { embed, embedQuery, model, similarity } = require('../utils/embeddings')
 const { embeddableText } = require('../utils/messageNoise')
 
 const DEFAULT_MESSAGES = 50
@@ -17,6 +17,29 @@ const DEFAULT_HOURS = 12
 const MAX_TOPICS = 8
 const MIN_SCORE = 0.55
 const MAX_CHARS = 200
+const MAX_CACHE = 2000
+
+// Recent messages in a busy channel are read on every mention; keeping their vectors in memory means
+// each message is embedded at most once instead of again on every turn of a conversation.
+const vectorCache = new Map() // `${model}\n${text}` -> Int8Array
+
+function cachedVector (key) {
+  const v = vectorCache.get(key)
+  if (!v) return null
+  vectorCache.delete(key)
+  vectorCache.set(key, v)
+  return v
+}
+
+function rememberVector (key, vector) {
+  if (vectorCache.has(key)) vectorCache.delete(key)
+  else if (vectorCache.size >= MAX_CACHE) vectorCache.delete(vectorCache.keys().next().value)
+  vectorCache.set(key, vector)
+}
+
+function clearCache () {
+  vectorCache.clear()
+}
 
 function enabled () {
   return process.env.MENTION_RECENT_TOPICS !== 'false'
@@ -43,7 +66,24 @@ async function relatedRecent (message, request, {
     .map(m => ({ m, text: embeddableText(m.content) }))
     .filter(c => c.text)
   if (!candidates.length) return []
-  const [query, vectors] = await Promise.all([embedQuery(request), embed(candidates.map(c => c.text))])
+  const currentModel = model()
+  const missingKeys = []
+  const missingTexts = []
+  const seenMissing = new Set()
+  for (const c of candidates) {
+    const key = `${currentModel}\n${c.text}`
+    if (!cachedVector(key) && !seenMissing.has(key)) {
+      seenMissing.add(key)
+      missingKeys.push(key)
+      missingTexts.push(c.text)
+    }
+  }
+  const [query, fresh] = await Promise.all([
+    embedQuery(request),
+    missingTexts.length ? embed(missingTexts) : Promise.resolve([])
+  ])
+  for (let i = 0; i < missingKeys.length; i++) rememberVector(missingKeys[i], fresh[i])
+  const vectors = candidates.map(c => cachedVector(`${currentModel}\n${c.text}`))
   const guild = message.channel.guild
   return candidates
     .map((c, i) => ({ ...c, score: similarity(query, vectors[i]) }))
@@ -59,4 +99,4 @@ async function relatedRecent (message, request, {
     })
 }
 
-module.exports = { relatedRecent, enabled, MIN_SCORE, MAX_TOPICS }
+module.exports = { relatedRecent, clearCache, enabled, MIN_SCORE, MAX_TOPICS }

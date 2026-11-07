@@ -85,7 +85,7 @@ async function lookUp (topic, now = new Date()) {
     contents: [{ role: 'user', parts: [{ text: prompt(topic, now) }] }],
     tools: [{ google_search: {} }],
     generationConfig: { temperature: 0.2 }
-  }, { timeoutMs: TIMEOUT_MS, purpose: 'webKnowledge' }))
+  }, { timeoutMs: TIMEOUT_MS, purpose: 'webKnowledge', flex: true }))
   const text = withoutCharCount(content.parts.map(p => p.text || '').join('').trim())
   if (!text) throw new Error(`nothing found about ${topic}`)
   const title = `「${nameOf(topic)}」について（Web 検索で調べたもの、${dayOf(now)} 時点）`
