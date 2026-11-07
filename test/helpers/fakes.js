@@ -180,25 +180,54 @@ installLoreStore()
 // { guildID: true } for servers that show the debug line, tokenLimits { guildID: { '5h', week,
 // flexAt } } for a server's own limits. Installed when this file loads, so no test reaches a real
 // database.
-function installReplyLengthStore (lengths = {}, personas = {}, debugFooters = {}, tokenLimits = {}, models = {}, rules = {}) {
+function installReplyLengthStore (lengths = {}, personas = {}, debugFooters = {}, tokenLimits = {}, models = {}, rules = {}, aiModels = {}) {
   const store = require('../../src/db/interfaces/postgres/replySettings')
-  store.getReplySettings = async guildID => ({
-    replyLength: lengths[guildID] || null,
-    streamerPersona: personas[guildID] !== false,
-    debugFooter: debugFooters[guildID] === true,
-    tokenLimits: { '5h': null, week: null, flexAt: null, unlimited: false, ...tokenLimits[guildID] },
-    replyModel: models[guildID]?.model || null,
-    replyThinking: models[guildID]?.thinking || null,
-    assistantRules: rules[guildID] || null
-  })
+  const taskModelsOf = guildID => {
+    const out = { ...(aiModels[guildID] || {}) }
+    if (models[guildID]?.model || models[guildID]?.thinking || models[guildID]?.tier) {
+      out.reply = { model: null, thinking: null, tier: null, ...out.reply, ...models[guildID] }
+    }
+    return out
+  }
+  store.getReplySettings = async guildID => {
+    const tasks = taskModelsOf(guildID)
+    return {
+      replyLength: lengths[guildID] || null,
+      streamerPersona: personas[guildID] !== false,
+      debugFooter: debugFooters[guildID] === true,
+      tokenLimits: { '5h': null, week: null, flexAt: null, unlimited: false, ...tokenLimits[guildID] },
+      replyModel: tasks.reply?.model || null,
+      replyThinking: tasks.reply?.thinking || null,
+      aiModels: tasks,
+      assistantRules: rules[guildID] || null
+    }
+  }
+  store.getTaskModel = async (guildID, task) => {
+    if (guildID) return taskModelsOf(guildID)[task] || null
+    for (const g of Object.keys(aiModels).sort()) {
+      if (aiModels[g]?.[task]) return aiModels[g][task]
+    }
+    return null
+  }
+  store.setTaskModel = async (guildID, task, which, value) => {
+    if (!aiModels[guildID]) aiModels[guildID] = {}
+    if (which === 'all') {
+      delete aiModels[guildID][task]
+      if (task === 'reply') models[guildID] = { model: null, thinking: null }
+      return
+    }
+    aiModels[guildID][task] = { model: null, thinking: null, tier: null, ...aiModels[guildID][task], [which]: value }
+    if (!aiModels[guildID][task].model && !aiModels[guildID][task].thinking && !aiModels[guildID][task].tier) delete aiModels[guildID][task]
+    if (task === 'reply') models[guildID] = { ...models[guildID], [which]: value }
+  }
   store.setAssistantRules = async (guildID, text) => { rules[guildID] = text }
-  store.setReplyModel = async (guildID, which, value) => { models[guildID] = { ...models[guildID], [which]: value } }
+  store.setReplyModel = async (guildID, which, value) => store.setTaskModel(guildID, 'reply', which, value)
   store.setTokenLimit = async (guildID, which, value) => { tokenLimits[guildID] = { ...tokenLimits[guildID], [which]: value } }
   store.getReplyLength = async guildID => lengths[guildID] || null
   store.setReplyLength = async (guildID, length) => { lengths[guildID] = length }
   store.setStreamerPersona = async (guildID, enabled) => { personas[guildID] = enabled }
   store.setDebugFooter = async (guildID, enabled) => { debugFooters[guildID] = enabled }
-  return { lengths, personas, debugFooters, tokenLimits, models, rules }
+  return { lengths, personas, debugFooters, tokenLimits, models, rules, aiModels }
 }
 installReplyLengthStore()
 

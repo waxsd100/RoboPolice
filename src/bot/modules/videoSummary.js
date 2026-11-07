@@ -58,8 +58,9 @@ function fps () {
 const textOf = content => content.parts.map(p => p.text || '').join('').trim()
 
 // The model and generateContent body that summarize a video (or the clip of it) with `prompt`.
-function summaryRequest (videoID, prompt = PROMPT, clip = null) {
-  const model = process.env.GEMINI_MODEL || DEFAULT_GEMINI_MODEL
+function summaryRequest (videoID, prompt = PROMPT, clip = null, custom = null) {
+  const model = custom?.model || process.env.GEMINI_MODEL || DEFAULT_GEMINI_MODEL
+  const thinking = custom?.thinking || thinkingConfig(model, { setting: 'VIDEO_SUMMARY_THINKING_LEVEL', fallback: 'low' })
   const body = {
     contents: [{
       role: 'user',
@@ -70,7 +71,7 @@ function summaryRequest (videoID, prompt = PROMPT, clip = null) {
     }],
     // Fewer tokens per frame: the summary is about what is said and roughly shown, not fine detail.
     // Gemini 3 thinks at high unless told: a summary needs little (VIDEO_SUMMARY_THINKING_LEVEL).
-    generationConfig: { temperature: 0.2, mediaResolution: 'MEDIA_RESOLUTION_LOW', ...thinkingConfig(model, { setting: 'VIDEO_SUMMARY_THINKING_LEVEL', fallback: 'low' }) }
+    generationConfig: { temperature: 0.2, mediaResolution: 'MEDIA_RESOLUTION_LOW', ...thinking }
   }
   // Video summaries keep the model's own safety filters (no safetySettings), also in a batch.
   return { model, body }
@@ -78,8 +79,9 @@ function summaryRequest (videoID, prompt = PROMPT, clip = null) {
 
 // flex: on Flex inference (half the price, queued for up to about 15 minutes more).
 const FLEX_EXTRA_MS = 15 * 60 * 1000
-function askVideo (videoID, prompt, clip = null, { flex = false } = {}) {
-  const { model, body } = summaryRequest(videoID, prompt, clip)
+async function askVideo (videoID, prompt, clip = null, { flex = false, guildID = null } = {}) {
+  const custom = guildID ? await require('./eventDrafter').resolveTaskConfig('summary', guildID) : null
+  const { model, body } = summaryRequest(videoID, prompt, clip, custom)
   return callGemini(model, body, { timeoutMs: summaryTimeoutMs() + (flex ? FLEX_EXTRA_MS : 0), purpose: flex ? 'videoSummary-flex' : 'videoSummary', flex, defaultSafety: true })
 }
 
@@ -117,7 +119,7 @@ async function summarizeParts (guildID, videoID, seconds, partSeconds, { flex = 
   for (let start = 0; start < seconds; start += partSeconds) {
     const end = Math.min(seconds, start + partSeconds)
     const prompt = `${PROMPT}\n\nこれは長い動画の ${fmt(start)}〜${fmt(end)} の部分だけです。この部分だけを要約し、時間はこの部分の最初を [0:00] として書いてください。`
-    const content = await backgroundQueue.run(guildID, () => askVideo(videoID, prompt, { start, end }, { flex }))
+    const content = await backgroundQueue.run(guildID, () => askVideo(videoID, prompt, { start, end }, { flex, guildID }))
     parts.push(`### ${fmt(start)}〜${fmt(end)}\n${shiftTimestamps(textOf(content), start)}`)
   }
   if (parts.length === 1) return parts[0].split('\n').slice(1).join('\n')
@@ -145,7 +147,7 @@ async function summarizeVideo (guildID, url, { onStart = () => {}, force = false
   try {
     text = textOf(await backgroundQueue.run(guildID, async () => {
       await onStart(summaryTimeoutMs())
-      return askVideo(videoID, PROMPT, null, { flex })
+      return askVideo(videoID, PROMPT, null, { flex, guildID })
     }))
   } catch (e) {
     if (!TOO_LONG.test(e.message)) throw e
