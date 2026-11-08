@@ -165,6 +165,12 @@ describe('stores', { skip: !database.available && 'needs PGHOST' }, () => {
 
     test('message embeddings are searched through their message', async () => {
       const store = require('../../src/db/interfaces/postgres/embeddings')
+      delete require.cache[require.resolve('../../src/db/interfaces/postgres/replySettings')]
+      const replySettings = require('../../src/db/interfaces/postgres/replySettings')
+      assert.equal(await replySettings.isEmbedMessagesEnabled('g1'), false, 'non-owner server is off by default')
+      assert.deepEqual(await store.pendingMessages(3), [])
+      await replySettings.setEmbedding('g1', 'messages', true)
+      assert.equal(await replySettings.isEmbedMessagesEnabled('g1'), true)
       const pending = await store.pendingMessages(3)
       assert.deepEqual(pending.map(m => [m.id, m.content]), [['m8', 'text 8'], ['m7', 'text 7'], ['m6', 'text 6']])
       // Unit vectors along different axes: m8 matches the query exactly, m6 is orthogonal to it.
