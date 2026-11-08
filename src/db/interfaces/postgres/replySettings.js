@@ -7,13 +7,16 @@
 // (037_guild_assistant_rules.sql, /assistantrules).
 const pool = require('../../clients/postgres')
 const { AI_TASKS } = require('../../../bot/utils/replyOptions')
+const { isOwnerGuild } = require('../../../bot/utils/priority')
 
 // { replyLength: 'long' | 'normal' | 'short' | null, streamerPersona: boolean, debugFooter: boolean,
 // tokenLimits: { '5h', week, flexAt, unlimited }, replyModel and replyThinking (null for the
-// default), aiModels: { [task]: { model, thinking, tier } }, assistantRules (text or null) }.
+// default), aiModels: { [task]: { model, thinking, tier } }, assistantRules (text or null),
+// embeddings: { messages: boolean | null, emojis: boolean | null }, embedMessages: boolean,
+// embedEmojis: boolean }.
 async function getReplySettings (guildID) {
   const [rows, taskRows] = await Promise.all([
-    pool.query('SELECT reply_length, streamer_persona, debug_footer, token_limit_5h, token_limit_week, token_flex_at, token_unlimited, reply_model, reply_thinking, assistant_rules FROM guilds WHERE id = $1', [guildID]),
+    pool.query('SELECT reply_length, streamer_persona, debug_footer, token_limit_5h, token_limit_week, token_flex_at, token_unlimited, reply_model, reply_thinking, assistant_rules, embed_messages, embed_emojis FROM guilds WHERE id = $1', [guildID]),
     pool.query('SELECT task, model, thinking, tier FROM guild_ai_models WHERE guild_id = $1', [guildID])
   ])
   const row = rows.rows[0]
@@ -27,6 +30,7 @@ async function getReplySettings (guildID) {
     aiModels.reply.model = aiModels.reply.model || row?.reply_model || null
     aiModels.reply.thinking = aiModels.reply.thinking || row?.reply_thinking || null
   }
+  const owner = isOwnerGuild(guildID)
   return {
     replyLength: row?.reply_length || null,
     streamerPersona: row ? row.streamer_persona !== false : true,
@@ -35,8 +39,26 @@ async function getReplySettings (guildID) {
     replyModel: aiModels.reply?.model || row?.reply_model || null,
     replyThinking: aiModels.reply?.thinking || row?.reply_thinking || null,
     aiModels,
-    assistantRules: row?.assistant_rules || null
+    assistantRules: row?.assistant_rules || null,
+    embeddings: {
+      messages: row?.embed_messages ?? null,
+      emojis: row?.embed_emojis ?? null
+    },
+    embedMessages: row?.embed_messages ?? owner,
+    embedEmojis: row?.embed_emojis ?? owner
   }
+}
+
+async function isEmbedMessagesEnabled (guildID) {
+  if (!guildID) return false
+  const { rows } = await pool.query('SELECT embed_messages FROM guilds WHERE id = $1', [guildID])
+  return rows[0]?.embed_messages ?? isOwnerGuild(guildID)
+}
+
+async function isEmbedEmojisEnabled (guildID) {
+  if (!guildID) return false
+  const { rows } = await pool.query('SELECT embed_emojis FROM guilds WHERE id = $1', [guildID])
+  return rows[0]?.embed_emojis ?? isOwnerGuild(guildID)
 }
 
 async function getTaskModel (guildID, task) {
@@ -78,6 +100,19 @@ async function setStreamerPersona (guildID, enabled) {
 async function setDebugFooter (guildID, enabled) {
   await ensureGuild(guildID)
   await pool.query('UPDATE guilds SET debug_footer = $2 WHERE id = $1', [guildID, enabled])
+}
+
+const EMBED_COLUMNS = { messages: 'embed_messages', emojis: 'embed_emojis' }
+async function setEmbedding (guildID, which, value) {
+  if (which === 'all') {
+    await ensureGuild(guildID)
+    await pool.query('UPDATE guilds SET embed_messages = $2, embed_emojis = $2 WHERE id = $1', [guildID, value])
+    return
+  }
+  const column = EMBED_COLUMNS[which]
+  if (!column) throw new Error(`No embedding setting ${which}`)
+  await ensureGuild(guildID)
+  await pool.query(`UPDATE guilds SET ${column} = $2 WHERE id = $1`, [guildID, value])
 }
 
 // Sets one of the server's token limits: which is '5h', 'week' or 'flexAt'; value a number, or null
@@ -127,4 +162,4 @@ async function setAssistantRules (guildID, text) {
   await pool.query('UPDATE guilds SET assistant_rules = $2 WHERE id = $1', [guildID, text])
 }
 
-module.exports = { setAssistantRules, setReplyModel, setTaskModel, getTaskModel, setTokenLimit, getReplySettings, getReplyLength, setReplyLength, setStreamerPersona, setDebugFooter }
+module.exports = { setAssistantRules, setReplyModel, setTaskModel, getTaskModel, setTokenLimit, getReplySettings, getReplyLength, setReplyLength, setStreamerPersona, setDebugFooter, setEmbedding, isEmbedMessagesEnabled, isEmbedEmojisEnabled }

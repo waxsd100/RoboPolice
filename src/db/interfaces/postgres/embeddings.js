@@ -22,9 +22,9 @@ async function modelId (name) {
   return modelIds.get(name)
 }
 
-// Messages not handled yet and not in a running batch, those of the owner's servers first, then
-// newest first: [{ id, guild_id, channel_id, ts, content }]. after: only those sent since then;
-// before: only those sent before then (or at no known time).
+// Messages not handled yet and not in a running batch, in servers with message embeddings enabled
+// (OWNER_GUILD_IDS by default, or guilds.embed_messages = true), those of the owner's servers first,
+// then newest first: [{ id, guild_id, channel_id, ts, content }].
 async function pendingMessages (limit, { after = null, before = null } = {}) {
   const rows = await pool.query(
     `SELECT id, guild_id, channel_id, ts, content FROM messages m
@@ -32,6 +32,7 @@ async function pendingMessages (limit, { after = null, before = null } = {}) {
        AND ($3::timestamptz IS NULL OR ts >= $3)
        AND ($4::timestamptz IS NULL OR ts < $4 OR ts IS NULL)
        AND NOT EXISTS (SELECT 1 FROM embedding_batch_messages b WHERE b.message_id = m.id)
+       AND EXISTS (SELECT 1 FROM guilds g WHERE g.id = m.guild_id AND coalesce(g.embed_messages, g.id = ANY($2)))
      ORDER BY (guild_id = ANY($2)) DESC NULLS LAST, ts DESC LIMIT $1`,
     [limit, ownerGuildIDs(), after, before])
   return rows.rows
@@ -108,12 +109,18 @@ async function dropMessageEmbeddings (ids) {
 }
 
 // Drops up to `limit` message embeddings made by another model and marks their messages to be
-// embedded again. Resolves to how many were dropped.
+// embedded again (only in servers where message embeddings are enabled).
 async function resetStaleMessageEmbeddings (model, limit) {
   const result = await pool.query(
     `UPDATE messages SET embedding = NULL, embedding_model_id = NULL
-     WHERE id IN (SELECT id FROM messages WHERE embedding_model_id <> $1 LIMIT $2)`,
-    [await modelId(model), limit])
+     WHERE id IN (
+       SELECT m.id FROM messages m
+       JOIN guilds g ON g.id = m.guild_id
+       WHERE m.embedding_model_id <> $1
+         AND coalesce(g.embed_messages, g.id = ANY($3))
+       LIMIT $2
+     )`,
+    [await modelId(model), limit, ownerGuildIDs()])
   return result.rowCount || 0
 }
 

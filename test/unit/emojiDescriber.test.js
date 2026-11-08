@@ -1,13 +1,14 @@
 // Describing a server's emojis from their name and image, and offering those that suit a request.
 const { test, describe, beforeEach, afterEach } = require('node:test')
 const assert = require('node:assert/strict')
-const { configureGateway, createGuild, createMember } = require('../helpers/fakes')
+const { configureGateway, createGuild, createMember, installReplyLengthStore } = require('../helpers/fakes')
 const urlFetcher = require('../../src/bot/utils/urlFetcher')
 const store = require('../../src/db/interfaces/postgres/emojis')
+const replySettings = require('../../src/db/interfaces/postgres/replySettings')
 const emojiDescriber = require('../../src/bot/modules/emojiDescriber')
 const { describeServer } = require('../../src/bot/modules/eventTools')
 
-const GATEWAY = ['CLOUDFLARE_ACCOUNT_ID', 'CLOUDFLARE_AI_GATEWAY_ID', 'GEMINI_API_KEY', 'EMOJI_DESCRIPTIONS']
+const GATEWAY = ['CLOUDFLARE_ACCOUNT_ID', 'CLOUDFLARE_AI_GATEWAY_ID', 'GEMINI_API_KEY', 'EMOJI_DESCRIPTIONS', 'OWNER_GUILD_IDS']
 afterEach(() => { for (const name of GATEWAY) delete process.env[name] })
 
 // Gemini for both: a description per emoji, and an embedding that is 1 on the axis of a topic word.
@@ -42,6 +43,8 @@ describe('syncGuild', () => {
   let rows
   beforeEach((t) => {
     configureGateway()
+    installReplyLengthStore()
+    process.env.OWNER_GUILD_IDS = '100'
     rows = new Map()
     t.mock.method(urlFetcher, 'fetchImage', async url => ({ buffer: Buffer.from(url), contentType: 'image/png' }))
     t.mock.method(store, 'syncEmojis', async (guildID, emojis) => {
@@ -140,6 +143,18 @@ describe('syncGuild', () => {
     installModels({ kusa: '', naki: '泣いている顔' })
     assert.deepEqual(await emojiDescriber.syncGuild({ id: '100', emojis: [{ id: '1', name: 'kusa' }, { id: '2', name: 'naki' }] }), { described: 1, embedded: 1, failed: 1 }, 'one failing does not hold the other up')
     assert.equal(rows.get('1').description, undefined)
+  })
+
+  test('non-owner servers are skipped by default unless enabled, and owner servers can be disabled', async () => {
+    installModels({ kusa: '草' })
+    const other = { id: '200', emojis: [{ id: '1', name: 'kusa' }] }
+    assert.deepEqual(await emojiDescriber.syncGuild(other), { described: 0, embedded: 0, failed: 0 })
+    await replySettings.setEmbedding('200', 'emojis', true)
+    assert.deepEqual(await emojiDescriber.syncGuild(other), { described: 1, embedded: 1, failed: 0 })
+
+    rows.clear()
+    await replySettings.setEmbedding('100', 'emojis', false)
+    assert.deepEqual(await emojiDescriber.syncGuild({ id: '100', emojis: [{ id: '1', name: 'kusa' }] }), { described: 0, embedded: 0, failed: 0 })
   })
 })
 

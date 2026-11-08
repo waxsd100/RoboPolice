@@ -122,8 +122,10 @@ async function embedPending (guildID) {
 }
 
 // Brings one server's stored emojis in step with Discord, then describes and embeds what is
-// missing. Resolves to { described, embedded, failed }.
+// missing (when emoji embeddings are enabled for the server). Resolves to { described, embedded, failed }.
 async function syncGuild (guild) {
+  const { isEmbedEmojisEnabled } = require('../../db/interfaces/postgres/replySettings')
+  if (!(await isEmbedEmojisEnabled(guild.id))) return { described: 0, embedded: 0, failed: 0 }
   await store.syncEmojis(guild.id, usableEmojis(guild))
   // When what the wiki says about the characters changes, every emoji is described again.
   const characters = await require('./wikiKnowledge').characterContext()

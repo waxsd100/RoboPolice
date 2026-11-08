@@ -90,9 +90,19 @@ function installEmbeddingStore ({ videos = {}, messages = [], pending = [] } = {
   }
   store.videosForEmbedding = async () => []
   store.saveVideoEmbedding = async (videoID, embedding, hash, model) => saved.videos.push({ videoID, embedding, hash, model })
-  store.pendingMessages = async (limit, { after = null, before = null } = {}) => pending
-    .filter(m => !saved.batched.has(m.id) && !saved.handled.includes(m.id) && (!after || (m.ts && m.ts >= after)) && (!before || !m.ts || m.ts < before))
-    .slice(0, limit)
+  store.pendingMessages = async (limit, { after = null, before = null } = {}) => {
+    const { isEmbedMessagesEnabled } = require('../../src/db/interfaces/postgres/replySettings')
+    const out = []
+    for (const m of pending) {
+      if (saved.batched.has(m.id) || saved.handled.includes(m.id)) continue
+      if (after && (!m.ts || m.ts < after)) continue
+      if (before && m.ts && m.ts >= before) continue
+      if (m.guild_id && !(await isEmbedMessagesEnabled(m.guild_id))) continue
+      out.push(m)
+      if (out.length >= limit) break
+    }
+    return out
+  }
   // Embedding batches of past messages (Batch API).
   saved.batches = []
   saved.batched = new Set()
@@ -180,8 +190,9 @@ installLoreStore()
 // { guildID: true } for servers that show the debug line, tokenLimits { guildID: { '5h', week,
 // flexAt } } for a server's own limits. Installed when this file loads, so no test reaches a real
 // database.
-function installReplyLengthStore (lengths = {}, personas = {}, debugFooters = {}, tokenLimits = {}, models = {}, rules = {}, aiModels = {}) {
+function installReplyLengthStore (lengths = {}, personas = {}, debugFooters = {}, tokenLimits = {}, models = {}, rules = {}, aiModels = {}, embeddings = {}) {
   const store = require('../../src/db/interfaces/postgres/replySettings')
+  const { isOwnerGuild } = require('../../src/bot/utils/priority')
   const taskModelsOf = guildID => {
     const out = { ...(aiModels[guildID] || {}) }
     if (models[guildID]?.model || models[guildID]?.thinking || models[guildID]?.tier) {
@@ -191,6 +202,8 @@ function installReplyLengthStore (lengths = {}, personas = {}, debugFooters = {}
   }
   store.getReplySettings = async guildID => {
     const tasks = taskModelsOf(guildID)
+    const owner = isOwnerGuild(guildID)
+    const emb = { messages: null, emojis: null, ...embeddings[guildID] }
     return {
       replyLength: lengths[guildID] || null,
       streamerPersona: personas[guildID] !== false,
@@ -199,8 +212,26 @@ function installReplyLengthStore (lengths = {}, personas = {}, debugFooters = {}
       replyModel: tasks.reply?.model || null,
       replyThinking: tasks.reply?.thinking || null,
       aiModels: tasks,
-      assistantRules: rules[guildID] || null
+      assistantRules: rules[guildID] || null,
+      embeddings: emb,
+      embedMessages: emb.messages ?? owner,
+      embedEmojis: emb.emojis ?? owner
     }
+  }
+  store.isEmbedMessagesEnabled = async guildID => {
+    if (!guildID) return false
+    return embeddings[guildID]?.messages ?? isOwnerGuild(guildID)
+  }
+  store.isEmbedEmojisEnabled = async guildID => {
+    if (!guildID) return false
+    return embeddings[guildID]?.emojis ?? isOwnerGuild(guildID)
+  }
+  store.setEmbedding = async (guildID, which, value) => {
+    if (which === 'all') {
+      embeddings[guildID] = { messages: value, emojis: value }
+      return
+    }
+    embeddings[guildID] = { messages: null, emojis: null, ...embeddings[guildID], [which]: value }
   }
   store.getTaskModel = async (guildID, task) => {
     if (guildID) return taskModelsOf(guildID)[task] || null
@@ -227,7 +258,7 @@ function installReplyLengthStore (lengths = {}, personas = {}, debugFooters = {}
   store.setReplyLength = async (guildID, length) => { lengths[guildID] = length }
   store.setStreamerPersona = async (guildID, enabled) => { personas[guildID] = enabled }
   store.setDebugFooter = async (guildID, enabled) => { debugFooters[guildID] = enabled }
-  return { lengths, personas, debugFooters, tokenLimits, models, rules, aiModels }
+  return { lengths, personas, debugFooters, tokenLimits, models, rules, aiModels, embeddings }
 }
 installReplyLengthStore()
 

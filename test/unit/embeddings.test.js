@@ -1,7 +1,8 @@
-const { test, describe, beforeEach } = require('node:test')
+const { test, describe, beforeEach, afterEach } = require('node:test')
 const assert = require('node:assert/strict')
-const { configureGateway, installEmbeddingModel, installEmbeddingStore } = require('../helpers/fakes')
+const { configureGateway, installEmbeddingModel, installEmbeddingStore, installReplyLengthStore } = require('../helpers/fakes')
 const { embed, embedQuery, blend, similarity, quantize, toVectorLiteral, toBase64, fromBase64, DIMENSIONS } = require('../../src/bot/utils/embeddings')
+const replySettings = require('../../src/db/interfaces/postgres/replySettings')
 const indexer = require('../../src/bot/modules/embeddingIndexer')
 const semanticSearch = require('../../src/bot/modules/semanticSearch')
 
@@ -46,7 +47,14 @@ describe('embeddings', () => {
 })
 
 describe('embeddingIndexer', () => {
-  beforeEach(() => configureGateway())
+  beforeEach(() => {
+    configureGateway()
+    installReplyLengthStore()
+    process.env.OWNER_GUILD_IDS = '100'
+  })
+  afterEach(() => {
+    delete process.env.OWNER_GUILD_IDS
+  })
 
   test('embeds videos whose text changed, and leaves the rest', async () => {
     installEmbeddingModel()
@@ -88,6 +96,22 @@ describe('embeddingIndexer', () => {
     assert.deepEqual(saved.handled, ['1', '2', '3', '4', '5'])
     assert.equal(saved.resetFor, 'gemini-embedding-001', 'messages embedded by another model are sent back first')
     assert.equal(saved.messages[0].model, 'gemini-embedding-001')
+  })
+
+  test('embeds messages only for servers where message embeddings are enabled (owner servers by default)', async () => {
+    installEmbeddingModel()
+    const saved = installEmbeddingStore({
+      pending: [
+        { id: '1', guild_id: '100', channel_id: '201', ts: new Date(), content: 'オーナーサーバーの発言' },
+        { id: '2', guild_id: '200', channel_id: '202', ts: new Date(), content: '別サーバーの発言' }
+      ]
+    })
+    await replySettings.setEmbedding('100', 'messages', false)
+    assert.equal(await indexer.indexMessages(), 0, 'owner server disabled: nothing indexed')
+
+    await replySettings.setEmbedding('200', 'messages', true)
+    assert.equal(await indexer.indexMessages(), 1, 'non-owner server enabled: its message is indexed')
+    assert.deepEqual(saved.messages.map(m => m.id), ['2'])
   })
 
   test('embeds messages only when MESSAGE_EMBEDDINGS=true', async (t) => {
