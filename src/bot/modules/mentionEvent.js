@@ -1,7 +1,8 @@
 const Eris = require('eris')
 const { v4: uuidv4 } = require('uuid')
 const { draft, revise, isConfigured, isUncensoredUsable, isR18Text, ENTITY_TYPES } = require('./eventDrafter')
-const { createTools, describeServer, withServerEmojis, withServerChannels, StopDrafting } = require('./eventTools')
+const { createTools, describeServer, worthSearching, withServerEmojis, withServerChannels, StopDrafting } = require('./eventTools')
+const { embedQuery } = require('../utils/embeddings')
 const { withLinkCards } = require('../utils/linkCards')
 const { safeLinks } = require('../utils/linkSafety')
 const { reportInjection } = require('../utils/untrusted')
@@ -19,7 +20,6 @@ const { CoverImage, MODES } = require('./coverImage')
 const { FORUM_TYPES } = require('./forumPost')
 const postedEdit = require('./postedEdit')
 const replySettingsStore = require('../../db/interfaces/postgres/replySettings')
-const serverRules = require('./serverRules')
 const { EDIT_HINT } = postedEdit
 
 const ANSWER_TIMEOUT_MS = 5 * 60 * 1000
@@ -489,20 +489,25 @@ async function handle (message) {
       // (recentTopics.js); not when something the bot made is being changed.
       // The server's rules and what its moderators asked of the assistant (serverRules.js).
       const directR18 = isUncensoredUsable() && isR18Text(request, referenced?.text)
-      const [server, recent, rulesChannels] = await Promise.all([
+      let queryVecPromise = null
+      const queryVector = () => {
+        if (!worthSearching(request)) return Promise.resolve(null)
+        if (!queryVecPromise) queryVecPromise = embedQuery(request)
+        return queryVecPromise
+      }
+      const [server, recent] = await Promise.all([
         directR18
           ? null
-          : describeServer(guild, member, message.channel.id, { query: request, context: referenced?.othersText }).catch(e => {
+          : describeServer(guild, member, message.channel.id, { query: request, context: referenced?.othersText, queryVector }).catch(e => {
             global.logger.warn(`Could not describe server ${guild.id}: ${e.message}`)
             return null
           }),
         edit
           ? []
-          : relatedRecent(message, request).catch(e => {
+          : relatedRecent(message, request, { queryVector }).catch(e => {
             global.logger.warn(`Could not read the recent talk in ${message.channel.id}: ${e.message}`)
             return []
-          }),
-        directR18 ? null : serverRules.readRules(guild).catch(() => null)
+          })
       ])
       // Combined emojis and other servers' emojis in what was said are shown to the model as
       // images, for this request only.
@@ -515,7 +520,7 @@ async function handle (message) {
         recent,
         replyLength,
         streamerPersona,
-        rules: directR18 ? null : { moderators: assistantRules || null, channels: rulesChannels || [] },
+        rules: directR18 ? null : { moderators: assistantRules || null, channels: [] },
         model: replyModel || null,
         thinking: replyThinking || null,
         tier: aiModels?.reply?.tier || null,

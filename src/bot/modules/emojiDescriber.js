@@ -19,6 +19,7 @@ const PER_RUN = 10
 const EMBED_BATCH = 50
 const CHECK_EVERY_MS = 6 * 60 * 60 * 1000
 const MAX_DESCRIPTION = 80
+const MAX_REFERENCES = 6
 // Changing how emojis are described describes them all again: it is part of the hash stored with
 // each description.
 const DESCRIBE_VERSION = 3
@@ -42,14 +43,25 @@ function namedIn (emojiName, names = []) {
 
 // Pictures of the characters from the wiki, fetched once per run: [{ name, buffer, contentType }].
 // One that cannot be fetched is left out.
-async function referenceImages (images = []) {
-  const fetched = await Promise.all(images.map(i => urlFetcher.fetchImage(i.url)
-    .then(({ buffer, contentType }) => ({ name: i.name, buffer, contentType }))
-    .catch(() => null)))
+async function referenceImages (images = [], cache = new Map()) {
+  const fetched = await Promise.all(images.map(i => {
+    if (!cache.has(i.url)) {
+      cache.set(i.url, urlFetcher.fetchImage(i.url)
+        .then(({ buffer, contentType }) => ({ name: i.name, buffer, contentType }))
+        .catch(() => null))
+    }
+    return cache.get(i.url)
+  }))
   return fetched.filter(Boolean)
 }
 
 const inline = (buffer, contentType) => ({ inlineData: { mimeType: contentType || 'image/png', data: buffer.toString('base64') } })
+
+// Whether a character heading/name matches one of `named`.
+function matchesNamed (label, named) {
+  const s = String(label || '')
+  return named.some(n => s === n || s.startsWith(`${n}（`) || s.startsWith(`- ${n}:`) || s.startsWith(`- ${n}（`))
+}
 
 // One short line: what the emoji shows and when it is used. context: who the community's
 // characters are (wikiKnowledge.characterContext, with `references`, the fetched pictures of
@@ -58,17 +70,23 @@ async function describeEmoji (emoji, context = {}) {
   const { text: characters = '', names = [], references = [], guildID = emoji.guild_id || null } = typeof context === 'string' ? { text: context } : context
   const { buffer, contentType } = await urlFetcher.fetchImage(imageURL(emoji))
   const named = namedIn(emoji.name, names)
-  const known = characters
+  const matchedRefs = named.length ? references.filter(r => matchesNamed(r.name, named)) : []
+  const pickedRefs = (matchedRefs.length ? matchedRefs : references).slice(0, MAX_REFERENCES)
+  const matchedLines = named.length && characters
+    ? characters.split('\n').filter(line => matchesNamed(line, named)).join('\n')
+    : ''
+  const characterText = matchedLines || characters
+  const known = characterText
     ? [
-        '', '', `このコミュニティの配信者のキャラクター（コミュニティの wiki より）:\n${characters}`,
-        ...(references.length ? ['', '下にこのうち何人かの wiki の画像を、絵文字の画像の前に付けています。絵文字がそのキャラクターかどうか、形（頭の飾り・顔・輪郭など）で見比べてください。'] : []),
+        '', '', `このコミュニティの配信者のキャラクター（コミュニティの wiki より）:\n${characterText}`,
+        ...(pickedRefs.length ? ['', '下にこのうち何人かの wiki の画像を、絵文字の画像の前に付けています。絵文字がそのキャラクターかどうか、形（頭の飾り・顔・輪郭など）で見比べてください。'] : []),
         ...(named.length ? ['', `絵文字の名前「${emoji.name}」には、キャラクター「${named.join('」「')}」の名前が入っています。`] : []),
         '', '絵文字がこの中のキャラクターなら、説明の最初にその名前を書き、色や形を並べるより wiki に書かれたそのキャラクターの特徴（何者か・目立つ部分）を踏まえて書いてください。wiki にない設定は付け足さないでください。どれにも当てはまらなければ名前は書かないでください。'
       ].join('\n')
     : ''
   const parts = [{ text: `Discord のカスタム絵文字「:${emoji.name}:」の画像（最後の画像）です。何が描かれているか、どんな気持ちや場面で使う絵文字かを、日本語の短い1文で書いてください。前置きや文字数は書かないでください。${known}` }]
-  if (characters) {
-    for (const r of references) parts.push({ text: `参考: wiki の「${r.name}」の画像` }, inline(r.buffer, r.contentType))
+  if (characterText) {
+    for (const r of pickedRefs) parts.push({ text: `参考: wiki の「${r.name}」の画像` }, inline(r.buffer, r.contentType))
   }
   parts.push({ text: `説明する絵文字「:${emoji.name}:」の画像` }, inline(buffer, contentType))
   const { model: m, thinking, flex } = await resolveTaskConfig('light', guildID)
@@ -110,10 +128,15 @@ async function syncGuild (guild) {
   // When what the wiki says about the characters changes, every emoji is described again.
   const characters = await require('./wikiKnowledge').characterContext()
   const hash = `v${DESCRIBE_VERSION}:${characters.hash || ''}`
-  // The pictures are fetched only when some emoji is to be described.
-  let references = null
-  const context = async () => {
-    if (!references) references = await referenceImages(characters.images)
+  // Reference images are fetched lazily and cached per URL; when an emoji is named after a known
+  // character, only that character's image is fetched.
+  const imageCache = new Map()
+  const context = async emoji => {
+    const named = namedIn(emoji.name, characters.names)
+    const images = characters.images || []
+    const matched = named.length ? images.filter(i => matchesNamed(i.name, named)) : []
+    const needed = (matched.length ? matched : images).slice(0, MAX_REFERENCES)
+    const references = await referenceImages(needed, imageCache)
     return { ...characters, references, guildID: guild.id }
   }
   // Embedded first: those described before (in a run that stopped part way) are searchable at once.
@@ -128,7 +151,7 @@ async function syncGuild (guild) {
     if (batch.length === 0) break
     for (const emoji of batch) {
       try {
-        const description = await backgroundQueue.run(guild.id, async () => describeEmoji(emoji, await context()))
+        const description = await backgroundQueue.run(guild.id, async () => describeEmoji(emoji, await context(emoji)))
         await store.saveDescription(emoji.emoji_id, emoji.name, description, hash)
         described++
       } catch (e) {

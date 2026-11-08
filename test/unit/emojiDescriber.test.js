@@ -153,13 +153,17 @@ describe('describeEmoji', () => {
       return { ok: true, json: async () => ({ candidates: [{ content: { parts: [{ text: 'よつろんが笑っている。ごきげんなときに使う' }] } }] }) }
     }
     const context = {
-      text: '- よつろん（yotsuron）: 頭に大きな四葉、白々しい笑顔',
+      text: '- よつろん（yotsuron）: 頭に大きな四葉、白々しい笑顔\n- クリーム: 謎の生物',
       names: [{ name: 'よつろん', aliases: ['yotsuron'] }, { name: 'クリーム', aliases: [] }],
-      references: [{ name: 'よつろん', buffer: Buffer.from('ref'), contentType: 'image/png' }]
+      references: [
+        { name: 'よつろん', buffer: Buffer.from('ref'), contentType: 'image/png' },
+        { name: 'クリーム', buffer: Buffer.from('kream'), contentType: 'image/png' }
+      ]
     }
     assert.equal(await emojiDescriber.describeEmoji({ id: '1', name: 'Yotsuron_happy' }, context), 'よつろんが笑っている。ごきげんなときに使う')
     const parts = body.contents[0].parts
     assert.match(parts[0].text, /頭に大きな四葉/)
+    assert.doesNotMatch(parts[0].text, /謎の生物/, 'unrelated character lines are omitted when the name matches')
     assert.match(parts[0].text, /キャラクター「よつろん」の名前が入っています/)
     assert.match(parts[0].text, /形（頭の飾り・顔・輪郭など）で見比べて/)
     assert.deepEqual(parts.slice(1).map(p => p.text || p.inlineData.data), [

@@ -17,6 +17,7 @@ const semanticSearch = require('./semanticSearch')
 const { messageEmbeddingsEnabled } = require('./embeddingIndexer')
 const { wrap, reportInjection } = require('../utils/untrusted')
 const serverLore = require('./serverLore')
+const serverRules = require('./serverRules')
 const loreStore = require('../../db/interfaces/postgres/serverLore')
 const embeddingStore = require('../../db/interfaces/postgres/embeddings')
 const { embeddableText } = require('../utils/messageNoise')
@@ -24,7 +25,7 @@ const { embeddableText } = require('../utils/messageNoise')
 const MAX_RECENT_MESSAGES = 50
 const MAX_QUESTIONS = 3
 const MAX_OPTIONS = 4
-const MAX_RESULT_CHARS = 20000
+const MAX_RESULT_CHARS = 10000
 const MESSAGE_LINK = /^https?:\/\/(?:(?:ptb|canary)\.)?discord(?:app)?\.com\/channels\/(\d+)\/(\d+)\/(\d+)/i
 // A link to a channel itself (no message).
 const CHANNEL_LINK = /^https?:\/\/(?:(?:ptb|canary)\.)?discord(?:app)?\.com\/channels\/(\d+)\/(\d+)\/?(?:[?#]|$)/i
@@ -109,7 +110,11 @@ const DECLARATIONS = [
   },
   {
     name: 'list_channels',
-    description: 'このサーバーで依頼者が閲覧できるチャンネルの一覧（ID・名前・種類）を得る。ボイス/ステージでイベントを行う場合のチャンネル選びにも使う。'
+    description: 'このサーバーで依頼者が閲覧できるチャンネルの一覧（ID・名前・種類・カテゴリ・説明）を得る。どのチャンネルで何を話すか聞かれたとき、当てはまるチャンネルを探すとき、ボイス/ステージでイベントを行う場合のチャンネル選びに使う。'
+  },
+  {
+    name: 'get_server_rules',
+    description: 'このサーバーのルール・必読・はじめに等のチャンネルに書かれている内容を読む。サーバーのルール・禁止事項・決まりについて聞かれたとき、またはイベントやフォーラム投稿を作る前にルールを確認するときに使う。'
   },
   {
     name: 'list_forums',
@@ -162,12 +167,10 @@ const DECLARATIONS = [
 
 // How much stored history one search reads, and how many matching messages it returns.
 const HISTORY_SCAN = 1000
-const MAX_HISTORY_RESULTS = 100
+const MAX_HISTORY_RESULTS = 40
 const MAX_HISTORY_TEXT = 500
-const MAX_PROFILE_CHANNELS = 80
-const MAX_PROFILE_ROLES = 40
 const MAX_TOPIC = 100
-const MAX_PROFILE_EMOJIS = 60
+const MAX_PROFILE_EMOJIS = 15
 const MAX_YOUTUBE_RESULTS = 15
 const LIVE_LABELS = { live: '配信中', upcoming: '配信予定' }
 
@@ -323,10 +326,23 @@ function createTools ({ guild, member, ask, progress = () => {} }) {
       ].join('\n')
     },
     async list_channels () {
-      return [...guild.channels.values()]
-        .filter(c => c.permissionsOf(member.id).has('viewChannel'))
-        .map(c => `${c.id}: ${c.name}（${CHANNEL_TYPES[c.type] || c.type}）`)
+      const all = [...guild.channels.values()]
+      const order = c => [guild.channels.get(c.parentID)?.position ?? -1, c.position ?? 0]
+      return all
+        .filter(c => c.type !== 4 && c.permissionsOf(member.id).has('viewChannel'))
+        .sort((a, b) => order(a)[0] - order(b)[0] || order(a)[1] - order(b)[1])
+        .map(c => {
+          const category = guild.channels.get(c.parentID)?.name
+          const topic = c.topic ? ` — ${c.topic.replace(/\s+/g, ' ').slice(0, MAX_TOPIC)}` : ''
+          return `${c.id}: ${c.name}（${CHANNEL_TYPES[c.type] || c.type}）${category ? ` [${category}]` : ''}${topic}`
+        })
         .join('\n')
+    },
+    async get_server_rules () {
+      const rules = await serverRules.readRules(guild)
+      if (!rules?.length) return 'このサーバーのルールチャンネルは見つかりませんでした'
+      for (const r of rules) sources.push(`<#${r.channelID}>`)
+      return rules.map(r => `### <#${r.channelID}> より\n${r.text}`).join('\n\n')
     },
     async list_forums () {
       return describeForums(guild, member)
@@ -623,11 +639,6 @@ function findMembers (guild, who) {
   return exact.length ? exact : members.filter(m => names(m).some(n => n.includes(q)))
 }
 
-function channelLine (c, requestChannelID) {
-  const topic = c.topic ? ` — ${c.topic.replace(/\s+/g, ' ').slice(0, MAX_TOPIC)}` : ''
-  return `- ${c.id}: #${c.name}（${CHANNEL_TYPES[c.type] || c.type}）${c.id === requestChannelID ? ' ← 依頼されたチャンネル' : ''}${topic}`
-}
-
 const { usableEmojis } = emojiDescriber
 
 function emojiCode (e) {
@@ -726,15 +737,13 @@ async function emojiSection (guild, vectorOf) {
   const head = '### サーバー絵文字（返事で使うときは、この書き方のまま書く）'
   const notes = emojiDescriber.enabled() ? await emojiStore.descriptions(guild.id).catch(() => ({})) : {}
   if (!Object.keys(notes).length) return [head, emojis.slice(0, MAX_PROFILE_EMOJIS).map(emojiCode).join(' ')]
-  let first = []
   const vector = await vectorOf()
-  if (vector) {
-    first = await emojiStore.nearestEmojis(guild.id, vector, embeddingModel(), MAX_PROFILE_EMOJIS)
-      .catch(e => {
-        global.logger.warn(`Could not rank the emojis of ${guild.id}: ${e.message}`)
-        return []
-      })
-  }
+  if (!vector) return [head, emojis.slice(0, MAX_PROFILE_EMOJIS).map(emojiCode).join(' ')]
+  const first = await emojiStore.nearestEmojis(guild.id, vector, embeddingModel(), MAX_PROFILE_EMOJIS)
+    .catch(e => {
+      global.logger.warn(`Could not rank the emojis of ${guild.id}: ${e.message}`)
+      return []
+    })
   const rank = new Map(first.map((id, i) => [id, i]))
   const ordered = [...emojis].sort((a, b) => (rank.get(a.id) ?? Infinity) - (rank.get(b.id) ?? Infinity))
   return [
@@ -782,32 +791,13 @@ async function relatedMessages (guild, member, vectorOf) {
 // The server as the requester can see it. Sent with every request, fresh each time, so questions
 // about "this server" need no lookups. query: what was asked; context: the conversation it replies
 // to (readThread), if any. Both choose the knowledge and the emojis put first.
-async function describeServer (guild, member, requestChannelID, { query = '', context = '' } = {}) {
+async function describeServer (guild, member, requestChannelID, { query = '', context = '', queryVector = null } = {}) {
+  // Ensure the channel cache is readable before building the profile.
+  guild.channels.values()
   const lines = [`サーバー名: ${guild.name}`]
   if (guild.description) lines.push(`説明: ${guild.description}`)
   if (guild.memberCount) lines.push(`メンバー数: ${guild.memberCount}`)
-  if (guild.rulesChannelID) lines.push(`ルールチャンネル: <#${guild.rulesChannelID}>`)
-
-  const all = [...guild.channels.values()]
-  const order = c => [guild.channels.get(c.parentID)?.position ?? -1, c.position ?? 0]
-  const visible = all
-    .filter(c => c.type !== 4 && c.permissionsOf(member.id).has('viewChannel'))
-    .sort((a, b) => order(a)[0] - order(b)[0] || order(a)[1] - order(b)[1])
-  const byCategory = new Map()
-  for (const c of visible.slice(0, MAX_PROFILE_CHANNELS)) {
-    const category = guild.channels.get(c.parentID)?.name || '（カテゴリなし）'
-    if (!byCategory.has(category)) byCategory.set(category, [])
-    byCategory.get(category).push(channelLine(c, requestChannelID))
-  }
-  lines.push('', '### チャンネル（依頼者が見られるもの。返事で触れるときは <#ID> の形で書くとリンクになる）')
-  for (const [category, channels] of byCategory) lines.push(`[${category}]`, ...channels)
-  if (visible.length > MAX_PROFILE_CHANNELS) lines.push(`…ほか ${visible.length - MAX_PROFILE_CHANNELS} 件`)
-
-  const roles = [...guild.roles.values()]
-    .filter(r => r.id !== guild.id && !r.managed)
-    .sort((a, b) => (b.position ?? 0) - (a.position ?? 0))
-    .map(r => r.name)
-  if (roles.length) lines.push('', '### ロール', roles.slice(0, MAX_PROFILE_ROLES).join(', '))
+  if (guild.rulesChannelID) lines.push(`ルールチャンネル: <#${guild.rulesChannelID}>（内容は get_server_rules で読む）`)
 
   // What the knowledge and the emojis are chosen for: the request, and the conversation it replies
   // to, which counts more (a reply such as "それの続きは？" is about what came before). The latest
@@ -819,12 +809,19 @@ async function describeServer (guild, member, requestChannelID, { query = '', co
   const vectorOf = () => {
     if (!worthSearching(texts.join('\n'))) return Promise.resolve(null)
     if (!embedding) {
-      embedding = embed(texts, 'RETRIEVAL_QUERY')
-        .then(vectors => vectors.length === 1 ? vectors[0] : blend(vectors, [CONTEXT_WEIGHT, 1 - CONTEXT_WEIGHT]))
-        .catch(e => {
+      if (!recent.trim() && typeof queryVector === 'function') {
+        embedding = Promise.resolve(queryVector()).catch(e => {
           global.logger.warn(`Could not embed the request in ${guild.id}: ${e.message}`)
           return null
         })
+      } else {
+        embedding = embed(texts, 'RETRIEVAL_QUERY')
+          .then(vectors => vectors.length === 1 ? vectors[0] : blend(vectors, [CONTEXT_WEIGHT, 1 - CONTEXT_WEIGHT]))
+          .catch(e => {
+            global.logger.warn(`Could not embed the request in ${guild.id}: ${e.message}`)
+            return null
+          })
+      }
     }
     return embedding
   }
@@ -847,7 +844,7 @@ async function describeServer (guild, member, requestChannelID, { query = '', co
   const synced = (youtube?.channels || []).filter(c => c.synced_at)
   lines.push('', '### YouTube', synced.length
     ? [
-        ...synced.map(c => `${c.title}（動画 ${c.video_count} 件を保存、取得 ${new Date(c.synced_at).toISOString()}）${c.description ? `\n  チャンネルの説明: ${c.description.replace(/\s+/g, ' ').slice(0, 200)}` : ''}`),
+        ...synced.map(c => `${c.title}（動画 ${c.video_count} 件を保存、取得 ${new Date(c.synced_at).toISOString()}）`),
         '詳しくは search_youtube で調べる'
       ].join('\n')
     : '設定なし')

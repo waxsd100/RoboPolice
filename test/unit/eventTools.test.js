@@ -104,7 +104,7 @@ describe('fetch_url', () => {
   test('caps very long results', async (t) => {
     t.mock.method(urlFetcher, 'fetchPageText', async url => ({ url, text: 'x'.repeat(30000) }))
     const res = await tools().call('fetch_url', { url: 'https://example.com' })
-    assert.equal(res.result.length, 20000)
+    assert.equal(res.result.length, 10000)
   })
 })
 
@@ -132,6 +132,15 @@ describe('list_channels', () => {
     assert.match(res.result, /201: general（text）/)
     assert.match(res.result, /204: ボイス（voice）/)
     assert.doesNotMatch(res.result, /staff/)
+  })
+})
+
+describe('get_server_rules', () => {
+  test('reads the server rules channel on demand', async (t) => {
+    const serverRules = require('../../src/bot/modules/serverRules')
+    t.mock.method(serverRules, 'readRules', async () => [{ channelID: '201', text: '1. 仲良くすること' }])
+    const res = await tools().call('get_server_rules')
+    assert.match(res.result, /### <#201> より\n1\. 仲良くすること/)
   })
 })
 
@@ -193,7 +202,7 @@ describe('declarations', () => {
 
   test('omit parameters for tools without arguments', () => {
     const byName = Object.fromEntries(tools().declarations.map(d => [d.name, d]))
-    for (const name of ['list_channels', 'list_forums', 'list_scheduled_events']) {
+    for (const name of ['list_channels', 'list_forums', 'list_scheduled_events', 'get_server_rules']) {
       assert.equal(byName[name].parameters, undefined, name)
     }
   })
@@ -332,7 +341,7 @@ describe('describeServer', () => {
     return g
   }
 
-  test('describes the server as the requester sees it, marking the request channel', async () => {
+  test('describes the server compactly and leaves channel listings to list_channels', async () => {
     installYouTubeStore()
     const g = richGuild()
     installBot({ guilds: [g], scheduledEvents: [{ name: '定例会', scheduled_start_time: '2026-11-03T10:00:00Z', entity_metadata: { location: '渋谷' } }] })
@@ -341,23 +350,19 @@ describe('describeServer', () => {
       'サーバー名: のばまんサーバー',
       '説明: ゲーム好きの集まり',
       'メンバー数: 12000',
-      'ルールチャンネル: <#11>',
-      '',
-      '### チャンネル（依頼者が見られるもの。返事で触れるときは <#ID> の形で書くとリンクになる）',
-      '[（カテゴリなし）]',
-      '- 14: #ボイス（voice）',
-      '[イベント]',
-      '- 11: #お知らせ（announcement） — 運営からのお知らせ。 書き込み禁止',
-      '- 12: #雑談（text） ← 依頼されたチャンネル',
-      '',
-      '### ロール',
-      '運営, メンバー',
+      'ルールチャンネル: <#11>（内容は get_server_rules で読む）',
       '',
       '### サーバー絵文字（返事で使うときは、この書き方のまま書く）',
       '<:nobaman_wave:31> <a:party:32>',
       '',
       '### YouTube',
       '設定なし'
+    ].join('\n'))
+    const channels = await createTools({ guild: g, member, ask: async () => '' }).call('list_channels')
+    assert.equal(channels.result, [
+      '14: ボイス（voice）',
+      '11: お知らせ（announcement） [イベント] — 運営からのお知らせ。 書き込み禁止',
+      '12: 雑談（text） [イベント]'
     ].join('\n'))
   })
 

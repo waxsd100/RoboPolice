@@ -116,10 +116,10 @@ describe('search_channel_history', () => {
     const many = Array.from({ length: 150 }, (_, i) => ({ author_id: '2', content: `msg ${i}`, ts: new Date(Date.UTC(2026, 9, 1, 0, 0, 150 - i)) }))
     t.mock.method(read, 'getChannelHistory', async () => many)
     const text = (await tools().call('search_channel_history', { channel_id: '201' })).result
-    assert.equal(text.split('\n').length, 1 + 100 + 1)
-    assert.match(text, /…ほか 50 件（query で絞り込めます）$/)
-    // The newest 100 are kept, shown oldest first.
-    assert.match(text.split('\n')[1], /msg 99$/)
+    assert.equal(text.split('\n').length, 1 + 40 + 1)
+    assert.match(text, /…ほか 110 件（query で絞り込めます）$/)
+    // The newest 40 are kept, shown oldest first.
+    assert.match(text.split('\n')[1], /msg 39$/)
   })
 })
 
