@@ -28,11 +28,12 @@ const picks = new Map() // guildID -> { signature, ids, at, failed }
 const texts = new Map() // guildID -> { at, key, channels }
 const redisKeyOf = guildID => `server-rules-pick:${guildID}`
 
+const { everyoneCanRead } = require('./discordKnowledge')
 const drafter = () => require('./eventDrafter')
 
-// The channels that could hold rules: text, announcement and forum channels.
+// The channels that could hold rules: text, announcement and forum channels that @everyone can read.
 function candidates (guild) {
-  return [...(guild.channels?.values() || [])].filter(c => TEXT_TYPES.includes(c.type)).slice(0, MAX_CANDIDATES)
+  return [...(guild.channels?.values() || [])].filter(c => TEXT_TYPES.includes(c.type) && everyoneCanRead(guild, c)).slice(0, MAX_CANDIDATES)
 }
 
 function signatureOf (channels) {

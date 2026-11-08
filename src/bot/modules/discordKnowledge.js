@@ -35,28 +35,42 @@ function delay () {
 }
 
 // Whether @everyone can read the channel and its history: the @everyone role's permissions with
-// the channel's overwrite for it.
+// the channel's (and its parent category's, if not overridden) overwrite for it.
 const NEEDED = Constants.Permissions.viewChannel | Constants.Permissions.readMessageHistory
 function everyoneCanRead (guild, channel) {
-  let allow = BigInt(guild.roles.get(guild.id)?.permissions?.allow ?? 0)
+  let allow = BigInt(guild.roles?.get(guild.id)?.permissions?.allow ?? NEEDED)
   if (allow & Constants.Permissions.administrator) return true
+  const parent = channel.parentID && guild.channels?.get(channel.parentID)
+  const parentOverwrite = parent?.permissionOverwrites?.get(guild.id)
+  if (parentOverwrite && !channel.permissionOverwrites?.has(guild.id)) {
+    allow = (allow & ~BigInt(parentOverwrite.deny)) | BigInt(parentOverwrite.allow)
+  }
   const overwrite = channel.permissionOverwrites?.get(guild.id)
   if (overwrite) allow = (allow & ~BigInt(overwrite.deny)) | BigInt(overwrite.allow)
   return (allow & NEEDED) === NEEDED
 }
 
-// The channels whose messages are read: text and announcement channels everyone and the bot can read.
-function publicChannels (guild) {
-  return [...guild.channels.values()].filter(c => TEXT_CHANNELS.includes(c.type) &&
-    everyoneCanRead(guild, c) &&
-    c.permissionsOf(global.bot.user.id).has('viewChannel') && c.permissionsOf(global.bot.user.id).has('readMessageHistory'))
+function botCanRead (channel) {
+  if (typeof channel?.permissionsOf !== 'function') return true
+  const perms = channel.permissionsOf(global.bot.user.id)
+  return perms.has('viewChannel') && perms.has('readMessageHistory')
 }
 
-// Whether the message is one to keep: by one of the accounts, in one of those channels.
+// All text and announcement channels the bot can read (used for storing posts).
+function botChannels (guild) {
+  return [...guild.channels.values()].filter(c => TEXT_CHANNELS.includes(c.type) && botCanRead(c))
+}
+
+// The channels whose messages are referenced for learning: text and announcement channels everyone and the bot can read.
+function publicChannels (guild) {
+  return botChannels(guild).filter(c => everyoneCanRead(guild, c))
+}
+
+// Whether the message is one to store: by one of the accounts, in a channel the bot can see.
 function counts (message) {
   const guild = message.channel?.guild
   return !!(guild && isOwnerGuild(guild.id) && users().includes(message.author?.id) &&
-    TEXT_CHANNELS.includes(message.channel.type) && everyoneCanRead(guild, message.channel))
+    TEXT_CHANNELS.includes(message.channel.type) && botCanRead(message.channel))
 }
 
 // guild and channel: where it was posted (a message read from a channel's history may not carry them).
@@ -101,12 +115,19 @@ function monthSections (guildID, month, posts) {
   }
 }
 
-// Writes the pages of the months given as `${guildID}/${authorID}/${month}`; a month with no
-// messages left loses its page.
-async function writeMonths (months) {
+// Writes the learning pages of the months given as `${guildID}/${authorID}/${month}`, referencing
+// only channels @everyone can read; a month with no public messages left loses its page.
+async function writeMonths (months, knownGuild = null) {
   for (const key of months) {
     const [guildID, authorID, month] = key.split('/')
-    const posts = await store.postsOfMonth(guildID, authorID, month)
+    const guild = (knownGuild?.id === guildID ? knownGuild : null) || global.bot?.guilds?.get(guildID)
+    const allPosts = await store.postsOfMonth(guildID, authorID, month)
+    const posts = guild
+      ? allPosts.filter(p => {
+        const ch = guild.channels?.get(p.channel_id)
+        return ch && everyoneCanRead(guild, ch)
+      })
+      : allPosts
     const url = pageUrl(guildID, authorID, month)
     if (!posts.length) {
       await knowledgeStore.deletePagesExcept(url, [])
@@ -126,6 +147,7 @@ async function readChannel (guild, channel, { wait = delay(), getMessages = (id,
   if (state?.done) return 0
   let before = state?.before_id || undefined
   let added = 0
+  const isPublic = everyoneCanRead(guild, channel)
   const months = new Set()
   for (;;) {
     // A message Eris could not read comes back as null: left out, but counted for a full page.
@@ -133,7 +155,7 @@ async function readChannel (guild, channel, { wait = delay(), getMessages = (id,
     const batch = page.filter(Boolean)
     const posts = batch.filter(m => users().includes(m.author?.id)).map(m => toPost(m, guild, channel)).filter(Boolean)
     const fresh = await store.savePosts(posts)
-    for (const p of fresh) months.add(monthKey(p))
+    if (isPublic) for (const p of fresh) months.add(monthKey(p))
     added += fresh.length
     const done = page.length < PAGE_SIZE
     if (batch.length) before = batch.reduce((oldest, m) => BigInt(m.id) < BigInt(oldest) ? m.id : oldest, batch[0].id)
@@ -141,12 +163,13 @@ async function readChannel (guild, channel, { wait = delay(), getMessages = (id,
     if (done) break
     await sleep(wait)
   }
-  await writeMonths(months)
+  if (months.size) await writeMonths(months, guild)
   return added
 }
 
-// Reads the history of every public channel of the owner's servers this worker hosts, one channel
-// at a time. One that fails is tried again at the next start.
+// Reads the history of every bot-readable channel of the owner's servers this worker hosts, one
+// channel at a time. All posts are stored in discord_posts; only @everyone-readable channels are
+// written to the learning pages. One that fails is tried again at the next start.
 let running = false
 async function backfill (options) {
   if (running || !enabled()) return null
@@ -156,7 +179,7 @@ async function backfill (options) {
     for (const id of ownerGuildIDs()) {
       const guild = global.bot.guilds.get(id)
       if (!guild) continue
-      for (const channel of publicChannels(guild)) {
+      for (const channel of botChannels(guild)) {
         try {
           added += await readChannel(guild, channel, options)
         } catch (e) {
@@ -171,13 +194,16 @@ async function backfill (options) {
   }
 }
 
-// A new or edited message of one of the accounts.
+// A new or edited message of one of the accounts: stored in all bot-visible channels, and added to
+// the learning pages only when @everyone can read the channel.
 async function onMessage (message) {
   if (!enabled() || !counts(message)) return
   const post = toPost(message)
   if (!post) return
   const fresh = await store.savePosts([post])
-  if (fresh.length) await writeMonths([monthKey(post)])
+  if (fresh.length && everyoneCanRead(message.channel.guild, message.channel)) {
+    await writeMonths([monthKey(post)], message.channel.guild)
+  }
 }
 
 // A deleted message: gone from the knowledge too.
@@ -190,8 +216,8 @@ async function onDelete (messageID) {
 function startDiscordKnowledge () {
   if (!enabled()) return
   if (!ownerGuildIDs().some(id => global.bot.guilds.has(id))) return
-  global.logger.startup(`[DISCORD]: Reading the messages of ${users().join(', ')} in the public channels of the owner's servers as knowledge.`)
+  global.logger.startup(`[DISCORD]: Reading the messages of ${users().join(', ')} in the channels of the owner's servers (learning from public channels only).`)
   backfill().catch(e => global.logger.warn(`[DISCORD]: Reading past messages failed: ${e.message}`))
 }
 
-module.exports = { startDiscordKnowledge, backfill, readChannel, onMessage, onDelete, everyoneCanRead, publicChannels, monthSections, users, enabled }
+module.exports = { startDiscordKnowledge, backfill, readChannel, onMessage, onDelete, everyoneCanRead, botChannels, publicChannels, monthSections, users, enabled }

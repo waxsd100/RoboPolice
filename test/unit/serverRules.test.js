@@ -41,9 +41,15 @@ test('the rules channels: the one set in Discord first, then those the model pic
   assert.equal(asked.length, 2, 'picked again when the channels change')
 })
 
-test('without Gemini, or when the pick fails, channels named like rules are taken (and the pick is tried again later)', async t => {
+test('without Gemini, or when the pick fails, channels named like rules that @everyone can read are taken (and the pick is tried again later)', async t => {
+  const { Constants } = require('eris')
   const drafter = require('../../src/bot/modules/eventDrafter')
-  const channels = [{ id: '1', name: 'general', type: 0 }, { id: '2', name: '📜ルール', type: 0 }, { id: '3', name: 'server-rules', type: 2 }]
+  const channels = [
+    { id: '1', name: 'general', type: 0 },
+    { id: '2', name: '📜ルール', type: 0 },
+    { id: '3', name: 'server-rules', type: 2 },
+    { id: '4', name: '運営ルール', type: 0, permissionOverwrites: new Map([['g1', { allow: 0n, deny: Constants.Permissions.viewChannel }]]) }
+  ]
   t.mock.method(drafter, 'isConfigured', () => false)
   assert.deepEqual((await serverRules.rulesChannels(guildWith(channels))).map(c => c.id), ['2'])
   serverRules.reset()

@@ -34,7 +34,7 @@ afterEach(() => {
 })
 
 describe('which channels', () => {
-  test('only text and announcement channels everyone and the bot can read, with their history', () => {
+  test('botChannels includes all text/announcement channels the bot can read; publicChannels keeps only those @everyone can read', () => {
     const g = guild([
       channel('1'),
       channel('2', { type: 5 }),
@@ -42,8 +42,11 @@ describe('which channels', () => {
       channel('4', { everyone: { allow: 0n, deny: P.readMessageHistory } }),
       channel('5', { botCan: false }),
       channel('6', { type: 2 }),
-      channel('7', { type: 4 })
+      channel('7', { type: 4 }),
+      { ...channel('8'), parentID: 'cat-private' },
+      { ...channel('cat-private', { type: 4, everyone: { allow: 0n, deny: P.viewChannel } }) }
     ])
+    assert.deepEqual(discord.botChannels(g).map(c => c.id), ['1', '2', '3', '4', '8'])
     assert.deepEqual(discord.publicChannels(g).map(c => c.id), ['1', '2'])
     // A server where everyone cannot see channels: only those opened to everyone.
     const closed = guild([channel('1'), channel('2', { everyone: { allow: P.viewChannel | P.readMessageHistory, deny: 0n } })], 0n)
@@ -84,19 +87,26 @@ describe('reading a channel\'s history', () => {
 })
 
 describe('following messages', () => {
-  test('a new message of the account in a public channel of the owner\'s server is kept; others are not', async (t) => {
+  test('stores messages in all bot-visible channels, but only learns from @everyone-visible channels', async (t) => {
     const ch = channel('10')
-    const g = guild([ch, channel('11', { everyone: { allow: 0n, deny: P.viewChannel } })])
+    const priv = channel('11', { everyone: { allow: 0n, deny: P.viewChannel } })
+    const g = guild([ch, priv])
     const saved = t.mock.method(store, 'savePosts', async posts => posts)
-    t.mock.method(store, 'postsOfMonth', async () => [{ id: '1', channel_id: '10', channel_name: 'ch10', author_name: 'のばまん', content: '告知', created_at: new Date('2026-10-15T03:00:00Z') }])
-    const pages = t.mock.method(knowledgeStore, 'savePage', async () => {})
+    t.mock.method(store, 'postsOfMonth', async () => [
+      { id: '1', channel_id: '10', channel_name: 'ch10', author_name: 'のばまん', content: '告知', created_at: new Date('2026-10-15T03:00:00Z') },
+      { id: '3', channel_id: '11', channel_name: 'ch11', author_name: 'のばまん', content: '非公開チャンネル', created_at: new Date('2026-10-15T04:00:00Z') }
+    ])
+    const pages = []
+    t.mock.method(knowledgeStore, 'savePage', async (url, title, sections) => pages.push(sections[0].text))
     const inChannel = (c, m, gg = g) => ({ ...m, channel: { ...c, guild: gg } })
     await discord.onMessage(inChannel(ch, message('1', NOBAMAN, '告知')))
     await discord.onMessage(inChannel(ch, message('2', '2', 'ほかの人')))
-    await discord.onMessage(inChannel(g.channels.get('11'), message('3', NOBAMAN, '非公開チャンネル')))
+    await discord.onMessage(inChannel(priv, message('3', NOBAMAN, '非公開チャンネル')))
     await discord.onMessage(inChannel(ch, message('4', NOBAMAN, '別サーバー'), { ...g, id: '999' }))
-    assert.deepEqual(saved.mock.calls.map(c => c.arguments[0][0].id), ['1'])
-    assert.equal(pages.mock.callCount(), 1)
+    assert.deepEqual(saved.mock.calls.map(c => c.arguments[0][0].id), ['1', '3'], 'both public and private bot-visible channels are stored')
+    assert.equal(pages.length, 1, 'learning page is only written for public channel posts')
+    assert.match(pages[0], /告知/)
+    assert.doesNotMatch(pages[0], /非公開チャンネル/, 'private channel posts are filtered out of learning pages')
   })
 
   test('a deleted message leaves the knowledge; a month with none left loses its page', async (t) => {
