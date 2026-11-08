@@ -667,5 +667,42 @@ function installEmbeddingModel () {
   return batches
 }
 
+// The mention log store (mentionLogs.js), in memory: logs [{ id, guild_id, ... }].
+function installMentionLogStore (logs = []) {
+  const store = require('../../src/db/interfaces/postgres/mentionLogs')
+  store.saveMentionLog = async entry => {
+    const row = {
+      id: String(logs.length + 1),
+      guild_id: entry.guildID,
+      channel_id: entry.channelID,
+      message_id: entry.messageID,
+      reply_message_id: entry.replyMessageID ?? null,
+      user_id: entry.userID,
+      user_name: entry.userName ?? null,
+      kind: entry.kind,
+      request: entry.request ?? '',
+      referenced_text: entry.referencedText ?? null,
+      response: entry.response ?? '',
+      model: entry.model ?? null,
+      prompt_tokens: entry.promptTokens || 0,
+      cached_tokens: entry.cachedTokens || 0,
+      output_tokens: entry.outputTokens || 0,
+      thinking_tokens: entry.thinkingTokens || 0,
+      gemini_calls: entry.geminiCalls || 0,
+      created_at: new Date()
+    }
+    logs.push(row)
+    return row.id
+  }
+  store.getMentionLogs = async (guildID, { limit = 50, userID = null } = {}) => logs
+    .filter(r => r.guild_id === guildID && (!userID || r.user_id === userID))
+    .slice()
+    .reverse()
+    .slice(0, limit)
+  return logs
+}
+installMentionLogStore()
+
 module.exports.installEmbeddingModel = installEmbeddingModel
 module.exports.installReplyLengthStore = installReplyLengthStore
+module.exports.installMentionLogStore = installMentionLogStore

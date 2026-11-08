@@ -584,4 +584,65 @@ describe('stores', { skip: !database.available && 'needs PGHOST' }, () => {
       assert.deepEqual(await q('SELECT * FROM steam_wishlist'), [])
     })
   })
+
+  describe('mentionLogs', () => {
+    test('records mention requests and bot responses per server and cascades on guild delete', async () => {
+      delete require.cache[require.resolve('../../src/db/interfaces/postgres/mentionLogs')]
+      const store = require('../../src/db/interfaces/postgres/mentionLogs')
+      await require('../../src/db/interfaces/postgres/create').createGuild({ id: 'g1', ownerID: 'o1' })
+
+      const id1 = await store.saveMentionLog({
+        guildID: 'g1',
+        channelID: 'c1',
+        messageID: 'm101',
+        replyMessageID: 'r101',
+        userID: 'u1',
+        userName: 'alice',
+        kind: 'chat',
+        request: 'こんにちは',
+        referencedText: null,
+        response: 'やあ、元気？',
+        model: 'gemini-3.8-flash',
+        promptTokens: 120,
+        cachedTokens: 80,
+        outputTokens: 15,
+        thinkingTokens: 30,
+        geminiCalls: 1
+      })
+      assert.ok(id1)
+
+      const id2 = await store.saveMentionLog({
+        guildID: 'g1',
+        channelID: 'c1',
+        messageID: 'm102',
+        replyMessageID: 'r102',
+        userID: 'u2',
+        userName: 'bob',
+        kind: 'event',
+        request: '11/3 19時から交流会',
+        referencedText: '告知本文',
+        response: 'イベントを登録しました: https://discord.com/events/g1/ev1',
+        model: 'gemini-3.8-flash',
+        promptTokens: 200,
+        cachedTokens: 100,
+        outputTokens: 40,
+        thinkingTokens: 50,
+        geminiCalls: 2
+      })
+      assert.ok(id2)
+
+      const all = await store.getMentionLogs('g1')
+      assert.equal(all.length, 2)
+      assert.equal(all[0].message_id, 'm102')
+      assert.equal(all[0].kind, 'event')
+      assert.equal(all[0].request, '11/3 19時から交流会')
+      assert.equal(all[0].referenced_text, '告知本文')
+      assert.equal(all[1].message_id, 'm101')
+      assert.equal(all[1].response, 'やあ、元気？')
+
+      const byUser = await store.getMentionLogs('g1', { userID: 'u1' })
+      assert.equal(byUser.length, 1)
+      assert.equal(byUser[0].user_name, 'alice')
+    })
+  })
 })
