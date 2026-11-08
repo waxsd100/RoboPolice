@@ -149,12 +149,12 @@ const DECLARATIONS = [
   },
   {
     name: 'search_steam',
-    description: 'BOT が見ている配信者の Steam アカウントについて保存している情報（プロフィール、所持・プレイ済みゲーム一覧とプレイ時間、最近遊んだゲーム、書いたレビュー、ウィッシュリスト）を探す。Steam や所持ゲーム・プレイ時間・レビュー・ウィッシュリストについての依頼で使う。query を省くとプレイ時間順のゲームと最近のレビューを返す。',
+    description: 'BOT が見ている配信者の Steam アカウントについて保存している情報（プロフィール、所持・プレイ済みゲーム一覧とプレイ時間、最近遊んだゲーム、書いたレビュー、ウィッシュリスト）を探す。おすすめのゲームや好きなゲームを聞かれたとき、特定のゲームを遊んだことがあるか・どう思うか聞かれたとき、ゲームの話題に返すとき、Steam や所持ゲーム・プレイ時間・レビュー・ウィッシュリストについての依頼で使う。query を省くとおすすめレビュー・直近プレイ・プレイ時間順のゲームを返す。',
     parameters: {
       type: 'OBJECT',
       properties: {
-        query: { type: 'STRING', description: 'ゲーム名・英語名・レビュー本文に含まれる語（空白区切りで AND）。省略可' },
-        section: { type: 'STRING', enum: ['all', 'games', 'reviews', 'wishlist'], description: '調べる対象（省略すると所持ゲームとレビューを中心に返す。ウィッシュリストを見たいときは wishlist）' }
+        query: { type: 'STRING', description: '特定のゲーム名・英語名・ジャンル・レビュー本文に含まれる語（空白区切りで AND）。おすすめ全般やよく遊ぶゲームを知りたいときは省略する' },
+        section: { type: 'STRING', enum: ['all', 'games', 'reviews', 'wishlist'], description: '調べる対象（省略するとおすすめレビューと所持ゲームを中心に返す。ウィッシュリストを見たいときは wishlist）' }
       }
     }
   }
@@ -498,10 +498,12 @@ async function searchTwitch (query) {
 const MAX_STEAM_GAMES = 25
 const MAX_STEAM_REVIEWS = 15
 const MAX_STEAM_WISHLIST = 25
+const STEAM_META_WORDS = /^(?:おすすめ|オススメ|推奨|ゲーム|神ゲー|名作|面白い|おもしろい|好き|好きな|人気|ランキング|プレイ|時間|最近|直近|レビュー|感想|評価|ウィッシュリスト|steam|スチーム|のばまん|nobaman)$/i
 
 // The streamer's Steam profile, owned/played games, reviews and wishlist (steamSync.js).
 async function searchSteam (query, section = 'all') {
-  const words = String(query || '').toLowerCase().split(/\s+/).filter(Boolean)
+  const rawWords = String(query || '').toLowerCase().split(/\s+/).filter(Boolean)
+  const words = rawWords.filter(w => !STEAM_META_WORDS.test(w))
   const [profiles, games, reviews, wishlist] = await Promise.all([
     steamDB.getOverview(),
     steamDB.getGames(),
@@ -513,8 +515,15 @@ async function searchSteam (query, section = 'all') {
   const profileUrl = p => `https://steamcommunity.com/${p.custom_url ? `id/${p.custom_url}` : `profiles/${p.steam_id}`}`
   const whoPrefix = p => profiles.length > 1 ? `【${p.persona_name || p.account_ref}】` : ''
 
-  const matchedGames = games.filter(g => matchesAll(words, `${g.name}\n${g.name_en || ''}\n${g.app_id}`))
-  const matchedReviews = reviews.filter(r => matchesAll(words, `${r.name || ''}\n${r.name_en || ''}\n${r.content}\n${r.app_id}`))
+  const reviewByApp = new Map(reviews.map(r => [`${r.steam_id}:${r.app_id}`, r]))
+  const matchedGames = games.filter(g => {
+    const r = reviewByApp.get(`${g.steam_id}:${g.app_id}`)
+    return matchesAll(words, `${g.name}\n${g.name_en || ''}\n${g.app_id}\n${r?.content || ''}`)
+  })
+  const matchedReviews = reviews.filter(r => {
+    const recLabel = r.recommended ? 'おすすめ オススメ recommended' : 'おすすめしない おすすめしません not recommended'
+    return matchesAll(words, `${r.name || ''}\n${r.name_en || ''}\n${r.content}\n${r.app_id}\n${recLabel}`)
+  })
   const matchedWishlist = wishlist.filter(w => matchesAll(words, `${w.name}\n${w.name_en || ''}\n${w.app_id}`))
 
   const formatGame = g => {
@@ -522,7 +531,9 @@ async function searchSteam (query, section = 'all') {
     const hours = Number.isFinite(g.playtime_hours) ? `${g.playtime_hours}時間` : '時間不明'
     const recent = Number.isFinite(g.recent_hours) && g.recent_hours > 0 ? `、直近2週間 ${g.recent_hours}時間` : ''
     const first = g.first_played_at ? `、初プレイ ${new Date(g.first_played_at).toISOString().slice(0, 10)}` : ''
-    return `- ${whoPrefix(g)}${g.name}${en}（総プレイ ${hours}${recent}${first}）https://store.steampowered.com/app/${g.app_id}/`
+    const rev = reviewByApp.get(`${g.steam_id}:${g.app_id}`)
+    const revBadge = rev ? `［レビュー: ${rev.recommended ? 'おすすめ' : 'おすすめしない'}］` : ''
+    return `- ${whoPrefix(g)}${g.name}${en}（総プレイ ${hours}${recent}${first}）${revBadge}https://store.steampowered.com/app/${g.app_id}/`
   }
 
   const formatReview = r => {
@@ -530,7 +541,7 @@ async function searchSteam (query, section = 'all') {
     const hours = Number.isFinite(r.hours_on_record) ? `、${r.hours_on_record}時間` : ''
     const posted = r.posted ? `、投稿 ${r.posted}` : ''
     const text = (r.content || '').replace(/\s+/g, ' ').slice(0, 300)
-    return `- ${whoPrefix(r)}【${r.name || `App ${r.app_id}`}】${label}${hours}${posted} ${r.url}\n  ${text}`
+    return `- ${whoPrefix(r)}【${r.name || `App ${r.app_id}`}】${label}${hours}${posted} ${r.url} （ストア: https://store.steampowered.com/app/${r.app_id}/）\n  ${text}`
   }
 
   const formatWish = w => {
@@ -564,9 +575,10 @@ async function searchSteam (query, section = 'all') {
   }
 
   if (section === 'all' || section === 'reviews') {
+    const recCount = reviews.filter(r => r.recommended).length
     lines.push(
       '',
-      words.length ? `「${query}」に一致した Steam レビュー: ${matchedReviews.length} 件` : `Steam レビュー（全 ${reviews.length} 件）:`,
+      words.length ? `「${query}」に一致した Steam レビュー: ${matchedReviews.length} 件` : `Steam レビュー（全 ${reviews.length} 件、うちおすすめ ${recCount} 件）:`,
       ...matchedReviews.slice(0, MAX_STEAM_REVIEWS).map(formatReview),
       ...(matchedReviews.length > MAX_STEAM_REVIEWS ? [`…ほか ${matchedReviews.length - MAX_STEAM_REVIEWS} 件（query や section: "reviews" で絞り込めます）`] : [])
     )
@@ -579,6 +591,17 @@ async function searchSteam (query, section = 'all') {
       ...matchedWishlist.slice(0, MAX_STEAM_WISHLIST).map(formatWish),
       ...(matchedWishlist.length > MAX_STEAM_WISHLIST ? [`…ほか ${matchedWishlist.length - MAX_STEAM_WISHLIST} 本（query で絞り込めます）`] : [])
     )
+  }
+
+  if (words.length && !matchedGames.length && !matchedReviews.length && !matchedWishlist.length) {
+    const topGames = games.slice(0, 15)
+    const recReviews = reviews.filter(r => r.recommended).slice(0, 10)
+    lines.push(
+      '',
+      '（指定の語が直接含まれるものはありませんでした。以下はプレイ時間上位の所持・プレイ済みゲームとおすすめレビューです。ジャンルや内容が合うものがあればここから選んでください）'
+    )
+    if (topGames.length) lines.push('プレイ時間が多い順の主なゲーム:', ...topGames.map(formatGame))
+    if (recReviews.length) lines.push('Steam で「おすすめ」しているレビュー:', ...recReviews.map(formatReview))
   }
 
   return lines.join('\n')
@@ -837,10 +860,63 @@ async function describeServer (guild, member, requestChannelID, { query = '', co
   }
   const steam = await steamDB.getOverview().catch(() => [])
   if (steam.length) {
-    lines.push('', '### Steam', [
-      ...steam.map(p => `${p.persona_name || p.account_ref}（https://steamcommunity.com/${p.custom_url ? `id/${p.custom_url}` : `profiles/${p.steam_id}`}、所持・プレイ確認ゲーム ${p.stored_game_count} 本${p.game_count ? `／所持総数 ${p.game_count} 本` : ''}・レビュー ${p.review_count} 件・ウィッシュリスト ${p.stored_wishlist_count} 本を保存）`),
-      '持っているゲーム・プレイ時間・レビュー・ウィッシュリストは search_steam で調べる'
-    ].join('\n'))
+    const [steamGames, steamReviews, steamWishlist] = await Promise.all([
+      steamDB.getGames(200).catch(() => []),
+      steamDB.getReviews(100).catch(() => []),
+      steamDB.getWishlist(200).catch(() => [])
+    ])
+    const steamLines = [
+      ...steam.map(p => `${p.persona_name || p.account_ref}（https://steamcommunity.com/${p.custom_url ? `id/${p.custom_url}` : `profiles/${p.steam_id}`}、所持・プレイ確認ゲーム ${p.stored_game_count} 本${p.game_count ? `／所持総数 ${p.game_count} 本` : ''}・レビュー ${p.review_count} 件・ウィッシュリスト ${p.stored_wishlist_count} 本を保存）`)
+    ]
+    const recentPlayed = steamGames.filter(g => Number.isFinite(g.recent_hours) && g.recent_hours > 0).slice(0, 5)
+    if (recentPlayed.length) {
+      steamLines.push(
+        '直近2週間にプレイしたゲーム:',
+        ...recentPlayed.map(g => `- ${g.name}${g.name_en && g.name_en !== g.name ? ` / ${g.name_en}` : ''}（直近2週間 ${g.recent_hours}時間${Number.isFinite(g.playtime_hours) ? `、総プレイ ${g.playtime_hours}時間` : ''}）https://store.steampowered.com/app/${g.app_id}/`)
+      )
+    }
+    const topPlayed = steamGames.filter(g => Number.isFinite(g.playtime_hours) && g.playtime_hours > 0).slice(0, 10)
+    if (topPlayed.length) {
+      steamLines.push(
+        'よく遊んでいるゲーム（プレイ時間上位）:',
+        ...topPlayed.map(g => `- ${g.name}${g.name_en && g.name_en !== g.name ? ` / ${g.name_en}` : ''}（総プレイ ${g.playtime_hours}時間）https://store.steampowered.com/app/${g.app_id}/`)
+      )
+    }
+    const recommended = steamReviews.filter(r => r.recommended).slice(0, 8)
+    if (recommended.length) {
+      steamLines.push(
+        'Steam レビューで「おすすめ」しているゲーム:',
+        ...recommended.map(r => `- 【${r.name || `App ${r.app_id}`}】（${Number.isFinite(r.hours_on_record) ? `総プレイ ${r.hours_on_record}時間` : 'プレイ時間不明'}）: 「${(r.content || '').replace(/\s+/g, ' ').slice(0, 150)}」 ${r.url} （ストア: https://store.steampowered.com/app/${r.app_id}/）`)
+      )
+    }
+    const notRecommended = steamReviews.filter(r => !r.recommended).slice(0, 4)
+    if (notRecommended.length) {
+      steamLines.push(
+        'Steam レビューで「おすすめしない」としているゲーム:',
+        ...notRecommended.map(r => `- 【${r.name || `App ${r.app_id}`}】（${Number.isFinite(r.hours_on_record) ? `総プレイ ${r.hours_on_record}時間` : 'プレイ時間不明'}）: 「${(r.content || '').replace(/\s+/g, ' ').slice(0, 120)}」 ${r.url}`)
+      )
+    }
+    const lowerTalk = texts.join('\n').toLowerCase()
+    if (lowerTalk) {
+      const nameHit = (n) => n && n.length >= 2 && lowerTalk.includes(n.toLowerCase())
+      const reviewByApp = new Map(steamReviews.map(r => [r.app_id, r]))
+      const mentionedGames = steamGames.filter(g => nameHit(g.name) || nameHit(g.name_en)).slice(0, 5)
+      const mentionedWish = steamWishlist.filter(w => (nameHit(w.name) || nameHit(w.name_en)) && !mentionedGames.some(g => g.app_id === w.app_id)).slice(0, 5)
+      if (mentionedGames.length || mentionedWish.length) {
+        steamLines.push('依頼や返信先の会話に出てくるゲームの Steam 情報:')
+        for (const g of mentionedGames) {
+          const rev = reviewByApp.get(g.app_id)
+          const hours = Number.isFinite(g.playtime_hours) ? `総プレイ ${g.playtime_hours}時間` : '所持・プレイ確認済み'
+          const revInfo = rev ? `、レビュー: ${rev.recommended ? 'おすすめ' : 'おすすめしない'}「${(rev.content || '').replace(/\s+/g, ' ').slice(0, 120)}」 ${rev.url}` : ''
+          steamLines.push(`- ${g.name}（${hours}${revInfo}）https://store.steampowered.com/app/${g.app_id}/`)
+        }
+        for (const w of mentionedWish) {
+          steamLines.push(`- ${w.name}（ウィッシュリスト登録済み）https://store.steampowered.com/app/${w.app_id}/`)
+        }
+      }
+    }
+    steamLines.push('持っているゲーム・プレイ時間・レビュー・ウィッシュリストは search_steam で調べる（おすすめのゲームを聞かれたときは、上のプレイ時間上位やおすすめレビュー、search_steam の結果から紹介する）')
+    lines.push('', '### Steam', steamLines.join('\n'))
   }
   return lines.join('\n')
 }

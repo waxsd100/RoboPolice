@@ -133,6 +133,7 @@ beforeEach(() => {
 afterEach(() => {
   process.env.STEAM_ACCOUNTS = ''
   delete process.env.STEAM_API_KEY
+  installSteamStore()
 })
 
 test('steam.getProfile, getReviews, getReplayGames, getWishlist and resolveApps parse public Steam data without an API key', async () => {
@@ -169,7 +170,9 @@ test('steam.getProfile, getReviews, getReplayGames, getWishlist and resolveApps 
   assert.equal(wishlist[0].appId, 1091500)
 })
 
-test('steamSync syncs profiles, games, reviews and wishlist, writes reviews to webKnowledge, and search_steam searches them', async (t) => {
+test('steamSync syncs profiles, games, reviews and wishlist, writes reviews to webKnowledge, and search_steam & describeServer expose recommendations', async (t) => {
+  const { createGuild, createMember, installBot, installYouTubeStore } = require('../helpers/fakes')
+  const { describeServer } = require('../../src/bot/modules/eventTools')
   const stored = installSteamStore()
   const webPages = []
   t.mock.method(webStore, 'savePage', async (url, title, sections) => webPages.push({ url, title, sections }))
@@ -192,10 +195,40 @@ test('steamSync syncs profiles, games, reviews and wishlist, writes reviews to w
   assert.match(all, /Dota 2（総プレイ 1234\.5時間）/)
   assert.match(all, /【Dota 2】おすすめ、1234\.5時間、投稿 2023年5月10日/)
 
+  // Generic recommendation query ("おすすめ ゲーム") strips meta-words and returns top games and reviews.
+  const rec = await searchSteam('おすすめ ゲーム')
+  assert.match(rec, /プレイ時間が多い順の所持・プレイ済みゲーム:/)
+  assert.match(rec, /Dota 2（総プレイ 1234\.5時間）［レビュー: おすすめ］/)
+
+  // Searching by a term in review text ("MOBA") matches the game as well as the review.
+  const byReviewWord = await searchSteam('MOBA', 'games')
+  assert.match(byReviewWord, /「MOBA」に一致した所持・プレイ済みゲーム: 1 本/)
+  assert.match(byReviewWord, /Dota 2/)
+
+  // Searching a genre word not literally in titles ("サバイバル") falls back to top games & recommended reviews.
+  const fallback = await searchSteam('サバイバル')
+  assert.match(fallback, /プレイ時間が多い順の主なゲーム:/)
+  assert.match(fallback, /Steam で「おすすめ」しているレビュー:/)
+
   const filtered = await searchSteam('Factorio', 'games')
   assert.match(filtered, /「Factorio」に一致した所持・プレイ済みゲーム: 1 本/)
   assert.doesNotMatch(filtered, /Dota 2/)
 
   const wish = await searchSteam('', 'wishlist')
   assert.match(wish, /サイバーパンク2077 \/ Cyberpunk 2077/)
+
+  // describeServer includes recent games, top played games, recommended reviews, and conversation-mentioned games.
+  installYouTubeStore()
+  const g = createGuild()
+  installBot({ guilds: [g] })
+  const serverProfile = await describeServer(g, createMember({ id: '1' }), '1', {
+    query: '何かおすすめのゲームある？',
+    context: 'サイバーパンク2077とFactorioが気になってる'
+  })
+  assert.match(serverProfile, /### Steam/)
+  assert.match(serverProfile, /直近2週間にプレイしたゲーム:\n- RimWorld（直近2週間 5\.5時間、総プレイ 320\.4時間）/)
+  assert.match(serverProfile, /よく遊んでいるゲーム（プレイ時間上位）:\n- Dota 2（総プレイ 1234\.5時間）/)
+  assert.match(serverProfile, /Steam レビューで「おすすめ」しているゲーム:\n- 【Dota 2】（総プレイ 1234\.5時間）: 「最高のMOBAゲームです。 人生が溶けました。」/)
+  assert.match(serverProfile, /Steam レビューで「おすすめしない」としているゲーム:\n- 【テストゲーム】（総プレイ 2時間）: 「バグが多すぎました。」/)
+  assert.match(serverProfile, /依頼や返信先の会話に出てくるゲームの Steam 情報:\n- Factorio（総プレイ 25時間）https:\/\/store\.steampowered\.com\/app\/427520\/\n- サイバーパンク2077（ウィッシュリスト登録済み）https:\/\/store\.steampowered\.com\/app\/1091500\//)
 })
