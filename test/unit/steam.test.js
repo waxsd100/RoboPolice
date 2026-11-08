@@ -217,18 +217,11 @@ test('steamSync syncs profiles, games, reviews and wishlist, writes reviews to w
   const wish = await searchSteam('', 'wishlist')
   assert.match(wish, /サイバーパンク2077 \/ Cyberpunk 2077/)
 
-  // describeServer includes recent games, top played games, recommended reviews, and conversation-mentioned games.
+  // describeServer only includes the concise Steam overview and directs the model to search_steam when needed.
   installYouTubeStore()
   const g = createGuild()
   installBot({ guilds: [g] })
-  const serverProfile = await describeServer(g, createMember({ id: '1' }), '1', {
-    query: '何かおすすめのゲームある？',
-    context: 'サイバーパンク2077とFactorioが気になってる'
-  })
-  assert.match(serverProfile, /### Steam/)
-  assert.match(serverProfile, /直近2週間にプレイしたゲーム:\n- RimWorld（直近2週間 5\.5時間、総プレイ 320\.4時間）/)
-  assert.match(serverProfile, /よく遊んでいるゲーム（プレイ時間上位）:\n- Dota 2（総プレイ 1234\.5時間）/)
-  assert.match(serverProfile, /Steam レビューで「おすすめ」しているゲーム:\n- 【Dota 2】（総プレイ 1234\.5時間）: 「最高のMOBAゲームです。 人生が溶けました。」/)
-  assert.match(serverProfile, /Steam レビューで「おすすめしない」としているゲーム:\n- 【テストゲーム】（総プレイ 2時間）: 「バグが多すぎました。」/)
-  assert.match(serverProfile, /依頼や返信先の会話に出てくるゲームの Steam 情報:\n- Factorio（総プレイ 25時間）https:\/\/store\.steampowered\.com\/app\/427520\/\n- サイバーパンク2077（ウィッシュリスト登録済み）https:\/\/store\.steampowered\.com\/app\/1091500\//)
+  const serverProfile = await describeServer(g, createMember({ id: '1' }), '1')
+  assert.match(serverProfile, /### Steam\nNobaman（https:\/\/steamcommunity\.com\/id\/nobaman、所持・プレイ確認ゲーム 5 本／所持総数 752 本・レビュー 2 件・ウィッシュリスト 1 本を保存）\n持っているゲーム・プレイ時間・レビュー・ウィッシュリスト・おすすめのゲームは search_steam で調べる/)
+  assert.doesNotMatch(serverProfile, /RimWorld|Dota 2/)
 })
