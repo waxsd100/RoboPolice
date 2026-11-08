@@ -313,7 +313,7 @@ async function characterContext () {
   const rows = known.length
     ? known.map(c => ({ heading: `${c.name}${c.aliases?.length ? `（${c.aliases.join('、')}）` : ''}`, text: c.content }))
     : await store.characters().catch(() => [])
-  const text = rows.map(r => `- ${r.heading}: ${r.text.replace(/\s+/g, ' ').slice(0, 150)}`).join('\n').slice(0, 8000)
+  const text = rows.map(r => `- ${r.heading}: ${r.text.replace(/\s+/g, ' ').slice(0, 150)}`).join('\n').slice(0, 2500)
   const names = known.length
     ? known.map(c => ({ name: c.name, aliases: c.aliases || [] }))
     : rows.map(r => ({ name: r.heading, aliases: [] }))

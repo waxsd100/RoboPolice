@@ -64,7 +64,8 @@ const displayName = m => m?.nick || m?.user?.globalName || m?.globalName || m?.u
 // `message` is the mention; `request` what it asks (without the mention).
 async function relatedRecent (message, request, {
   now = Date.now(),
-  getMessages = (id, options) => global.bot.getMessages(id, options)
+  getMessages = (id, options) => global.bot.getMessages(id, options),
+  queryVector = null
 } = {}) {
   if (!enabled() || !embeddableText(request)) return []
   const since = now - setting('MENTION_RECENT_HOURS', DEFAULT_HOURS) * 60 * 60 * 1000
@@ -98,7 +99,7 @@ async function relatedRecent (message, request, {
     }
   }
   const [query, fresh] = await Promise.all([
-    embedQuery(request),
+    typeof queryVector === 'function' ? queryVector() : embedQuery(request),
     missingTexts.length ? embed(missingTexts) : Promise.resolve([])
   ])
   for (let i = 0; i < missingKeys.length; i++) rememberVector(missingKeys[i], fresh[i])

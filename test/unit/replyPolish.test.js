@@ -2,7 +2,7 @@ const { test } = require('node:test')
 const assert = require('node:assert/strict')
 const fs = require('fs')
 const path = require('path')
-const { rejected, keptParts, POCKET_DIR } = require('../../src/bot/modules/replyPolish')
+const { needsPolish, rejected, keptParts, POCKET_DIR } = require('../../src/bot/modules/replyPolish')
 
 test('the vendored yomiyasu-pocket is there, with its version and licence', () => {
   const text = fs.readFileSync(path.join(POCKET_DIR, 'yomiyasu-pocket.txt'), 'utf8')
@@ -11,6 +11,13 @@ test('the vendored yomiyasu-pocket is there, with its version and licence', () =
   assert.match(tag, /^v\d+\.\d+\.\d+$/)
   assert.match(commit, /^[0-9a-f]{40}$/)
   assert.match(fs.readFileSync(path.join(POCKET_DIR, 'LICENSE'), 'utf8'), /^MIT License/)
+})
+
+test('only polishes replies that have AI-like phrasing or are long enough to warrant a check', () => {
+  assert.equal(needsPolish('やあ！'), false)
+  assert.equal(needsPolish('そのゲームなら Cities: Skylines がすごくおすすめだよ！道路を作るだけでも時間が溶けるよ！'), false)
+  assert.equal(needsPolish('重要なのは、まず最初の道路の渋滞を解消すること——つまりインターチェンジの配置が一番のカギだよ！'), true)
+  assert.equal(needsPolish('あ'.repeat(250)), true)
 })
 
 test('keeps the parts of a Discord message a rewrite must not touch', () => {

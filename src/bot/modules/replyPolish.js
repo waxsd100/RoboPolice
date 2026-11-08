@@ -13,12 +13,24 @@
 // REPLY_POLISH=false turns it off.
 const fs = require('fs')
 const path = require('path')
-const { callGemini, lightModel } = require('./eventDrafter')
+const { callGemini, lightModel, thinkingConfig } = require('./eventDrafter')
 
 const POCKET_DIR = path.resolve(__dirname, '..', '..', '..', 'vendor', 'yomiyasu-pocket')
 const TIMEOUT_MS = 30 * 1000
 const MIN_CHARS = 40 // a greeting or a one-liner has nothing to polish
+const LONG_CHARS = 250 // longer replies may have subtle stiffness worth checking
 const MAX_CHARS = 2000
+
+// Common AI-like phrasing and punctuation that yomiyasu-pocket rewrites. Short replies without any
+// of these are sent as they are, saving a round-trip and its tokens.
+const AI_PATTERNS = /重要なのは|大切なのは|注目すべきは|特筆すべきは|と言えるでしょう|と言えます|に他なりません|単なる[^\n。]{1,30}ではなく|だけでなく[^\n。]{1,30}もまた|——|――| — /
+
+function needsPolish (text) {
+  const s = String(text || '')
+  const chars = [...s].length
+  if (chars < MIN_CHARS || s.length > MAX_CHARS) return false
+  return chars >= LONG_CHARS || AI_PATTERNS.test(s)
+}
 
 let pocket = null
 function instruction () {
@@ -69,11 +81,13 @@ const DISCORD_NOTE = [
 // The reply rewritten, or as it was.
 async function polish (text, { guildID = null } = {}) {
   const before = String(text || '')
-  if (!enabled() || [...before].length < MIN_CHARS || before.length > MAX_CHARS) return before
+  if (!enabled() || !needsPolish(before)) return before
   try {
-    const content = await callGemini(lightModel(), {
+    const m = lightModel()
+    const content = await callGemini(m, {
       systemInstruction: { parts: [{ text: instruction() + '\n' + DISCORD_NOTE }] },
-      contents: [{ role: 'user', parts: [{ text: before }] }]
+      contents: [{ role: 'user', parts: [{ text: before }] }],
+      generationConfig: { ...thinkingConfig(m, { setting: 'GEMINI_LIGHT_THINKING_LEVEL', fallback: 'minimal' }) }
     }, { purpose: 'replyPolish', timeoutMs: TIMEOUT_MS })
     const after = (content.parts || []).filter(p => !p.thought).map(p => p.text || '').join('').trim()
     const why = rejected(before, after)
@@ -88,4 +102,4 @@ async function polish (text, { guildID = null } = {}) {
   }
 }
 
-module.exports = { polish, enabled, rejected, keptParts, POCKET_DIR }
+module.exports = { polish, needsPolish, enabled, rejected, keptParts, POCKET_DIR }

@@ -639,7 +639,7 @@ describe('mention → event / forum post (integration)', () => {
     const prompt = requests[0].body.contents[0].parts[0].text
     assert.match(prompt, /依頼されたチャンネル: #general（ID: 201、text）/)
     assert.match(prompt, /## このサーバーの情報（最新）\n<untrusted source="server">\nサーバー名: テストサーバー/)
-    assert.match(prompt, /- 201: #general（text） ← 依頼されたチャンネル/)
+    assert.doesNotMatch(prompt, /### チャンネル/, 'channel list is fetched on demand via list_channels')
     assert.doesNotMatch(prompt, /#staff/, 'channels the requester cannot see are left out')
     assert.match(prompt, /### YouTube\n設定なし/)
     assert.equal(replies[0].state.content, '⚠️ **作成できませんでした**\nx')
@@ -886,7 +886,7 @@ describe('mention → event / forum post (integration)', () => {
     assert.equal(reply.body.generationConfig.thinkingConfig.thinkingLevel, 'high')
   })
 
-  test('chat: the server\'s rules channel and what its moderators asked (/assistantrules) go with the request', async () => {
+  test('chat: what moderators asked (/assistantrules) goes with the request, and the rules channel is read on demand via get_server_rules', async () => {
     const { installReplyLengthStore } = require('../helpers/fakes')
     const serverRules = require('../../src/bot/modules/serverRules')
     const { channel } = createChannel()
@@ -894,11 +894,17 @@ describe('mention → event / forum post (integration)', () => {
     guild.rulesChannelID = '202'
     serverRules.reset()
     try {
-      const requests = installGemini([[call('submit_chat_reply', { text: 'やあ' })]])
-      await mentionEvent.handle(mention(channel, '<@BOT> やあ'))
+      const requests = installGemini([
+        [call('get_server_rules')],
+        body => {
+          assert.match(lastToolResponses(body)[0].response.result, /### <#202> より\nスタッフ会議 11\/5 20時/)
+          return [call('submit_chat_reply', { text: 'やあ' })]
+        }
+      ])
+      await mentionEvent.handle(mention(channel, '<@BOT> ルール教えて'))
       const prompt = requests[0].body.contents[0].parts[0].text
       assert.match(prompt, /## このサーバーのルールとモデレーターからのお願い（返事・下書きはこれに従う）\n### モデレーターから AI へのお願い\n<untrusted source="rules">\nネタバレ禁止\n<\/untrusted>/)
-      assert.match(prompt, /### サーバーのルール（<#202> より）\n<untrusted source="rules">\nスタッフ会議 11\/5 20時/)
+      assert.doesNotMatch(prompt, /スタッフ会議 11\/5 20時/, 'rules channel is not dumped into every prompt')
       assert.ok(prompt.indexOf('## このサーバーのルール') < prompt.indexOf('## 依頼メッセージ'))
     } finally {
       delete guild.rulesChannelID

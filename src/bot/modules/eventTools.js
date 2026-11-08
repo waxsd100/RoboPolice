@@ -17,6 +17,7 @@ const semanticSearch = require('./semanticSearch')
 const { messageEmbeddingsEnabled } = require('./embeddingIndexer')
 const { wrap, reportInjection } = require('../utils/untrusted')
 const serverLore = require('./serverLore')
+const serverRules = require('./serverRules')
 const loreStore = require('../../db/interfaces/postgres/serverLore')
 const embeddingStore = require('../../db/interfaces/postgres/embeddings')
 const { embeddableText } = require('../utils/messageNoise')
@@ -24,7 +25,7 @@ const { embeddableText } = require('../utils/messageNoise')
 const MAX_RECENT_MESSAGES = 50
 const MAX_QUESTIONS = 3
 const MAX_OPTIONS = 4
-const MAX_RESULT_CHARS = 20000
+const MAX_RESULT_CHARS = 10000
 const MESSAGE_LINK = /^https?:\/\/(?:(?:ptb|canary)\.)?discord(?:app)?\.com\/channels\/(\d+)\/(\d+)\/(\d+)/i
 // A link to a channel itself (no message).
 const CHANNEL_LINK = /^https?:\/\/(?:(?:ptb|canary)\.)?discord(?:app)?\.com\/channels\/(\d+)\/(\d+)\/?(?:[?#]|$)/i
@@ -109,7 +110,11 @@ const DECLARATIONS = [
   },
   {
     name: 'list_channels',
-    description: 'このサーバーで依頼者が閲覧できるチャンネルの一覧（ID・名前・種類）を得る。ボイス/ステージでイベントを行う場合のチャンネル選びにも使う。'
+    description: 'このサーバーで依頼者が閲覧できるチャンネルの一覧（ID・名前・種類・カテゴリ・説明）を得る。どのチャンネルで何を話すか聞かれたとき、当てはまるチャンネルを探すとき、ボイス/ステージでイベントを行う場合のチャンネル選びに使う。'
+  },
+  {
+    name: 'get_server_rules',
+    description: 'このサーバーのルール・必読・はじめに等のチャンネルに書かれている内容を読む。サーバーのルール・禁止事項・決まりについて聞かれたとき、またはイベントやフォーラム投稿を作る前にルールを確認するときに使う。'
   },
   {
     name: 'list_forums',
@@ -149,12 +154,12 @@ const DECLARATIONS = [
   },
   {
     name: 'search_steam',
-    description: 'BOT が見ている配信者の Steam アカウントについて保存している情報（プロフィール、所持・プレイ済みゲーム一覧とプレイ時間、最近遊んだゲーム、書いたレビュー、ウィッシュリスト）を探す。Steam や所持ゲーム・プレイ時間・レビュー・ウィッシュリストについての依頼で使う。query を省くとプレイ時間順のゲームと最近のレビューを返す。',
+    description: 'BOT が見ている配信者の Steam アカウントについて保存している情報（プロフィール、所持・プレイ済みゲーム一覧とプレイ時間、最近遊んだゲーム、書いたレビュー、ウィッシュリスト）を探す。おすすめのゲームや好きなゲームを聞かれたとき、特定のゲームを遊んだことがあるか・どう思うか聞かれたとき、ゲームの話題に返すとき、Steam や所持ゲーム・プレイ時間・レビュー・ウィッシュリストについての依頼で使う。query を省くとおすすめレビュー・直近プレイ・プレイ時間順のゲームを返す。',
     parameters: {
       type: 'OBJECT',
       properties: {
-        query: { type: 'STRING', description: 'ゲーム名・英語名・レビュー本文に含まれる語（空白区切りで AND）。省略可' },
-        section: { type: 'STRING', enum: ['all', 'games', 'reviews', 'wishlist'], description: '調べる対象（省略すると所持ゲームとレビューを中心に返す。ウィッシュリストを見たいときは wishlist）' }
+        query: { type: 'STRING', description: '特定のゲーム名・英語名・ジャンル・レビュー本文に含まれる語（空白区切りで AND）。おすすめ全般やよく遊ぶゲームを知りたいときは省略する' },
+        section: { type: 'STRING', enum: ['all', 'games', 'reviews', 'wishlist'], description: '調べる対象（省略するとおすすめレビューと所持ゲームを中心に返す。ウィッシュリストを見たいときは wishlist）' }
       }
     }
   }
@@ -162,12 +167,10 @@ const DECLARATIONS = [
 
 // How much stored history one search reads, and how many matching messages it returns.
 const HISTORY_SCAN = 1000
-const MAX_HISTORY_RESULTS = 100
+const MAX_HISTORY_RESULTS = 40
 const MAX_HISTORY_TEXT = 500
-const MAX_PROFILE_CHANNELS = 80
-const MAX_PROFILE_ROLES = 40
 const MAX_TOPIC = 100
-const MAX_PROFILE_EMOJIS = 60
+const MAX_PROFILE_EMOJIS = 15
 const MAX_YOUTUBE_RESULTS = 15
 const LIVE_LABELS = { live: '配信中', upcoming: '配信予定' }
 
@@ -323,10 +326,23 @@ function createTools ({ guild, member, ask, progress = () => {} }) {
       ].join('\n')
     },
     async list_channels () {
-      return [...guild.channels.values()]
-        .filter(c => c.permissionsOf(member.id).has('viewChannel'))
-        .map(c => `${c.id}: ${c.name}（${CHANNEL_TYPES[c.type] || c.type}）`)
+      const all = [...guild.channels.values()]
+      const order = c => [guild.channels.get(c.parentID)?.position ?? -1, c.position ?? 0]
+      return all
+        .filter(c => c.type !== 4 && c.permissionsOf(member.id).has('viewChannel'))
+        .sort((a, b) => order(a)[0] - order(b)[0] || order(a)[1] - order(b)[1])
+        .map(c => {
+          const category = guild.channels.get(c.parentID)?.name
+          const topic = c.topic ? ` — ${c.topic.replace(/\s+/g, ' ').slice(0, MAX_TOPIC)}` : ''
+          return `${c.id}: ${c.name}（${CHANNEL_TYPES[c.type] || c.type}）${category ? ` [${category}]` : ''}${topic}`
+        })
         .join('\n')
+    },
+    async get_server_rules () {
+      const rules = await serverRules.readRules(guild)
+      if (!rules?.length) return 'このサーバーのルールチャンネルは見つかりませんでした'
+      for (const r of rules) sources.push(`<#${r.channelID}>`)
+      return rules.map(r => `### <#${r.channelID}> より\n${r.text}`).join('\n\n')
     },
     async list_forums () {
       return describeForums(guild, member)
@@ -498,10 +514,12 @@ async function searchTwitch (query) {
 const MAX_STEAM_GAMES = 25
 const MAX_STEAM_REVIEWS = 15
 const MAX_STEAM_WISHLIST = 25
+const STEAM_META_WORDS = /^(?:おすすめ|オススメ|推奨|ゲーム|神ゲー|名作|面白い|おもしろい|好き|好きな|人気|ランキング|プレイ|時間|最近|直近|レビュー|感想|評価|ウィッシュリスト|steam|スチーム|のばまん|nobaman)$/i
 
 // The streamer's Steam profile, owned/played games, reviews and wishlist (steamSync.js).
 async function searchSteam (query, section = 'all') {
-  const words = String(query || '').toLowerCase().split(/\s+/).filter(Boolean)
+  const rawWords = String(query || '').toLowerCase().split(/\s+/).filter(Boolean)
+  const words = rawWords.filter(w => !STEAM_META_WORDS.test(w))
   const [profiles, games, reviews, wishlist] = await Promise.all([
     steamDB.getOverview(),
     steamDB.getGames(),
@@ -513,8 +531,15 @@ async function searchSteam (query, section = 'all') {
   const profileUrl = p => `https://steamcommunity.com/${p.custom_url ? `id/${p.custom_url}` : `profiles/${p.steam_id}`}`
   const whoPrefix = p => profiles.length > 1 ? `【${p.persona_name || p.account_ref}】` : ''
 
-  const matchedGames = games.filter(g => matchesAll(words, `${g.name}\n${g.name_en || ''}\n${g.app_id}`))
-  const matchedReviews = reviews.filter(r => matchesAll(words, `${r.name || ''}\n${r.name_en || ''}\n${r.content}\n${r.app_id}`))
+  const reviewByApp = new Map(reviews.map(r => [`${r.steam_id}:${r.app_id}`, r]))
+  const matchedGames = games.filter(g => {
+    const r = reviewByApp.get(`${g.steam_id}:${g.app_id}`)
+    return matchesAll(words, `${g.name}\n${g.name_en || ''}\n${g.app_id}\n${r?.content || ''}`)
+  })
+  const matchedReviews = reviews.filter(r => {
+    const recLabel = r.recommended ? 'おすすめ オススメ recommended' : 'おすすめしない おすすめしません not recommended'
+    return matchesAll(words, `${r.name || ''}\n${r.name_en || ''}\n${r.content}\n${r.app_id}\n${recLabel}`)
+  })
   const matchedWishlist = wishlist.filter(w => matchesAll(words, `${w.name}\n${w.name_en || ''}\n${w.app_id}`))
 
   const formatGame = g => {
@@ -522,7 +547,9 @@ async function searchSteam (query, section = 'all') {
     const hours = Number.isFinite(g.playtime_hours) ? `${g.playtime_hours}時間` : '時間不明'
     const recent = Number.isFinite(g.recent_hours) && g.recent_hours > 0 ? `、直近2週間 ${g.recent_hours}時間` : ''
     const first = g.first_played_at ? `、初プレイ ${new Date(g.first_played_at).toISOString().slice(0, 10)}` : ''
-    return `- ${whoPrefix(g)}${g.name}${en}（総プレイ ${hours}${recent}${first}）https://store.steampowered.com/app/${g.app_id}/`
+    const rev = reviewByApp.get(`${g.steam_id}:${g.app_id}`)
+    const revBadge = rev ? `［レビュー: ${rev.recommended ? 'おすすめ' : 'おすすめしない'}］` : ''
+    return `- ${whoPrefix(g)}${g.name}${en}（総プレイ ${hours}${recent}${first}）${revBadge}https://store.steampowered.com/app/${g.app_id}/`
   }
 
   const formatReview = r => {
@@ -530,7 +557,7 @@ async function searchSteam (query, section = 'all') {
     const hours = Number.isFinite(r.hours_on_record) ? `、${r.hours_on_record}時間` : ''
     const posted = r.posted ? `、投稿 ${r.posted}` : ''
     const text = (r.content || '').replace(/\s+/g, ' ').slice(0, 300)
-    return `- ${whoPrefix(r)}【${r.name || `App ${r.app_id}`}】${label}${hours}${posted} ${r.url}\n  ${text}`
+    return `- ${whoPrefix(r)}【${r.name || `App ${r.app_id}`}】${label}${hours}${posted} ${r.url} （ストア: https://store.steampowered.com/app/${r.app_id}/）\n  ${text}`
   }
 
   const formatWish = w => {
@@ -564,9 +591,10 @@ async function searchSteam (query, section = 'all') {
   }
 
   if (section === 'all' || section === 'reviews') {
+    const recCount = reviews.filter(r => r.recommended).length
     lines.push(
       '',
-      words.length ? `「${query}」に一致した Steam レビュー: ${matchedReviews.length} 件` : `Steam レビュー（全 ${reviews.length} 件）:`,
+      words.length ? `「${query}」に一致した Steam レビュー: ${matchedReviews.length} 件` : `Steam レビュー（全 ${reviews.length} 件、うちおすすめ ${recCount} 件）:`,
       ...matchedReviews.slice(0, MAX_STEAM_REVIEWS).map(formatReview),
       ...(matchedReviews.length > MAX_STEAM_REVIEWS ? [`…ほか ${matchedReviews.length - MAX_STEAM_REVIEWS} 件（query や section: "reviews" で絞り込めます）`] : [])
     )
@@ -579,6 +607,17 @@ async function searchSteam (query, section = 'all') {
       ...matchedWishlist.slice(0, MAX_STEAM_WISHLIST).map(formatWish),
       ...(matchedWishlist.length > MAX_STEAM_WISHLIST ? [`…ほか ${matchedWishlist.length - MAX_STEAM_WISHLIST} 本（query で絞り込めます）`] : [])
     )
+  }
+
+  if (words.length && !matchedGames.length && !matchedReviews.length && !matchedWishlist.length) {
+    const topGames = games.slice(0, 15)
+    const recReviews = reviews.filter(r => r.recommended).slice(0, 10)
+    lines.push(
+      '',
+      '（指定の語が直接含まれるものはありませんでした。以下はプレイ時間上位の所持・プレイ済みゲームとおすすめレビューです。ジャンルや内容が合うものがあればここから選んでください）'
+    )
+    if (topGames.length) lines.push('プレイ時間が多い順の主なゲーム:', ...topGames.map(formatGame))
+    if (recReviews.length) lines.push('Steam で「おすすめ」しているレビュー:', ...recReviews.map(formatReview))
   }
 
   return lines.join('\n')
@@ -598,11 +637,6 @@ function findMembers (guild, who) {
   const members = [...guild.members.values()]
   const exact = members.filter(m => names(m).includes(q))
   return exact.length ? exact : members.filter(m => names(m).some(n => n.includes(q)))
-}
-
-function channelLine (c, requestChannelID) {
-  const topic = c.topic ? ` — ${c.topic.replace(/\s+/g, ' ').slice(0, MAX_TOPIC)}` : ''
-  return `- ${c.id}: #${c.name}（${CHANNEL_TYPES[c.type] || c.type}）${c.id === requestChannelID ? ' ← 依頼されたチャンネル' : ''}${topic}`
 }
 
 const { usableEmojis } = emojiDescriber
@@ -703,15 +737,13 @@ async function emojiSection (guild, vectorOf) {
   const head = '### サーバー絵文字（返事で使うときは、この書き方のまま書く）'
   const notes = emojiDescriber.enabled() ? await emojiStore.descriptions(guild.id).catch(() => ({})) : {}
   if (!Object.keys(notes).length) return [head, emojis.slice(0, MAX_PROFILE_EMOJIS).map(emojiCode).join(' ')]
-  let first = []
   const vector = await vectorOf()
-  if (vector) {
-    first = await emojiStore.nearestEmojis(guild.id, vector, embeddingModel(), MAX_PROFILE_EMOJIS)
-      .catch(e => {
-        global.logger.warn(`Could not rank the emojis of ${guild.id}: ${e.message}`)
-        return []
-      })
-  }
+  if (!vector) return [head, emojis.slice(0, MAX_PROFILE_EMOJIS).map(emojiCode).join(' ')]
+  const first = await emojiStore.nearestEmojis(guild.id, vector, embeddingModel(), MAX_PROFILE_EMOJIS)
+    .catch(e => {
+      global.logger.warn(`Could not rank the emojis of ${guild.id}: ${e.message}`)
+      return []
+    })
   const rank = new Map(first.map((id, i) => [id, i]))
   const ordered = [...emojis].sort((a, b) => (rank.get(a.id) ?? Infinity) - (rank.get(b.id) ?? Infinity))
   return [
@@ -759,32 +791,13 @@ async function relatedMessages (guild, member, vectorOf) {
 // The server as the requester can see it. Sent with every request, fresh each time, so questions
 // about "this server" need no lookups. query: what was asked; context: the conversation it replies
 // to (readThread), if any. Both choose the knowledge and the emojis put first.
-async function describeServer (guild, member, requestChannelID, { query = '', context = '' } = {}) {
+async function describeServer (guild, member, requestChannelID, { query = '', context = '', queryVector = null } = {}) {
+  // Ensure the channel cache is readable before building the profile.
+  guild.channels.values()
   const lines = [`サーバー名: ${guild.name}`]
   if (guild.description) lines.push(`説明: ${guild.description}`)
   if (guild.memberCount) lines.push(`メンバー数: ${guild.memberCount}`)
-  if (guild.rulesChannelID) lines.push(`ルールチャンネル: <#${guild.rulesChannelID}>`)
-
-  const all = [...guild.channels.values()]
-  const order = c => [guild.channels.get(c.parentID)?.position ?? -1, c.position ?? 0]
-  const visible = all
-    .filter(c => c.type !== 4 && c.permissionsOf(member.id).has('viewChannel'))
-    .sort((a, b) => order(a)[0] - order(b)[0] || order(a)[1] - order(b)[1])
-  const byCategory = new Map()
-  for (const c of visible.slice(0, MAX_PROFILE_CHANNELS)) {
-    const category = guild.channels.get(c.parentID)?.name || '（カテゴリなし）'
-    if (!byCategory.has(category)) byCategory.set(category, [])
-    byCategory.get(category).push(channelLine(c, requestChannelID))
-  }
-  lines.push('', '### チャンネル（依頼者が見られるもの。返事で触れるときは <#ID> の形で書くとリンクになる）')
-  for (const [category, channels] of byCategory) lines.push(`[${category}]`, ...channels)
-  if (visible.length > MAX_PROFILE_CHANNELS) lines.push(`…ほか ${visible.length - MAX_PROFILE_CHANNELS} 件`)
-
-  const roles = [...guild.roles.values()]
-    .filter(r => r.id !== guild.id && !r.managed)
-    .sort((a, b) => (b.position ?? 0) - (a.position ?? 0))
-    .map(r => r.name)
-  if (roles.length) lines.push('', '### ロール', roles.slice(0, MAX_PROFILE_ROLES).join(', '))
+  if (guild.rulesChannelID) lines.push(`ルールチャンネル: <#${guild.rulesChannelID}>（内容は get_server_rules で読む）`)
 
   // What the knowledge and the emojis are chosen for: the request, and the conversation it replies
   // to, which counts more (a reply such as "それの続きは？" is about what came before). The latest
@@ -796,12 +809,19 @@ async function describeServer (guild, member, requestChannelID, { query = '', co
   const vectorOf = () => {
     if (!worthSearching(texts.join('\n'))) return Promise.resolve(null)
     if (!embedding) {
-      embedding = embed(texts, 'RETRIEVAL_QUERY')
-        .then(vectors => vectors.length === 1 ? vectors[0] : blend(vectors, [CONTEXT_WEIGHT, 1 - CONTEXT_WEIGHT]))
-        .catch(e => {
+      if (!recent.trim() && typeof queryVector === 'function') {
+        embedding = Promise.resolve(queryVector()).catch(e => {
           global.logger.warn(`Could not embed the request in ${guild.id}: ${e.message}`)
           return null
         })
+      } else {
+        embedding = embed(texts, 'RETRIEVAL_QUERY')
+          .then(vectors => vectors.length === 1 ? vectors[0] : blend(vectors, [CONTEXT_WEIGHT, 1 - CONTEXT_WEIGHT]))
+          .catch(e => {
+            global.logger.warn(`Could not embed the request in ${guild.id}: ${e.message}`)
+            return null
+          })
+      }
     }
     return embedding
   }
@@ -824,7 +844,7 @@ async function describeServer (guild, member, requestChannelID, { query = '', co
   const synced = (youtube?.channels || []).filter(c => c.synced_at)
   lines.push('', '### YouTube', synced.length
     ? [
-        ...synced.map(c => `${c.title}（動画 ${c.video_count} 件を保存、取得 ${new Date(c.synced_at).toISOString()}）${c.description ? `\n  チャンネルの説明: ${c.description.replace(/\s+/g, ' ').slice(0, 200)}` : ''}`),
+        ...synced.map(c => `${c.title}（動画 ${c.video_count} 件を保存、取得 ${new Date(c.synced_at).toISOString()}）`),
         '詳しくは search_youtube で調べる'
       ].join('\n')
     : '設定なし')
@@ -839,7 +859,7 @@ async function describeServer (guild, member, requestChannelID, { query = '', co
   if (steam.length) {
     lines.push('', '### Steam', [
       ...steam.map(p => `${p.persona_name || p.account_ref}（https://steamcommunity.com/${p.custom_url ? `id/${p.custom_url}` : `profiles/${p.steam_id}`}、所持・プレイ確認ゲーム ${p.stored_game_count} 本${p.game_count ? `／所持総数 ${p.game_count} 本` : ''}・レビュー ${p.review_count} 件・ウィッシュリスト ${p.stored_wishlist_count} 本を保存）`),
-      '持っているゲーム・プレイ時間・レビュー・ウィッシュリストは search_steam で調べる'
+      '持っているゲーム・プレイ時間・レビュー・ウィッシュリスト・おすすめのゲームは search_steam で調べる'
     ].join('\n'))
   }
   return lines.join('\n')

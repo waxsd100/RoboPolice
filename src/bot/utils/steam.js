@@ -140,12 +140,13 @@ function parseReviewsHtml (html, baseUrl) {
   for (const part of parts) {
     const appId = Number(part.match(/\/app\/(\d+)/)?.[1])
     if (!appId) continue
-    const recommended = /icon_thumbsUp/i.test(part) || (!/icon_thumbsDown/i.test(part) && /おすすめ/.test(part))
+    const recommended = /icon_thumbsUp/i.test(part) || (!/icon_thumbsDown|おすすめしません|Not Recommended/i.test(part) && /おすすめ|Recommended/i.test(part))
     const hoursRaw = part.match(/<div class="hours">([\s\S]*?)<\/div>/)?.[1] || ''
     const hoursOnRecord = parseHours(hoursRaw)
     const postedRaw = part.match(/<div class="posted">([\s\S]*?)<\/div>/)?.[1] || ''
     const posted = stripHtml(postedRaw).replace(/^(?:投稿日[：:\s]*|Posted[：:\s]*)/i, '').replace(/\.$/, '').trim() || null
-    const contentRaw = part.match(/<div class="content\s*">([\s\S]*?)<\/div>\s*<div class="posted">/)?.[1] || ''
+    const contentRaw = part.match(/<div class="content\s*">([\s\S]*?)<\/div>\s*(?:<div class="(?:posted|hr|review_award_aggregated)"|$)/)?.[1] ||
+      part.match(/<div class="content\s*">([\s\S]*?)<\/div>/)?.[1] || ''
     const content = stripHtml(contentRaw)
     if (!content) continue
     reviews.push({
