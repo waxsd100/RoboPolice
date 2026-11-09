@@ -1067,12 +1067,51 @@ describe('explicit cache and thinking', () => {
     assert.equal(refusalResult.text, '拒否テキスト検知からの返事だよ！')
 
     // Startup check (checkUncensoredConnection) marks usability and disables R18 routing when down.
-    const { checkUncensoredConnection, isUncensoredUsable, uncensoredState } = require('../../src/bot/modules/eventDrafter')
+    const { checkUncensoredConnection, startUncensoredCheck, isLocalUncensoredUrl, isUncensoredUsable, uncensoredState } = require('../../src/bot/modules/eventDrafter')
+    const { priceOf } = require('../../src/bot/utils/geminiPrices')
     t.mock.method(global.logger, 'warn', () => {})
     t.after(() => {
       uncensoredState.usable = null
       uncensoredState.url = null
+      delete process.env.UNCENSORED_SKIP_STARTUP_PROBE
+      delete process.env.UNCENSORED_MODEL
     })
+    assert.equal(isLocalUncensoredUrl('https://gemma-heretic-12345-an.a.run.app/v1/chat/completions'), true)
+    assert.equal(isLocalUncensoredUrl('https://api.featherless.ai/v1/chat/completions'), false)
+    assert.deepEqual(priceOf('mradermacher/gemma-4-31B-it-ARA-heretic-GGUF'), { input: 0.28, cached: 0.14, output: 0.28, imageOutput: 0.28 })
+    assert.deepEqual(priceOf('gemma-4-31B-it-ARA-heretic'), { input: 0.28, cached: 0.14, output: 0.28, imageOutput: 0.28 })
+
+    // Cloud Run (*.run.app) uses compact single-pass mode and supports UNCENSORED_SKIP_STARTUP_PROBE=true.
+    process.env.UNCENSORED_API_URL = 'https://gemma-heretic-12345-an.a.run.app/v1'
+    process.env.UNCENSORED_MODEL = 'gemma-4-31B-it-ARA-heretic'
+    process.env.UNCENSORED_SKIP_STARTUP_PROBE = 'true'
+    let probeFetched = 0
+    global.fetch = async () => {
+      probeFetched++
+      return { ok: true, json: async () => ({}) }
+    }
+    const skippedCheck = await startUncensoredCheck()
+    assert.equal(skippedCheck.usable, true)
+    assert.equal(skippedCheck.skipped, true)
+    assert.equal(probeFetched, 0)
+    delete process.env.UNCENSORED_SKIP_STARTUP_PROBE
+
+    let cloudRunBody = null
+    global.fetch = async (url, init) => {
+      cloudRunBody = JSON.parse(init.body)
+      return {
+        ok: true,
+        json: async () => ({
+          choices: [{ message: { role: 'assistant', content: 'Cloud Run GPUからの返事だよ！' } }]
+        })
+      }
+    }
+    const cloudRunReply = await draft({ request: 'R18のエロ小説を書いて', channelName: 'general', guild, tools: quietTools, now: NOW })
+    assert.equal(cloudRunReply.text, 'Cloud Run GPUからの返事だよ！')
+    assert.equal(cloudRunBody.tools, undefined, 'Cloud Run llama-server uses compact mode without tool schema overhead')
+    assert.equal(cloudRunBody.stream, true)
+
+    process.env.UNCENSORED_API_URL = 'https://api.featherless.ai/v1'
     global.fetch = async () => ({
       ok: true,
       json: async () => ({ choices: [{ message: { role: 'assistant', content: 'ok' } }] })

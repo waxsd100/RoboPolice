@@ -831,7 +831,7 @@ function compactUncensoredText (text) {
 }
 
 function isLocalUncensoredUrl (url) {
-  return /\.railway\.internal\b|\.trycloudflare\.com\b|\.ngrok(?:-free)?\.(?:app|io|dev)\b|\/\/(?:localhost|127\.0\.0\.1|\[::1?\])(?::|\/|$)/i.test(String(url || ''))
+  return /\.railway\.internal\b|\.run\.app\b|\.trycloudflare\.com\b|\.ngrok(?:-free)?\.(?:app|io|dev)\b|\/\/(?:localhost|127\.0\.0\.1|\[::1?\])(?::|\/|$)/i.test(String(url || ''))
 }
 
 function uncensoredEndpoint () {
@@ -874,8 +874,8 @@ function uncensoredHeaders (endpoint) {
 
 // Probes the uncensored endpoint at startup (and after a failure) so the logs show right away
 // whether it can be reached and the model is loaded. For direct OpenAI-compatible servers
-// (such as llama-server on Railway), it first checks GET /v1/models which responds in <10ms
-// without running 9B CPU inference; if that returns 404/405 (or on AI Gateway), it falls back
+// (such as llama-server on Railway or Cloud Run GPU), it first checks GET /v1/models which
+// responds without running inference; if that returns 404/405 (or on AI Gateway), it falls back
 // to a 1-token POST /v1/chat/completions.
 async function checkUncensoredConnection ({ timeoutMs = UNCENSORED_CHECK_TIMEOUT_MS, notifyWarn = true } = {}) {
   const endpoint = uncensoredEndpoint()
@@ -890,7 +890,7 @@ async function checkUncensoredConnection ({ timeoutMs = UNCENSORED_CHECK_TIMEOUT
     let verified = false
     if (!endpoint.gateway && /\/chat\/completions$/.test(endpoint.url)) {
       const modelsUrl = endpoint.url.replace(/\/chat\/completions$/, '/models')
-      const probeTimeout = Math.min(timeoutMs, UNCENSORED_MODELS_TIMEOUT_MS)
+      const probeTimeout = isLocalUncensoredUrl(endpoint.url) ? timeoutMs : Math.min(timeoutMs, UNCENSORED_MODELS_TIMEOUT_MS)
       const modelsRes = await fetch(modelsUrl, {
         method: 'GET',
         headers: uncensoredHeaders(endpoint),
@@ -951,6 +951,16 @@ async function checkUncensoredConnection ({ timeoutMs = UNCENSORED_CHECK_TIMEOUT
 }
 
 function startUncensoredCheck () {
+  const endpoint = uncensoredEndpoint()
+  if (endpoint && process.env.UNCENSORED_SKIP_STARTUP_PROBE === 'true') {
+    const model = uncensoredModel()
+    uncensoredState.usable = true
+    uncensoredState.url = endpoint.url
+    uncensoredState.checkedAt = Date.now()
+    uncensoredState.error = null
+    global.logger?.info(`[UNCENSORED]: Configured (${model} at ${endpoint.url}); startup probe skipped (UNCENSORED_SKIP_STARTUP_PROBE=true)`)
+    return Promise.resolve({ configured: true, usable: true, skipped: true, model, url: endpoint.url })
+  }
   let attempts = 0
   const run = async () => {
     attempts++
@@ -1571,4 +1581,4 @@ async function revise (conversation, correction) {
   return check(conversation, await runAgent(conversation.contents, conversation.tools, conversation.submits))
 }
 
-module.exports = { THINKING_LEVELS, SERVICE_TIERS, defaultTaskConfig, resolveTaskConfig, replyTimeoutMs, flexUsable, SAFETY_SETTINGS, withSafetySettings, THINK_DEEPER_DECLARATION, HAND_OVER_R18_DECLARATION, isR18Text, isRefusalReply, deepModel, DEFAULT_UNCENSORED_MODEL, uncensoredModel, uncensoredEndpoint, isUncensoredConfigured, isUncensoredUsable, checkUncensoredConnection, startUncensoredCheck, uncensoredState, callUncensored, REPLY_LENGTHS, DEFAULT_REPLY_LENGTH, PERSONAS, thinkingConfig, cachedPrefix, caches, purgedFor, promptVersion, lightModel, extractModel, DEFAULT_EXTRACT_MODEL, draft, revise, MAX_STEPS, isConfigured, toScheduledEvent, callGemini, geminiRequest, geminiSend, geminiStream, retryTimer, DEFAULT_GEMINI_MODEL, ENTITY_TYPES, GeminiError }
+module.exports = { THINKING_LEVELS, SERVICE_TIERS, defaultTaskConfig, resolveTaskConfig, replyTimeoutMs, flexUsable, SAFETY_SETTINGS, withSafetySettings, THINK_DEEPER_DECLARATION, HAND_OVER_R18_DECLARATION, isR18Text, isRefusalReply, deepModel, DEFAULT_UNCENSORED_MODEL, uncensoredModel, isLocalUncensoredUrl, uncensoredEndpoint, isUncensoredConfigured, isUncensoredUsable, checkUncensoredConnection, startUncensoredCheck, uncensoredState, callUncensored, REPLY_LENGTHS, DEFAULT_REPLY_LENGTH, PERSONAS, thinkingConfig, cachedPrefix, caches, purgedFor, promptVersion, lightModel, extractModel, DEFAULT_EXTRACT_MODEL, draft, revise, MAX_STEPS, isConfigured, toScheduledEvent, callGemini, geminiRequest, geminiSend, geminiStream, retryTimer, DEFAULT_GEMINI_MODEL, ENTITY_TYPES, GeminiError }
