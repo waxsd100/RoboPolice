@@ -1,6 +1,6 @@
 const Eris = require('eris')
 const { v4: uuidv4 } = require('uuid')
-const { draft, revise, isConfigured, ENTITY_TYPES } = require('./eventDrafter')
+const { draft, revise, isConfigured, isUncensoredConfigured, isUncensoredDirective, rememberThreadModel, isR18Text, ENTITY_TYPES } = require('./eventDrafter')
 const { createTools, describeServer, worthSearching, withServerEmojis, withServerChannels, StopDrafting } = require('./eventTools')
 const { embedQuery } = require('../utils/embeddings')
 const { withLinkCards } = require('../utils/linkCards')
@@ -453,8 +453,9 @@ async function handle (message) {
       // /replylength, /persona, %debugfooter, %tokenlimit, %safety; without them (or the database) as by default.
       const { isOwnerGuild } = require('../utils/priority')
       const owner = isOwnerGuild(guild.id)
-      const { replyLength, streamerPersona, debugFooter, tokenLimits, replyModel, replyThinking, aiModels, assistantRules, safetyFilter = !owner } = await replySettingsStore.getReplySettings(guild.id)
-        .catch(() => ({ replyLength: null, streamerPersona: true, debugFooter: false, tokenLimits: {}, safetyFilter: !owner }))
+      const { replyLength, streamerPersona, debugFooter, tokenLimits, replyModel, replyThinking, aiModels, assistantRules, safety = {}, safetyFilter = !owner, uncensoredR18 = owner } = await replySettingsStore.getReplySettings(guild.id)
+        .catch(() => ({ replyLength: null, streamerPersona: true, debugFooter: false, tokenLimits: {}, safety: {}, safetyFilter: !owner, uncensoredR18: owner }))
+      const allowUncensored = uncensoredR18 !== false || (safetyFilter === false && safety?.uncensored !== false)
       // Per user across every server, in tokens, against this server's limits (mentionQuota.js). Near
       // a limit, every call goes to Flex inference: slower and half the price.
       const quota = await mentionQuota.take(message.author.id, guild.id, new Date(), { limits: tokenLimits })
@@ -493,6 +494,7 @@ async function handle (message) {
       // What was just being talked about in the channel, as far as it bears on the request
       // (recentTopics.js); not when something the bot made is being changed.
       // The server's rules and what its moderators asked of the assistant (serverRules.js).
+      const directR18 = allowUncensored && isUncensoredConfigured() && (isUncensoredDirective(request, referenced) || isR18Text(request, referenced?.text))
       let queryVecPromise = null
       const queryVector = () => {
         if (!worthSearching(request)) return Promise.resolve(null)
@@ -500,10 +502,12 @@ async function handle (message) {
         return queryVecPromise
       }
       const [server, recent] = await Promise.all([
-        describeServer(guild, member, message.channel.id, { query: request, context: referenced?.othersText, queryVector }).catch(e => {
-          global.logger.warn(`Could not describe server ${guild.id}: ${e.message}`)
-          return null
-        }),
+        directR18
+          ? null
+          : describeServer(guild, member, message.channel.id, { query: request, context: referenced?.othersText, queryVector }).catch(e => {
+            global.logger.warn(`Could not describe server ${guild.id}: ${e.message}`)
+            return null
+          }),
         edit
           ? []
           : relatedRecent(message, request, { queryVector }).catch(e => {
@@ -513,7 +517,7 @@ async function handle (message) {
       ])
       // Combined emojis and other servers' emojis in what was said are shown to the model as
       // images, for this request only.
-      const pictures = await picturesFor([request, referenced?.text], guild).catch(() => [])
+      const pictures = directR18 ? [] : await picturesFor([request, referenced?.text], guild).catch(() => [])
       // A reply brings its conversation in (`referenced`); otherwise only what was just said in the
       // channel that bears on the request (`recent`), never the bot's own earlier replies.
       let result = await draft({
@@ -523,7 +527,8 @@ async function handle (message) {
         replyLength,
         streamerPersona,
         safetyFilter: !!safetyFilter,
-        rules: { moderators: assistantRules || null, channels: [] },
+        uncensoredR18: allowUncensored,
+        rules: directR18 ? null : { moderators: assistantRules || null, channels: [] },
         model: replyModel || null,
         thinking: replyThinking || null,
         tier: aiModels?.reply?.tier || null,
@@ -549,9 +554,10 @@ async function handle (message) {
       for (;;) {
         if (result.kind === 'chat') {
           if (!previous) {
+            rememberThreadModel([message.id, reply?.id], result.conversation?.contents)
             // Rewritten to read less like AI-made Japanese (replyPolish.js), but not what the
-            // stronger model wrote.
-            if (!result.conversation?.contents?.deep) result = { ...result, text: await polish(result.text, { guildID: guild.id }) }
+            // stronger model or the uncensored fallback wrote.
+            if (!result.conversation?.contents?.deep && !result.conversation?.contents?.uncensored) result = { ...result, text: await polish(result.text, { guildID: guild.id }) }
             const { content, embeds } = await withLinkCards(withServerChannels(withServerEmojis(checkedLinks(result, guild), guild), guild, message.member))
             outcome = { kind: 'chat', response: content }
             await reply.edit({ content: withFooter(content, debugFooter ? tokenFooter(usage) : ''), embeds, components: [], allowedMentions: NO_MENTIONS })

@@ -118,13 +118,14 @@ describe('stores', { skip: !database.available && 'needs PGHOST' }, () => {
       await settings.setAssistantRules('g2', null)
       assert.equal((await settings.getReplySettings('g2')).assistantRules, null)
       const defSafety = await settings.getReplySettings('g2')
-      assert.equal(defSafety.safetyFilter, true, 'non-owner server has safety filter on by default')
+      assert.deepEqual([defSafety.safetyFilter, defSafety.uncensoredR18], [true, false], 'non-owner server has safety filter on and R18 handover off by default')
       await settings.setSafety('g2', 'filter', false)
+      await settings.setSafety('g2', 'uncensored', true)
       const relaxed = await settings.getReplySettings('g2')
-      assert.equal(relaxed.safetyFilter, false)
+      assert.deepEqual([relaxed.safetyFilter, relaxed.uncensoredR18], [false, true])
       await settings.setSafety('g2', 'all', null)
       const resetSafety = await settings.getReplySettings('g2')
-      assert.deepEqual([resetSafety.safety.filter, resetSafety.safetyFilter], [null, true])
+      assert.deepEqual([resetSafety.safety.filter, resetSafety.safety.uncensored, resetSafety.safetyFilter, resetSafety.uncensoredR18], [null, null, true, false])
     })
 
     test('a server made on first use, and its settings go with it', async () => {

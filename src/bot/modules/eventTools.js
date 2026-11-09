@@ -236,7 +236,7 @@ function createTools ({ guild, member, ask, progress = () => {} }) {
         return null
       })
       if (!m) break
-      messages.unshift(m)
+      messages.unshift(m.id ? m : { ...m, id: next.messageID })
       next = m.messageReference && { channelID: m.messageReference.channelID || next.channelID, messageID: m.messageReference.messageID }
     }
     return {
@@ -245,7 +245,8 @@ function createTools ({ guild, member, ask, progress = () => {} }) {
       // The conversation without the bot's own replies: what knowledge is looked up by
       // (describeServer), so the bot's earlier answers do not keep bringing back the same
       // knowledge, and with it the same jokes.
-      othersText: messages.filter(m => m.author?.id !== global.bot.user.id).map(m => formatMessage(m, member.id)).join('\n')
+      othersText: messages.filter(m => m.author?.id !== global.bot.user.id).map(m => formatMessage(m, member.id)).join('\n'),
+      messageIds: messages.map(m => m.id).filter(Boolean)
     }
   }
 

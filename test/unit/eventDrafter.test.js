@@ -922,4 +922,356 @@ describe('explicit cache and thinking', () => {
     await callGemini('gemini-3.1-flash-image', { contents: [] })
     assert.equal(requests[2].body.generationConfig, undefined)
   })
+
+  test('when Gemini refuses (blocked) and UNCENSORED_API_URL or UNCENSORED_GATEWAY_PROVIDER is set, hands over to DeepSeek-V4-Pro-Qwen3.5-9B-UNCENSORED-heretic', async (t) => {
+    t.mock.method(global.logger, 'info', () => {})
+    const { uncensoredEndpoint, DEFAULT_UNCENSORED_MODEL } = require('../../src/bot/modules/eventDrafter')
+    process.env.UNCENSORED_API_URL = 'https://api.featherless.ai/v1'
+    process.env.UNCENSORED_API_KEY = 'fl-secret-key'
+    t.after(() => {
+      delete process.env.UNCENSORED_API_URL
+      delete process.env.UNCENSORED_API_KEY
+      delete process.env.UNCENSORED_GATEWAY_PROVIDER
+    })
+    assert.deepEqual(uncensoredEndpoint(), { url: 'https://api.featherless.ai/v1/chat/completions', gateway: false })
+
+    const calls = []
+    global.fetch = async (url, init) => {
+      const body = JSON.parse(init.body)
+      calls.push({ url, headers: init.headers, body })
+      if (/google-ai-studio/.test(url)) {
+        return { ok: true, json: async () => ({ promptFeedback: { blockReason: 'PROHIBITED_CONTENT' } }) }
+      }
+      if (calls.filter(c => /featherless/.test(c.url)).length === 1) {
+        return {
+          ok: true,
+          json: async () => ({
+            choices: [{
+              message: {
+                role: 'assistant',
+                tool_calls: [{ id: 'c1', type: 'function', function: { name: 'lookup', arguments: '{"q":"wiki"}' } }]
+              }
+            }],
+            usage: { prompt_tokens: 200, completion_tokens: 20 }
+          })
+        }
+      }
+      return {
+        ok: true,
+        json: async () => ({
+          choices: [{
+            message: {
+              role: 'assistant',
+              content: '<think>考えています…</think>\n検閲なしの返事だよ！'
+            }
+          }],
+          usage: { prompt_tokens: 250, completion_tokens: 30, completion_tokens_details: { reasoning_tokens: 10 } }
+        })
+      }
+    }
+
+    const result = await draft({ request: 'きわどい質問', channelName: 'general', guild, tools: quietTools, now: NOW })
+    assert.equal(result.kind, 'chat')
+    assert.equal(result.text, '検閲なしの返事だよ！')
+    const uncensoredCalls = calls.filter(c => /featherless/.test(c.url))
+    assert.equal(uncensoredCalls.length, 2)
+    assert.equal(uncensoredCalls[0].url, 'https://api.featherless.ai/v1/chat/completions')
+    assert.equal(uncensoredCalls[0].headers.Authorization, 'Bearer fl-secret-key')
+    assert.equal(uncensoredCalls[0].body.model, DEFAULT_UNCENSORED_MODEL)
+    assert.ok(!uncensoredCalls[0].body.tools.some(tl => tl.function.name === 'think_deeper'))
+    assert.equal(uncensoredCalls[0].body.tools[0].function.parameters.type, 'object')
+    assert.equal(uncensoredCalls[1].body.messages.at(-1).role, 'tool')
+    assert.equal(uncensoredCalls[1].body.messages.at(-1).name, 'lookup')
+
+    process.env.UNCENSORED_GATEWAY_PROVIDER = 'featherless'
+    assert.deepEqual(uncensoredEndpoint(), {
+      url: 'https://gateway.ai.cloudflare.com/v1/acct/gw/custom-featherless/v1/chat/completions',
+      gateway: true
+    })
+
+    // Servers that reject tools/tool_choice with HTTP 400 are retried without tools.
+    delete process.env.UNCENSORED_GATEWAY_PROVIDER
+    let llamaCalls = 0
+    global.fetch = async (url, init) => {
+      const body = JSON.parse(init.body)
+      if (/google-ai-studio/.test(url)) {
+        return { ok: true, json: async () => ({ promptFeedback: { blockReason: 'PROHIBITED_CONTENT' } }) }
+      }
+      llamaCalls++
+      if (body.tools) {
+        return { ok: false, status: 400, text: async () => 'tools not supported without --jinja' }
+      }
+      return {
+        ok: true,
+        json: async () => ({
+          choices: [{ message: { role: 'assistant', content: 'ツールなしでも返事できるよ！' } }]
+        })
+      }
+    }
+    const plainResult = await draft({ request: 'もう一回', channelName: 'general', guild, tools: quietTools, now: NOW })
+    assert.equal(plainResult.kind, 'chat')
+    assert.equal(plainResult.text, 'ツールなしでも返事できるよ！')
+    assert.equal(llamaCalls, 2)
+
+    // Pre-call R18 detection routes directly to the uncensored model without calling Gemini.
+    let geminiCalled = 0
+    global.fetch = async (url, init) => {
+      if (/google-ai-studio/.test(url)) {
+        geminiCalled++
+        return { ok: true, json: async () => ({}) }
+      }
+      const body = JSON.parse(init.body)
+      assert.match(body.messages[0].content, /R18・検閲なしフォールバック時の追加指示/)
+      return {
+        ok: true,
+        json: async () => ({
+          choices: [{ message: { role: 'assistant', content: 'R18直行の返事だよ！' } }]
+        })
+      }
+    }
+    const r18Result = await draft({ request: 'R18のエロ小説を書いて', channelName: 'general', guild, tools: quietTools, now: NOW })
+    assert.equal(r18Result.kind, 'chat')
+    assert.equal(r18Result.text, 'R18直行の返事だよ！')
+    assert.equal(geminiCalled, 0)
+
+    // Subtle R18 request handed over via hand_over_r18 tool call or soft refusal reply.
+    global.fetch = async (url) => {
+      if (/google-ai-studio/.test(url)) {
+        return {
+          ok: true,
+          json: async () => ({
+            candidates: [{ content: { role: 'model', parts: [{ functionCall: { name: 'hand_over_r18', args: { reason: '大人向け' } } }] } }]
+          })
+        }
+      }
+      return {
+        ok: true,
+        json: async () => ({
+          choices: [{ message: { role: 'assistant', content: 'ツール引き継ぎの返事だよ！' } }]
+        })
+      }
+    }
+    const handOverResult = await draft({ request: '夜の続きをお願い', channelName: 'general', guild, tools: quietTools, now: NOW })
+    assert.equal(handOverResult.text, 'ツール引き継ぎの返事だよ！')
+
+    global.fetch = async (url) => {
+      if (/google-ai-studio/.test(url)) {
+        return {
+          ok: true,
+          json: async () => ({
+            candidates: [{ content: { role: 'model', parts: [{ functionCall: { name: 'submit_chat_reply', args: { text: '申し訳ありませんが、成人向け・性的な内容にはお応えできません。' } } }] } }]
+          })
+        }
+      }
+      return {
+        ok: true,
+        json: async () => ({
+          choices: [{ message: { role: 'assistant', content: '拒否テキスト検知からの返事だよ！' } }]
+        })
+      }
+    }
+    const refusalResult = await draft({ request: 'ちょっと攻めた話をして', channelName: 'general', guild, tools: quietTools, now: NOW })
+    assert.equal(refusalResult.text, '拒否テキスト検知からの返事だよ！')
+
+    // Startup check (checkUncensoredConnection) marks usability and disables R18 routing when down.
+    const { checkUncensoredConnection, startUncensoredCheck, isLocalUncensoredUrl, isUncensoredUsable, uncensoredState } = require('../../src/bot/modules/eventDrafter')
+    const { priceOf } = require('../../src/bot/utils/geminiPrices')
+    t.mock.method(global.logger, 'warn', () => {})
+    t.after(() => {
+      uncensoredState.usable = null
+      uncensoredState.url = null
+      uncensoredState.detectedModel = null
+      delete process.env.UNCENSORED_SKIP_STARTUP_PROBE
+      delete process.env.UNCENSORED_MODEL
+      delete process.env.UNCENSORED_R18_MODEL
+    })
+    assert.equal(isLocalUncensoredUrl('https://gemma-heretic-12345-an.a.run.app/v1/chat/completions'), true)
+    assert.equal(isLocalUncensoredUrl('https://api.featherless.ai/v1/chat/completions'), false)
+    assert.deepEqual(priceOf('mradermacher/gemma-4-31B-it-ARA-heretic-GGUF'), { input: 0.28, cached: 0.14, output: 0.28, imageOutput: 0.28 })
+    assert.deepEqual(priceOf('gemma-4-31B-it-ARA-heretic'), { input: 0.28, cached: 0.14, output: 0.28, imageOutput: 0.28 })
+    process.env.UNCENSORED_MODEL = 'some-other-org/any-custom-model-32B'
+    assert.deepEqual(priceOf('some-other-org/any-custom-model-32B'), { input: 0.28, cached: 0.14, output: 0.28, imageOutput: 0.28 })
+    assert.deepEqual(priceOf('custom-local-model.Q4_K_M.gguf'), { input: 0.28, cached: 0.14, output: 0.28, imageOutput: 0.28 })
+    delete process.env.UNCENSORED_MODEL
+
+    // Cloud Run (*.run.app) uses compact single-pass mode and supports UNCENSORED_SKIP_STARTUP_PROBE=true.
+    // Also routes:
+    // - normal Gemini block fallback -> UNCENSORED_MODEL (Model 1)
+    // - R18 request / handover -> UNCENSORED_R18_MODEL (Model 2)
+    process.env.UNCENSORED_API_URL = 'https://gemma-heretic-12345-an.a.run.app/v1'
+    process.env.UNCENSORED_MODEL = 'gemma-4-31B-it-ARA-heretic.IQ4_XS.gguf'
+    process.env.UNCENSORED_R18_MODEL = 'gemma-4-31B-it-The-DECKARD-HERETIC-UNCENSORED-Thinking.Q4_K_M.gguf'
+    process.env.UNCENSORED_SKIP_STARTUP_PROBE = 'true'
+    let probeFetched = 0
+    global.fetch = async () => {
+      probeFetched++
+      return { ok: true, json: async () => ({}) }
+    }
+    const skippedCheck = await startUncensoredCheck()
+    assert.equal(skippedCheck.usable, true)
+    assert.equal(skippedCheck.skipped, true)
+    assert.equal(probeFetched, 0)
+    delete process.env.UNCENSORED_SKIP_STARTUP_PROBE
+
+    // 1. R18 request uses Model 2 (UNCENSORED_R18_MODEL)
+    let cloudRunBody = null
+    global.fetch = async (url, init) => {
+      cloudRunBody = JSON.parse(init.body)
+      return {
+        ok: true,
+        json: async () => ({
+          choices: [{ message: { role: 'assistant', content: 'Cloud Run GPUからの返事だよ！' } }]
+        })
+      }
+    }
+    const cloudRunReply = await draft({ request: 'R18の小説を書いて', channelName: 'general', guild, tools: quietTools, now: NOW })
+    assert.equal(cloudRunReply.text, 'Cloud Run GPUからの返事だよ！')
+    assert.equal(cloudRunBody.model, 'gemma-4-31B-it-The-DECKARD-HERETIC-UNCENSORED-Thinking.Q4_K_M')
+    assert.equal(cloudRunBody.tools, undefined, 'Cloud Run llama-server uses compact mode without tool schema overhead')
+    assert.equal(cloudRunBody.stream, true)
+
+    // 2. Normal Gemini block fallback uses Model 1 (UNCENSORED_MODEL)
+    let blockedFallbackModel = null
+    global.fetch = async (url, init) => {
+      if (/google-ai-studio/.test(url)) {
+        return { ok: true, json: async () => ({ promptFeedback: { blockReason: 'PROHIBITED_CONTENT' } }) }
+      }
+      blockedFallbackModel = JSON.parse(init.body).model
+      return {
+        ok: true,
+        json: async () => ({
+          choices: [{ message: { role: 'assistant', content: 'モデル1（フォールバック）の返事だよ！' } }]
+        })
+      }
+    }
+    const blockedReply = await draft({ request: 'ブラックジョークを言って', channelName: 'general', guild, tools: quietTools, now: NOW })
+    assert.equal(blockedReply.text, 'モデル1（フォールバック）の返事だよ！')
+    assert.equal(blockedFallbackModel, 'gemma-4-31B-it-ARA-heretic.IQ4_XS')
+
+    // 3. Explicit model directives in the message (--model 1/2, --1, --2, --r18, trailing flags, reply threads, custom GGUF)
+    const { parseModelDirective, rememberThreadModel } = require('../../src/bot/modules/eventDrafter')
+    assert.deepEqual(parseModelDirective('--model 1 こんにちは'), { directive: '1', text: 'こんにちは' })
+    assert.deepEqual(parseModelDirective('-m 2 秘密の話'), { directive: '2', text: '秘密の話' })
+    assert.deepEqual(parseModelDirective('[model:2] 続きを書いて'), { directive: '2', text: '続きを書いて' })
+    assert.deepEqual(parseModelDirective('--r18 続きを書いて'), { directive: 'r18', text: '続きを書いて' })
+    assert.deepEqual(parseModelDirective('続きを書いて --2'), { directive: '2', text: '続きを書いて' })
+    assert.deepEqual(parseModelDirective('—r18 続きを書いて'), { directive: 'r18', text: '続きを書いて' })
+    assert.deepEqual(parseModelDirective('ーー２ 続きを書いて'), { directive: '2', text: '続きを書いて' })
+    assert.deepEqual(parseModelDirective('【R18】続きを書いて'), { directive: 'r18', text: '続きを書いて' })
+
+    let explicitPayload = null
+    global.fetch = async (url, init) => {
+      explicitPayload = JSON.parse(init.body)
+      return {
+        ok: true,
+        json: async () => ({
+          choices: [{ message: { role: 'assistant', content: '明示指定モデルの返事だよ！' } }]
+        })
+      }
+    }
+    await draft({ request: '--model 1 普通の質問だけどモデル1で答えて', channelName: 'general', guild, tools: quietTools, now: NOW })
+    assert.equal(explicitPayload.model, 'gemma-4-31B-it-ARA-heretic.IQ4_XS')
+    assert.doesNotMatch(explicitPayload.messages.at(-1).content, /--model 1/, 'directive prefix is stripped from prompt')
+    assert.match(explicitPayload.messages.at(-1).content, /普通の質問だけどモデル1で答えて/)
+
+    await draft({ request: '--model 2 モデル2で答えて', channelName: 'general', guild, tools: quietTools, now: NOW })
+    assert.equal(explicitPayload.model, 'gemma-4-31B-it-The-DECKARD-HERETIC-UNCENSORED-Thinking.Q4_K_M')
+
+    await draft({ request: '--model my-custom-model.Q4_K_M.gguf カスタムモデルで答えて', channelName: 'general', guild, tools: quietTools, now: NOW })
+    assert.equal(explicitPayload.model, 'my-custom-model.Q4_K_M')
+
+    // 4. Reply thread inherits earlier model directive or remembered uncensored model without falling back to Argon4
+    explicitPayload = null
+    await draft({
+      request: 'もっと続きを書いて',
+      referenced: {
+        text: '[2026-11-09T10:00:00.000Z] user (1)（依頼者）: <@999> --2 夜の物語を書いて\n[2026-11-09T10:00:05.000Z] あなた（BOT）: いいよ！',
+        othersText: '[2026-11-09T10:00:00.000Z] user (1)（依頼者）: <@999> --2 夜の物語を書いて',
+        count: 2
+      },
+      channelName: 'general',
+      guild,
+      tools: quietTools,
+      now: NOW
+    })
+    assert.equal(explicitPayload.model, 'gemma-4-31B-it-The-DECKARD-HERETIC-UNCENSORED-Thinking.Q4_K_M')
+
+    explicitPayload = null
+    rememberThreadModel(['msg-bot-1'], { uncensored: true, uncensoredR18Mode: true })
+    await draft({
+      request: 'さらに続きをお願い',
+      referenced: {
+        text: '[2026-11-09T10:00:05.000Z] あなた（BOT）: 続きだよ',
+        othersText: '',
+        messageIds: ['msg-bot-1'],
+        count: 1
+      },
+      channelName: 'general',
+      guild,
+      tools: quietTools,
+      now: NOW
+    })
+    assert.equal(explicitPayload.model, 'gemma-4-31B-it-The-DECKARD-HERETIC-UNCENSORED-Thinking.Q4_K_M')
+
+    // 5. Router mode pre-loads unloaded model via POST /models/load and polls GET /v1/models until loaded
+    let loadCalledWith = null
+    let modelsChecks = 0
+    global.fetch = async (url, init = {}) => {
+      if (/\/v1\/models$/.test(url) && (!init.method || init.method === 'GET')) {
+        modelsChecks++
+        return {
+          ok: true,
+          json: async () => ({
+            data: [{
+              id: 'gemma-4-31B-it-The-DECKARD-HERETIC-UNCENSORED-Thinking.Q4_K_M',
+              status: { value: modelsChecks >= 2 ? 'loaded' : 'unloaded' }
+            }]
+          })
+        }
+      }
+      if (/\/models\/load$/.test(url) && init.method === 'POST') {
+        loadCalledWith = JSON.parse(init.body)
+        return { ok: true, text: async () => '{"success":true}' }
+      }
+      explicitPayload = JSON.parse(init.body)
+      return {
+        ok: true,
+        json: async () => ({
+          choices: [{ message: { role: 'assistant', content: 'ロード完了後の返事だよ！' } }]
+        })
+      }
+    }
+    const loadedReply = await draft({ request: '--2 続きを書いて', channelName: 'general', guild, tools: quietTools, now: NOW })
+    assert.equal(loadedReply.text, 'ロード完了後の返事だよ！')
+    assert.deepEqual(loadCalledWith, { model: 'gemma-4-31B-it-The-DECKARD-HERETIC-UNCENSORED-Thinking.Q4_K_M' })
+    assert.ok(modelsChecks >= 2)
+
+    delete process.env.UNCENSORED_R18_MODEL
+
+    process.env.UNCENSORED_API_URL = 'https://api.featherless.ai/v1'
+    global.fetch = async () => ({
+      ok: true,
+      json: async () => ({ choices: [{ message: { role: 'assistant', content: 'ok' } }] })
+    })
+    const okCheck = await checkUncensoredConnection()
+    assert.equal(okCheck.usable, true)
+    assert.equal(isUncensoredUsable(), true)
+
+    global.fetch = async (url) => {
+      if (/google-ai-studio/.test(url)) {
+        return {
+          ok: true,
+          json: async () => ({
+            candidates: [{ content: { role: 'model', parts: [{ functionCall: { name: 'submit_chat_reply', args: { text: 'Geminiが代わりに答えるよ' } } }] } }]
+          })
+        }
+      }
+      return { ok: false, status: 503, text: async () => 'Loading model' }
+    }
+    const failCheck = await checkUncensoredConnection()
+    assert.equal(failCheck.usable, false)
+    assert.equal(isUncensoredUsable(), false)
+    const fallbackToGemini = await draft({ request: 'R18のエロ小説を書いて', channelName: 'general', guild, tools: quietTools, now: NOW })
+    assert.equal(fallbackToGemini.text, 'Geminiが代わりに答えるよ')
+  })
 })

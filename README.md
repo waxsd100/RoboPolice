@@ -118,6 +118,7 @@ BOT がサーバーに入った瞬間から、すべてのイベントを記録�
 - `/persona streamer:True`（初期値）のとき、AIはサーバーに設定されたYouTubeチャンネルの配信者本人になりきり、保存された動画・配信（`search_youtube`）やWiki・X・Discord発言（`search_wiki`）、Steamのプレイ履歴・レビュー（`search_steam`）から口調や知識を取り入れて話します（Discordの「アプリ / BOT」タグによりBOTの発言であることは明示されます）。
 - なりきるのは口調やキャラクター性のみであり、保存データにない配信予定・告知・約束などを配信者本人の発言として捏造することはありません。`CHAT_PERSONA`で運営者独自のキャラクター補足を設定することもできます。
 - イベントやフォーラム投稿を作ろうとしたものの情報が足りない場合（日時がない、リンク先が無関係など）は、雑談返信ではなくエラー（`⚠️ 作成できませんでした`）として返します。
+- 成人向け（R18）の話題や、Google Geminiが安全性ポリシー（`PROHIBITED_CONTENT`、`SAFETY`など）で回答を拒否した場合は、自動的に（または`hand_over_r18`ツール経由で）OpenAI互換の無検閲モデル（`UNCENSORED_MODEL`、SSEストリーミング対応）へ処理を引き継いで回答します。
 - `REPLY_POLISH`が有効（既定）のとき、AI特有の硬い表現や記号（「重要なのは」「——」など）が含まれる返信や250文字以上の長文返信は、`GEMINI_LIGHT_MODEL`（思考レベル`minimal`）と[yomiyasu-pocket](https://github.com/nanaism/yomiyasu-pocket)を使って一度だけ自然な日本語に整えられます（短文や問題のない返信ではスキップしてトークンと応答時間を節約します）。
 
 ### 会話の継続と直近の話題
@@ -296,6 +297,7 @@ rm robopolice-key.json
 | `GEMINI_FLEX` | 任意（既定: オン）。`false`にするとすべてのFlex推論を無効化し標準ティアでリクエストします。 |
 | `GEMINI_STREAM` | 任意（既定: オン）。Cloudflareの100秒タイムアウト（HTTP 524）を回避するため、メンション応答を`streamGenerateContent`でストリーミング受信します。 |
 | `GEMINI_EXPLICIT_CACHE` | 任意（既定: オン）。`false`にするとシステム指示とツールの明示的キャッシュ（`cachedContents`）を無効化します。 |
+| `UNCENSORED_API_URL`, `UNCENSORED_GATEWAY_PROVIDER`, `UNCENSORED_API_KEY`, `UNCENSORED_MODEL` | 任意。R18の話題やGeminiが安全性フィルタで拒否した際に引き継ぐOpenAI互換エンドポイント設定（既定モデル: `xtools-at/DeepSeek-V4-Pro-Qwen3.5-9B-UNCENSORED-heretic`）。 |
 | `REPLY_POLISH` | 任意（既定: オン）。AI特有の表現・記号を含む返信や250文字以上の返信を`GEMINI_LIGHT_MODEL`と`yomiyasu-pocket`で自然な日本語に整えます。 |
 | `MENTION_RECENT_TOPICS`, `MENTION_RECENT_MESSAGES`, `MENTION_RECENT_HOURS` | 任意。メンション時に同じチャンネルの直近の関連発言（既定: 過去12時間の最新50件から最大8件）を文脈として渡します。 |
 | `YOUTUBE_API_KEY`, `YOUTUBE_CHANNELS`, `YOUTUBE_AUTO_SYNC_MINUTES`, `YOUTUBE_LIVE_POLL_SECONDS`, `YOUTUBE_WEBSUB_URL`, `YOUTUBE_WEBSUB_SECRET`, `YOUTUBE_GATEWAY_PROVIDER` | 任意。YouTubeチャンネルの同期、動画要約、配信・新着動画イベント自動登録、WebSubプッシュ通知に関する設定。 |

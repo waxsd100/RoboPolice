@@ -1001,9 +1001,11 @@ describe('mention → event / forum post (integration)', () => {
     assert.match(footer, / · fallback: gemini-4-argon refused \(PROHIBITED_CONTENT\) → gemini-3\.8-flash$/)
   })
 
-  test('chat: non-owner servers use strict Gemini safety settings by default, while owner servers relax them', async (t) => {
+  test('chat: when Gemini refuses and UNCENSORED_API_URL is configured, DeepSeek-V4-Pro-Qwen3.5-9B-UNCENSORED-heretic answers on owner/enabled servers, and non-owner servers refuse by default', async (t) => {
     t.mock.method(global.logger, 'info', () => {})
+    process.env.UNCENSORED_API_URL = 'https://api.featherless.ai/v1'
     t.after(() => {
+      delete process.env.UNCENSORED_API_URL
       delete process.env.OWNER_GUILD_IDS
     })
     const { channel, replies } = createChannel()
@@ -1011,34 +1013,41 @@ describe('mention → event / forum post (integration)', () => {
     global.fetch = async (url, init) => {
       const body = JSON.parse(init.body)
       requests.push({ url, body })
+      if (/google-ai-studio/.test(url)) {
+        return { ok: true, json: async () => ({ promptFeedback: { blockReason: 'PROHIBITED_CONTENT' }, usageMetadata: { promptTokenCount: 100, candidatesTokenCount: 0 } }) }
+      }
       return {
         ok: true,
         json: async () => ({
-          candidates: [{ content: { role: 'model', parts: [{ functionCall: { name: 'submit_chat_reply', args: { text: 'こんにちは！' } } }] } }],
-          usageMetadata: { promptTokenCount: 100, candidatesTokenCount: 10 }
+          choices: [{
+            message: {
+              role: 'assistant',
+              tool_calls: [{ id: 'tc1', type: 'function', function: { name: 'submit_chat_reply', arguments: JSON.stringify({ text: 'これは検閲なしモデルがそのまま返した、40文字以上のしっかりした長い返事だよ！そのまま届くよ。' }) } }]
+            }
+          }],
+          usage: { prompt_tokens: 300, completion_tokens: 40 }
         })
       }
     }
     const { installReplyLengthStore } = require('../helpers/fakes')
-    installReplyLengthStore()
+    installReplyLengthStore({}, {}, { [channel.guild.id]: true })
     t.after(() => installReplyLengthStore())
 
-    // Non-owner server by default: strict safety settings sent.
-    await mentionEvent.handle(mention(channel, '<@BOT> こんにちは'))
-    assert.equal(requests.length, 1)
+    // Non-owner server by default: strict safety settings sent, and blocked requests are NOT handed over to the uncensored model.
+    await mentionEvent.handle(mention(channel, '<@BOT> きわどいネタお願い'))
+    assert.equal(requests.length, 1, 'non-owner server does not call uncensored model when blocked')
     assert.equal(requests[0].body.safetySettings[0].threshold, 'BLOCK_LOW_AND_ABOVE')
-    assert.match(requests[0].body.contents[0].parts[0].text, /## セーフティ保護（このサーバーの設定・最優先）/)
-    assert.equal(replies[0].state.content, 'こんにちは！')
+    assert.match(replies[0].state.content, /AI（Google）の制限で答えられなかった/)
 
-    // Owner server: relaxed safety settings sent.
+    // Owner server (or server with r18 enabled): hands over to the uncensored model.
     requests.length = 0
     replies.length = 0
     process.env.OWNER_GUILD_IDS = channel.guild.id
-    await mentionEvent.handle(mention(channel, '<@BOT> こんにちは'))
-    assert.equal(requests.length, 1)
-    assert.equal(requests[0].body.safetySettings[0].threshold, 'OFF')
-    assert.doesNotMatch(requests[0].body.contents[0].parts[0].text, /## セーフティ保護（このサーバーの設定・最優先）/)
-    assert.equal(replies[0].state.content, 'こんにちは！')
+    await mentionEvent.handle(mention(channel, '<@BOT> きわどいネタお願い'))
+    assert.equal(requests.length, 2, '1 blocked Gemini call + 1 uncensored call (no Gemini polish call)')
+    const [text, footer] = replies[0].state.content.split('\n')
+    assert.equal(text, 'これは検閲なしモデルがそのまま返した、40文字以上のしっかりした長い返事だよ！そのまま届くよ。')
+    assert.match(footer, /^-# model: gemini-3\.8-flash → xtools-at\/DeepSeek-V4-Pro-Qwen3\.5-9B-UNCENSORED-heretic · tokens: in 400 \(cached 0\) · out 40 · 2 Gemini calls · fallback: gemini-3\.8-flash refused \(PROHIBITED_CONTENT\) → xtools-at\/DeepSeek-V4-Pro-Qwen3\.5-9B-UNCENSORED-heretic$/)
   })
 
   test('chat: server emojis are offered to the model, and :name: becomes the emoji', async () => {
