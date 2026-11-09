@@ -1001,10 +1001,13 @@ describe('mention → event / forum post (integration)', () => {
     assert.match(footer, / · fallback: gemini-4-argon refused \(PROHIBITED_CONTENT\) → gemini-3\.8-flash$/)
   })
 
-  test('chat: when Gemini refuses and UNCENSORED_API_URL is configured, DeepSeek-V4-Pro-Qwen3.5-9B-UNCENSORED-heretic answers without Gemini polish', async (t) => {
+  test('chat: when Gemini refuses and UNCENSORED_API_URL is configured, DeepSeek-V4-Pro-Qwen3.5-9B-UNCENSORED-heretic answers on owner/enabled servers, and non-owner servers refuse by default', async (t) => {
     t.mock.method(global.logger, 'info', () => {})
     process.env.UNCENSORED_API_URL = 'https://api.featherless.ai/v1'
-    t.after(() => { delete process.env.UNCENSORED_API_URL })
+    t.after(() => {
+      delete process.env.UNCENSORED_API_URL
+      delete process.env.OWNER_GUILD_IDS
+    })
     const { channel, replies } = createChannel()
     const requests = []
     global.fetch = async (url, init) => {
@@ -1029,6 +1032,17 @@ describe('mention → event / forum post (integration)', () => {
     const { installReplyLengthStore } = require('../helpers/fakes')
     installReplyLengthStore({}, {}, { [channel.guild.id]: true })
     t.after(() => installReplyLengthStore())
+
+    // Non-owner server by default: strict safety settings sent, and blocked requests are NOT handed over to the uncensored model.
+    await mentionEvent.handle(mention(channel, '<@BOT> きわどいネタお願い'))
+    assert.equal(requests.length, 1, 'non-owner server does not call uncensored model when blocked')
+    assert.equal(requests[0].body.safetySettings[0].threshold, 'BLOCK_LOW_AND_ABOVE')
+    assert.match(replies[0].state.content, /AI（Google）の制限で答えられなかった/)
+
+    // Owner server (or server with r18 enabled): hands over to the uncensored model.
+    requests.length = 0
+    replies.length = 0
+    process.env.OWNER_GUILD_IDS = channel.guild.id
     await mentionEvent.handle(mention(channel, '<@BOT> きわどいネタお願い'))
     assert.equal(requests.length, 2, '1 blocked Gemini call + 1 uncensored call (no Gemini polish call)')
     const [text, footer] = replies[0].state.content.split('\n')

@@ -192,19 +192,26 @@ describe('draft', () => {
   })
 
   test('every request carries the safety settings, but image models, video summaries and a request that sets its own', async () => {
-    const { callGemini, SAFETY_SETTINGS } = require('../../src/bot/modules/eventDrafter')
+    const { callGemini, SAFETY_SETTINGS, STRICT_SAFETY_SETTINGS } = require('../../src/bot/modules/eventDrafter')
     const { summaryRequest } = require('../../src/bot/modules/videoSummary')
-    const requests = installGemini([[{ text: 'a' }], [{ text: 'b' }], [{ text: 'c' }]])
+    const requests = installGemini([[{ text: 'a' }], [{ text: 'b' }], [{ text: 'c' }], [{ text: 'e' }]])
     await callGemini('gemini-3.5-flash-lite', { contents: [] })
     await callGemini('gemini-3-pro-image', { contents: [] })
     await callGemini('gemini-3.5-flash-lite', { contents: [], safetySettings: [] })
+    await callGemini('gemini-3.5-flash-lite', { contents: [] }, { strictSafety: true })
     assert.deepEqual(requests[0].body.safetySettings, SAFETY_SETTINGS)
     assert.equal(requests[1].body.safetySettings, undefined)
     assert.deepEqual(requests[2].body.safetySettings, [])
+    assert.deepEqual(requests[3].body.safetySettings, STRICT_SAFETY_SETTINGS)
     assert.equal(summaryRequest('dQw4w9WgXcQ').body.safetySettings, undefined, 'video summaries keep the model\'s own, also in a batch')
     const more = installGemini([[{ text: 'd' }]])
     await callGemini('gemini-3.8-flash', { contents: [] }, { defaultSafety: true })
     assert.equal(more[0].body.safetySettings, undefined)
+
+    const strictDraft = installGemini([[call('submit_chat_reply', { text: 'お断りします' })]])
+    await draft({ request: 'A', channelName: 'general', safetyFilter: true, guild, tools, now: NOW })
+    assert.deepEqual(strictDraft[0].body.safetySettings, STRICT_SAFETY_SETTINGS)
+    assert.match(strictDraft[0].body.contents[0].parts[0].text, /## セーフティ保護（このサーバーの設定・最優先）/)
   })
 
   test('think_deeper hands the request over to the stronger model on Flex, from the start', async () => {

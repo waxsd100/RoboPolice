@@ -13,10 +13,11 @@ const { isOwnerGuild } = require('../../../bot/utils/priority')
 // tokenLimits: { '5h', week, flexAt, unlimited }, replyModel and replyThinking (null for the
 // default), aiModels: { [task]: { model, thinking, tier } }, assistantRules (text or null),
 // embeddings: { messages: boolean | null, emojis: boolean | null }, embedMessages: boolean,
-// embedEmojis: boolean }.
+// embedEmojis: boolean, safety: { filter: boolean | null, uncensored: boolean | null },
+// safetyFilter: boolean, uncensoredR18: boolean }.
 async function getReplySettings (guildID) {
   const [rows, taskRows] = await Promise.all([
-    pool.query('SELECT reply_length, streamer_persona, debug_footer, token_limit_5h, token_limit_week, token_flex_at, token_unlimited, reply_model, reply_thinking, assistant_rules, embed_messages, embed_emojis FROM guilds WHERE id = $1', [guildID]),
+    pool.query('SELECT reply_length, streamer_persona, debug_footer, token_limit_5h, token_limit_week, token_flex_at, token_unlimited, reply_model, reply_thinking, assistant_rules, embed_messages, embed_emojis, safety_filter, uncensored_r18 FROM guilds WHERE id = $1', [guildID]),
     pool.query('SELECT task, model, thinking, tier FROM guild_ai_models WHERE guild_id = $1', [guildID])
   ])
   const row = rows.rows[0]
@@ -45,7 +46,13 @@ async function getReplySettings (guildID) {
       emojis: row?.embed_emojis ?? null
     },
     embedMessages: row?.embed_messages ?? owner,
-    embedEmojis: row?.embed_emojis ?? owner
+    embedEmojis: row?.embed_emojis ?? owner,
+    safety: {
+      filter: row?.safety_filter ?? null,
+      uncensored: row?.uncensored_r18 ?? null
+    },
+    safetyFilter: row?.safety_filter ?? !owner,
+    uncensoredR18: row?.uncensored_r18 ?? owner
   }
 }
 
@@ -115,6 +122,21 @@ async function setEmbedding (guildID, which, value) {
   await pool.query(`UPDATE guilds SET ${column} = $2 WHERE id = $1`, [guildID, value])
 }
 
+const SAFETY_COLUMNS = { filter: 'safety_filter', uncensored: 'uncensored_r18' }
+async function setSafety (guildID, which, value) {
+  if (which === 'all') {
+    await ensureGuild(guildID)
+    const filterVal = value === null ? null : Boolean(value)
+    const uncensoredVal = value === null ? null : !value
+    await pool.query('UPDATE guilds SET safety_filter = $2, uncensored_r18 = $3 WHERE id = $1', [guildID, filterVal, uncensoredVal])
+    return
+  }
+  const column = SAFETY_COLUMNS[which]
+  if (!column) throw new Error(`No safety setting ${which}`)
+  await ensureGuild(guildID)
+  await pool.query(`UPDATE guilds SET ${column} = $2 WHERE id = $1`, [guildID, value])
+}
+
 // Sets one of the server's token limits: which is '5h', 'week' or 'flexAt'; value a number, or null
 // for the default.
 // 'unlimited' takes true or false.
@@ -162,4 +184,4 @@ async function setAssistantRules (guildID, text) {
   await pool.query('UPDATE guilds SET assistant_rules = $2 WHERE id = $1', [guildID, text])
 }
 
-module.exports = { setAssistantRules, setReplyModel, setTaskModel, getTaskModel, setTokenLimit, getReplySettings, getReplyLength, setReplyLength, setStreamerPersona, setDebugFooter, setEmbedding, isEmbedMessagesEnabled, isEmbedEmojisEnabled }
+module.exports = { setAssistantRules, setReplyModel, setTaskModel, getTaskModel, setTokenLimit, getReplySettings, getReplyLength, setReplyLength, setStreamerPersona, setDebugFooter, setEmbedding, isEmbedMessagesEnabled, isEmbedEmojisEnabled, setSafety }
