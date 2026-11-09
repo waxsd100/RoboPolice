@@ -20,6 +20,7 @@ const { CoverImage, MODES } = require('./coverImage')
 const { FORUM_TYPES } = require('./forumPost')
 const postedEdit = require('./postedEdit')
 const replySettingsStore = require('../../db/interfaces/postgres/replySettings')
+const mentionLogsStore = require('../../db/interfaces/postgres/mentionLogs')
 const { EDIT_HINT } = postedEdit
 
 const ANSWER_TIMEOUT_MS = 5 * 60 * 1000
@@ -445,6 +446,8 @@ async function handle (message) {
   // Every Gemini request made for this mention is counted, and logged when it is done.
   await trackUsage(async usage => {
     let reply
+    let referenced = null
+    let outcome = null
     try {
       reply = await message.channel.createMessage({ content: '内容を読み取っています…', ...reference })
       // /replylength, /persona, %debugfooter, %tokenlimit; without them (or the database) as by default.
@@ -477,7 +480,7 @@ async function handle (message) {
       const edit = editTarget && await postedEdit.load(guild, editTarget)
       // A mention sent as a reply ("@bot これをイベントにして") is about the replied-to message.
       // Following the replies back makes a reply to the bot's answer continue that conversation.
-      const referenced = repliedTo && !edit
+      referenced = repliedTo && !edit
         ? await tools.readThread(message.messageReference.channelID || message.channel.id, repliedTo).catch(e => ({ text: `（読めませんでした: ${e.message}）`, count: 1 }))
         : null
       // Attempts to take over the model are only logged: the prompt marks all of this as data.
@@ -550,6 +553,7 @@ async function handle (message) {
             // stronger model or the uncensored fallback wrote.
             if (!result.conversation?.contents?.deep && !result.conversation?.contents?.uncensored) result = { ...result, text: await polish(result.text, { guildID: guild.id }) }
             const { content, embeds } = await withLinkCards(withServerChannels(withServerEmojis(checkedLinks(result, guild), guild), guild, message.member))
+            outcome = { kind: 'chat', response: content }
             await reply.edit({ content: withFooter(content, debugFooter ? tokenFooter(usage) : ''), embeds, components: [], allowedMentions: NO_MENTIONS })
             return
           }
@@ -563,7 +567,9 @@ async function handle (message) {
           result = { ...result, error: NO_EVENT_PERMISSION }
         }
         if (result.error) {
-          await editReply(reply, { content: failure(result.error), embeds: [], components: [] }, null)
+          const errContent = failure(result.error)
+          outcome = { kind: 'error', response: errContent }
+          await editReply(reply, { content: errContent, embeds: [], components: [] }, null)
           return
         }
         result = checkedDraft(result, guild)
@@ -628,19 +634,24 @@ async function handle (message) {
           embeds: [embed, ...candidatesEmbed(cover)]
         }, buttons, previewFiles(cover))
         if (!picked) {
-          await reply.edit({ content: '時間内に確認されなかったため、取りやめました。', components: [] })
+          const timeoutContent = '時間内に確認されなかったため、取りやめました。'
+          outcome = { kind: 'cancelled', response: timeoutContent }
+          await reply.edit({ content: timeoutContent, components: [] })
           return
         }
         const { interaction } = picked
         const action = buttons[picked.index].action
         if (action === 'cancel') {
-          await interaction.editOriginalMessage({ content: 'キャンセルしました。', components: [] })
+          const cancelContent = 'キャンセルしました。'
+          outcome = { kind: 'cancelled', response: cancelContent }
+          await interaction.editOriginalMessage({ content: cancelContent, components: [] })
           return
         }
         if (action === 'create') {
           const done = edit
             ? await postedEdit.update(guild, edit, result, cover, message.author)
             : await kind.create(result, guild, message.author, cover)
+          outcome = { kind: result.kind, response: done }
           await interaction.editOriginalMessage({ content: done, components: [] })
           return
         }
@@ -666,6 +677,7 @@ async function handle (message) {
       }
     } catch (e) {
       if (e instanceof StopDrafting || e instanceof postedEdit.EditRefused) {
+        outcome = { kind: 'refused', response: e.message }
         await editReply(reply, { content: e.message, embeds: [], components: [] }, null).catch(() => {})
         return
       }
@@ -674,6 +686,7 @@ async function handle (message) {
       if (e.blocked) {
         global.logger.info(`[GEMINI]: A mention in ${guild.id} was refused by Google (${e.blocked})`)
         const content = 'ごめん、その内容は AI（Google）の制限で答えられなかった…！言い方や中身を変えてもう一回どうぞ。'
+        outcome = { kind: 'refused', response: content }
         if (reply) await editReply(reply, { content, embeds: [], components: [] }, null).catch(() => {})
         else await message.channel.createMessage({ content, ...reference }).catch(() => {})
         return
@@ -683,6 +696,7 @@ async function handle (message) {
       global.webhook.error(redact(`Drafting from a mention in ${guild.id} failed: ${e.message}`).slice(0, 2000))
       const cause = e.hint || (e.name === 'TimeoutError' ? 'AI の応答が時間内に返りませんでした' : null)
       const content = `⚠️ エラーが発生しました${cause ? `（${cause}）` : ''}。時間をおいてもう一度お試しください。\n${errorLog(e)}`
+      outcome = { kind: 'error', response: content }
       if (reply) {
         await editReply(reply, { content, embeds: [], components: [] }, null).catch(() => {})
       } else {
@@ -692,6 +706,26 @@ async function handle (message) {
       inProgress.delete(message.author.id)
       // Whatever it ended in, the tokens it used count against the user's limits.
       await mentionQuota.record(message.author.id, usage.cost)
+      if (outcome) {
+        await mentionLogsStore.saveMentionLog({
+          guildID: guild.id,
+          channelID: message.channel.id,
+          messageID: message.id,
+          replyMessageID: reply?.id || null,
+          userID: message.author.id,
+          userName: message.author.username || null,
+          kind: outcome.kind,
+          request: request || '',
+          referencedText: referenced?.text || null,
+          response: outcome.response,
+          model: usage.models?.length ? usage.models.join(' → ') : null,
+          promptTokens: usage.tokens?.prompt || 0,
+          cachedTokens: usage.tokens?.cached || 0,
+          outputTokens: usage.tokens?.output || 0,
+          thinkingTokens: usage.tokens?.thoughts || 0,
+          geminiCalls: usage.requests || 0
+        }).catch(err => global.logger.warn(`Could not save mention log in ${guild.id}: ${err.message}`))
+      }
       global.logger.info(`Mention drafting in ${guild.id}: ${usage.requests} Gemini request(s), ${usage.retries} retried after HTTP 429`)
     }
   })
