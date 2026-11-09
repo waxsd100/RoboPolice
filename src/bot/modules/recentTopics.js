@@ -19,7 +19,7 @@ const DEFAULT_HOURS = 12
 const MAX_TOPICS = 8
 const MIN_SCORE = 0.55
 const MAX_CHARS = 200
-const MAX_CACHE = 2000
+const MAX_CACHE = 128
 const REDIS_TTL_SECONDS = 24 * 60 * 60
 
 const redisKeyOf = key => `recent-vec:${crypto.createHash('sha256').update(key).digest('hex').slice(0, 24)}`
