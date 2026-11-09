@@ -170,7 +170,7 @@ describe('migrations', { skip: !database.available && 'needs PGHOST' }, () => {
     assert.deepEqual(await q('SELECT guild_id, event FROM guild_disabled_events'), [{ guild_id: 'g1', event: 'presenceUpdate' }])
     assert.deepEqual(await q('SELECT id, log_bots FROM guilds ORDER BY id'), [{ id: 'g1', log_bots: true }, { id: 'g2', log_bots: false }])
     const columns = (await q("SELECT column_name FROM information_schema.columns WHERE table_name = 'guilds' ORDER BY column_name")).map(r => r.column_name)
-    assert.deepEqual(columns, ['assistant_rules', 'debug_footer', 'details_updated_at', 'embed_emojis', 'embed_messages', 'icon_url', 'id', 'joined_at', 'log_bots', 'member_count', 'name', 'owner_id', 'reply_length', 'reply_model', 'reply_thinking', 'safety_filter', 'streamer_persona', 'token_flex_at', 'token_limit_5h', 'token_limit_week', 'token_unlimited', 'youtube_live_events'])
+    assert.deepEqual(columns, ['assistant_rules', 'debug_footer', 'details_updated_at', 'embed_emojis', 'embed_messages', 'icon_url', 'id', 'joined_at', 'log_bots', 'member_count', 'name', 'owner_id', 'reply_length', 'reply_model', 'reply_thinking', 'safety_filter', 'streamer_persona', 'token_flex_at', 'token_limit_5h', 'token_limit_week', 'token_unlimited', 'uncensored_r18', 'youtube_live_events'])
     assert.deepEqual(await q("SELECT task, model, thinking, tier FROM guild_ai_models WHERE guild_id = 'g1' ORDER BY task"), [
       { task: 'reply', model: 'gemini-3.8-flash', thinking: 'high', tier: 'standard' },
       { task: 'rules', model: 'gemini-3.1-flash-lite', thinking: 'minimal', tier: 'standard' },

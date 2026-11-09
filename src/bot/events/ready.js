@@ -24,6 +24,7 @@ module.exports = {
       require('../modules/twitterKnowledge').startTwitter() // ...and the streamer's X posts (TWITTER_ACCOUNTS)
       require('../modules/twitchSync').startTwitch() // ...and the archives of the Twitch channels (TWITCH_CHANNELS)
       require('../modules/steamSync').startSteam() // ...and the games and reviews of the Steam accounts (STEAM_ACCOUNTS)
+      require('../modules/eventDrafter').startUncensoredCheck() // ...and checks whether the uncensored fallback model (UNCENSORED_API_URL) responds
       // ...and, once, finds the channel of messages stored before channels were recorded.
       require('../../miscellaneous/backfillChannels').startBackfill()
     }

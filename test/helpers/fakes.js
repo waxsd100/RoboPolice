@@ -204,7 +204,7 @@ function installReplyLengthStore (lengths = {}, personas = {}, debugFooters = {}
     const tasks = taskModelsOf(guildID)
     const owner = isOwnerGuild(guildID)
     const emb = { messages: null, emojis: null, ...embeddings[guildID] }
-    const saf = { filter: null, ...safety[guildID] }
+    const saf = { filter: null, uncensored: null, ...safety[guildID] }
     return {
       replyLength: lengths[guildID] || null,
       streamerPersona: personas[guildID] !== false,
@@ -218,7 +218,8 @@ function installReplyLengthStore (lengths = {}, personas = {}, debugFooters = {}
       embedMessages: emb.messages ?? owner,
       embedEmojis: emb.emojis ?? owner,
       safety: saf,
-      safetyFilter: saf.filter ?? !owner
+      safetyFilter: saf.filter ?? !owner,
+      uncensoredR18: saf.uncensored ?? owner
     }
   }
   store.isEmbedMessagesEnabled = async guildID => {
@@ -237,7 +238,14 @@ function installReplyLengthStore (lengths = {}, personas = {}, debugFooters = {}
     embeddings[guildID] = { messages: null, emojis: null, ...embeddings[guildID], [which]: value }
   }
   store.setSafety = async (guildID, which, value) => {
-    safety[guildID] = { filter: value === null ? null : Boolean(value) }
+    if (which === 'all') {
+      safety[guildID] = {
+        filter: value === null ? null : Boolean(value),
+        uncensored: value === null ? null : !value
+      }
+      return
+    }
+    safety[guildID] = { filter: null, uncensored: null, ...safety[guildID], [which]: value }
   }
   store.getTaskModel = async (guildID, task) => {
     if (guildID) return taskModelsOf(guildID)[task] || null

@@ -1,14 +1,17 @@
-// %safety: per-server toggle for Gemini safety filtering (eventDrafter.js). For the bot's
-// developers (CREATOR_IDS).
+// %safety: per-server toggles for Gemini safety filtering (eventDrafter.js) and R18 / uncensored
+// model handover (UNCENSORED_MODEL). For the bot's developers (CREATOR_IDS).
 //   %safety                         shows current settings
-//   %safety on | off | default      sets Gemini safety filter
+//   %safety on | off | default      sets both (on: filter ON + R18 OFF; off: filter OFF + R18 ON)
 //   %safety filter on|off|default   sets Gemini safety filter
+//   %safety r18 on|off|default      sets R18 / uncensored model handover
 const store = require('../../db/interfaces/postgres/replySettings')
 const { isOwnerGuild } = require('../utils/priority')
 
 const TARGETS = {
   filter: 'filter',
   safety: 'filter',
+  r18: 'uncensored',
+  uncensored: 'uncensored',
   all: 'all'
 }
 
@@ -28,13 +31,15 @@ function formatLine (label, effective, explicit, defaultEffective, owner) {
   return `- ${label}: ${state}${source}`
 }
 
-function describe (guildID, { safety = {}, safetyFilter }) {
+function describe (guildID, { safety = {}, safetyFilter, uncensoredR18 }) {
   const owner = isOwnerGuild(guildID)
   const prefix = process.env.GLOBAL_BOT_PREFIX
   return [
-    'このサーバーの AI セーフティ設定:',
+    'このサーバーの AI セーフティ・R18 設定:',
     formatLine('Gemini セーフティフィルタ (`filter`)', safetyFilter, safety.filter, !owner, owner),
-    `\`${prefix}safety <on|off|default>\` で切り替えられます。`
+    formatLine('R18・検閲なしモデル引き継ぎ (`r18`)', uncensoredR18, safety.uncensored, owner, owner),
+    `\`${prefix}safety [filter|r18] <on|off|default>\` で個別に切り替えられます。`,
+    `（対象省略時の \`${prefix}safety on\` は「フィルタ オン＋R18引き継ぎ オフ」、\`${prefix}safety off\` は「フィルタ オフ＋R18引き継ぎ オン」に一括変更します）`
   ].join('\n')
 }
 
@@ -53,7 +58,7 @@ module.exports = {
         raw = tokens[1]
       }
       if (!target || !(raw in VALUES)) {
-        return say(`\`on\`・\`off\`・\`default\` を指定してください。\n${await show()}`)
+        return say(`\`filter\` / \`r18\`（または省略）と \`on\`・\`off\`・\`default\` を指定してください。\n${await show()}`)
       }
       await store.setSafety(guildID, target, VALUES[raw])
       return say(`変更しました。\n${await show()}`)
