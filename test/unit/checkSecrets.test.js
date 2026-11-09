@@ -29,7 +29,7 @@ describe('checkSecrets', () => {
     assert.equal(scanLine(`token: ${fakeGh}`)[0]?.ruleId, 'github-token')
 
     const fakeHf = 'hf_' + 'aBcDeFgHiJkLmNoPqRsTuVwXyZ0123456789'
-    assert.equal(scanLine(`UNCENSORED_API_KEY=${fakeHf}`)[0]?.ruleId, 'huggingface-token')
+    assert.equal(scanLine(`HF_TOKEN=${fakeHf}`)[0]?.ruleId, 'huggingface-token')
 
     const fakePem = '-----BEGIN ' + 'RSA PRIVATE KEY-----'
     assert.equal(scanLine(fakePem)[0]?.ruleId, 'private-key-block')
