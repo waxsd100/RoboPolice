@@ -876,6 +876,13 @@ function rememberThreadModel (messageIds, contents) {
   }
 }
 
+const DEBUG_FOOTER_PATTERN = /(?:\r?\n|^)-#\s*(?:model:\s*[^\r\n]+|tokens:\s*in\s+[^\r\n]+)/g
+
+function stripDebugFooterLines (text) {
+  if (typeof text !== 'string') return ''
+  return text.replace(DEBUG_FOOTER_PATTERN, '').trimEnd()
+}
+
 function extractReferencedDirective (referenced) {
   if (!referenced) return null
   if (Array.isArray(referenced.messageIds)) {
@@ -883,6 +890,9 @@ function extractReferencedDirective (referenced) {
       const remembered = threadModelMemory.get(referenced.messageIds[i])
       if (remembered) return remembered
     }
+  }
+  if (typeof referenced.lastBotModel === 'string' && referenced.lastBotModel.trim() && !/^gemini-/i.test(referenced.lastBotModel.trim())) {
+    return referenced.lastBotModel.trim()
   }
   const sources = [referenced.othersText, referenced.text].filter(t => typeof t === 'string' && t.trim())
   for (const src of sources) {
@@ -1827,7 +1837,8 @@ async function check (conversation, { name, args, calls = [] }) {
   const { guild, member, now, forum, edit } = conversation
   conversation.lastCalls = calls
   if (name === SUBMIT_CHAT_DECLARATION.name) {
-    return { kind: 'chat', text: String(args.text || '').trim().slice(0, MAX_CHAT_REPLY) || '……', conversation }
+    const cleaned = stripDebugFooterLines(String(args.text || '')).trim().slice(0, MAX_CHAT_REPLY) || '……'
+    return { kind: 'chat', text: cleaned, conversation }
   }
   if (name === SUBMIT_FORUM_DECLARATION.name) {
     // A forum named in the request wins over whatever the model picked.
@@ -1853,6 +1864,13 @@ async function draft ({ request, referenced, recent = [], channelName, channelID
   const parsed = parseModelDirective(request)
   if (parsed.directive) request = parsed.text || '（返信先のメッセージに答えてください）'
   const threadDirective = !parsed.directive ? extractReferencedDirective(referenced) : null
+  if (referenced && (typeof referenced.text === 'string' || typeof referenced.othersText === 'string')) {
+    referenced = {
+      ...referenced,
+      ...(typeof referenced.text === 'string' ? { text: stripDebugFooterLines(referenced.text) } : {}),
+      ...(typeof referenced.othersText === 'string' ? { othersText: stripDebugFooterLines(referenced.othersText) } : {})
+    }
+  }
   const combined = pictures.filter(p => p.combined)
   const foreign = pictures.filter(p => !p.combined)
   const notes = [
