@@ -611,16 +611,35 @@ const CACHE_RETRY_AFTER_MS = 60 * 60 * 1000
 const CACHE_RETRY_AFTER_ERROR_MS = 5 * 60 * 1000
 const CACHE_LABEL = 'robopolice-mention'
 const MAX_CACHE_LIST_PAGES = 10
+const MAX_MEMORY_CACHES = 16
+const MAX_MEMORY_PURGED = 16
+const UNCENSORED_REPLY_CACHE_TTL_SECONDS = 10 * 60
 const caches = new Map()
+const uncensoredCacheKeys = new Set()
+const rawCachesSet = caches.set.bind(caches)
+caches.set = (key, value) => {
+  if (caches.has(key)) caches.delete(key)
+  else if (caches.size >= MAX_MEMORY_CACHES) caches.delete(caches.keys().next().value)
+  return rawCachesSet(key, value)
+}
 const rawCachesClear = caches.clear.bind(caches)
 caches.clear = ({ memoryOnly = false } = {}) => {
   if (!memoryOnly) {
     for (const key of caches.keys()) aiCache.del(`gemini-cache:${key}`)
+    for (const key of uncensoredCacheKeys) aiCache.del(key)
+    uncensoredCacheKeys.clear()
   }
   rawCachesClear()
 }
 // Versions whose older caches this worker has already deleted.
 const purgedFor = new Set()
+const rawPurgedAdd = purgedFor.add.bind(purgedFor)
+purgedFor.add = version => {
+  if (!purgedFor.has(version) && purgedFor.size >= MAX_MEMORY_PURGED) {
+    purgedFor.delete(purgedFor.values().next().value)
+  }
+  return rawPurgedAdd(version)
+}
 const rawPurgedClear = purgedFor.clear.bind(purgedFor)
 purgedFor.clear = ({ memoryOnly = false } = {}) => {
   if (!memoryOnly) {
@@ -812,7 +831,7 @@ function compactUncensoredText (text) {
 }
 
 function isLocalUncensoredUrl (url) {
-  return /\.railway\.internal\b|\/\/(?:localhost|127\.0\.0\.1|\[::1?\])(?::|\/|$)/i.test(String(url || ''))
+  return /\.railway\.internal\b|\.trycloudflare\.com\b|\.ngrok(?:-free)?\.(?:app|io|dev)\b|\/\/(?:localhost|127\.0\.0\.1|\[::1?\])(?::|\/|$)/i.test(String(url || ''))
 }
 
 function uncensoredEndpoint () {
@@ -1174,6 +1193,15 @@ async function callUncensored (contents, declarations, allowed = null, { timeout
             : 'required'
         })
   }
+  const replyCacheKey = useCompact ? `uncensored-reply:${hashOf(JSON.stringify({ model, messages: body.messages }))}` : null
+  if (replyCacheKey) {
+    const cachedReply = await aiCache.getJson(replyCacheKey)
+    if (Array.isArray(cachedReply?.parts) && cachedReply.parts.length) {
+      uncensoredState.usable = true
+      uncensoredState.url = endpoint.url
+      return { role: 'model', parts: cachedReply.parts }
+    }
+  }
   const usage = currentUsage()
   const send = async payload => {
     let r
@@ -1244,6 +1272,10 @@ async function callUncensored (contents, declarations, allowed = null, { timeout
   addModel(model, { flex: false })
   if (!parts.length) {
     throw new GeminiError(`Uncensored model returned no content: ${JSON.stringify(data).slice(0, 1000)}`, 'AI から応答がありませんでした')
+  }
+  if (replyCacheKey) {
+    uncensoredCacheKeys.add(replyCacheKey)
+    await aiCache.setJson(replyCacheKey, { parts }, UNCENSORED_REPLY_CACHE_TTL_SECONDS)
   }
   return { role: 'model', parts }
 }

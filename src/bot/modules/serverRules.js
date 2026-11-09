@@ -21,12 +21,23 @@ const MAX_CANDIDATES = 150
 const CACHE_MS = 60 * 60 * 1000
 const RETRY_PICK_MS = 60 * 60 * 1000
 const REDIS_PICK_TTL_SECONDS = 7 * 24 * 60 * 60
+const REDIS_TEXT_TTL_SECONDS = 60 * 60
+const MAX_MEMORY_GUILDS = 16
 const RULES_NAME = /ルール|規約|必読|はじめに|始めに|rule|readme|start-?here/i
 const TEXT_TYPES = [0, 5, 15] // text, announcement, forum
 
 const picks = new Map() // guildID -> { signature, ids, at, failed }
 const texts = new Map() // guildID -> { at, key, channels }
+const trackedGuilds = new Set()
 const redisKeyOf = guildID => `server-rules-pick:${guildID}`
+const redisTextKeyOf = guildID => `server-rules-text:${guildID}`
+
+function setBounded (map, key, value) {
+  trackedGuilds.add(key)
+  if (map.has(key)) map.delete(key)
+  else if (map.size >= MAX_MEMORY_GUILDS) map.delete(map.keys().next().value)
+  map.set(key, value)
+}
 
 const { everyoneCanRead } = require('./discordKnowledge')
 const drafter = () => require('./eventDrafter')
@@ -81,7 +92,7 @@ async function rulesChannels (guild, { now = Date.now(), pick = module.exports.p
     const cached = await aiCache.getJson(redisKeyOf(guild.id))
     if (cached?.signature === signature && Array.isArray(cached.ids)) {
       known = { signature, ids: cached.ids, at: now, failed: false }
-      picks.set(guild.id, known)
+      setBounded(picks, guild.id, known)
     }
   }
   const stale = !known || known.signature !== signature || (known.failed && now - known.at >= RETRY_PICK_MS)
@@ -100,7 +111,7 @@ async function rulesChannels (guild, { now = Date.now(), pick = module.exports.p
     }
     if (failed) ids = byName(channels)
     known = { signature, ids, at: now, failed }
-    picks.set(guild.id, known)
+    setBounded(picks, guild.id, known)
     if (!failed) {
       await aiCache.setJson(redisKeyOf(guild.id), { signature, ids }, REDIS_PICK_TTL_SECONDS)
       global.logger?.info(`[RULES]: ${guild.id} rules channels: ${ids.join(', ') || 'none'}`)
@@ -122,7 +133,14 @@ async function readRules (guild, { getMessages = (id, options) => global.bot.get
   const channels = await rulesChannels(guild, { now, pick })
   if (!channels.length) return null
   const key = channels.map(c => c.id).join(',')
-  const known = texts.get(guild.id)
+  let known = texts.get(guild.id)
+  if (!known) {
+    const cached = await aiCache.getJson(redisTextKeyOf(guild.id))
+    if (cached && cached.key === key && typeof cached.at === 'number' && Array.isArray(cached.channels)) {
+      known = cached
+      setBounded(texts, guild.id, known)
+    }
+  }
   if (known && known.key === key && now - known.at < CACHE_MS) return known.channels.length ? known.channels : null
   const read = []
   let left = MAX_RULES_CHARS
@@ -139,14 +157,20 @@ async function readRules (guild, { getMessages = (id, options) => global.bot.get
       global.logger?.warn(`Could not read the rules channel ${channel.id} of ${guild.id}: ${e.message}`)
     }
   }
-  texts.set(guild.id, { at: now, key, channels: read })
+  const entry = { at: now, key, channels: read }
+  setBounded(texts, guild.id, entry)
+  await aiCache.setJson(redisTextKeyOf(guild.id), entry, REDIS_TEXT_TTL_SECONDS)
   return read.length ? read : null
 }
 
 // For tests.
 function reset ({ memoryOnly = false } = {}) {
   if (!memoryOnly) {
-    for (const guildID of picks.keys()) aiCache.del(redisKeyOf(guildID))
+    for (const guildID of new Set([...trackedGuilds, ...picks.keys(), ...texts.keys()])) {
+      aiCache.del(redisKeyOf(guildID))
+      aiCache.del(redisTextKeyOf(guildID))
+    }
+    trackedGuilds.clear()
   }
   picks.clear()
   texts.clear()
