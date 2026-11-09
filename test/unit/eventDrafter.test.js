@@ -1076,19 +1076,28 @@ describe('explicit cache and thinking', () => {
       uncensoredState.detectedModel = null
       delete process.env.UNCENSORED_SKIP_STARTUP_PROBE
       delete process.env.UNCENSORED_MODEL
+      delete process.env.UNCENSORED_R18_MODEL
+      delete process.env.UNCENSORED_FAST_MODEL
     })
     assert.equal(isLocalUncensoredUrl('https://gemma-heretic-12345-an.a.run.app/v1/chat/completions'), true)
     assert.equal(isLocalUncensoredUrl('https://api.featherless.ai/v1/chat/completions'), false)
     assert.deepEqual(priceOf('mradermacher/gemma-4-31B-it-ARA-heretic-GGUF'), { input: 0.28, cached: 0.14, output: 0.28, imageOutput: 0.28 })
     assert.deepEqual(priceOf('gemma-4-31B-it-ARA-heretic'), { input: 0.28, cached: 0.14, output: 0.28, imageOutput: 0.28 })
+    assert.deepEqual(priceOf('SevenOfNine/Gemma-4-26B-A4B-It-Abliterated-GGUF'), { input: 0.14, cached: 0.07, output: 0.14, imageOutput: 0.14 })
     process.env.UNCENSORED_MODEL = 'some-other-org/any-custom-model-32B'
     assert.deepEqual(priceOf('some-other-org/any-custom-model-32B'), { input: 0.28, cached: 0.14, output: 0.28, imageOutput: 0.28 })
     assert.deepEqual(priceOf('custom-local-model.Q4_K_M.gguf'), { input: 0.28, cached: 0.14, output: 0.28, imageOutput: 0.28 })
     delete process.env.UNCENSORED_MODEL
 
     // Cloud Run (*.run.app) uses compact single-pass mode and supports UNCENSORED_SKIP_STARTUP_PROBE=true.
+    // Also routes:
+    // - normal Gemini block fallback -> UNCENSORED_MODEL (Model 1)
+    // - R18 request / handover -> UNCENSORED_R18_MODEL (Model 2)
+    // - token/load limit (tier: 'flex') or primary model failure -> UNCENSORED_FAST_MODEL
     process.env.UNCENSORED_API_URL = 'https://gemma-heretic-12345-an.a.run.app/v1'
-    process.env.UNCENSORED_MODEL = 'gemma-4-31B-it-ARA-heretic'
+    process.env.UNCENSORED_MODEL = 'gemma-4-31B-it-ARA-heretic.IQ4_XS.gguf'
+    process.env.UNCENSORED_R18_MODEL = 'gemma-4-31B-it-The-DECKARD-HERETIC-UNCENSORED-Thinking.Q4_K_M.gguf'
+    process.env.UNCENSORED_FAST_MODEL = 'Gemma-4-26B-A4B-It-Abliterated-Q4_K_M.gguf'
     process.env.UNCENSORED_SKIP_STARTUP_PROBE = 'true'
     let probeFetched = 0
     global.fetch = async () => {
@@ -1101,6 +1110,7 @@ describe('explicit cache and thinking', () => {
     assert.equal(probeFetched, 0)
     delete process.env.UNCENSORED_SKIP_STARTUP_PROBE
 
+    // 1. R18 request uses Model 2 (UNCENSORED_R18_MODEL)
     let cloudRunBody = null
     global.fetch = async (url, init) => {
       cloudRunBody = JSON.parse(init.body)
@@ -1113,8 +1123,66 @@ describe('explicit cache and thinking', () => {
     }
     const cloudRunReply = await draft({ request: 'R18のエロ小説を書いて', channelName: 'general', guild, tools: quietTools, now: NOW })
     assert.equal(cloudRunReply.text, 'Cloud Run GPUからの返事だよ！')
+    assert.equal(cloudRunBody.model, 'gemma-4-31B-it-The-DECKARD-HERETIC-UNCENSORED-Thinking.Q4_K_M.gguf')
     assert.equal(cloudRunBody.tools, undefined, 'Cloud Run llama-server uses compact mode without tool schema overhead')
     assert.equal(cloudRunBody.stream, true)
+
+    // 2. Normal Gemini block fallback uses Model 1 (UNCENSORED_MODEL)
+    let blockedFallbackModel = null
+    global.fetch = async (url, init) => {
+      if (/google-ai-studio/.test(url)) {
+        return { ok: true, json: async () => ({ promptFeedback: { blockReason: 'PROHIBITED_CONTENT' } }) }
+      }
+      blockedFallbackModel = JSON.parse(init.body).model
+      return {
+        ok: true,
+        json: async () => ({
+          choices: [{ message: { role: 'assistant', content: 'モデル1（フォールバック）の返事だよ！' } }]
+        })
+      }
+    }
+    const blockedReply = await draft({ request: 'ブラックジョークを言って', channelName: 'general', guild, tools: quietTools, now: NOW })
+    assert.equal(blockedReply.text, 'モデル1（フォールバック）の返事だよ！')
+    assert.equal(blockedFallbackModel, 'gemma-4-31B-it-ARA-heretic.IQ4_XS.gguf')
+
+    // 3. When limit is reached (tier: 'flex'), uses UNCENSORED_FAST_MODEL
+    let limitModel = null
+    global.fetch = async (url, init) => {
+      limitModel = JSON.parse(init.body).model
+      return {
+        ok: true,
+        json: async () => ({
+          choices: [{ message: { role: 'assistant', content: '高速モデルの返事だよ！' } }]
+        })
+      }
+    }
+    const limitReply = await draft({ request: 'R18の別の小説を書いて', tier: 'flex', channelName: 'general', guild, tools: quietTools, now: NOW })
+    assert.equal(limitReply.text, '高速モデルの返事だよ！')
+    assert.equal(limitModel, 'Gemma-4-26B-A4B-It-Abliterated-Q4_K_M.gguf')
+
+    // 4. When primary uncensored model fails, automatically switches to UNCENSORED_FAST_MODEL
+    const triedModels = []
+    global.fetch = async (url, init) => {
+      const m = JSON.parse(init.body).model
+      triedModels.push(m)
+      if (m !== 'Gemma-4-26B-A4B-It-Abliterated-Q4_K_M.gguf') {
+        return { ok: false, status: 500, text: async () => 'OOM on 31B' }
+      }
+      return {
+        ok: true,
+        json: async () => ({
+          choices: [{ message: { role: 'assistant', content: '31B失敗から高速版への自動フォールバック！' } }]
+        })
+      }
+    }
+    const autoFastReply = await draft({ request: 'R18のさらに別の話をお願い', channelName: 'general', guild, tools: quietTools, now: NOW })
+    assert.equal(autoFastReply.text, '31B失敗から高速版への自動フォールバック！')
+    assert.deepEqual(triedModels, [
+      'gemma-4-31B-it-The-DECKARD-HERETIC-UNCENSORED-Thinking.Q4_K_M.gguf',
+      'Gemma-4-26B-A4B-It-Abliterated-Q4_K_M.gguf'
+    ])
+    delete process.env.UNCENSORED_R18_MODEL
+    delete process.env.UNCENSORED_FAST_MODEL
 
     process.env.UNCENSORED_API_URL = 'https://api.featherless.ai/v1'
     global.fetch = async () => ({

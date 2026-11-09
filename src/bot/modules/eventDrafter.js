@@ -755,14 +755,43 @@ const replyModel = contents => contents?.model || process.env.GEMINI_MODEL || DE
 
 // When R18 / adult content is detected or Google refuses to answer a mention (PROHIBITED_CONTENT,
 // SAFETY, …) and an OpenAI-compatible uncensored endpoint is configured (UNCENSORED_API_URL or
-// UNCENSORED_GATEWAY_PROVIDER), the conversation is handed over to UNCENSORED_MODEL (by default
-// xtools-at/DeepSeek-V4-Pro-Qwen3.5-9B-UNCENSORED-heretic).
+// UNCENSORED_GATEWAY_PROVIDER), the conversation is handed over to:
+// - UNCENSORED_MODEL for general Gemini block fallback (Model 1)
+// - UNCENSORED_R18_MODEL for R18 / adult content requests and handovers (Model 2; falls back to UNCENSORED_MODEL)
+// - UNCENSORED_FAST_MODEL when a token/load limit is reached (flex tier / busy load) or when the primary uncensored model fails.
 const DEFAULT_UNCENSORED_MODEL = 'xtools-at/DeepSeek-V4-Pro-Qwen3.5-9B-UNCENSORED-heretic'
-function uncensoredModel () {
+function uncensoredBaseModel () {
   const configured = String(process.env.UNCENSORED_MODEL || '').trim()
   if (configured && configured.toLowerCase() !== 'auto') return configured
   if (uncensoredState.detectedModel) return uncensoredState.detectedModel
   return DEFAULT_UNCENSORED_MODEL
+}
+
+function uncensoredR18Model () {
+  const configured = String(process.env.UNCENSORED_R18_MODEL || '').trim()
+  return configured || uncensoredBaseModel()
+}
+
+function uncensoredFastModel () {
+  const configured = String(process.env.UNCENSORED_FAST_MODEL || '').trim()
+  return configured || null
+}
+
+function isUncensoredLimitReached (contents = null) {
+  const usage = currentUsage()
+  return Boolean(
+    contents?.uncensoredFast ||
+    contents?.tier === 'flex' ||
+    usage?.flex ||
+    geminiLoad.flexForAll()
+  )
+}
+
+function uncensoredModel (contents = null) {
+  const fast = uncensoredFastModel()
+  if (fast && isUncensoredLimitReached(contents)) return fast
+  if (contents?.uncensoredR18Mode) return uncensoredR18Model()
+  return uncensoredBaseModel()
 }
 
 const HAND_OVER_R18_DECLARATION = {
@@ -1193,7 +1222,8 @@ async function readUncensoredResponse (res, { softTimeoutMs = 200 * 1000 } = {})
 async function callUncensored (contents, declarations, allowed = null, { timeoutMs = Math.max(replyTimeoutMs(), 420 * 1000) } = {}) {
   const endpoint = uncensoredEndpoint()
   if (!endpoint) throw new GeminiError('Uncensored endpoint is not configured', 'AI の呼び出しに失敗しました')
-  const model = uncensoredModel()
+  const model = uncensoredModel(contents)
+  const isFastLimit = isUncensoredLimitReached(contents)
   const headers = uncensoredHeaders(endpoint)
   const local = !endpoint.gateway && isLocalUncensoredUrl(endpoint.url)
   const canSubmitChat = (!allowed || allowed.includes(SUBMIT_CHAT_DECLARATION.name)) && declarations.some(d => d.name === SUBMIT_CHAT_DECLARATION.name)
@@ -1285,9 +1315,9 @@ async function callUncensored (contents, declarations, allowed = null, { timeout
       }
     : undefined
   recordTokens('mention-uncensored', model, usageMeta)
-  addTokens(usageMeta, { model, flex: false })
-  geminiLoad.record(require('../utils/mentionQuota').costOf(usageMeta, model, { flex: false }))
-  addModel(model, { flex: false })
+  addTokens(usageMeta, { model, flex: isFastLimit })
+  geminiLoad.record(require('../utils/mentionQuota').costOf(usageMeta, model, { flex: isFastLimit }))
+  addModel(model, { flex: isFastLimit })
   if (!parts.length) {
     throw new GeminiError(`Uncensored model returned no content: ${JSON.stringify(data).slice(0, 1000)}`, 'AI から応答がありませんでした')
   }
@@ -1354,30 +1384,43 @@ async function runAgent (contents, tools, submits = SUBMIT_DECLARATIONS) {
     try {
       content = await generate(contents, declarationsFor(), last ? submits.map(d => d.name) : null, { deep: !!contents.deep, uncensored: !!contents.uncensored })
     } catch (e) {
-      if (contents.uncensored && !contents.geminiBlocked) {
-        const fallback = replyModel(contents)
-        global.logger?.warn(`[UNCENSORED]: ${uncensoredModel()} failed (${e.message.slice(0, 200)}); ${fallback} answers instead`)
-        addFallback(`${uncensoredModel()} unavailable → ${fallback}`)
-        contents.splice(start)
-        contents.uncensored = false
-        contents.uncensoredFailed = true
-        contents.uncensoredError = e
-        const idx = offered.indexOf(HAND_OVER_R18_DECLARATION)
-        if (idx !== -1) offered.splice(idx, 1)
-        step = -1
-        continue
+      if (contents.uncensored) {
+        const currentModel = uncensoredModel(contents)
+        const fastModel = uncensoredFastModel()
+        if (fastModel && !contents.uncensoredFast && currentModel !== fastModel) {
+          global.logger?.warn(`[UNCENSORED]: ${currentModel} failed (${e.message.slice(0, 200)}); switching to fast model ${fastModel}`)
+          addFallback(`${currentModel} unavailable → ${fastModel}`)
+          contents.splice(start)
+          contents.uncensoredFast = true
+          step = -1
+          continue
+        }
+        if (!contents.geminiBlocked) {
+          const fallback = replyModel(contents)
+          global.logger?.warn(`[UNCENSORED]: ${currentModel} failed (${e.message.slice(0, 200)}); ${fallback} answers instead`)
+          addFallback(`${currentModel} unavailable → ${fallback}`)
+          contents.splice(start)
+          contents.uncensored = false
+          contents.uncensoredFailed = true
+          contents.uncensoredError = e
+          const idx = offered.indexOf(HAND_OVER_R18_DECLARATION)
+          if (idx !== -1) offered.splice(idx, 1)
+          step = -1
+          continue
+        }
       }
       if (!contents.uncensored && e.blocked && isUncensoredConfigured() && !contents.uncensoredFailed) {
         const failed = contents.deep ? deepModel() : replyModel(contents)
-        const fallback = uncensoredModel()
-        global.logger?.info(`[GEMINI]: ${failed} refused (${e.blocked}); ${fallback} answers instead`)
-        addFallback(`${failed} refused (${e.blocked}) → ${fallback}`)
         const notes = extractLookupNotes(contents.slice(start))
         if (notes) contents.lookupNotes = notes
         contents.splice(start)
         contents.deep = false
         contents.uncensored = true
+        contents.uncensoredR18Mode = false
         contents.geminiBlocked = true
+        const fallback = uncensoredModel(contents)
+        global.logger?.info(`[GEMINI]: ${failed} refused (${e.blocked}); ${fallback} answers instead`)
+        addFallback(`${failed} refused (${e.blocked}) → ${fallback}`)
         offered.length = 0
         step = -1
         continue
@@ -1403,14 +1446,15 @@ async function runAgent (contents, tools, submits = SUBMIT_DECLARATIONS) {
     const r18HandOver = !contents.uncensored && isUncensoredUsable() && !contents.uncensoredFailed && content.parts.some(p => p.functionCall?.name === HAND_OVER_R18_DECLARATION.name)
     if (r18HandOver) {
       const fromModel = contents.deep ? deepModel() : replyModel(contents)
-      const fallback = uncensoredModel()
-      global.logger?.info(`[GEMINI]: ${fromModel} R18 handover; ${fallback} answers instead`)
-      addFallback(`${fromModel} R18 handover → ${fallback}`)
       const notes = extractLookupNotes(contents.slice(start))
       if (notes) contents.lookupNotes = notes
       contents.splice(start)
       contents.deep = false
       contents.uncensored = true
+      contents.uncensoredR18Mode = true
+      const fallback = uncensoredModel(contents)
+      global.logger?.info(`[GEMINI]: ${fromModel} R18 handover; ${fallback} answers instead`)
+      addFallback(`${fromModel} R18 handover → ${fallback}`)
       offered.length = 0
       step = -1
       continue
@@ -1432,14 +1476,15 @@ async function runAgent (contents, tools, submits = SUBMIT_DECLARATIONS) {
     const submitted = calls.find(c => submits.some(d => d.name === c.name))
     if (submitted && !contents.uncensored && isUncensoredUsable() && !contents.uncensoredFailed && submitted.name === SUBMIT_CHAT_DECLARATION.name && isRefusalReply(submitted.args?.text)) {
       const fromModel = contents.deep ? deepModel() : replyModel(contents)
-      const fallback = uncensoredModel()
-      global.logger?.info(`[GEMINI]: ${fromModel} refused in reply (R18); ${fallback} answers instead`)
-      addFallback(`${fromModel} refused (R18) → ${fallback}`)
       const notes = extractLookupNotes(contents.slice(start))
       if (notes) contents.lookupNotes = notes
       contents.splice(start)
       contents.deep = false
       contents.uncensored = true
+      contents.uncensoredR18Mode = true
+      const fallback = uncensoredModel(contents)
+      global.logger?.info(`[GEMINI]: ${fromModel} refused in reply (R18); ${fallback} answers instead`)
+      addFallback(`${fromModel} refused (R18) → ${fallback}`)
       offered.length = 0
       step = -1
       continue
@@ -1555,10 +1600,11 @@ async function draft ({ request, referenced, recent = [], channelName, channelID
   conversation.contents.thinking = THINKING_LEVELS.includes(thinking) ? thinking : null
   conversation.contents.tier = SERVICE_TIERS.includes(tier) ? tier : null
   if (isUncensoredUsable() && isR18Text(request, referenced?.text)) {
-    const initial = replyModel(conversation.contents)
-    const fallback = uncensoredModel()
-    global.logger?.info(`[GEMINI]: R18 detected in request; ${fallback} answers instead of ${initial}`)
     conversation.contents.uncensored = true
+    conversation.contents.uncensoredR18Mode = true
+    const initial = replyModel(conversation.contents)
+    const fallback = uncensoredModel(conversation.contents)
+    global.logger?.info(`[GEMINI]: R18 detected in request; ${fallback} answers instead of ${initial}`)
   }
   return check(conversation, await runAgent(conversation.contents, tools, conversation.submits))
 }
@@ -1580,13 +1626,14 @@ async function revise (conversation, correction) {
     }))
   })
   if (!conversation.contents.uncensored && isUncensoredUsable() && isR18Text(correction)) {
-    const initial = replyModel(conversation.contents)
-    const fallback = uncensoredModel()
-    global.logger?.info(`[GEMINI]: R18 detected in revision; ${fallback} answers instead of ${initial}`)
     conversation.contents.deep = false
     conversation.contents.uncensored = true
+    conversation.contents.uncensoredR18Mode = true
+    const initial = replyModel(conversation.contents)
+    const fallback = uncensoredModel(conversation.contents)
+    global.logger?.info(`[GEMINI]: R18 detected in revision; ${fallback} answers instead of ${initial}`)
   }
   return check(conversation, await runAgent(conversation.contents, conversation.tools, conversation.submits))
 }
 
-module.exports = { THINKING_LEVELS, SERVICE_TIERS, defaultTaskConfig, resolveTaskConfig, replyTimeoutMs, flexUsable, SAFETY_SETTINGS, withSafetySettings, THINK_DEEPER_DECLARATION, HAND_OVER_R18_DECLARATION, isR18Text, isRefusalReply, deepModel, DEFAULT_UNCENSORED_MODEL, uncensoredModel, isLocalUncensoredUrl, uncensoredEndpoint, isUncensoredConfigured, isUncensoredUsable, checkUncensoredConnection, startUncensoredCheck, uncensoredState, callUncensored, REPLY_LENGTHS, DEFAULT_REPLY_LENGTH, PERSONAS, thinkingConfig, cachedPrefix, caches, purgedFor, promptVersion, lightModel, extractModel, DEFAULT_EXTRACT_MODEL, draft, revise, MAX_STEPS, isConfigured, toScheduledEvent, callGemini, geminiRequest, geminiSend, geminiStream, retryTimer, DEFAULT_GEMINI_MODEL, ENTITY_TYPES, GeminiError }
+module.exports = { THINKING_LEVELS, SERVICE_TIERS, defaultTaskConfig, resolveTaskConfig, replyTimeoutMs, flexUsable, SAFETY_SETTINGS, withSafetySettings, THINK_DEEPER_DECLARATION, HAND_OVER_R18_DECLARATION, isR18Text, isRefusalReply, deepModel, DEFAULT_UNCENSORED_MODEL, uncensoredModel, uncensoredR18Model, uncensoredFastModel, isUncensoredLimitReached, isLocalUncensoredUrl, uncensoredEndpoint, isUncensoredConfigured, isUncensoredUsable, checkUncensoredConnection, startUncensoredCheck, uncensoredState, callUncensored, REPLY_LENGTHS, DEFAULT_REPLY_LENGTH, PERSONAS, thinkingConfig, cachedPrefix, caches, purgedFor, promptVersion, lightModel, extractModel, DEFAULT_EXTRACT_MODEL, draft, revise, MAX_STEPS, isConfigured, toScheduledEvent, callGemini, geminiRequest, geminiSend, geminiStream, retryTimer, DEFAULT_GEMINI_MODEL, ENTITY_TYPES, GeminiError }
