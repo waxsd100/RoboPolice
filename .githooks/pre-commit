@@ -1,0 +1,4 @@
+#!/usr/bin/env sh
+set -e
+
+node "$(git rev-parse --show-toplevel)/src/miscellaneous/checkSecrets.js" --staged
