@@ -36,7 +36,7 @@ const FORBIDDEN_FILE_RULES = [
   }
 ]
 
-const PLACEHOLDER_VALUE = /^(?:your[_-]?.*|get one.*|error logging.*|postgres(?:password|username)?|localhost|127\.0\.0\.1|default|true|false|null|undefined|none|changeme|example.*|placeholder.*|xxx+|dummy.*|fake.*|mock.*|test(?:[-_].*)?|gem-key|gw-token|uncensored-key|yt-key|steam-key|twitch-secret|\$\{.*\}|<.*>)$/i
+const PLACEHOLDER_VALUE = /^(?:your[_-]?.*|get one.*|error logging.*|postgres(?:password|username)?|localhost|127\.0\.0\.1|default|true|false|null|undefined|none|changeme|example.*|placeholder.*|xxx+|dummy.*|fake.*|mock.*|test(?:[-_].*)?|gem-key|gw-token|yt-key|steam-key|twitch-secret|\$\{.*\}|<.*>)$/i
 
 const SECRET_RULES = [
   {
@@ -99,7 +99,7 @@ const SECRET_RULES = [
   {
     id: 'env-secret-assignment',
     description: 'Hardcoded secret value assigned to sensitive environment variable',
-    regex: /^\s*(?:export\s+)?(BOT_TOKEN|GEMINI_API_KEY|CLOUDFLARE_AI_GATEWAY_TOKEN|UNCENSORED_API_KEY|GCP_SERVICE_ACCOUNT_KEY|STEAM_API_KEY|TWITCH_CLIENT_SECRET|YOUTUBE_API_KEY|YOUTUBE_WEBSUB_SECRET|REDIS_PASSWORD|PGPASSWORD|AES_KEY)\s*=\s*['"]?([^\s'"#]+)['"]?/,
+    regex: /^\s*(?:export\s+)?(BOT_TOKEN|GEMINI_API_KEY|CLOUDFLARE_AI_GATEWAY_TOKEN|GCP_SERVICE_ACCOUNT_KEY|STEAM_API_KEY|TWITCH_CLIENT_SECRET|YOUTUBE_API_KEY|YOUTUBE_WEBSUB_SECRET|REDIS_PASSWORD|PGPASSWORD|AES_KEY)\s*=\s*['"]?([^\s'"#]+)['"]?/,
     validateMatch: match => {
       const val = String(match[2] || '').trim()
       if (val.length < 16) return false
