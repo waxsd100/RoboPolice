@@ -795,7 +795,9 @@ function uncensoredBaseModel () {
 
 function uncensoredR18Model () {
   const configured = String(process.env.UNCENSORED_R18_MODEL || '').trim()
-  return configured ? normalizeLocalModelId(configured) : uncensoredBaseModel()
+  if (configured && configured.toLowerCase() !== 'auto') return normalizeLocalModelId(configured)
+  if (uncensoredState.detectedR18Model) return normalizeLocalModelId(uncensoredState.detectedR18Model)
+  return uncensoredBaseModel()
 }
 
 function uncensoredModel (contents = null) {
@@ -932,7 +934,7 @@ function applyModelDirective (contents, directive) {
     contents.uncensored = true
     contents.directUncensored = true
     contents.uncensoredR18Mode = false
-    contents.explicitUncensoredModel = uncensoredBaseModel()
+    contents.explicitUncensoredModel = null
     return true
   }
   if (lower === '2' || lower === 'r18' || lower === 'deckard') {
@@ -940,7 +942,7 @@ function applyModelDirective (contents, directive) {
     contents.uncensored = true
     contents.directUncensored = true
     contents.uncensoredR18Mode = true
-    contents.explicitUncensoredModel = uncensoredR18Model()
+    contents.explicitUncensoredModel = null
     return true
   }
   const custom = normalizeLocalModelId(directive)
@@ -1062,6 +1064,22 @@ function uncensoredHeaders (endpoint) {
   return headers
 }
 
+function updateDetectedModelsFromList (list) {
+  if (!Array.isArray(list) || !list.length) return
+  const ids = list
+    .map(m => (typeof m?.id === 'string' ? m.id.trim() : (typeof m?.name === 'string' ? m.name.trim() : '')))
+    .filter(Boolean)
+  if (!ids.length) return
+  const register = require('../utils/geminiPrices').registerUncensoredModel
+  ids.forEach(id => register(id))
+  const r18Candidate = ids.length > 1
+    ? (ids.find(id => /deckard|r-?18|uncensored-thinking/i.test(id)) || ids[1])
+    : null
+  const baseCandidate = (r18Candidate && ids.find(id => id !== r18Candidate)) || ids[0]
+  if (baseCandidate) uncensoredState.detectedModel = baseCandidate
+  if (r18Candidate) uncensoredState.detectedR18Model = r18Candidate
+}
+
 // Probes the uncensored endpoint at startup (and after a failure) so the logs show right away
 // whether it can be reached and the model is loaded. For direct OpenAI-compatible servers
 // (such as llama-server on Railway or Cloud Run GPU), it first checks GET /v1/models which
@@ -1089,12 +1107,10 @@ async function checkUncensoredConnection ({ timeoutMs = UNCENSORED_CHECK_TIMEOUT
       })
       if (modelsRes.ok) {
         const modelsData = await modelsRes.json()
-        if (Array.isArray(modelsData?.data) || Array.isArray(modelsData?.models) || Array.isArray(modelsData?.choices)) {
+        const list = Array.isArray(modelsData?.data) ? modelsData.data : (Array.isArray(modelsData?.models) ? modelsData.models : null)
+        if (list || Array.isArray(modelsData?.choices)) {
           verified = true
-          const firstModel = modelsData?.data?.[0]?.id || modelsData?.models?.[0]?.id || modelsData?.models?.[0]?.name
-          if (typeof firstModel === 'string' && firstModel.trim()) {
-            uncensoredState.detectedModel = firstModel.trim()
-          }
+          if (list) updateDetectedModelsFromList(list)
         }
       } else if (modelsRes.status !== 404 && modelsRes.status !== 405) {
         const text = (await modelsRes.text().catch(() => '')).slice(0, 300)
@@ -1379,20 +1395,29 @@ async function readUncensoredResponse (res, { softTimeoutMs = 200 * 1000 } = {})
 
 const UNCENSORED_LOAD_POLL_MS = 3000
 
-async function ensureUncensoredModelLoaded (endpoint, model, headers, { timeoutMs = 240 * 1000, onProgress = null } = {}) {
+async function ensureUncensoredModelLoaded (endpoint, model, headers, { r18Mode = false, timeoutMs = 240 * 1000, onProgress = null } = {}) {
   if (!endpoint || endpoint.gateway || !isLocalUncensoredUrl(endpoint.url) || !/\/chat\/completions$/.test(endpoint.url)) {
     return model
   }
   const modelsUrl = endpoint.url.replace(/\/chat\/completions$/, '/models')
-  const loadUrl = endpoint.url.replace(/\/v1\/chat\/completions$|\/chat\/completions$/, '/models/load')
-  const cleanTarget = String(model || '').trim().replace(/\.gguf$/i, '').toLowerCase()
-  const findEntry = list => {
+  const primaryLoadUrl = endpoint.url.replace(/\/v1\/chat\/completions$|\/chat\/completions$/, '/models/load')
+  const fallbackLoadUrl = `${modelsUrl}/load`
+  const findEntry = (list, target) => {
     if (!Array.isArray(list) || !list.length) return null
-    return list.find(m => typeof m?.id === 'string' && m.id.replace(/\.gguf$/i, '').toLowerCase() === cleanTarget) || null
+    const cleanTarget = String(target || '').trim().replace(/\.gguf$/i, '').toLowerCase()
+    const exact = list.find(m => typeof m?.id === 'string' && m.id.replace(/\.gguf$/i, '').toLowerCase() === cleanTarget)
+    if (exact) return exact
+    const partial = cleanTarget ? list.find(m => typeof m?.id === 'string' && m.id.toLowerCase().includes(cleanTarget)) : null
+    if (partial) return partial
+    if (r18Mode && list.length > 1) {
+      return list.find(m => typeof m?.id === 'string' && /deckard|r-?18|uncensored-thinking/i.test(m.id)) || list[1]
+    }
+    return typeof list[0]?.id === 'string' ? list[0] : null
   }
   const deadline = Date.now() + Math.min(timeoutMs, 300 * 1000)
   let resolvedModel = model
   let loadRequested = false
+  let unloadedPollsSinceLoad = 0
   let notified = false
   while (Date.now() < deadline) {
     let list = null
@@ -1410,7 +1435,8 @@ async function ensureUncensoredModelLoaded (endpoint, model, headers, { timeoutM
     } catch (_) {
       return resolvedModel
     }
-    const entry = findEntry(list)
+    if (list) updateDetectedModelsFromList(list)
+    const entry = findEntry(list, resolvedModel)
     if (!entry) return resolvedModel
     if (typeof entry.id === 'string' && entry.id.trim()) resolvedModel = entry.id.trim()
     const state = entry.status?.value
@@ -1420,15 +1446,31 @@ async function ensureUncensoredModelLoaded (endpoint, model, headers, { timeoutM
       notified = true
       await Promise.resolve(onProgress('無検閲モデルを GPU にロードしています…（初回やモデル切替時は 1〜2 分ほどかかります）')).catch(() => {})
     }
-    if (state === 'unloaded' && !loadRequested) {
+    if (state === 'unloaded' && (!loadRequested || unloadedPollsSinceLoad >= 3)) {
       loadRequested = true
-      await fetch(loadUrl, {
+      unloadedPollsSinceLoad = 0
+      const loadTimeout = Math.min(240 * 1000, Math.max(30 * 1000, deadline - Date.now()))
+      const res = await fetch(primaryLoadUrl, {
         method: 'POST',
         headers,
-        signal: AbortSignal.timeout(30 * 1000),
-        dispatcher: dispatcherFor(30 * 1000),
+        signal: AbortSignal.timeout(loadTimeout),
+        dispatcher: dispatcherFor(loadTimeout),
         body: JSON.stringify({ model: resolvedModel })
-      }).then(r => r?.text?.().catch(() => {})).catch(() => {})
+      }).catch(() => null)
+      if (res && (res.status === 404 || res.status === 405) && fallbackLoadUrl !== primaryLoadUrl) {
+        await res.text?.().catch(() => {})
+        await fetch(fallbackLoadUrl, {
+          method: 'POST',
+          headers,
+          signal: AbortSignal.timeout(loadTimeout),
+          dispatcher: dispatcherFor(loadTimeout),
+          body: JSON.stringify({ model: resolvedModel })
+        }).then(r => r?.text?.().catch(() => {})).catch(() => {})
+      } else {
+        await res?.text?.().catch(() => {})
+      }
+    } else if (state === 'unloaded') {
+      unloadedPollsSinceLoad++
     }
     await retryTimer.sleep(UNCENSORED_LOAD_POLL_MS)
   }
@@ -1454,7 +1496,11 @@ async function callUncensored (contents, declarations, allowed = null, { timeout
     }
   }
   if (local) {
-    model = await ensureUncensoredModelLoaded(endpoint, model, headers, { timeoutMs, onProgress: contents?.onProgress })
+    model = await ensureUncensoredModelLoaded(endpoint, model, headers, {
+      r18Mode: !!contents?.uncensoredR18Mode && !contents?.explicitUncensoredModel,
+      timeoutMs,
+      onProgress: contents?.onProgress
+    })
   }
   const body = {
     model,
@@ -1491,7 +1537,11 @@ async function callUncensored (contents, declarations, allowed = null, { timeout
       }
       await retryTimer.sleep(wait)
       if (local && r.status !== 429) {
-        model = await ensureUncensoredModelLoaded(endpoint, model, headers, { timeoutMs, onProgress: contents?.onProgress })
+        model = await ensureUncensoredModelLoaded(endpoint, model, headers, {
+          r18Mode: !!contents?.uncensoredR18Mode && !contents?.explicitUncensoredModel,
+          timeoutMs,
+          onProgress: contents?.onProgress
+        })
         payload = { ...payload, model }
       }
     }
