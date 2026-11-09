@@ -32,6 +32,7 @@ jobs:
       # package-lock の eris は git+ssh 指定なので HTTPS で取得させる
       - run: git config --global url."https://github.com/".insteadOf ssh://git@github.com/
       - run: npm ci --no-audit --no-fund
+      - run: npm run check:secrets
       - run: npm run test:unit
       - run: npm run test:it
       - run: npm run test:db

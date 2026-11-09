@@ -1,0 +1,12 @@
+repos:
+  - repo: https://github.com/gitleaks/gitleaks
+    rev: v8.24.0
+    hooks:
+      - id: gitleaks
+  - repo: local
+    hooks:
+      - id: robopolice-check-secrets
+        name: Check staged changes for secrets and sensitive files
+        entry: node src/miscellaneous/checkSecrets.js --staged
+        language: system
+        pass_filenames: false
