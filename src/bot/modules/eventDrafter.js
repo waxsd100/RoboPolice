@@ -790,8 +790,76 @@ function isUncensoredLimitReached (contents = null) {
 function uncensoredModel (contents = null) {
   const fast = uncensoredFastModel()
   if (fast && isUncensoredLimitReached(contents)) return fast
+  if (contents?.explicitUncensoredModel) return contents.explicitUncensoredModel
   if (contents?.uncensoredR18Mode) return uncensoredR18Model()
   return uncensoredBaseModel()
+}
+
+// Explicit model directive at the start of a mention request:
+//   --model <1|2|3|uncensored|r18|fast|deep|flash|lite|model-name>
+//   -m <...>
+//   [model:<...>]
+//   --1 / --2 / --3 / --uncensored / --r18 / --fast / --deep / --flash / --lite
+const MODEL_DIRECTIVE_PATTERN = /^(?:(?:--model(?:=|\s+)|-m\s+)(\S+)|\[model:([^\]]+)\]|--(1|2|3|uncensored|fallback|heretic|r18|deckard|fast|moe|deep|argon|flash|lite)(?=\s|$))\s*/i
+const GEMINI_DIRECTIVE_ALIASES = {
+  flash: 'gemini-3.8-flash',
+  lite: 'gemini-3.5-flash-lite'
+}
+
+function parseModelDirective (text) {
+  if (typeof text !== 'string') return { directive: null, text: '' }
+  const match = text.match(MODEL_DIRECTIVE_PATTERN)
+  if (!match) return { directive: null, text }
+  const raw = (match[1] || match[2] || match[3] || '').trim()
+  const rest = text.slice(match[0].length).trim()
+  return { directive: raw || null, text: rest }
+}
+
+function applyModelDirective (contents, directive) {
+  if (!directive || !contents) return false
+  const lower = String(directive).trim().toLowerCase()
+  if (lower === 'deep' || lower === 'argon') {
+    if (deepModel()) {
+      contents.deep = true
+      contents.uncensored = false
+      return true
+    }
+    return false
+  }
+  if (GEMINI_DIRECTIVE_ALIASES[lower] || /^gemini-/i.test(directive)) {
+    contents.model = GEMINI_DIRECTIVE_ALIASES[lower] || String(directive).trim()
+    contents.deep = false
+    contents.uncensored = false
+    return true
+  }
+  if (!isUncensoredUsable()) return false
+  if (lower === '1' || lower === 'uncensored' || lower === 'fallback' || lower === 'heretic') {
+    contents.deep = false
+    contents.uncensored = true
+    contents.uncensoredR18Mode = false
+    contents.explicitUncensoredModel = uncensoredBaseModel()
+    return true
+  }
+  if (lower === '2' || lower === 'r18' || lower === 'deckard') {
+    contents.deep = false
+    contents.uncensored = true
+    contents.uncensoredR18Mode = true
+    contents.explicitUncensoredModel = uncensoredR18Model()
+    return true
+  }
+  if (lower === '3' || lower === 'fast' || lower === 'moe') {
+    contents.deep = false
+    contents.uncensored = true
+    contents.uncensoredFast = true
+    contents.explicitUncensoredModel = uncensoredFastModel() || uncensoredBaseModel()
+    return true
+  }
+  const custom = String(directive).trim()
+  require('../utils/geminiPrices').registerUncensoredModel(custom)
+  contents.deep = false
+  contents.uncensored = true
+  contents.explicitUncensoredModel = custom
+  return true
 }
 
 const HAND_OVER_R18_DECLARATION = {
@@ -1571,6 +1639,8 @@ const eventTools = () => require('./eventTools')
 
 // model, thinking, tier: the server's own model, thinking level and tier (%replymodel); null for the default.
 async function draft ({ request, referenced, recent = [], channelName, channelID, server, forum = null, images = [], pictures = [], edit = null, replyLength = null, streamerPersona = true, rules = null, model = null, thinking = null, tier = null, guild, member, tools, now = new Date() }) {
+  const parsed = parseModelDirective(request)
+  if (parsed.directive) request = parsed.text || '（返信先のメッセージに答えてください）'
   const combined = pictures.filter(p => p.combined)
   const foreign = pictures.filter(p => !p.combined)
   const notes = [
@@ -1599,7 +1669,12 @@ async function draft ({ request, referenced, recent = [], channelName, channelID
   conversation.contents.model = model
   conversation.contents.thinking = THINKING_LEVELS.includes(thinking) ? thinking : null
   conversation.contents.tier = SERVICE_TIERS.includes(tier) ? tier : null
-  if (isUncensoredUsable() && isR18Text(request, referenced?.text)) {
+  if (parsed.directive && applyModelDirective(conversation.contents, parsed.directive)) {
+    const chosen = conversation.contents.uncensored
+      ? uncensoredModel(conversation.contents)
+      : (conversation.contents.deep ? deepModel() : replyModel(conversation.contents))
+    global.logger?.info(`[GEMINI]: Explicit model directive "${parsed.directive}" in request; using ${chosen}`)
+  } else if (isUncensoredUsable() && isR18Text(request, referenced?.text)) {
     conversation.contents.uncensored = true
     conversation.contents.uncensoredR18Mode = true
     const initial = replyModel(conversation.contents)
@@ -1614,6 +1689,8 @@ async function draft ({ request, referenced, recent = [], channelName, channelID
 // Gemini wants one response per call of the turn, so tools called alongside the submit (which were
 // not run) are answered too.
 async function revise (conversation, correction) {
+  const parsed = parseModelDirective(correction)
+  if (parsed.directive) correction = parsed.text || correction
   conversation.contents.push({
     role: 'user',
     parts: conversation.lastCalls.map(call => ({
@@ -1625,7 +1702,12 @@ async function revise (conversation, correction) {
       }
     }))
   })
-  if (!conversation.contents.uncensored && isUncensoredUsable() && isR18Text(correction)) {
+  if (parsed.directive && applyModelDirective(conversation.contents, parsed.directive)) {
+    const chosen = conversation.contents.uncensored
+      ? uncensoredModel(conversation.contents)
+      : (conversation.contents.deep ? deepModel() : replyModel(conversation.contents))
+    global.logger?.info(`[GEMINI]: Explicit model directive "${parsed.directive}" in revision; using ${chosen}`)
+  } else if (!conversation.contents.uncensored && isUncensoredUsable() && isR18Text(correction)) {
     conversation.contents.deep = false
     conversation.contents.uncensored = true
     conversation.contents.uncensoredR18Mode = true
@@ -1636,4 +1718,4 @@ async function revise (conversation, correction) {
   return check(conversation, await runAgent(conversation.contents, conversation.tools, conversation.submits))
 }
 
-module.exports = { THINKING_LEVELS, SERVICE_TIERS, defaultTaskConfig, resolveTaskConfig, replyTimeoutMs, flexUsable, SAFETY_SETTINGS, withSafetySettings, THINK_DEEPER_DECLARATION, HAND_OVER_R18_DECLARATION, isR18Text, isRefusalReply, deepModel, DEFAULT_UNCENSORED_MODEL, uncensoredModel, uncensoredR18Model, uncensoredFastModel, isUncensoredLimitReached, isLocalUncensoredUrl, uncensoredEndpoint, isUncensoredConfigured, isUncensoredUsable, checkUncensoredConnection, startUncensoredCheck, uncensoredState, callUncensored, REPLY_LENGTHS, DEFAULT_REPLY_LENGTH, PERSONAS, thinkingConfig, cachedPrefix, caches, purgedFor, promptVersion, lightModel, extractModel, DEFAULT_EXTRACT_MODEL, draft, revise, MAX_STEPS, isConfigured, toScheduledEvent, callGemini, geminiRequest, geminiSend, geminiStream, retryTimer, DEFAULT_GEMINI_MODEL, ENTITY_TYPES, GeminiError }
+module.exports = { THINKING_LEVELS, SERVICE_TIERS, defaultTaskConfig, resolveTaskConfig, replyTimeoutMs, flexUsable, SAFETY_SETTINGS, withSafetySettings, THINK_DEEPER_DECLARATION, HAND_OVER_R18_DECLARATION, isR18Text, isRefusalReply, deepModel, DEFAULT_UNCENSORED_MODEL, uncensoredModel, uncensoredR18Model, uncensoredFastModel, isUncensoredLimitReached, parseModelDirective, applyModelDirective, isLocalUncensoredUrl, uncensoredEndpoint, isUncensoredConfigured, isUncensoredUsable, checkUncensoredConnection, startUncensoredCheck, uncensoredState, callUncensored, REPLY_LENGTHS, DEFAULT_REPLY_LENGTH, PERSONAS, thinkingConfig, cachedPrefix, caches, purgedFor, promptVersion, lightModel, extractModel, DEFAULT_EXTRACT_MODEL, draft, revise, MAX_STEPS, isConfigured, toScheduledEvent, callGemini, geminiRequest, geminiSend, geminiStream, retryTimer, DEFAULT_GEMINI_MODEL, ENTITY_TYPES, GeminiError }

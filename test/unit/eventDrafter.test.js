@@ -1181,6 +1181,37 @@ describe('explicit cache and thinking', () => {
       'gemma-4-31B-it-The-DECKARD-HERETIC-UNCENSORED-Thinking.Q4_K_M.gguf',
       'Gemma-4-26B-A4B-It-Abliterated-Q4_K_M.gguf'
     ])
+    // 5. Explicit model directives in the message (--model 1/2/3, --r18, --fast, [model:...], custom GGUF)
+    const { parseModelDirective } = require('../../src/bot/modules/eventDrafter')
+    assert.deepEqual(parseModelDirective('--model 1 こんにちは'), { directive: '1', text: 'こんにちは' })
+    assert.deepEqual(parseModelDirective('-m 2 秘密の話'), { directive: '2', text: '秘密の話' })
+    assert.deepEqual(parseModelDirective('[model:fast] 急いで答えて'), { directive: 'fast', text: '急いで答えて' })
+    assert.deepEqual(parseModelDirective('--r18 続きを書いて'), { directive: 'r18', text: '続きを書いて' })
+
+    let explicitPayload = null
+    global.fetch = async (url, init) => {
+      explicitPayload = JSON.parse(init.body)
+      return {
+        ok: true,
+        json: async () => ({
+          choices: [{ message: { role: 'assistant', content: '明示指定モデルの返事だよ！' } }]
+        })
+      }
+    }
+    await draft({ request: '--model 1 普通の質問だけどモデル1で答えて', channelName: 'general', guild, tools: quietTools, now: NOW })
+    assert.equal(explicitPayload.model, 'gemma-4-31B-it-ARA-heretic.IQ4_XS.gguf')
+    assert.doesNotMatch(explicitPayload.messages.at(-1).content, /--model 1/, 'directive prefix is stripped from prompt')
+    assert.match(explicitPayload.messages.at(-1).content, /普通の質問だけどモデル1で答えて/)
+
+    await draft({ request: '--model 2 モデル2で答えて', channelName: 'general', guild, tools: quietTools, now: NOW })
+    assert.equal(explicitPayload.model, 'gemma-4-31B-it-The-DECKARD-HERETIC-UNCENSORED-Thinking.Q4_K_M.gguf')
+
+    await draft({ request: '--fast 高速モデルで答えて', channelName: 'general', guild, tools: quietTools, now: NOW })
+    assert.equal(explicitPayload.model, 'Gemma-4-26B-A4B-It-Abliterated-Q4_K_M.gguf')
+
+    await draft({ request: '--model my-custom-model.Q4_K_M.gguf カスタムモデルで答えて', channelName: 'general', guild, tools: quietTools, now: NOW })
+    assert.equal(explicitPayload.model, 'my-custom-model.Q4_K_M.gguf')
+
     delete process.env.UNCENSORED_R18_MODEL
     delete process.env.UNCENSORED_FAST_MODEL
 

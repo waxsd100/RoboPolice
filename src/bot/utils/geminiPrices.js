@@ -45,6 +45,11 @@ function configuredPrices () {
 }
 
 const warned = new Set()
+const customUncensoredModels = new Set()
+
+function registerUncensoredModel (model) {
+  if (model && typeof model === 'string') customUncensoredModels.add(model.trim())
+}
 
 const DEFAULT_UNCENSORED_PRICE = { input: 0.28, cached: 0.14, output: 0.28, imageOutput: 0.28 }
 const DEFAULT_UNCENSORED_FAST_PRICE = { input: 0.14, cached: 0.07, output: 0.14, imageOutput: 0.14 }
@@ -65,7 +70,7 @@ function priceOf (model, now = new Date()) {
     }
     const customUncensored = String(process.env.UNCENSORED_MODEL || '').trim()
     const customR18 = String(process.env.UNCENSORED_R18_MODEL || '').trim()
-    if ((customUncensored && model === customUncensored) || (customR18 && model === customR18) || /\.gguf$/i.test(String(model || ''))) {
+    if ((customUncensored && model === customUncensored) || (customR18 && model === customR18) || customUncensoredModels.has(model) || /\.gguf$/i.test(String(model || ''))) {
       return { ...DEFAULT_UNCENSORED_PRICE }
     }
     if (model && !warned.has(model)) {
@@ -91,4 +96,4 @@ function usdOf (meta, model, { flex = false, now = new Date() } = {}) {
   return flex ? usd / 2 : usd
 }
 
-module.exports = { PRICES, priceOf, usdOf, FALLBACK_MODEL }
+module.exports = { PRICES, priceOf, usdOf, registerUncensoredModel, FALLBACK_MODEL }
