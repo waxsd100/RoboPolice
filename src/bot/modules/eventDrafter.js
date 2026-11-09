@@ -759,7 +759,10 @@ const replyModel = contents => contents?.model || process.env.GEMINI_MODEL || DE
 // xtools-at/DeepSeek-V4-Pro-Qwen3.5-9B-UNCENSORED-heretic).
 const DEFAULT_UNCENSORED_MODEL = 'xtools-at/DeepSeek-V4-Pro-Qwen3.5-9B-UNCENSORED-heretic'
 function uncensoredModel () {
-  return String(process.env.UNCENSORED_MODEL || '').trim() || DEFAULT_UNCENSORED_MODEL
+  const configured = String(process.env.UNCENSORED_MODEL || '').trim()
+  if (configured && configured.toLowerCase() !== 'auto') return configured
+  if (uncensoredState.detectedModel) return uncensoredState.detectedModel
+  return DEFAULT_UNCENSORED_MODEL
 }
 
 const HAND_OVER_R18_DECLARATION = {
@@ -901,6 +904,10 @@ async function checkUncensoredConnection ({ timeoutMs = UNCENSORED_CHECK_TIMEOUT
         const modelsData = await modelsRes.json()
         if (Array.isArray(modelsData?.data) || Array.isArray(modelsData?.models) || Array.isArray(modelsData?.choices)) {
           verified = true
+          const firstModel = modelsData?.data?.[0]?.id || modelsData?.models?.[0]?.id || modelsData?.models?.[0]?.name
+          if (typeof firstModel === 'string' && firstModel.trim()) {
+            uncensoredState.detectedModel = firstModel.trim()
+          }
         }
       } else if (modelsRes.status !== 404 && modelsRes.status !== 405) {
         const text = (await modelsRes.text().catch(() => '')).slice(0, 300)
@@ -929,14 +936,15 @@ async function checkUncensoredConnection ({ timeoutMs = UNCENSORED_CHECK_TIMEOUT
         throw new Error(`Unexpected response: ${JSON.stringify(data).slice(0, 300)}`)
       }
     }
+    const activeModel = uncensoredModel()
     uncensoredState.usable = true
     uncensoredState.url = endpoint.url
     uncensoredState.checkedAt = Date.now()
     uncensoredState.error = null
-    const msg = `[UNCENSORED]: Connected and ready (${model} at ${endpoint.url})`
+    const msg = `[UNCENSORED]: Connected and ready (${activeModel} at ${endpoint.url})`
     global.logger?.info(msg)
     global.webhook?.generic?.(msg)
-    return { configured: true, usable: true, model, url: endpoint.url }
+    return { configured: true, usable: true, model: activeModel, url: endpoint.url }
   } catch (e) {
     const reason = (e?.message || String(e)).slice(0, 300)
     uncensoredState.usable = false

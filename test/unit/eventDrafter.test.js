@@ -1073,6 +1073,7 @@ describe('explicit cache and thinking', () => {
     t.after(() => {
       uncensoredState.usable = null
       uncensoredState.url = null
+      uncensoredState.detectedModel = null
       delete process.env.UNCENSORED_SKIP_STARTUP_PROBE
       delete process.env.UNCENSORED_MODEL
     })
@@ -1080,6 +1081,10 @@ describe('explicit cache and thinking', () => {
     assert.equal(isLocalUncensoredUrl('https://api.featherless.ai/v1/chat/completions'), false)
     assert.deepEqual(priceOf('mradermacher/gemma-4-31B-it-ARA-heretic-GGUF'), { input: 0.28, cached: 0.14, output: 0.28, imageOutput: 0.28 })
     assert.deepEqual(priceOf('gemma-4-31B-it-ARA-heretic'), { input: 0.28, cached: 0.14, output: 0.28, imageOutput: 0.28 })
+    process.env.UNCENSORED_MODEL = 'some-other-org/any-custom-model-32B'
+    assert.deepEqual(priceOf('some-other-org/any-custom-model-32B'), { input: 0.28, cached: 0.14, output: 0.28, imageOutput: 0.28 })
+    assert.deepEqual(priceOf('custom-local-model.Q4_K_M.gguf'), { input: 0.28, cached: 0.14, output: 0.28, imageOutput: 0.28 })
+    delete process.env.UNCENSORED_MODEL
 
     // Cloud Run (*.run.app) uses compact single-pass mode and supports UNCENSORED_SKIP_STARTUP_PROBE=true.
     process.env.UNCENSORED_API_URL = 'https://gemma-heretic-12345-an.a.run.app/v1'

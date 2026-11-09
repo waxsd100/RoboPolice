@@ -43,6 +43,8 @@ function configuredPrices () {
 
 const warned = new Set()
 
+const DEFAULT_UNCENSORED_PRICE = { input: 0.28, cached: 0.14, output: 0.28, imageOutput: 0.28 }
+
 // The price of `model` at `now`: { input, cached, output, imageOutput }.
 function priceOf (model, now = new Date()) {
   const configured = configuredPrices()[model]
@@ -53,6 +55,10 @@ function priceOf (model, now = new Date()) {
   }
   const known = PRICES.filter(p => p.model === model)
   if (!known.length && model !== FALLBACK_MODEL) {
+    const customUncensored = String(process.env.UNCENSORED_MODEL || '').trim()
+    if ((customUncensored && model === customUncensored) || /\.gguf$/i.test(String(model || ''))) {
+      return { ...DEFAULT_UNCENSORED_PRICE }
+    }
     if (model && !warned.has(model)) {
       warned.add(model)
       global.logger?.warn(`[GEMINI]: No price listed for ${model}; counting it as ${FALLBACK_MODEL} (geminiPrices.js, MENTION_TOKEN_PRICES)`)
