@@ -4,6 +4,9 @@
   "description": "RoboPolice - a private audit-logging Discord app, forked from Logger v3",
   "main": "index.js",
   "scripts": {
+    "prepare": "git config core.hooksPath .githooks || true",
+    "precommit": "node src/miscellaneous/checkSecrets.js --staged",
+    "check:secrets": "node src/miscellaneous/checkSecrets.js --all",
     "test": "standard",
     "test:unit": "node --test 'test/unit/**/*.test.js'",
     "test:it": "node --test 'test/integration/**/*.test.js'",
