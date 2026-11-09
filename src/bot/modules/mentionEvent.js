@@ -450,9 +450,11 @@ async function handle (message) {
     let outcome = null
     try {
       reply = await message.channel.createMessage({ content: '内容を読み取っています…', ...reference })
-      // /replylength, /persona, %debugfooter, %tokenlimit; without them (or the database) as by default.
-      const { replyLength, streamerPersona, debugFooter, tokenLimits, replyModel, replyThinking, aiModels, assistantRules } = await replySettingsStore.getReplySettings(guild.id)
-        .catch(() => ({ replyLength: null, streamerPersona: true, debugFooter: false, tokenLimits: {} }))
+      // /replylength, /persona, %debugfooter, %tokenlimit, %safety; without them (or the database) as by default.
+      const { isOwnerGuild } = require('../utils/priority')
+      const owner = isOwnerGuild(guild.id)
+      const { replyLength, streamerPersona, debugFooter, tokenLimits, replyModel, replyThinking, aiModels, assistantRules, safetyFilter = !owner, uncensoredR18 = owner } = await replySettingsStore.getReplySettings(guild.id)
+        .catch(() => ({ replyLength: null, streamerPersona: true, debugFooter: false, tokenLimits: {}, safetyFilter: !owner, uncensoredR18: owner }))
       // Per user across every server, in tokens, against this server's limits (mentionQuota.js). Near
       // a limit, every call goes to Flex inference: slower and half the price.
       const quota = await mentionQuota.take(message.author.id, guild.id, new Date(), { limits: tokenLimits })
@@ -491,7 +493,7 @@ async function handle (message) {
       // What was just being talked about in the channel, as far as it bears on the request
       // (recentTopics.js); not when something the bot made is being changed.
       // The server's rules and what its moderators asked of the assistant (serverRules.js).
-      const directR18 = isUncensoredUsable() && isR18Text(request, referenced?.text)
+      const directR18 = uncensoredR18 !== false && isUncensoredUsable() && isR18Text(request, referenced?.text)
       let queryVecPromise = null
       const queryVector = () => {
         if (!worthSearching(request)) return Promise.resolve(null)
@@ -523,6 +525,8 @@ async function handle (message) {
         recent,
         replyLength,
         streamerPersona,
+        safetyFilter: !!safetyFilter,
+        uncensoredR18: uncensoredR18 !== false,
         rules: directR18 ? null : { moderators: assistantRules || null, channels: [] },
         model: replyModel || null,
         thinking: replyThinking || null,

@@ -190,7 +190,7 @@ installLoreStore()
 // { guildID: true } for servers that show the debug line, tokenLimits { guildID: { '5h', week,
 // flexAt } } for a server's own limits. Installed when this file loads, so no test reaches a real
 // database.
-function installReplyLengthStore (lengths = {}, personas = {}, debugFooters = {}, tokenLimits = {}, models = {}, rules = {}, aiModels = {}, embeddings = {}) {
+function installReplyLengthStore (lengths = {}, personas = {}, debugFooters = {}, tokenLimits = {}, models = {}, rules = {}, aiModels = {}, embeddings = {}, safety = {}) {
   const store = require('../../src/db/interfaces/postgres/replySettings')
   const { isOwnerGuild } = require('../../src/bot/utils/priority')
   const taskModelsOf = guildID => {
@@ -204,6 +204,7 @@ function installReplyLengthStore (lengths = {}, personas = {}, debugFooters = {}
     const tasks = taskModelsOf(guildID)
     const owner = isOwnerGuild(guildID)
     const emb = { messages: null, emojis: null, ...embeddings[guildID] }
+    const saf = { filter: null, uncensored: null, ...safety[guildID] }
     return {
       replyLength: lengths[guildID] || null,
       streamerPersona: personas[guildID] !== false,
@@ -215,7 +216,10 @@ function installReplyLengthStore (lengths = {}, personas = {}, debugFooters = {}
       assistantRules: rules[guildID] || null,
       embeddings: emb,
       embedMessages: emb.messages ?? owner,
-      embedEmojis: emb.emojis ?? owner
+      embedEmojis: emb.emojis ?? owner,
+      safety: saf,
+      safetyFilter: saf.filter ?? !owner,
+      uncensoredR18: saf.uncensored ?? owner
     }
   }
   store.isEmbedMessagesEnabled = async guildID => {
@@ -232,6 +236,16 @@ function installReplyLengthStore (lengths = {}, personas = {}, debugFooters = {}
       return
     }
     embeddings[guildID] = { messages: null, emojis: null, ...embeddings[guildID], [which]: value }
+  }
+  store.setSafety = async (guildID, which, value) => {
+    if (which === 'all') {
+      safety[guildID] = {
+        filter: value === null ? null : Boolean(value),
+        uncensored: value === null ? null : !value
+      }
+      return
+    }
+    safety[guildID] = { filter: null, uncensored: null, ...safety[guildID], [which]: value }
   }
   store.getTaskModel = async (guildID, task) => {
     if (guildID) return taskModelsOf(guildID)[task] || null
@@ -258,7 +272,7 @@ function installReplyLengthStore (lengths = {}, personas = {}, debugFooters = {}
   store.setReplyLength = async (guildID, length) => { lengths[guildID] = length }
   store.setStreamerPersona = async (guildID, enabled) => { personas[guildID] = enabled }
   store.setDebugFooter = async (guildID, enabled) => { debugFooters[guildID] = enabled }
-  return { lengths, personas, debugFooters, tokenLimits, models, rules, aiModels, embeddings }
+  return { lengths, personas, debugFooters, tokenLimits, models, rules, aiModels, embeddings, safety }
 }
 installReplyLengthStore()
 
