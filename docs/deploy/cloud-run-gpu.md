@@ -56,11 +56,11 @@ Railway（8GB RAM）では 31B クラスの大型 GGUF モデルを動作させ�
 
 手元の PC に数十 GB のモデルをダウンロードする必要はありません。[Google Cloud Console](https://console.cloud.google.com/) 右上の **`>_`（Cloud Shell をアクティブにする）** を開き、データセンター内の高速回線で Hugging Face から GCS バケットへ直接流し込みます。
 
-### ステップ 1: プロジェクト設定と API 有効化
+### ステップ 1: プロジェクト設定と API 有効化（東京リージョン: `asia-northeast1`）
 
 ```bash
 export PROJECT_ID="あなたのGCPプロジェクトID"
-export REGION="us-central1"
+export REGION="asia-northeast1"
 export BUCKET_NAME="${PROJECT_ID}-llm-models"
 export UNCENSORED_KEY=$(openssl rand -hex 32)
 
@@ -69,6 +69,9 @@ echo "生成されたAPIキー（後でRailwayに設定します）: ${UNCENSORE
 gcloud config set project "${PROJECT_ID}"
 gcloud services enable run.googleapis.com storage.googleapis.com
 ```
+
+> **リージョンに関する補足**:
+> 東京リージョンは `asia-northeast1` です（Compute Engine の L4 GPU VM は東京で提供されています）。ただし、Cloud Run のサーバーレス GPU（`--gpu-type=nvidia-l4`）は GCP 側の提供状況により、一部のプロジェクトで `asia-northeast1` が未開放の場合があります。もしステップ 3 のデプロイ時にリージョン非対応エラーが出た場合は、アジア圏で Cloud Run L4 GPU が一般提供（GA）されている最寄りの `export REGION="asia-southeast1"`（シンガポール）に変更し、バケットと Cloud Run のリージョンを揃えて実行してください。
 
 ### ステップ 2: GCS バケット作成と 3 モデルの直接転送
 
@@ -114,7 +117,7 @@ gcloud beta run deploy gemma-heretic \
   --args="--models-dir,/models,--models-max,1,--host,0.0.0.0,--port,8080,-ngl,99,-c,8192,-fa,on,--api-key,${UNCENSORED_KEY}"
 ```
 
-デプロイ完了時に表示される `Service URL`（例: `https://gemma-heretic-xxxxxx-uc.a.run.app`）を控えます。
+デプロイ完了時に表示される `Service URL`（例: `https://gemma-heretic-xxxxxx-an.a.run.app`）を控えます。
 
 ---
 
@@ -123,7 +126,7 @@ gcloud beta run deploy gemma-heretic \
 Railway のダッシュボード（Variables）に以下の環境変数を設定します。
 
 ```env
-UNCENSORED_API_URL=https://gemma-heretic-xxxxxx-uc.a.run.app/v1
+UNCENSORED_API_URL=https://gemma-heretic-xxxxxx-an.a.run.app/v1
 UNCENSORED_API_KEY=<ステップ1で生成されたUNCENSORED_KEY>
 UNCENSORED_SKIP_STARTUP_PROBE=true
 

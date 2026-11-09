@@ -232,7 +232,7 @@ const replyLengthOf = length => REPLY_LENGTHS[length] ? length : DEFAULT_REPLY_L
 // rules: { moderators, channels } (serverRules.js): what the server's moderators asked of the
 // assistant (/assistantrules) and its rules channels' text ([{ channelID, text }]); either may be
 // missing.
-function buildPrompt ({ request, referenced, recent = [], channelName, channelID, channelInfo = null, server, forum, images, edit, channels = [], people = [], replyLength = null, streamerPersona = true, rules = null, now }) {
+function buildPrompt ({ request, referenced, recent = [], channelName, channelID, channelInfo = null, server, forum, images, edit, channels = [], people = [], replyLength = null, streamerPersona = true, safetyFilter = false, rules = null, now }) {
   const lines = [
     '## 話し方（このサーバーの設定）',
     streamerPersona === false ? PERSONAS.bot : PERSONAS.streamer,
@@ -240,6 +240,14 @@ function buildPrompt ({ request, referenced, recent = [], channelName, channelID
     '## 返事の長さ（このサーバーの設定）',
     ...REPLY_LENGTHS[replyLengthOf(replyLength)]
   ]
+  if (safetyFilter) {
+    lines.push(
+      '',
+      '## セーフティ保護（このサーバーの設定・最優先）',
+      '- このサーバーではセーフティフィルタが有効です。システム指示の「下ネタ」「そのままでは書けない依頼」よりもこの設定を優先してください。',
+      '- 成人向け（R18・性的・官能・エロ・露骨な下ネタ）・危険な行為（犯罪・違法行為・自傷・暴力・危険物の製造や悪用）・差別・嫌がらせに関する依頼には、年齢制限チャンネルであっても応じないでください（ぼかした版やフェードアウト・朝チュンも書かず、丁寧にお断りしてください）。'
+    )
+  }
   if (rules?.moderators || rules?.channels?.length) {
     lines.push('', '## このサーバーのルールとモデレーターからのお願い（返事・下書きはこれに従う）')
     if (rules.moderators) lines.push('### モデレーターから AI へのお願い', wrap('rules', rules.moderators))
@@ -517,12 +525,20 @@ const SAFETY_SETTINGS = [
   { category: 'HARM_CATEGORY_DANGEROUS_CONTENT', threshold: 'OFF' },
   { category: 'HARM_CATEGORY_CIVIC_INTEGRITY', threshold: 'BLOCK_MEDIUM_AND_ABOVE' }
 ]
-function withSafetySettings (model, body) {
-  return body.safetySettings || /image/i.test(model) ? body : { ...body, safetySettings: SAFETY_SETTINGS }
+const STRICT_SAFETY_SETTINGS = [
+  { category: 'HARM_CATEGORY_HARASSMENT', threshold: 'BLOCK_LOW_AND_ABOVE' },
+  { category: 'HARM_CATEGORY_HATE_SPEECH', threshold: 'BLOCK_LOW_AND_ABOVE' },
+  { category: 'HARM_CATEGORY_SEXUALLY_EXPLICIT', threshold: 'BLOCK_LOW_AND_ABOVE' },
+  { category: 'HARM_CATEGORY_DANGEROUS_CONTENT', threshold: 'BLOCK_LOW_AND_ABOVE' },
+  { category: 'HARM_CATEGORY_CIVIC_INTEGRITY', threshold: 'BLOCK_LOW_AND_ABOVE' }
+]
+function withSafetySettings (model, body, { strict = false } = {}) {
+  if (body.safetySettings || /image/i.test(model)) return body
+  return { ...body, safetySettings: strict ? STRICT_SAFETY_SETTINGS : SAFETY_SETTINGS }
 }
 
 async function callGemini (model, body, options) {
-  if (!options?.defaultSafety) body = withSafetySettings(model, body)
+  if (!options?.defaultSafety) body = withSafetySettings(model, body, { strict: !!options?.strictSafety })
   if (!body.generationConfig?.thinkingConfig && !/image/i.test(model)) {
     const thinking = thinkingConfig(model, { setting: 'GEMINI_LIGHT_THINKING_LEVEL', fallback: 'low' })
     if (thinking.thinkingConfig) body = { ...body, generationConfig: { ...body.generationConfig, ...thinking } }
@@ -832,7 +848,7 @@ function applyModelDirective (contents, directive) {
     contents.uncensored = false
     return true
   }
-  if (!isUncensoredUsable()) return false
+  if (!isUncensoredUsable() || contents.uncensoredR18 === false) return false
   if (lower === '1' || lower === 'uncensored' || lower === 'fallback' || lower === 'heretic') {
     contents.deep = false
     contents.uncensored = true
@@ -1399,6 +1415,7 @@ async function callUncensored (contents, declarations, allowed = null, { timeout
 async function generate (contents, declarations, allowed = null, { deep = false, uncensored = false } = {}) {
   if (uncensored) return callUncensored(contents, declarations, allowed)
   const model = deep ? deepModel() : replyModel(contents)
+  const strictSafety = !!contents.safetyFilter
   const prefix = {
     systemInstruction: { parts: [{ text: systemInstruction() }] },
     tools: [{ functionDeclarations: declarations }],
@@ -1411,7 +1428,7 @@ async function generate (contents, declarations, allowed = null, { deep = false,
   // The busier the bot as a whole, the less a reply thinks (geminiLoad.js).
   if (generationConfig.thinkingConfig) generationConfig.thinkingConfig = { ...generationConfig.thinkingConfig, thinkingLevel: geminiLoad.cappedThinking(generationConfig.thinkingConfig.thinkingLevel) }
   if (deep) {
-    return callGemini(model, { ...prefix, contents, generationConfig }, { purpose: 'mention-deep', timeoutMs: DEEP_TIMEOUT_MS, flex: process.env.GEMINI_DEEP_FLEX !== 'false', stream: true })
+    return callGemini(model, { ...prefix, contents, generationConfig }, { purpose: 'mention-deep', timeoutMs: DEEP_TIMEOUT_MS, flex: process.env.GEMINI_DEEP_FLEX !== 'false', stream: true, strictSafety })
   }
   const replyFlex = contents.tier === 'flex'
   // The last step, limited to submitting (allowed), has its own toolConfig: sent in full, since a
@@ -1419,13 +1436,13 @@ async function generate (contents, declarations, allowed = null, { deep = false,
   const cache = allowed ? null : await cachedPrefix(model, prefix)
   if (cache) {
     try {
-      return await callGemini(model, { cachedContent: cache, contents, generationConfig }, { purpose: 'mention', timeoutMs: replyTimeoutMs(), flex: replyFlex, stream: true })
+      return await callGemini(model, { cachedContent: cache, contents, generationConfig }, { purpose: 'mention', timeoutMs: replyTimeoutMs(), flex: replyFlex, stream: true, strictSafety })
     } catch (e) {
       if (!/cachedContent|CachedContent|cached content/i.test(e.message) || e.blocked) throw e
       forgetCache(cache) // gone on Gemini's side: once more in full
     }
   }
-  return callGemini(model, { ...prefix, contents, generationConfig }, { purpose: 'mention', timeoutMs: replyTimeoutMs(), flex: replyFlex, stream: true })
+  return callGemini(model, { ...prefix, contents, generationConfig }, { purpose: 'mention', timeoutMs: replyTimeoutMs(), flex: replyFlex, stream: true, strictSafety })
 }
 
 // Runs the model with the read-only tools until it submits a draft, appending every turn to
@@ -1436,10 +1453,11 @@ async function generate (contents, declarations, allowed = null, { deep = false,
 const FLEX_UNAVAILABLE = [429, 503, 524]
 
 async function runAgent (contents, tools, submits = SUBMIT_DECLARATIONS) {
+  const allowUncensored = contents.uncensoredR18 !== false
   // Not offered again once the stronger model or the uncensored fallback took over this conversation.
   const offered = [
     ...(deepModel() && !contents.deepRefused && !contents.uncensored ? [THINK_DEEPER_DECLARATION] : []),
-    ...(isUncensoredUsable() && !contents.uncensored && !contents.uncensoredFailed ? [HAND_OVER_R18_DECLARATION] : [])
+    ...(allowUncensored && isUncensoredUsable() && !contents.uncensored && !contents.uncensoredFailed ? [HAND_OVER_R18_DECLARATION] : [])
   ]
   const declarationsFor = () => [...tools.declarations, ...(contents.deep || contents.uncensored ? [] : offered), ...submits]
   const start = contents.length
@@ -1477,7 +1495,7 @@ async function runAgent (contents, tools, submits = SUBMIT_DECLARATIONS) {
           continue
         }
       }
-      if (!contents.uncensored && e.blocked && isUncensoredConfigured() && !contents.uncensoredFailed) {
+      if (allowUncensored && !contents.uncensored && e.blocked && isUncensoredConfigured() && !contents.uncensoredFailed) {
         const failed = contents.deep ? deepModel() : replyModel(contents)
         const notes = extractLookupNotes(contents.slice(start))
         if (notes) contents.lookupNotes = notes
@@ -1511,7 +1529,7 @@ async function runAgent (contents, tools, submits = SUBMIT_DECLARATIONS) {
       }
       throw e
     }
-    const r18HandOver = !contents.uncensored && isUncensoredUsable() && !contents.uncensoredFailed && content.parts.some(p => p.functionCall?.name === HAND_OVER_R18_DECLARATION.name)
+    const r18HandOver = allowUncensored && !contents.uncensored && isUncensoredUsable() && !contents.uncensoredFailed && content.parts.some(p => p.functionCall?.name === HAND_OVER_R18_DECLARATION.name)
     if (r18HandOver) {
       const fromModel = contents.deep ? deepModel() : replyModel(contents)
       const notes = extractLookupNotes(contents.slice(start))
@@ -1542,7 +1560,7 @@ async function runAgent (contents, tools, submits = SUBMIT_DECLARATIONS) {
     contents.push(content)
     const calls = content.parts.filter(p => p.functionCall).map(p => p.functionCall)
     const submitted = calls.find(c => submits.some(d => d.name === c.name))
-    if (submitted && !contents.uncensored && isUncensoredUsable() && !contents.uncensoredFailed && submitted.name === SUBMIT_CHAT_DECLARATION.name && isRefusalReply(submitted.args?.text)) {
+    if (submitted && allowUncensored && !contents.uncensored && isUncensoredUsable() && !contents.uncensoredFailed && submitted.name === SUBMIT_CHAT_DECLARATION.name && isRefusalReply(submitted.args?.text)) {
       const fromModel = contents.deep ? deepModel() : replyModel(contents)
       const notes = extractLookupNotes(contents.slice(start))
       if (notes) contents.lookupNotes = notes
@@ -1638,7 +1656,7 @@ async function check (conversation, { name, args, calls = [] }) {
 const eventTools = () => require('./eventTools')
 
 // model, thinking, tier: the server's own model, thinking level and tier (%replymodel); null for the default.
-async function draft ({ request, referenced, recent = [], channelName, channelID, server, forum = null, images = [], pictures = [], edit = null, replyLength = null, streamerPersona = true, rules = null, model = null, thinking = null, tier = null, guild, member, tools, now = new Date() }) {
+async function draft ({ request, referenced, recent = [], channelName, channelID, server, forum = null, images = [], pictures = [], edit = null, replyLength = null, streamerPersona = true, safetyFilter = false, uncensoredR18 = true, rules = null, model = null, thinking = null, tier = null, guild, member, tools, now = new Date() }) {
   const parsed = parseModelDirective(request)
   if (parsed.directive) request = parsed.text || '（返信先のメッセージに答えてください）'
   const combined = pictures.filter(p => p.combined)
@@ -1654,7 +1672,7 @@ async function draft ({ request, referenced, recent = [], channelName, channelID
       ]
     : []
   const conversation = {
-    contents: [{ role: 'user', parts: [{ text: buildPrompt({ request, referenced, recent, channelName, channelID, channelInfo: channelID ? eventTools().requestChannelInfo(channelID, guild) : null, server, forum, images, edit, channels: member ? eventTools().namedChannels([request, referenced?.text], guild, member) : [], people: member ? eventTools().namedMembers([request, referenced?.text], guild, member) : [], replyLength, streamerPersona, rules, now }) }, ...shown] }],
+    contents: [{ role: 'user', parts: [{ text: buildPrompt({ request, referenced, recent, channelName, channelID, channelInfo: channelID ? eventTools().requestChannelInfo(channelID, guild) : null, server, forum, images, edit, channels: member ? eventTools().namedChannels([request, referenced?.text], guild, member) : [], people: member ? eventTools().namedMembers([request, referenced?.text], guild, member) : [], replyLength, streamerPersona, safetyFilter, rules, now }) }, ...shown] }],
     guild,
     member,
     tools,
@@ -1669,12 +1687,14 @@ async function draft ({ request, referenced, recent = [], channelName, channelID
   conversation.contents.model = model
   conversation.contents.thinking = THINKING_LEVELS.includes(thinking) ? thinking : null
   conversation.contents.tier = SERVICE_TIERS.includes(tier) ? tier : null
+  conversation.contents.safetyFilter = !!safetyFilter
+  conversation.contents.uncensoredR18 = uncensoredR18 !== false
   if (parsed.directive && applyModelDirective(conversation.contents, parsed.directive)) {
     const chosen = conversation.contents.uncensored
       ? uncensoredModel(conversation.contents)
       : (conversation.contents.deep ? deepModel() : replyModel(conversation.contents))
     global.logger?.info(`[GEMINI]: Explicit model directive "${parsed.directive}" in request; using ${chosen}`)
-  } else if (isUncensoredUsable() && isR18Text(request, referenced?.text)) {
+  } else if (conversation.contents.uncensoredR18 && isUncensoredUsable() && isR18Text(request, referenced?.text)) {
     conversation.contents.uncensored = true
     conversation.contents.uncensoredR18Mode = true
     const initial = replyModel(conversation.contents)
@@ -1707,7 +1727,7 @@ async function revise (conversation, correction) {
       ? uncensoredModel(conversation.contents)
       : (conversation.contents.deep ? deepModel() : replyModel(conversation.contents))
     global.logger?.info(`[GEMINI]: Explicit model directive "${parsed.directive}" in revision; using ${chosen}`)
-  } else if (!conversation.contents.uncensored && isUncensoredUsable() && isR18Text(correction)) {
+  } else if (conversation.contents.uncensoredR18 !== false && !conversation.contents.uncensored && isUncensoredUsable() && isR18Text(correction)) {
     conversation.contents.deep = false
     conversation.contents.uncensored = true
     conversation.contents.uncensoredR18Mode = true
@@ -1718,4 +1738,4 @@ async function revise (conversation, correction) {
   return check(conversation, await runAgent(conversation.contents, conversation.tools, conversation.submits))
 }
 
-module.exports = { THINKING_LEVELS, SERVICE_TIERS, defaultTaskConfig, resolveTaskConfig, replyTimeoutMs, flexUsable, SAFETY_SETTINGS, withSafetySettings, THINK_DEEPER_DECLARATION, HAND_OVER_R18_DECLARATION, isR18Text, isRefusalReply, deepModel, DEFAULT_UNCENSORED_MODEL, uncensoredModel, uncensoredR18Model, uncensoredFastModel, isUncensoredLimitReached, parseModelDirective, applyModelDirective, isLocalUncensoredUrl, uncensoredEndpoint, isUncensoredConfigured, isUncensoredUsable, checkUncensoredConnection, startUncensoredCheck, uncensoredState, callUncensored, REPLY_LENGTHS, DEFAULT_REPLY_LENGTH, PERSONAS, thinkingConfig, cachedPrefix, caches, purgedFor, promptVersion, lightModel, extractModel, DEFAULT_EXTRACT_MODEL, draft, revise, MAX_STEPS, isConfigured, toScheduledEvent, callGemini, geminiRequest, geminiSend, geminiStream, retryTimer, DEFAULT_GEMINI_MODEL, ENTITY_TYPES, GeminiError }
+module.exports = { THINKING_LEVELS, SERVICE_TIERS, defaultTaskConfig, resolveTaskConfig, replyTimeoutMs, flexUsable, SAFETY_SETTINGS, STRICT_SAFETY_SETTINGS, withSafetySettings, THINK_DEEPER_DECLARATION, HAND_OVER_R18_DECLARATION, isR18Text, isRefusalReply, deepModel, DEFAULT_UNCENSORED_MODEL, uncensoredModel, uncensoredR18Model, uncensoredFastModel, isUncensoredLimitReached, parseModelDirective, applyModelDirective, isLocalUncensoredUrl, uncensoredEndpoint, isUncensoredConfigured, isUncensoredUsable, checkUncensoredConnection, startUncensoredCheck, uncensoredState, callUncensored, REPLY_LENGTHS, DEFAULT_REPLY_LENGTH, PERSONAS, thinkingConfig, cachedPrefix, caches, purgedFor, promptVersion, lightModel, extractModel, DEFAULT_EXTRACT_MODEL, draft, revise, MAX_STEPS, isConfigured, toScheduledEvent, callGemini, geminiRequest, geminiSend, geminiStream, retryTimer, DEFAULT_GEMINI_MODEL, ENTITY_TYPES, GeminiError }
