@@ -774,7 +774,6 @@ const replyModel = contents => contents?.model || process.env.GEMINI_MODEL || DE
 // UNCENSORED_GATEWAY_PROVIDER), the conversation is handed over to:
 // - UNCENSORED_MODEL for general Gemini block fallback (Model 1)
 // - UNCENSORED_R18_MODEL for R18 / adult content requests and handovers (Model 2; falls back to UNCENSORED_MODEL)
-// - UNCENSORED_FAST_MODEL when a token/load limit is reached (flex tier / busy load) or when the primary uncensored model fails.
 const DEFAULT_UNCENSORED_MODEL = 'xtools-at/DeepSeek-V4-Pro-Qwen3.5-9B-UNCENSORED-heretic'
 function uncensoredBaseModel () {
   const configured = String(process.env.UNCENSORED_MODEL || '').trim()
@@ -788,35 +787,18 @@ function uncensoredR18Model () {
   return configured || uncensoredBaseModel()
 }
 
-function uncensoredFastModel () {
-  const configured = String(process.env.UNCENSORED_FAST_MODEL || '').trim()
-  return configured || null
-}
-
-function isUncensoredLimitReached (contents = null) {
-  const usage = currentUsage()
-  return Boolean(
-    contents?.uncensoredFast ||
-    contents?.tier === 'flex' ||
-    usage?.flex ||
-    geminiLoad.flexForAll()
-  )
-}
-
 function uncensoredModel (contents = null) {
-  const fast = uncensoredFastModel()
-  if (fast && isUncensoredLimitReached(contents)) return fast
   if (contents?.explicitUncensoredModel) return contents.explicitUncensoredModel
   if (contents?.uncensoredR18Mode) return uncensoredR18Model()
   return uncensoredBaseModel()
 }
 
 // Explicit model directive at the start of a mention request:
-//   --model <1|2|3|uncensored|r18|fast|deep|flash|lite|model-name>
+//   --model <1|2|uncensored|r18|deep|flash|lite|model-name>
 //   -m <...>
 //   [model:<...>]
-//   --1 / --2 / --3 / --uncensored / --r18 / --fast / --deep / --flash / --lite
-const MODEL_DIRECTIVE_PATTERN = /^(?:(?:--model(?:=|\s+)|-m\s+)(\S+)|\[model:([^\]]+)\]|--(1|2|3|uncensored|fallback|heretic|r18|deckard|fast|moe|deep|argon|flash|lite)(?=\s|$))\s*/i
+//   --1 / --2 / --uncensored / --r18 / --deep / --flash / --lite
+const MODEL_DIRECTIVE_PATTERN = /^(?:(?:--model(?:=|\s+)|-m\s+)(\S+)|\[model:([^\]]+)\]|--(1|2|uncensored|fallback|heretic|r18|deckard|deep|argon|flash|lite)(?=\s|$))\s*/i
 const GEMINI_DIRECTIVE_ALIASES = {
   flash: 'gemini-3.8-flash',
   lite: 'gemini-3.5-flash-lite'
@@ -861,13 +843,6 @@ function applyModelDirective (contents, directive) {
     contents.uncensored = true
     contents.uncensoredR18Mode = true
     contents.explicitUncensoredModel = uncensoredR18Model()
-    return true
-  }
-  if (lower === '3' || lower === 'fast' || lower === 'moe') {
-    contents.deep = false
-    contents.uncensored = true
-    contents.uncensoredFast = true
-    contents.explicitUncensoredModel = uncensoredFastModel() || uncensoredBaseModel()
     return true
   }
   const custom = String(directive).trim()
@@ -1307,7 +1282,6 @@ async function callUncensored (contents, declarations, allowed = null, { timeout
   const endpoint = uncensoredEndpoint()
   if (!endpoint) throw new GeminiError('Uncensored endpoint is not configured', 'AI の呼び出しに失敗しました')
   const model = uncensoredModel(contents)
-  const isFastLimit = isUncensoredLimitReached(contents)
   const headers = uncensoredHeaders(endpoint)
   const local = !endpoint.gateway && isLocalUncensoredUrl(endpoint.url)
   const canSubmitChat = (!allowed || allowed.includes(SUBMIT_CHAT_DECLARATION.name)) && declarations.some(d => d.name === SUBMIT_CHAT_DECLARATION.name)
@@ -1399,9 +1373,9 @@ async function callUncensored (contents, declarations, allowed = null, { timeout
       }
     : undefined
   recordTokens('mention-uncensored', model, usageMeta)
-  addTokens(usageMeta, { model, flex: isFastLimit })
-  geminiLoad.record(require('../utils/mentionQuota').costOf(usageMeta, model, { flex: isFastLimit }))
-  addModel(model, { flex: isFastLimit })
+  addTokens(usageMeta, { model, flex: false })
+  geminiLoad.record(require('../utils/mentionQuota').costOf(usageMeta, model, { flex: false }))
+  addModel(model, { flex: false })
   if (!parts.length) {
     throw new GeminiError(`Uncensored model returned no content: ${JSON.stringify(data).slice(0, 1000)}`, 'AI から応答がありませんでした')
   }
@@ -1470,30 +1444,19 @@ async function runAgent (contents, tools, submits = SUBMIT_DECLARATIONS) {
     try {
       content = await generate(contents, declarationsFor(), last ? submits.map(d => d.name) : null, { deep: !!contents.deep, uncensored: !!contents.uncensored })
     } catch (e) {
-      if (contents.uncensored) {
+      if (contents.uncensored && !contents.geminiBlocked) {
         const currentModel = uncensoredModel(contents)
-        const fastModel = uncensoredFastModel()
-        if (fastModel && !contents.uncensoredFast && currentModel !== fastModel) {
-          global.logger?.warn(`[UNCENSORED]: ${currentModel} failed (${e.message.slice(0, 200)}); switching to fast model ${fastModel}`)
-          addFallback(`${currentModel} unavailable → ${fastModel}`)
-          contents.splice(start)
-          contents.uncensoredFast = true
-          step = -1
-          continue
-        }
-        if (!contents.geminiBlocked) {
-          const fallback = replyModel(contents)
-          global.logger?.warn(`[UNCENSORED]: ${currentModel} failed (${e.message.slice(0, 200)}); ${fallback} answers instead`)
-          addFallback(`${currentModel} unavailable → ${fallback}`)
-          contents.splice(start)
-          contents.uncensored = false
-          contents.uncensoredFailed = true
-          contents.uncensoredError = e
-          const idx = offered.indexOf(HAND_OVER_R18_DECLARATION)
-          if (idx !== -1) offered.splice(idx, 1)
-          step = -1
-          continue
-        }
+        const fallback = replyModel(contents)
+        global.logger?.warn(`[UNCENSORED]: ${currentModel} failed (${e.message.slice(0, 200)}); ${fallback} answers instead`)
+        addFallback(`${currentModel} unavailable → ${fallback}`)
+        contents.splice(start)
+        contents.uncensored = false
+        contents.uncensoredFailed = true
+        contents.uncensoredError = e
+        const idx = offered.indexOf(HAND_OVER_R18_DECLARATION)
+        if (idx !== -1) offered.splice(idx, 1)
+        step = -1
+        continue
       }
       if (allowUncensored && !contents.uncensored && e.blocked && isUncensoredConfigured() && !contents.uncensoredFailed) {
         const failed = contents.deep ? deepModel() : replyModel(contents)
@@ -1738,4 +1701,4 @@ async function revise (conversation, correction) {
   return check(conversation, await runAgent(conversation.contents, conversation.tools, conversation.submits))
 }
 
-module.exports = { THINKING_LEVELS, SERVICE_TIERS, defaultTaskConfig, resolveTaskConfig, replyTimeoutMs, flexUsable, SAFETY_SETTINGS, STRICT_SAFETY_SETTINGS, withSafetySettings, THINK_DEEPER_DECLARATION, HAND_OVER_R18_DECLARATION, isR18Text, isRefusalReply, deepModel, DEFAULT_UNCENSORED_MODEL, uncensoredModel, uncensoredR18Model, uncensoredFastModel, isUncensoredLimitReached, parseModelDirective, applyModelDirective, isLocalUncensoredUrl, uncensoredEndpoint, isUncensoredConfigured, isUncensoredUsable, checkUncensoredConnection, startUncensoredCheck, uncensoredState, callUncensored, REPLY_LENGTHS, DEFAULT_REPLY_LENGTH, PERSONAS, thinkingConfig, cachedPrefix, caches, purgedFor, promptVersion, lightModel, extractModel, DEFAULT_EXTRACT_MODEL, draft, revise, MAX_STEPS, isConfigured, toScheduledEvent, callGemini, geminiRequest, geminiSend, geminiStream, retryTimer, DEFAULT_GEMINI_MODEL, ENTITY_TYPES, GeminiError }
+module.exports = { THINKING_LEVELS, SERVICE_TIERS, defaultTaskConfig, resolveTaskConfig, replyTimeoutMs, flexUsable, SAFETY_SETTINGS, STRICT_SAFETY_SETTINGS, withSafetySettings, THINK_DEEPER_DECLARATION, HAND_OVER_R18_DECLARATION, isR18Text, isRefusalReply, deepModel, DEFAULT_UNCENSORED_MODEL, uncensoredModel, uncensoredR18Model, parseModelDirective, applyModelDirective, isLocalUncensoredUrl, uncensoredEndpoint, isUncensoredConfigured, isUncensoredUsable, checkUncensoredConnection, startUncensoredCheck, uncensoredState, callUncensored, REPLY_LENGTHS, DEFAULT_REPLY_LENGTH, PERSONAS, thinkingConfig, cachedPrefix, caches, purgedFor, promptVersion, lightModel, extractModel, DEFAULT_EXTRACT_MODEL, draft, revise, MAX_STEPS, isConfigured, toScheduledEvent, callGemini, geminiRequest, geminiSend, geminiStream, retryTimer, DEFAULT_GEMINI_MODEL, ENTITY_TYPES, GeminiError }

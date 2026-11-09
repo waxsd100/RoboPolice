@@ -1084,13 +1084,11 @@ describe('explicit cache and thinking', () => {
       delete process.env.UNCENSORED_SKIP_STARTUP_PROBE
       delete process.env.UNCENSORED_MODEL
       delete process.env.UNCENSORED_R18_MODEL
-      delete process.env.UNCENSORED_FAST_MODEL
     })
     assert.equal(isLocalUncensoredUrl('https://gemma-heretic-12345-an.a.run.app/v1/chat/completions'), true)
     assert.equal(isLocalUncensoredUrl('https://api.featherless.ai/v1/chat/completions'), false)
     assert.deepEqual(priceOf('mradermacher/gemma-4-31B-it-ARA-heretic-GGUF'), { input: 0.28, cached: 0.14, output: 0.28, imageOutput: 0.28 })
     assert.deepEqual(priceOf('gemma-4-31B-it-ARA-heretic'), { input: 0.28, cached: 0.14, output: 0.28, imageOutput: 0.28 })
-    assert.deepEqual(priceOf('SevenOfNine/Gemma-4-26B-A4B-It-Abliterated-GGUF'), { input: 0.14, cached: 0.07, output: 0.14, imageOutput: 0.14 })
     process.env.UNCENSORED_MODEL = 'some-other-org/any-custom-model-32B'
     assert.deepEqual(priceOf('some-other-org/any-custom-model-32B'), { input: 0.28, cached: 0.14, output: 0.28, imageOutput: 0.28 })
     assert.deepEqual(priceOf('custom-local-model.Q4_K_M.gguf'), { input: 0.28, cached: 0.14, output: 0.28, imageOutput: 0.28 })
@@ -1100,11 +1098,9 @@ describe('explicit cache and thinking', () => {
     // Also routes:
     // - normal Gemini block fallback -> UNCENSORED_MODEL (Model 1)
     // - R18 request / handover -> UNCENSORED_R18_MODEL (Model 2)
-    // - token/load limit (tier: 'flex') or primary model failure -> UNCENSORED_FAST_MODEL
     process.env.UNCENSORED_API_URL = 'https://gemma-heretic-12345-an.a.run.app/v1'
     process.env.UNCENSORED_MODEL = 'gemma-4-31B-it-ARA-heretic.IQ4_XS.gguf'
     process.env.UNCENSORED_R18_MODEL = 'gemma-4-31B-it-The-DECKARD-HERETIC-UNCENSORED-Thinking.Q4_K_M.gguf'
-    process.env.UNCENSORED_FAST_MODEL = 'Gemma-4-26B-A4B-It-Abliterated-Q4_K_M.gguf'
     process.env.UNCENSORED_SKIP_STARTUP_PROBE = 'true'
     let probeFetched = 0
     global.fetch = async () => {
@@ -1152,47 +1148,11 @@ describe('explicit cache and thinking', () => {
     assert.equal(blockedReply.text, 'モデル1（フォールバック）の返事だよ！')
     assert.equal(blockedFallbackModel, 'gemma-4-31B-it-ARA-heretic.IQ4_XS.gguf')
 
-    // 3. When limit is reached (tier: 'flex'), uses UNCENSORED_FAST_MODEL
-    let limitModel = null
-    global.fetch = async (url, init) => {
-      limitModel = JSON.parse(init.body).model
-      return {
-        ok: true,
-        json: async () => ({
-          choices: [{ message: { role: 'assistant', content: '高速モデルの返事だよ！' } }]
-        })
-      }
-    }
-    const limitReply = await draft({ request: 'R18の別の小説を書いて', tier: 'flex', channelName: 'general', guild, tools: quietTools, now: NOW })
-    assert.equal(limitReply.text, '高速モデルの返事だよ！')
-    assert.equal(limitModel, 'Gemma-4-26B-A4B-It-Abliterated-Q4_K_M.gguf')
-
-    // 4. When primary uncensored model fails, automatically switches to UNCENSORED_FAST_MODEL
-    const triedModels = []
-    global.fetch = async (url, init) => {
-      const m = JSON.parse(init.body).model
-      triedModels.push(m)
-      if (m !== 'Gemma-4-26B-A4B-It-Abliterated-Q4_K_M.gguf') {
-        return { ok: false, status: 500, text: async () => 'OOM on 31B' }
-      }
-      return {
-        ok: true,
-        json: async () => ({
-          choices: [{ message: { role: 'assistant', content: '31B失敗から高速版への自動フォールバック！' } }]
-        })
-      }
-    }
-    const autoFastReply = await draft({ request: 'R18のさらに別の話をお願い', channelName: 'general', guild, tools: quietTools, now: NOW })
-    assert.equal(autoFastReply.text, '31B失敗から高速版への自動フォールバック！')
-    assert.deepEqual(triedModels, [
-      'gemma-4-31B-it-The-DECKARD-HERETIC-UNCENSORED-Thinking.Q4_K_M.gguf',
-      'Gemma-4-26B-A4B-It-Abliterated-Q4_K_M.gguf'
-    ])
-    // 5. Explicit model directives in the message (--model 1/2/3, --r18, --fast, [model:...], custom GGUF)
+    // 3. Explicit model directives in the message (--model 1/2, --1, --2, --r18, [model:...], custom GGUF)
     const { parseModelDirective } = require('../../src/bot/modules/eventDrafter')
     assert.deepEqual(parseModelDirective('--model 1 こんにちは'), { directive: '1', text: 'こんにちは' })
     assert.deepEqual(parseModelDirective('-m 2 秘密の話'), { directive: '2', text: '秘密の話' })
-    assert.deepEqual(parseModelDirective('[model:fast] 急いで答えて'), { directive: 'fast', text: '急いで答えて' })
+    assert.deepEqual(parseModelDirective('[model:2] 続きを書いて'), { directive: '2', text: '続きを書いて' })
     assert.deepEqual(parseModelDirective('--r18 続きを書いて'), { directive: 'r18', text: '続きを書いて' })
 
     let explicitPayload = null
@@ -1213,14 +1173,10 @@ describe('explicit cache and thinking', () => {
     await draft({ request: '--model 2 モデル2で答えて', channelName: 'general', guild, tools: quietTools, now: NOW })
     assert.equal(explicitPayload.model, 'gemma-4-31B-it-The-DECKARD-HERETIC-UNCENSORED-Thinking.Q4_K_M.gguf')
 
-    await draft({ request: '--fast 高速モデルで答えて', channelName: 'general', guild, tools: quietTools, now: NOW })
-    assert.equal(explicitPayload.model, 'Gemma-4-26B-A4B-It-Abliterated-Q4_K_M.gguf')
-
     await draft({ request: '--model my-custom-model.Q4_K_M.gguf カスタムモデルで答えて', channelName: 'general', guild, tools: quietTools, now: NOW })
     assert.equal(explicitPayload.model, 'my-custom-model.Q4_K_M.gguf')
 
     delete process.env.UNCENSORED_R18_MODEL
-    delete process.env.UNCENSORED_FAST_MODEL
 
     process.env.UNCENSORED_API_URL = 'https://api.featherless.ai/v1'
     global.fetch = async () => ({
