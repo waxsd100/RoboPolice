@@ -25,7 +25,12 @@ const PRICES = [
   { model: 'gemini-3.1-flash-image', input: 0.5, output: 3, imageOutput: 60 },
   { model: 'gemini-3.1-flash-lite-image', input: 0.25, output: 1.5, imageOutput: 30 },
   { model: 'gemini-nano-banana-2.1', input: 1.5, output: 7.5, imageOutput: 30 },
-  { model: 'xtools-at/DeepSeek-V4-Pro-Qwen3.5-9B-UNCENSORED-heretic', input: 0.28, cached: 0.14, output: 0.28 }
+  { model: 'xtools-at/DeepSeek-V4-Pro-Qwen3.5-9B-UNCENSORED-heretic', input: 0.28, cached: 0.14, output: 0.28 },
+  { model: 'mradermacher/gemma-4-31B-it-ARA-heretic-GGUF', input: 0.28, cached: 0.14, output: 0.28 },
+  { model: 'gemma-4-31B-it-ARA-heretic', input: 0.28, cached: 0.14, output: 0.28 },
+  { model: 'DavidAU/gemma-4-31B-it-The-DECKARD-HERETIC-UNCENSORED-Thinking', input: 0.28, cached: 0.14, output: 0.28 },
+  { model: 'SevenOfNine/Gemma-4-26B-A4B-It-Abliterated-GGUF', input: 0.14, cached: 0.07, output: 0.14 },
+  { model: 'mradermacher/gemma-4-26B-A4B-it-abliterated-GGUF', input: 0.14, cached: 0.07, output: 0.14 }
 ]
 // A model not in the list is priced as the usual reply model.
 const FALLBACK_MODEL = 'gemini-3.8-flash'
@@ -40,6 +45,14 @@ function configuredPrices () {
 }
 
 const warned = new Set()
+const customUncensoredModels = new Set()
+
+function registerUncensoredModel (model) {
+  if (model && typeof model === 'string') customUncensoredModels.add(model.trim())
+}
+
+const DEFAULT_UNCENSORED_PRICE = { input: 0.28, cached: 0.14, output: 0.28, imageOutput: 0.28 }
+const DEFAULT_UNCENSORED_FAST_PRICE = { input: 0.14, cached: 0.07, output: 0.14, imageOutput: 0.14 }
 
 // The price of `model` at `now`: { input, cached, output, imageOutput }.
 function priceOf (model, now = new Date()) {
@@ -51,6 +64,15 @@ function priceOf (model, now = new Date()) {
   }
   const known = PRICES.filter(p => p.model === model)
   if (!known.length && model !== FALLBACK_MODEL) {
+    const customFast = String(process.env.UNCENSORED_FAST_MODEL || '').trim()
+    if ((customFast && model === customFast) || /26B-A4B|30B-A3B|35B-A3B/i.test(String(model || ''))) {
+      return { ...DEFAULT_UNCENSORED_FAST_PRICE }
+    }
+    const customUncensored = String(process.env.UNCENSORED_MODEL || '').trim()
+    const customR18 = String(process.env.UNCENSORED_R18_MODEL || '').trim()
+    if ((customUncensored && model === customUncensored) || (customR18 && model === customR18) || customUncensoredModels.has(model) || /\.gguf$/i.test(String(model || ''))) {
+      return { ...DEFAULT_UNCENSORED_PRICE }
+    }
     if (model && !warned.has(model)) {
       warned.add(model)
       global.logger?.warn(`[GEMINI]: No price listed for ${model}; counting it as ${FALLBACK_MODEL} (geminiPrices.js, MENTION_TOKEN_PRICES)`)
@@ -74,4 +96,4 @@ function usdOf (meta, model, { flex = false, now = new Date() } = {}) {
   return flex ? usd / 2 : usd
 }
 
-module.exports = { PRICES, priceOf, usdOf, FALLBACK_MODEL }
+module.exports = { PRICES, priceOf, usdOf, registerUncensoredModel, FALLBACK_MODEL }

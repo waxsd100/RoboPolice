@@ -771,11 +771,86 @@ const replyModel = contents => contents?.model || process.env.GEMINI_MODEL || DE
 
 // When R18 / adult content is detected or Google refuses to answer a mention (PROHIBITED_CONTENT,
 // SAFETY, …) and an OpenAI-compatible uncensored endpoint is configured (UNCENSORED_API_URL or
-// UNCENSORED_GATEWAY_PROVIDER), the conversation is handed over to UNCENSORED_MODEL (by default
-// xtools-at/DeepSeek-V4-Pro-Qwen3.5-9B-UNCENSORED-heretic).
+// UNCENSORED_GATEWAY_PROVIDER), the conversation is handed over to:
+// - UNCENSORED_MODEL for general Gemini block fallback (Model 1)
+// - UNCENSORED_R18_MODEL for R18 / adult content requests and handovers (Model 2; falls back to UNCENSORED_MODEL)
 const DEFAULT_UNCENSORED_MODEL = 'xtools-at/DeepSeek-V4-Pro-Qwen3.5-9B-UNCENSORED-heretic'
-function uncensoredModel () {
-  return String(process.env.UNCENSORED_MODEL || '').trim() || DEFAULT_UNCENSORED_MODEL
+function uncensoredBaseModel () {
+  const configured = String(process.env.UNCENSORED_MODEL || '').trim()
+  if (configured && configured.toLowerCase() !== 'auto') return configured
+  if (uncensoredState.detectedModel) return uncensoredState.detectedModel
+  return DEFAULT_UNCENSORED_MODEL
+}
+
+function uncensoredR18Model () {
+  const configured = String(process.env.UNCENSORED_R18_MODEL || '').trim()
+  return configured || uncensoredBaseModel()
+}
+
+function uncensoredModel (contents = null) {
+  if (contents?.explicitUncensoredModel) return contents.explicitUncensoredModel
+  if (contents?.uncensoredR18Mode) return uncensoredR18Model()
+  return uncensoredBaseModel()
+}
+
+// Explicit model directive at the start of a mention request:
+//   --model <1|2|uncensored|r18|deep|flash|lite|model-name>
+//   -m <...>
+//   [model:<...>]
+//   --1 / --2 / --uncensored / --r18 / --deep / --flash / --lite
+const MODEL_DIRECTIVE_PATTERN = /^(?:(?:--model(?:=|\s+)|-m\s+)(\S+)|\[model:([^\]]+)\]|--(1|2|uncensored|fallback|heretic|r18|deckard|deep|argon|flash|lite)(?=\s|$))\s*/i
+const GEMINI_DIRECTIVE_ALIASES = {
+  flash: 'gemini-3.8-flash',
+  lite: 'gemini-3.5-flash-lite'
+}
+
+function parseModelDirective (text) {
+  if (typeof text !== 'string') return { directive: null, text: '' }
+  const match = text.match(MODEL_DIRECTIVE_PATTERN)
+  if (!match) return { directive: null, text }
+  const raw = (match[1] || match[2] || match[3] || '').trim()
+  const rest = text.slice(match[0].length).trim()
+  return { directive: raw || null, text: rest }
+}
+
+function applyModelDirective (contents, directive) {
+  if (!directive || !contents) return false
+  const lower = String(directive).trim().toLowerCase()
+  if (lower === 'deep' || lower === 'argon') {
+    if (deepModel()) {
+      contents.deep = true
+      contents.uncensored = false
+      return true
+    }
+    return false
+  }
+  if (GEMINI_DIRECTIVE_ALIASES[lower] || /^gemini-/i.test(directive)) {
+    contents.model = GEMINI_DIRECTIVE_ALIASES[lower] || String(directive).trim()
+    contents.deep = false
+    contents.uncensored = false
+    return true
+  }
+  if (!isUncensoredUsable() || contents.uncensoredR18 === false) return false
+  if (lower === '1' || lower === 'uncensored' || lower === 'fallback' || lower === 'heretic') {
+    contents.deep = false
+    contents.uncensored = true
+    contents.uncensoredR18Mode = false
+    contents.explicitUncensoredModel = uncensoredBaseModel()
+    return true
+  }
+  if (lower === '2' || lower === 'r18' || lower === 'deckard') {
+    contents.deep = false
+    contents.uncensored = true
+    contents.uncensoredR18Mode = true
+    contents.explicitUncensoredModel = uncensoredR18Model()
+    return true
+  }
+  const custom = String(directive).trim()
+  require('../utils/geminiPrices').registerUncensoredModel(custom)
+  contents.deep = false
+  contents.uncensored = true
+  contents.explicitUncensoredModel = custom
+  return true
 }
 
 const HAND_OVER_R18_DECLARATION = {
@@ -847,7 +922,7 @@ function compactUncensoredText (text) {
 }
 
 function isLocalUncensoredUrl (url) {
-  return /\.railway\.internal\b|\.trycloudflare\.com\b|\.ngrok(?:-free)?\.(?:app|io|dev)\b|\/\/(?:localhost|127\.0\.0\.1|\[::1?\])(?::|\/|$)/i.test(String(url || ''))
+  return /\.railway\.internal\b|\.run\.app\b|\.trycloudflare\.com\b|\.ngrok(?:-free)?\.(?:app|io|dev)\b|\/\/(?:localhost|127\.0\.0\.1|\[::1?\])(?::|\/|$)/i.test(String(url || ''))
 }
 
 function uncensoredEndpoint () {
@@ -890,8 +965,8 @@ function uncensoredHeaders (endpoint) {
 
 // Probes the uncensored endpoint at startup (and after a failure) so the logs show right away
 // whether it can be reached and the model is loaded. For direct OpenAI-compatible servers
-// (such as llama-server on Railway), it first checks GET /v1/models which responds in <10ms
-// without running 9B CPU inference; if that returns 404/405 (or on AI Gateway), it falls back
+// (such as llama-server on Railway or Cloud Run GPU), it first checks GET /v1/models which
+// responds without running inference; if that returns 404/405 (or on AI Gateway), it falls back
 // to a 1-token POST /v1/chat/completions.
 async function checkUncensoredConnection ({ timeoutMs = UNCENSORED_CHECK_TIMEOUT_MS, notifyWarn = true } = {}) {
   const endpoint = uncensoredEndpoint()
@@ -906,7 +981,7 @@ async function checkUncensoredConnection ({ timeoutMs = UNCENSORED_CHECK_TIMEOUT
     let verified = false
     if (!endpoint.gateway && /\/chat\/completions$/.test(endpoint.url)) {
       const modelsUrl = endpoint.url.replace(/\/chat\/completions$/, '/models')
-      const probeTimeout = Math.min(timeoutMs, UNCENSORED_MODELS_TIMEOUT_MS)
+      const probeTimeout = isLocalUncensoredUrl(endpoint.url) ? timeoutMs : Math.min(timeoutMs, UNCENSORED_MODELS_TIMEOUT_MS)
       const modelsRes = await fetch(modelsUrl, {
         method: 'GET',
         headers: uncensoredHeaders(endpoint),
@@ -917,6 +992,10 @@ async function checkUncensoredConnection ({ timeoutMs = UNCENSORED_CHECK_TIMEOUT
         const modelsData = await modelsRes.json()
         if (Array.isArray(modelsData?.data) || Array.isArray(modelsData?.models) || Array.isArray(modelsData?.choices)) {
           verified = true
+          const firstModel = modelsData?.data?.[0]?.id || modelsData?.models?.[0]?.id || modelsData?.models?.[0]?.name
+          if (typeof firstModel === 'string' && firstModel.trim()) {
+            uncensoredState.detectedModel = firstModel.trim()
+          }
         }
       } else if (modelsRes.status !== 404 && modelsRes.status !== 405) {
         const text = (await modelsRes.text().catch(() => '')).slice(0, 300)
@@ -945,14 +1024,15 @@ async function checkUncensoredConnection ({ timeoutMs = UNCENSORED_CHECK_TIMEOUT
         throw new Error(`Unexpected response: ${JSON.stringify(data).slice(0, 300)}`)
       }
     }
+    const activeModel = uncensoredModel()
     uncensoredState.usable = true
     uncensoredState.url = endpoint.url
     uncensoredState.checkedAt = Date.now()
     uncensoredState.error = null
-    const msg = `[UNCENSORED]: Connected and ready (${model} at ${endpoint.url})`
+    const msg = `[UNCENSORED]: Connected and ready (${activeModel} at ${endpoint.url})`
     global.logger?.info(msg)
     global.webhook?.generic?.(msg)
-    return { configured: true, usable: true, model, url: endpoint.url }
+    return { configured: true, usable: true, model: activeModel, url: endpoint.url }
   } catch (e) {
     const reason = (e?.message || String(e)).slice(0, 300)
     uncensoredState.usable = false
@@ -967,6 +1047,16 @@ async function checkUncensoredConnection ({ timeoutMs = UNCENSORED_CHECK_TIMEOUT
 }
 
 function startUncensoredCheck () {
+  const endpoint = uncensoredEndpoint()
+  if (endpoint && process.env.UNCENSORED_SKIP_STARTUP_PROBE === 'true') {
+    const model = uncensoredModel()
+    uncensoredState.usable = true
+    uncensoredState.url = endpoint.url
+    uncensoredState.checkedAt = Date.now()
+    uncensoredState.error = null
+    global.logger?.info(`[UNCENSORED]: Configured (${model} at ${endpoint.url}); startup probe skipped (UNCENSORED_SKIP_STARTUP_PROBE=true)`)
+    return Promise.resolve({ configured: true, usable: true, skipped: true, model, url: endpoint.url })
+  }
   let attempts = 0
   const run = async () => {
     attempts++
@@ -1191,7 +1281,7 @@ async function readUncensoredResponse (res, { softTimeoutMs = 200 * 1000 } = {})
 async function callUncensored (contents, declarations, allowed = null, { timeoutMs = Math.max(replyTimeoutMs(), 420 * 1000) } = {}) {
   const endpoint = uncensoredEndpoint()
   if (!endpoint) throw new GeminiError('Uncensored endpoint is not configured', 'AI の呼び出しに失敗しました')
-  const model = uncensoredModel()
+  const model = uncensoredModel(contents)
   const headers = uncensoredHeaders(endpoint)
   const local = !endpoint.gateway && isLocalUncensoredUrl(endpoint.url)
   const canSubmitChat = (!allowed || allowed.includes(SUBMIT_CHAT_DECLARATION.name)) && declarations.some(d => d.name === SUBMIT_CHAT_DECLARATION.name)
@@ -1355,9 +1445,10 @@ async function runAgent (contents, tools, submits = SUBMIT_DECLARATIONS) {
       content = await generate(contents, declarationsFor(), last ? submits.map(d => d.name) : null, { deep: !!contents.deep, uncensored: !!contents.uncensored })
     } catch (e) {
       if (contents.uncensored && !contents.geminiBlocked) {
+        const currentModel = uncensoredModel(contents)
         const fallback = replyModel(contents)
-        global.logger?.warn(`[UNCENSORED]: ${uncensoredModel()} failed (${e.message.slice(0, 200)}); ${fallback} answers instead`)
-        addFallback(`${uncensoredModel()} unavailable → ${fallback}`)
+        global.logger?.warn(`[UNCENSORED]: ${currentModel} failed (${e.message.slice(0, 200)}); ${fallback} answers instead`)
+        addFallback(`${currentModel} unavailable → ${fallback}`)
         contents.splice(start)
         contents.uncensored = false
         contents.uncensoredFailed = true
@@ -1369,15 +1460,16 @@ async function runAgent (contents, tools, submits = SUBMIT_DECLARATIONS) {
       }
       if (allowUncensored && !contents.uncensored && e.blocked && isUncensoredConfigured() && !contents.uncensoredFailed) {
         const failed = contents.deep ? deepModel() : replyModel(contents)
-        const fallback = uncensoredModel()
-        global.logger?.info(`[GEMINI]: ${failed} refused (${e.blocked}); ${fallback} answers instead`)
-        addFallback(`${failed} refused (${e.blocked}) → ${fallback}`)
         const notes = extractLookupNotes(contents.slice(start))
         if (notes) contents.lookupNotes = notes
         contents.splice(start)
         contents.deep = false
         contents.uncensored = true
+        contents.uncensoredR18Mode = false
         contents.geminiBlocked = true
+        const fallback = uncensoredModel(contents)
+        global.logger?.info(`[GEMINI]: ${failed} refused (${e.blocked}); ${fallback} answers instead`)
+        addFallback(`${failed} refused (${e.blocked}) → ${fallback}`)
         offered.length = 0
         step = -1
         continue
@@ -1403,14 +1495,15 @@ async function runAgent (contents, tools, submits = SUBMIT_DECLARATIONS) {
     const r18HandOver = allowUncensored && !contents.uncensored && isUncensoredUsable() && !contents.uncensoredFailed && content.parts.some(p => p.functionCall?.name === HAND_OVER_R18_DECLARATION.name)
     if (r18HandOver) {
       const fromModel = contents.deep ? deepModel() : replyModel(contents)
-      const fallback = uncensoredModel()
-      global.logger?.info(`[GEMINI]: ${fromModel} R18 handover; ${fallback} answers instead`)
-      addFallback(`${fromModel} R18 handover → ${fallback}`)
       const notes = extractLookupNotes(contents.slice(start))
       if (notes) contents.lookupNotes = notes
       contents.splice(start)
       contents.deep = false
       contents.uncensored = true
+      contents.uncensoredR18Mode = true
+      const fallback = uncensoredModel(contents)
+      global.logger?.info(`[GEMINI]: ${fromModel} R18 handover; ${fallback} answers instead`)
+      addFallback(`${fromModel} R18 handover → ${fallback}`)
       offered.length = 0
       step = -1
       continue
@@ -1432,14 +1525,15 @@ async function runAgent (contents, tools, submits = SUBMIT_DECLARATIONS) {
     const submitted = calls.find(c => submits.some(d => d.name === c.name))
     if (submitted && allowUncensored && !contents.uncensored && isUncensoredUsable() && !contents.uncensoredFailed && submitted.name === SUBMIT_CHAT_DECLARATION.name && isRefusalReply(submitted.args?.text)) {
       const fromModel = contents.deep ? deepModel() : replyModel(contents)
-      const fallback = uncensoredModel()
-      global.logger?.info(`[GEMINI]: ${fromModel} refused in reply (R18); ${fallback} answers instead`)
-      addFallback(`${fromModel} refused (R18) → ${fallback}`)
       const notes = extractLookupNotes(contents.slice(start))
       if (notes) contents.lookupNotes = notes
       contents.splice(start)
       contents.deep = false
       contents.uncensored = true
+      contents.uncensoredR18Mode = true
+      const fallback = uncensoredModel(contents)
+      global.logger?.info(`[GEMINI]: ${fromModel} refused in reply (R18); ${fallback} answers instead`)
+      addFallback(`${fromModel} refused (R18) → ${fallback}`)
       offered.length = 0
       step = -1
       continue
@@ -1526,6 +1620,8 @@ const eventTools = () => require('./eventTools')
 
 // model, thinking, tier: the server's own model, thinking level and tier (%replymodel); null for the default.
 async function draft ({ request, referenced, recent = [], channelName, channelID, server, forum = null, images = [], pictures = [], edit = null, replyLength = null, streamerPersona = true, safetyFilter = false, uncensoredR18 = true, rules = null, model = null, thinking = null, tier = null, guild, member, tools, now = new Date() }) {
+  const parsed = parseModelDirective(request)
+  if (parsed.directive) request = parsed.text || '（返信先のメッセージに答えてください）'
   const combined = pictures.filter(p => p.combined)
   const foreign = pictures.filter(p => !p.combined)
   const notes = [
@@ -1556,11 +1652,17 @@ async function draft ({ request, referenced, recent = [], channelName, channelID
   conversation.contents.tier = SERVICE_TIERS.includes(tier) ? tier : null
   conversation.contents.safetyFilter = !!safetyFilter
   conversation.contents.uncensoredR18 = uncensoredR18 !== false
-  if (conversation.contents.uncensoredR18 && isUncensoredUsable() && isR18Text(request, referenced?.text)) {
-    const initial = replyModel(conversation.contents)
-    const fallback = uncensoredModel()
-    global.logger?.info(`[GEMINI]: R18 detected in request; ${fallback} answers instead of ${initial}`)
+  if (parsed.directive && applyModelDirective(conversation.contents, parsed.directive)) {
+    const chosen = conversation.contents.uncensored
+      ? uncensoredModel(conversation.contents)
+      : (conversation.contents.deep ? deepModel() : replyModel(conversation.contents))
+    global.logger?.info(`[GEMINI]: Explicit model directive "${parsed.directive}" in request; using ${chosen}`)
+  } else if (conversation.contents.uncensoredR18 && isUncensoredUsable() && isR18Text(request, referenced?.text)) {
     conversation.contents.uncensored = true
+    conversation.contents.uncensoredR18Mode = true
+    const initial = replyModel(conversation.contents)
+    const fallback = uncensoredModel(conversation.contents)
+    global.logger?.info(`[GEMINI]: R18 detected in request; ${fallback} answers instead of ${initial}`)
   }
   return check(conversation, await runAgent(conversation.contents, tools, conversation.submits))
 }
@@ -1570,6 +1672,8 @@ async function draft ({ request, referenced, recent = [], channelName, channelID
 // Gemini wants one response per call of the turn, so tools called alongside the submit (which were
 // not run) are answered too.
 async function revise (conversation, correction) {
+  const parsed = parseModelDirective(correction)
+  if (parsed.directive) correction = parsed.text || correction
   conversation.contents.push({
     role: 'user',
     parts: conversation.lastCalls.map(call => ({
@@ -1581,14 +1685,20 @@ async function revise (conversation, correction) {
       }
     }))
   })
-  if (conversation.contents.uncensoredR18 !== false && !conversation.contents.uncensored && isUncensoredUsable() && isR18Text(correction)) {
-    const initial = replyModel(conversation.contents)
-    const fallback = uncensoredModel()
-    global.logger?.info(`[GEMINI]: R18 detected in revision; ${fallback} answers instead of ${initial}`)
+  if (parsed.directive && applyModelDirective(conversation.contents, parsed.directive)) {
+    const chosen = conversation.contents.uncensored
+      ? uncensoredModel(conversation.contents)
+      : (conversation.contents.deep ? deepModel() : replyModel(conversation.contents))
+    global.logger?.info(`[GEMINI]: Explicit model directive "${parsed.directive}" in revision; using ${chosen}`)
+  } else if (conversation.contents.uncensoredR18 !== false && !conversation.contents.uncensored && isUncensoredUsable() && isR18Text(correction)) {
     conversation.contents.deep = false
     conversation.contents.uncensored = true
+    conversation.contents.uncensoredR18Mode = true
+    const initial = replyModel(conversation.contents)
+    const fallback = uncensoredModel(conversation.contents)
+    global.logger?.info(`[GEMINI]: R18 detected in revision; ${fallback} answers instead of ${initial}`)
   }
   return check(conversation, await runAgent(conversation.contents, conversation.tools, conversation.submits))
 }
 
-module.exports = { THINKING_LEVELS, SERVICE_TIERS, defaultTaskConfig, resolveTaskConfig, replyTimeoutMs, flexUsable, SAFETY_SETTINGS, STRICT_SAFETY_SETTINGS, withSafetySettings, THINK_DEEPER_DECLARATION, HAND_OVER_R18_DECLARATION, isR18Text, isRefusalReply, deepModel, DEFAULT_UNCENSORED_MODEL, uncensoredModel, uncensoredEndpoint, isUncensoredConfigured, isUncensoredUsable, checkUncensoredConnection, startUncensoredCheck, uncensoredState, callUncensored, REPLY_LENGTHS, DEFAULT_REPLY_LENGTH, PERSONAS, thinkingConfig, cachedPrefix, caches, purgedFor, promptVersion, lightModel, extractModel, DEFAULT_EXTRACT_MODEL, draft, revise, MAX_STEPS, isConfigured, toScheduledEvent, callGemini, geminiRequest, geminiSend, geminiStream, retryTimer, DEFAULT_GEMINI_MODEL, ENTITY_TYPES, GeminiError }
+module.exports = { THINKING_LEVELS, SERVICE_TIERS, defaultTaskConfig, resolveTaskConfig, replyTimeoutMs, flexUsable, SAFETY_SETTINGS, STRICT_SAFETY_SETTINGS, withSafetySettings, THINK_DEEPER_DECLARATION, HAND_OVER_R18_DECLARATION, isR18Text, isRefusalReply, deepModel, DEFAULT_UNCENSORED_MODEL, uncensoredModel, uncensoredR18Model, parseModelDirective, applyModelDirective, isLocalUncensoredUrl, uncensoredEndpoint, isUncensoredConfigured, isUncensoredUsable, checkUncensoredConnection, startUncensoredCheck, uncensoredState, callUncensored, REPLY_LENGTHS, DEFAULT_REPLY_LENGTH, PERSONAS, thinkingConfig, cachedPrefix, caches, purgedFor, promptVersion, lightModel, extractModel, DEFAULT_EXTRACT_MODEL, draft, revise, MAX_STEPS, isConfigured, toScheduledEvent, callGemini, geminiRequest, geminiSend, geminiStream, retryTimer, DEFAULT_GEMINI_MODEL, ENTITY_TYPES, GeminiError }
