@@ -191,8 +191,16 @@ function authorLabel (author, requesterID) {
   return `${author.username} (${author.id})${requesterID && author.id === requesterID ? '（依頼者）' : ''}`
 }
 
+const DEBUG_FOOTER_LINE = /(?:\r?\n|^)-#\s*(?:model:\s*[^\r\n]+?\s*·\s*)?tokens:\s*in\s+[^\r\n]+/g
+
+function stripDebugFooter (text) {
+  if (typeof text !== 'string') return ''
+  return text.replace(DEBUG_FOOTER_LINE, '').trimEnd()
+}
+
 function formatMessage (m, requesterID = null) {
-  const lines = [`[${new Date(m.timestamp).toISOString()}] ${authorLabel(m.author, requesterID)}: ${m.content || ''}`]
+  const cleanContent = stripDebugFooter(m.content || '')
+  const lines = [`[${new Date(m.timestamp).toISOString()}] ${authorLabel(m.author, requesterID)}: ${cleanContent}`]
   for (const e of m.embeds || []) {
     const text = [e.title, e.description, ...(e.fields || []).map(f => `${f.name}: ${f.value}`), e.url].filter(Boolean).join('\n')
     if (text) lines.push(`  埋め込み: ${text}`)
@@ -239,6 +247,20 @@ function createTools ({ guild, member, ask, progress = () => {} }) {
       messages.unshift(m.id ? m : { ...m, id: next.messageID })
       next = m.messageReference && { channelID: m.messageReference.channelID || next.channelID, messageID: m.messageReference.messageID }
     }
+    let lastBotModel = null
+    for (let i = messages.length - 1; i >= 0; i--) {
+      const m = messages[i]
+      if (m.author?.id === global.bot.user.id && typeof m.content === 'string') {
+        const footerMatch = m.content.match(/(?:^|\r?\n)-#\s*model:\s*(.+?)\s*·\s*tokens:/)
+        if (footerMatch) {
+          const candidate = footerMatch[1].split('→').pop().replace(/\s*\(flex\)\s*$/i, '').trim()
+          if (candidate && !/^gemini-/i.test(candidate)) {
+            lastBotModel = candidate
+            break
+          }
+        }
+      }
+    }
     return {
       text: messages.map(m => formatMessage(m, member.id)).join('\n'),
       count: messages.length,
@@ -246,7 +268,8 @@ function createTools ({ guild, member, ask, progress = () => {} }) {
       // (describeServer), so the bot's earlier answers do not keep bringing back the same
       // knowledge, and with it the same jokes.
       othersText: messages.filter(m => m.author?.id !== global.bot.user.id).map(m => formatMessage(m, member.id)).join('\n'),
-      messageIds: messages.map(m => m.id).filter(Boolean)
+      messageIds: messages.map(m => m.id).filter(Boolean),
+      ...(lastBotModel ? { lastBotModel } : {})
     }
   }
 
