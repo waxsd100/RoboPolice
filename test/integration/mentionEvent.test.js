@@ -958,6 +958,14 @@ describe('mention → event / forum post (integration)', () => {
       global.fetch = async () => ({ ok: true, json: async () => ({ candidates: [{ content: { role: 'model', parts: turns[i++] } }], usageMetadata: usage }) })
       await mentionEvent.handle(mention(again.channel, '<@BOT> やあ'))
       assert.equal(again.replies[0].state.content, 'やあ\n-# model: gemini-3.8-flash · tokens: in 2,400 (cached 2,000) · out 30 · thinking 80 · 2 Gemini calls')
+
+      const longNovel = `${'あ'.repeat(1500)}。\n\n${'い'.repeat(1200)}。`
+      const longCh = createChannel()
+      global.fetch = async () => ({ ok: true, json: async () => ({ candidates: [{ content: { role: 'model', parts: [call('submit_chat_reply', { text: longNovel })] } }], usageMetadata: usage }) })
+      await mentionEvent.handle(mention(longCh.channel, '<@BOT> 小説を書いて'))
+      assert.equal(longCh.replies.length, 2, 'split into 2 consecutive Discord messages')
+      assert.equal(longCh.replies[0].state.content, `${'あ'.repeat(1500)}。`)
+      assert.match(longCh.replies[1].state.content, new RegExp(`^${'い'.repeat(1200)}。\n-# model: gemini-3\\.8-flash`))
     } finally {
       installReplyLengthStore()
     }

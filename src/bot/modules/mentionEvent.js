@@ -97,12 +97,40 @@ function repliesToBot (message) {
   return !!(message.messageReference && ref && ref.author?.id === global.bot.user.id && !ref.webhookID && ref.messageReference)
 }
 
-// The reply with a footer line under it, cut so that both fit in one message.
 const MAX_MESSAGE = 2000
-function withFooter (content, footer) {
-  if (!footer) return content
-  const room = MAX_MESSAGE - footer.length - 1
-  return `${content.length > room ? `${content.slice(0, room - 1)}…` : content}\n${footer}`
+
+// Splits a long chat/novel reply (> 2,000 chars) at paragraph or sentence boundaries so the whole
+// story is delivered across consecutive Discord messages without truncation.
+function splitChatMessages (content, footer) {
+  const s = String(content || '')
+  const roomWithFooter = footer ? MAX_MESSAGE - footer.length - 1 : MAX_MESSAGE
+  if (s.length <= roomWithFooter) {
+    return [footer ? `${s}\n${footer}` : s]
+  }
+  const chunks = []
+  let rest = s
+  while (rest.length > 0) {
+    if (rest.length <= roomWithFooter) {
+      chunks.push(footer ? `${rest}\n${footer}` : rest)
+      break
+    }
+    if (rest.length <= MAX_MESSAGE) {
+      chunks.push(rest)
+      if (footer) chunks.push(footer)
+      break
+    }
+    const slice = rest.slice(0, MAX_MESSAGE)
+    let cut = slice.lastIndexOf('\n\n')
+    if (cut < MAX_MESSAGE * 0.4) cut = slice.lastIndexOf('\n')
+    if (cut < MAX_MESSAGE * 0.4) {
+      const m = [...slice.matchAll(/[。！？…」』]\s*/g)].at(-1)
+      if (m && m.index + m[0].length >= MAX_MESSAGE * 0.4) cut = m.index + m[0].length
+    }
+    if (cut < MAX_MESSAGE * 0.4) cut = MAX_MESSAGE
+    chunks.push(rest.slice(0, cut).trimEnd())
+    rest = rest.slice(cut).replace(/^\n+/, '')
+  }
+  return chunks
 }
 
 // A chat reply's text with only the links that came up in the conversation (the request, what it
@@ -568,13 +596,28 @@ async function handle (message) {
       for (;;) {
         if (result.kind === 'chat') {
           if (!previous) {
-            rememberThreadModel([message.id, reply?.id], result.conversation?.contents)
             // Rewritten to read less like AI-made Japanese (replyPolish.js), but not what the
             // stronger model or the uncensored fallback wrote.
             if (!result.conversation?.contents?.deep && !result.conversation?.contents?.uncensored) result = { ...result, text: await polish(result.text, { guildID: guild.id }) }
             const { content, embeds } = await withLinkCards(withServerChannels(withServerEmojis(checkedLinks(result, guild), guild), guild, message.member))
             outcome = { kind: 'chat', response: content }
-            await reply.edit({ content: withFooter(content, debugFooter ? tokenFooter(usage) : ''), embeds, components: [], allowedMentions: NO_MENTIONS })
+            const chunks = splitChatMessages(content, debugFooter ? tokenFooter(usage) : '')
+            await reply.edit({ content: chunks[0], embeds: chunks.length === 1 ? embeds : [], components: [], allowedMentions: NO_MENTIONS })
+            const sentIds = [message.id, reply?.id]
+            let prevId = reply?.id || message.id
+            for (let i = 1; i < chunks.length; i++) {
+              const followUp = await message.channel.createMessage({
+                content: chunks[i],
+                embeds: i === chunks.length - 1 ? embeds : [],
+                messageReference: { messageID: prevId },
+                allowedMentions: NO_MENTIONS
+              })
+              if (followUp?.id) {
+                sentIds.push(followUp.id)
+                prevId = followUp.id
+              }
+            }
+            rememberThreadModel(sentIds, result.conversation?.contents)
             return
           }
           // The requester asked something about the draft instead of correcting it: answer, and
