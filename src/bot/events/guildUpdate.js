@@ -28,14 +28,15 @@ module.exports = {
   handle: async (newGuild, oldGuild) => {
     require('../../db/interfaces/postgres/update').saveGuildDetails(newGuild).catch(e => global.logger.warn(`Could not save the details of ${newGuild.id}: ${e.message}`))
     const fields = []
-    newGuild.getAuditLogs({ actionType: 1, limit: 1 }).then((log) => {
+    newGuild.getAuditLog({ actionType: 1, limit: 1 }).then((log) => {
       if (!log || !log.entries || log.entries.length === 0 || new Date().getTime() - new Date((log.entries[0].id / 4194304) + 1420070400000).getTime() > 3000) return // this could be null coalesced but why not make it backwards compatible
       const user = log.entries[0].user
+      if (!user) return
       const member = newGuild.members.get(user.id)
       let arr
       // This is the only instance where referring to an audit log by position returned is okay.
       // Results are returned sorted by id (newer id is a larger number & comes up first)
-      if (Object.keys(log.entries[0].before) > Object.keys(log.entries[0].after)) {
+      if (Object.keys(log.entries[0].before).length > Object.keys(log.entries[0].after).length) {
         arr = Object.keys(log.entries[0].before)
       } else {
         arr = Object.keys(log.entries[0].after)
@@ -68,10 +69,10 @@ module.exports = {
       switch (name) {
         case 'system_channel_id':
           if (logEntry.before.system_channel_id) {
-            before = logEntry.before.system_channel_id ? newGuild.channels.get(logEntry.before.system_channel_id).name : 'なし'
+            before = newGuild.channels.get(logEntry.before.system_channel_id)?.name || 'なし'
           }
           if (logEntry.after.system_channel_id) {
-            after = logEntry.after.system_channel_id ? newGuild.channels.get(logEntry.after.system_channel_id).name : 'なし'
+            after = newGuild.channels.get(logEntry.after.system_channel_id)?.name || 'なし'
           }
           return {
             name: 'ウェルカムメッセージチャンネル',
@@ -178,15 +179,15 @@ module.exports = {
             value: `► 変更後: **${after}**\n► 変更前: **${before}**`
           }
         case 'rules_channel_id':
-          before = logEntry.before.rules_channel_id ? global.bot.getChannel(logEntry.before.rules_channel_id).name || 'なし' : 'なし',
-          after = logEntry.after.rules_channel_id ? global.bot.getChannel(logEntry.after.rules_channel_id).name || 'なし' : 'なし'
+          before = logEntry.before.rules_channel_id ? global.bot.getChannel(logEntry.before.rules_channel_id)?.name || 'なし' : 'なし'
+          after = logEntry.after.rules_channel_id ? global.bot.getChannel(logEntry.after.rules_channel_id)?.name || 'なし' : 'なし'
           return {
             name: 'ルールチャンネル',
             value: `► 変更後: **${after}**\n► 変更前: **${before}**`
           }
         case 'public_updates_channel_id':
-          before = logEntry.before.public_updates_channel_id ? global.bot.getChannel(logEntry.before.public_updates_channel_id).name || 'なし' : 'なし',
-          after = logEntry.after.public_updates_channel_id ? global.bot.getChannel(logEntry.after.public_updates_channel_id).name || 'なし' : 'なし'
+          before = logEntry.before.public_updates_channel_id ? global.bot.getChannel(logEntry.before.public_updates_channel_id)?.name || 'なし' : 'なし'
+          after = logEntry.after.public_updates_channel_id ? global.bot.getChannel(logEntry.after.public_updates_channel_id)?.name || 'なし' : 'なし'
           return {
             name: '公開アップデートチャンネル',
             value: `► 変更後: **${after}**\n► 変更前: **${before}**`
@@ -199,11 +200,11 @@ module.exports = {
             value: `► 変更後: **${after}**\n► 変更前: **${before}**`
           }
         case 'description':
-          before = logEntry.before.description
-          after = logEntry.after.description
+          before = logEntry.before.description || 'なし'
+          after = logEntry.after.description || 'なし'
           return {
             name: 'サーバーの説明',
-            value: `► 変更後: **${escape(after)}**\n► 変更前: **${escape(before)}**`
+            value: `► 変更後: **${escape(String(after))}**\n► 変更前: **${escape(String(before))}**`
           }
       }
     }

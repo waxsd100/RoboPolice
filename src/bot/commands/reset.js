@@ -21,7 +21,7 @@ module.exports = {
     })
     let complete = false
     const temp = async function (m) {
-      if (m.channel.id === message.channel.id && m.author.id === message.author.id && m.content.toLowerCase() === 'yes' && !complete) {
+      if (m.channel?.id === message.channel.id && m.author?.id === message.author.id && m.content?.toLowerCase() === 'yes' && !complete) {
         complete = true
         clearTimeout(timeout)
         global.bot.removeListener('messageCreate', temp)

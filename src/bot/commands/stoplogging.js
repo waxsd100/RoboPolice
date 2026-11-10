@@ -5,7 +5,7 @@ const eventList = require('../utils/constants').ALL_EVENTS
 
 module.exports = {
   func: async (message, suffix) => {
-    if (!message.channel.guild.members.get(global.bot.user.id).permissions.json.sendMessages) {
+    if (!message.channel.guild.members.get(global.bot.user.id)?.permissions?.json?.sendMessages) {
       return
     }
 
@@ -19,6 +19,7 @@ module.exports = {
       message.channel.createMessage(`<@${message.author.id}>, your selected events will not be logged here anymore.`)
     } else if (!suffix) {
       await clearEventByID(message.channel.guild.id, message.channel.id) // any event logging to this channel id will be wiped
+      await cacheGuild(message.channel.guild.id)
 
       await message.channel.createMessage({
         embeds: [{

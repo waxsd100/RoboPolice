@@ -56,4 +56,28 @@ describe('safeLinks', () => {
     assert.equal(r1.text, '](（リンクは省きました）) google.com \nラベル')
     assert.deepEqual(r1.removed, ['https://evil.example/b_(1)', 'https://evil.example/c', 'https://evil.example/a'])
   })
+
+  test('cannot be bypassed with whitespace, link titles, nested brackets or multiple domains in the label', () => {
+    const fromPage = [{ t: 'https://evil.example/login' }]
+    assert.equal(
+      safeLinks('[discord.com]( https://evil.example/login )', fromPage).text,
+      '[discord.com]( https://evil.example/login )（行き先: evil.example）'
+    )
+    assert.equal(
+      safeLinks('[discord.com](https://evil.example/login "official")', fromPage).text,
+      '[discord.com](https://evil.example/login "official")（行き先: evil.example）'
+    )
+    assert.equal(
+      safeLinks('[discord.com](https://evil.example/login "official")', sources).text,
+      'discord.com'
+    )
+    assert.equal(
+      safeLinks('[evil.example -> discord.com](https://evil.example/login)', fromPage).text,
+      '[evil.example -> discord.com](https://evil.example/login)（行き先: evil.example）'
+    )
+    assert.equal(
+      safeLinks('[Official [discord.com]](https://evil.example/login)', fromPage).text,
+      '[Official [discord.com]](https://evil.example/login)（行き先: evil.example）'
+    )
+  })
 })

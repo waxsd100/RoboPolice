@@ -11,10 +11,10 @@ const CHANNEL_TYPE_MAP = {
 }
 
 const canUseExternal = guild => {
-  const logChannelID = global.bot.guildSettingsCache[guild.id].event_logs.channelUpdate
+  const logChannelID = global.bot.guildSettingsCache[guild.id]?.event_logs?.channelUpdate
   if (logChannelID) {
     const logChannel = global.bot.getChannel(logChannelID)
-    const permOverwrite = !!logChannel.permissionOverwrites.get(guild.id)?.json.useExternalEmojis
+    const permOverwrite = !!logChannel?.permissionOverwrites?.get(guild.id)?.json.useExternalEmojis
     if (permOverwrite) return true
   }
   return !!guild.roles.get(guild.id)?.permissions.json.useExternalEmojis
@@ -147,7 +147,7 @@ module.exports = {
           if (newOverwrite.type === 1) {
             const member = channel.guild.members.get(newOverwrite.id)
             if (member) {
-              overwriteName += member.username + member.nick ? `(${member.mention})` : ''
+              overwriteName += member.username + (member.nick ? ` (${member.mention})` : '')
             }
           } else if (newOverwrite.type === 0) {
             const role = channel.guild.roles.find(r => r.id === newOverwrite.id)

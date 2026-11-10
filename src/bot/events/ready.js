@@ -46,14 +46,14 @@ module.exports = {
     // ...and follows their streams, for those that turned stream events on.
     liveWatcher.startWatcher()
     setInterval(() => {
-      if (bot.shards.filter(shard => shard.latency == Infinity && shard.status === 'disconnected').length !== 0) {
+      if (global.bot.shards.filter(shard => shard.latency == Infinity && shard.status === 'disconnected').length !== 0) {
         failedHealthCheckCount++
-        global.logger.warn(`[${cluster.worker.rangeForShard}] Found disconnected shards ${bot.shards.filter(shard => shard.latency == Infinity && shard.status === 'disconnected').map(s => s.id).join(', ')}, failure count is ${failedHealthCheckCount}`)
+        global.logger.warn(`[${cluster.worker.rangeForShard}] Found disconnected shards ${global.bot.shards.filter(shard => shard.latency == Infinity && shard.status === 'disconnected').map(s => s.id).join(', ')}, failure count is ${failedHealthCheckCount}`)
         if (failedHealthCheckCount >= 5) {
           global.logger.warn(`[${cluster.worker.rangeForShard}] Shard health check failed 5 times in a row, hard resetting shards`)
           global.webhook.error(`[${cluster.worker.rangeForShard}] Shard health check failed 5 times in a row, hard resetting shards`)
           failedHealthCheckCount = 0
-          bot.shards.forEach(shard => {
+          global.bot.shards.forEach(shard => {
             shard.hardReset()
             shard.connect()
           })

@@ -16,10 +16,12 @@ const MAX_IMAGE_BYTES = 10 * 1024 * 1024
 const blockedAddresses = new net.BlockList()
 for (const [subnet, prefix] of [
   ['0.0.0.0', 8], ['10.0.0.0', 8], ['100.64.0.0', 10], ['127.0.0.0', 8], ['169.254.0.0', 16],
-  ['172.16.0.0', 12], ['192.0.0.0', 24], ['192.168.0.0', 16], ['198.18.0.0', 15], ['224.0.0.0', 4], ['240.0.0.0', 4]
+  ['172.16.0.0', 12], ['192.0.0.0', 24], ['192.0.2.0', 24], ['192.88.99.0', 24], ['192.168.0.0', 16],
+  ['198.18.0.0', 15], ['198.51.100.0', 24], ['203.0.113.0', 24], ['224.0.0.0', 4], ['240.0.0.0', 4]
 ]) blockedAddresses.addSubnet(subnet, prefix, 'ipv4')
 for (const [subnet, prefix] of [
-  ['::', 128], ['::1', 128], ['::', 96], ['100::', 64], ['64:ff9b::', 96], ['64:ff9b:1::', 48],
+  ['::', 128], ['::1', 128], ['::', 96], ['::ffff:0:0:0', 96], ['100::', 64], ['64:ff9b::', 96], ['64:ff9b:1::', 48],
+  ['2001::', 32], ['2001:2::', 48], ['2001:20::', 28], ['2001:db8::', 32],
   ['2002::', 16], ['fc00::', 7], ['fe80::', 10], ['ff00::', 8]
 ]) {
   blockedAddresses.addSubnet(subnet, prefix, 'ipv6')
@@ -28,9 +30,9 @@ for (const [subnet, prefix] of [
 function isBlockedAddress (address, family) {
   if (family === 6 || family === 'IPv6') {
     const lower = address.toLowerCase()
-    const mapped = lower.match(/^::(?:ffff:)?(\d+\.\d+\.\d+\.\d+)$/)
+    const mapped = lower.match(/^::(?:ffff:(?:0:)?)?(\d+\.\d+\.\d+\.\d+)$/)
     if (mapped) return blockedAddresses.check(mapped[1], 'ipv4')
-    const hexMapped = lower.match(/^::ffff:([0-9a-f]{1,4}):([0-9a-f]{1,4})$/)
+    const hexMapped = lower.match(/^::ffff:(?:0:)?([0-9a-f]{1,4}):([0-9a-f]{1,4})$/)
     if (hexMapped) {
       const hi = parseInt(hexMapped[1], 16)
       const lo = parseInt(hexMapped[2], 16)
@@ -132,7 +134,7 @@ function decodeEntities (text) {
   return text.replace(/&(#x[0-9a-f]+|#\d+|[a-z]+);/gi, (whole, code) => {
     if (code[0] === '#') {
       const n = code[1].toLowerCase() === 'x' ? parseInt(code.slice(2), 16) : parseInt(code.slice(1), 10)
-      return Number.isFinite(n) && n <= 0x10ffff ? String.fromCodePoint(n) : whole
+      return Number.isFinite(n) && n >= 1 && n <= 0x10ffff && (n < 0xd800 || n > 0xdfff) ? String.fromCodePoint(n) : whole
     }
     return ENTITIES[code.toLowerCase()] ?? whole
   })

@@ -99,12 +99,12 @@ const SECRET_RULES = [
   {
     id: 'env-secret-assignment',
     description: 'Hardcoded secret value assigned to sensitive environment variable',
-    regex: /^\s*(?:export\s+)?(BOT_TOKEN|GEMINI_API_KEY|CLOUDFLARE_AI_GATEWAY_TOKEN|UNCENSORED_API_KEY|GCP_SERVICE_ACCOUNT_KEY|STEAM_API_KEY|TWITCH_CLIENT_SECRET|YOUTUBE_API_KEY|YOUTUBE_WEBSUB_SECRET|REDIS_PASSWORD|PGPASSWORD|AES_KEY)\s*=\s*['"]?([^\s'"#]+)['"]?/,
+    regex: /(?:^|;\s*)\s*(?:export\s+)?(BOT_TOKEN|DISCORD_WEBHOOK_URL|GEMINI_API_KEY|CLOUDFLARE_AI_GATEWAY_TOKEN|CF_ACCESS_CLIENT_SECRET|UNCENSORED_API_KEY|GCP_SERVICE_ACCOUNT_KEY|STEAM_API_KEY|TWITCH_CLIENT_SECRET|YOUTUBE_API_KEY|YOUTUBE_WEBSUB_SECRET|REDIS_PASSWORD|PGPASSWORD|AES_KEY)\s*=\s*['"]?([^\s'"#;,]+)['"]?/g,
     validateMatch: match => {
       const val = String(match[2] || '').trim()
       if (val.length < 16) return false
       if (PLACEHOLDER_VALUE.test(val)) return false
-      if (/^process\.env\b|^os\.environ\b|^var\.|^local\./.test(val)) return false
+      if (/^process\.env\b|^os\.environ\b|^var\.|^local\.|^projects\/[^/]+\/secrets\/|^robopolice-[a-z0-9-]+$/i.test(val)) return false
       return true
     }
   }
@@ -136,16 +136,19 @@ function scanLine (line, { file = '', lineNumber = 1 } = {}) {
   if (!line || ALLOW_COMMENT.test(line)) return []
   const findings = []
   for (const rule of SECRET_RULES) {
-    const match = line.match(rule.regex)
-    if (!match) continue
-    if (typeof rule.validateMatch === 'function' && !rule.validateMatch(match, line, file)) continue
-    findings.push({
-      file,
-      line: lineNumber,
-      ruleId: rule.id,
-      description: rule.description,
-      snippet: maskSecret(match[0])
-    })
+    const flags = rule.regex.flags.includes('g') ? rule.regex.flags : `${rule.regex.flags}g`
+    const globalRegex = new RegExp(rule.regex.source, flags)
+    for (const match of line.matchAll(globalRegex)) {
+      if (typeof rule.validateMatch === 'function' && !rule.validateMatch(match, line, file)) continue
+      findings.push({
+        file,
+        line: lineNumber,
+        ruleId: rule.id,
+        description: rule.description,
+        snippet: maskSecret(match[0])
+      })
+      break
+    }
   }
   return findings
 }
@@ -159,17 +162,22 @@ function scanText (content, { file = '' } = {}) {
   return findings
 }
 
+function unquoteGitPath (raw) {
+  const trimmed = raw.trim()
+  if (trimmed.startsWith('"') && trimmed.endsWith('"')) {
+    return trimmed.slice(1, -1).replace(/\\([\\"])/g, '$1')
+  }
+  return trimmed
+}
+
 function parseUnifiedDiffAddedLines (diffText) {
   const entries = []
   let currentFile = null
   let currentLine = 0
   for (const rawLine of String(diffText || '').split(/\r?\n/)) {
-    if (rawLine.startsWith('+++ b/')) {
-      currentFile = rawLine.slice(6).trim()
-      continue
-    }
-    if (rawLine.startsWith('+++ /dev/null')) {
-      currentFile = null
+    if (rawLine.startsWith('+++ ')) {
+      const target = unquoteGitPath(rawLine.slice(4))
+      currentFile = target === '/dev/null' ? null : target.replace(/^b\//, '')
       continue
     }
     const hunk = rawLine.match(/^@@ -\d+(?:,\d+)? \+(\d+)(?:,\d+)? @@/)

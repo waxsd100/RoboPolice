@@ -81,13 +81,15 @@ process.on('SIGINT', async () => {
 })
 
 process.on('unhandledRejection', (e) => {
-  if (!e.message.includes('[50013]') && !e.message.includes('Request timed out') && !e.message.startsWith('500 INTERNAL SERVER ERROR') && !e.message.includes('503 Service Temporarily Unavailable') && !e.message.includes('global ratelimit') && !e.message.includes('hang up')) {
+  const msg = typeof e?.message === 'string' ? e.message : String(e ?? '')
+  if (!msg.includes('[50013]') && !msg.includes('Request timed out') && !msg.startsWith('500 INTERNAL SERVER ERROR') && !msg.includes('503 Service Temporarily Unavailable') && !msg.includes('global ratelimit') && !msg.includes('hang up')) {
     global.logger.error(e)
   }
 })
 
 process.on('uncaughtException', (e) => {
-  if (!e.message.includes('[50013]') && !e.message.includes('Request timed out') && !e.message.startsWith('500 INTERNAL SERVER ERROR') && !e.message.includes('503 Service Temporarily Unavailable') && !e.message.includes('global ratelimit') && !e.message.includes('hang up')) {
+  const msg = typeof e?.message === 'string' ? e.message : String(e ?? '')
+  if (!msg.includes('[50013]') && !msg.includes('Request timed out') && !msg.startsWith('500 INTERNAL SERVER ERROR') && !msg.includes('503 Service Temporarily Unavailable') && !msg.includes('global ratelimit') && !msg.includes('hang up')) {
     global.logger.error(e)
   }
 })

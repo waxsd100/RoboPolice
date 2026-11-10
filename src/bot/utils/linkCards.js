@@ -11,8 +11,8 @@ const YOUTUBE_RED = 0xFF0000
 const OEMBED_TIMEOUT_MS = 5000
 
 // Bare URLs, and the URL part of [text](URL) / [text](<URL>).
-const MASKED = /\[([^\]\n]+)\]\(<?(https?:\/\/[^\s)>]+)>?\)/g
-const BARE = /(?<![(<\w])https?:\/\/[^\s<>()]+[^\s<>().,!?、。！？」』]/g
+const MASKED = /\[((?:[^[\]\n]|\[[^\]\n]*\])+)\]\(\s*(?:<(https?:\/\/[^\s<>]+)>|(https?:\/\/(?:[^\s<>()]|\([^\s<>()]*\))+))\s*\)/g
+const BARE = /(?<![([<\w])https?:\/\/(?:[^\s<>()]|\([^\s<>()]*\))*(?:[^\s<>().,!?、。！？」』]|\([^\s<>()]*\))/g
 
 // The title and channel of a video not stored: YouTube's oEmbed, which needs no key. null when
 // it cannot be read.
@@ -47,17 +47,22 @@ function card (videoID, { title, channel_title: channel } = {}) {
 
 // { content, embeds } for the reply `text`.
 async function withLinkCards (text, { fetchImpl } = {}) {
-  const urls = [...text.matchAll(MASKED)].map(m => m[2]).concat(text.replace(MASKED, '').match(BARE) || [])
+  const urls = [...text.matchAll(MASKED)].map(m => m[2] || m[3]).concat(text.replace(MASKED, '').match(BARE) || [])
   const ids = [...new Set(urls.map(parseVideoId).filter(Boolean))].slice(0, MAX_CARDS)
   const info = ids.length ? await videoInfo(ids, fetchImpl) : new Map()
   const label = url => {
     const id = parseVideoId(url)
     return (id && info.get(id)?.title) || null
   }
+  const kept = []
   let content = text
-    .replace(MASKED, (whole, name, url) => `[${name}](<${url}>)`)
+    .replace(MASKED, (whole, name, bracketedUrl, bareUrl) => {
+      const url = bracketedUrl || bareUrl
+      return `\0MASKED_${kept.push(`[${name}](<${url}>)`) - 1}\0`
+    })
     // A bare video link gets its title; any other bare link keeps its URL, without a preview.
     .replace(BARE, url => label(url) ? `[${label(url).replace(/[[\]]/g, '')}](<${url}>)` : `<${url}>`)
+    .replace(/\0MASKED_(\d+)\0/g, (_, i) => kept[Number(i)])
   if (content.length > MAX_CONTENT) content = `${content.slice(0, MAX_CONTENT - 1)}…`
   return { content, embeds: ids.map(id => card(id, info.get(id))) }
 }

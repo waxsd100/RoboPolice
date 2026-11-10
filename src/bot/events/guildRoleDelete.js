@@ -26,7 +26,7 @@ module.exports = {
     const logs = await guild.getAuditLog({ limit: 5, actionType: 32 }).catch(() => {})
     if (!logs) return
     const log = logs.entries.find(e => e.targetID === role.id && (new Date().getTime() - new Date((e.id / 4194304) + 1420070400000).getTime()) < 3000)
-    if (log) {
+    if (log && log.user) {
       const perp = log.user
       if (log.reason) guildRoleDeleteEvent.embeds[0].fields[1].value = log.reason
       guildRoleDeleteEvent.embeds[0].fields[2].value = `\`\`\`ini\nロール = ${role.id}\n実行者 = ${perp.id}\`\`\``

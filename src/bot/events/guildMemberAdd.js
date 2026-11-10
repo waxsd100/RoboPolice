@@ -37,7 +37,7 @@ module.exports = {
       return
     }
     const botPerms = guild.members.get(global.bot.user.id)?.permissions?.json
-    if (botPerms.manageGuild && botPerms.manageChannels) {
+    if (botPerms?.manageGuild && botPerms?.manageChannels) {
       let guildInvites
       try {
         guildInvites = (await guild.getInvites()).map(i => inviteCache.formatInvite(i, false))

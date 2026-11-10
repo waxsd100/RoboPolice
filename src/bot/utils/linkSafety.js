@@ -4,9 +4,9 @@
 // shows where it really goes.
 
 const URL_PATTERN = /https?:\/\/(?:[^\s<>()[\]"'`]|\([^\s<>()[\]"'`]*\))+/gi
-const MASKED = /\[([^\]]+)\]\((?:<(https?:\/\/[^\s<>]+)>|(https?:\/\/(?:[^\s<>()]|\([^\s<>()]*\))+))\)/gi
+const MASKED = /\[((?:[^[\]]|\[[^\]]*\])+)\]\(\s*(?:<(https?:\/\/[^\s<>]+)>|(https?:\/\/(?:[^\s<>()]|\([^\s<>()]*\))+))(?:\s+(?:"[^"\n]*"|'[^'\n]*'))?\s*\)/gi
 // A domain written in a link's text (example.com, www.example.co.jp).
-const DOMAIN = /\b((?:[a-z0-9-]+\.)+[a-z]{2,})\b/i
+const DOMAIN = /\b((?:[a-z0-9-]+\.)+[a-z]{2,})\b/gi
 
 const trimUrl = url => url.replace(/[.,!?;:、。）」』】>]+$/u, '')
 
@@ -48,9 +48,10 @@ function safeLinks (text, ...sources) {
       removed.push(url)
       return label
     }
-    const named = label.match(DOMAIN)?.[1]?.replace(/^www\./, '').toLowerCase()
+    const namedDomains = [...label.matchAll(DOMAIN)].map(m => m[1].replace(/^www\./, '').toLowerCase())
     const host = hostOf(url)
-    const rendered = named && host && named !== host && !host.endsWith(`.${named}`)
+    const mismatched = host && namedDomains.some(named => named !== host && !host.endsWith(`.${named}`))
+    const rendered = mismatched
       ? `${whole}（行き先: ${host}）`
       : whole
     return `\0MASKED_${kept.push(rendered) - 1}\0`

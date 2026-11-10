@@ -42,6 +42,7 @@ module.exports = {
     } else if (oldEmojis.length > emojis.length) {
       const removedEmojis = oldEmojis.filter(e => !emojis.find(o => o.id === e.id))
       emoji = removedEmojis[0]
+      if (!emoji) return
       type = 'removed'
       guildEmojisUpdateEvent.embeds[0].fields[0].name = 'Removed emoji'
       guildEmojisUpdateEvent.embeds[0].fields[0].value = `名前 = ${emoji.name}\n管理対象 = ${emoji.managed ? 'はい' : 'いいえ'}\nアニメーション = ${emoji.animated ? 'はい' : 'いいえ'}`
@@ -74,8 +75,8 @@ module.exports = {
           icon_url: user.avatarURL
         }
         guildEmojisUpdateEvent.embeds[0].fields[1].value = `\`\`\`ini\nユーザー = ${user.id}\n絵文字 = ${emoji.id}\`\`\``
-        await send(guildEmojisUpdateEvent)
       }
+      await send(guildEmojisUpdateEvent)
     }, 1000)
   }
 }

@@ -61,4 +61,23 @@ describe('checkSecrets', () => {
     assert.equal(findings.length, 1)
     assert.equal(findings[0].ruleId, 'google-api-key')
   })
+
+  it('catches secrets preceded by a placeholder on the same line, CF_ACCESS_CLIENT_SECRET, and quoted git diff paths', () => {
+    const fakeGooglePlaceholder = 'AIza' + '1234567890abcdefghijklmnopqrstuv123'
+    const fakeGoogleReal = 'AIza' + 'SyD9_0123456789abcdef0123456789abcd'
+    assert.equal(scanLine(`const a = "${fakeGooglePlaceholder}", b = "${fakeGoogleReal}"`)[0]?.ruleId, 'google-api-key')
+    assert.equal(scanLine(`${'GEMINI_API' + '_KEY'}="gem-key"; ${'GEMINI_API' + '_KEY'}="real_secret_value_123456"`)[0]?.ruleId, 'env-secret-assignment')
+    assert.equal(scanLine(`${'CF_ACCESS_CLIENT' + '_SECRET'}="cf_secret_value_1234567890"`)[0]?.ruleId, 'env-secret-assignment')
+
+    const quotedDiff = [
+      'diff --git "a/docs/\\346\\227\\245\\346\\234\\254.md" "b/docs/\\346\\227\\245\\346\\234\\254.md"',
+      '--- "a/docs/\\346\\227\\245\\346\\234\\254.md"',
+      '+++ "b/docs/\\346\\227\\245\\346\\234\\254.md"',
+      '@@ -0,0 +1,1 @@',
+      `+const k = "${fakeGoogleReal}"`
+    ].join('\n')
+    const added = parseUnifiedDiffAddedLines(quotedDiff)
+    assert.equal(added.length, 1)
+    assert.equal(added[0].file, 'docs/\\346\\227\\245\\346\\234\\254.md')
+  })
 })

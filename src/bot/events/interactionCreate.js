@@ -28,14 +28,19 @@ module.exports = {
         if (interaction.data.custom_id && waitingCustomIDs.has(interaction.data.custom_id)) {
           if (interaction.member.user.id === waitingCustomIDs.get(interaction.data.custom_id).userID) {
             interaction.acknowledge().catch(() => {}).then(() => {
-              waitingCustomIDs.get(interaction.data.custom_id).run(interaction)
+              waitingCustomIDs.get(interaction.data.custom_id)?.run(interaction)
               resolve()
             })
+            return
           }
         }
+        resolve()
       } else if (interaction instanceof Eris.CommandInteraction) {
         const channel = global.bot.getChannel(interaction.channel.id)
-        if (!channel || channel instanceof Eris.VoiceChannel) return // no need to check send messages because replies are made using webhooks
+        if (!channel || channel instanceof Eris.VoiceChannel) {
+          resolve()
+          return // no need to check send messages because replies are made using webhooks
+        }
         if (interaction.data.name === 'reloadinteractions' && isCreator(interaction.member.user.id)) {
           fs.readdirSync(path.resolve('src', 'bot', 'slashcommands')).forEach(filename => {
             delete require.cache[require.resolve(path.resolve('src', 'bot', 'slashcommands', filename))]
@@ -45,10 +50,12 @@ module.exports = {
           })
           interaction.createMessage({ content: '🆗 reloaded slash commands', flags: Eris.Constants.MessageFlags.EPHEMERAL }).catch(() => {})
           resolve()
+          return
         }
         const command = slashCommands.find(c => c.name === interaction.data.name)
         if (command) {
           if (command?.type === 'creator' && !isCreator(interaction.member.user.id)) {
+            resolve()
             return
           }
           if (command.noThread && (interaction.channel instanceof NewsThreadChannel || interaction.channel instanceof PrivateThreadChannel || interaction.channel instanceof PublicThreadChannel)) {
@@ -65,6 +72,7 @@ module.exports = {
               }],
               flags: Eris.Constants.MessageFlags.EPHEMERAL
             }).catch(() => {})
+            resolve()
             return
           }
           const subcommand = interaction.data.options?.find(o => o.type === 1 || !('value' in o))?.name
@@ -90,6 +98,7 @@ module.exports = {
                 }],
                 flags: Eris.Constants.MessageFlags.EPHEMERAL
               }).catch(() => {})
+              resolve()
               return
             }
           }
@@ -113,22 +122,26 @@ module.exports = {
                 }],
                 flags: Eris.Constants.MessageFlags.EPHEMERAL
               }).catch(() => {})
+              resolve()
               return
             }
           }
           const guild = global.bot.guilds.get(interaction.guildID)
           if (guild) {
             global.logger.info(`${interaction.member.username}#${interaction.member.discriminator} (${interaction.member.id}) in ${interaction.channel.id} sent /${command.name}. The guild is called "${guild.name}", owned by ${guild.ownerID} and has ${guild.memberCount} members.`)
-            try {
-              command.func(interaction)
-            } catch (commandError) {
-              global.logger.error(commandError)
-              resolve() // it hurts to use a promise like this
-            }
+            Promise.resolve()
+              .then(() => command.func(interaction))
+              .catch(commandError => global.logger.error(commandError))
+              .finally(() => resolve())
           } else {
             global.logger.warn('Interaction was used but the guild ID sent is not in cache!')
+            resolve()
           }
+        } else {
+          resolve()
         }
+      } else {
+        resolve()
       }
     })
   },

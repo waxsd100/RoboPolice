@@ -4,7 +4,7 @@ const getMessageFromDB = require('../../db/interfaces/postgres/read').getMessage
 const getMessageFromBatch = require('../../db/messageBatcher').getMessage
 const toStoredContent = require('../../db/interfaces/postgres/create').toStoredContent
 const escape = require('markdown-escape')
-const { isBeyondRetention } = require('../utils/retention')
+const { getRetentionDays, isBeyondRetention } = require('../utils/retention')
 const discordKnowledge = require('../modules/discordKnowledge')
 
 // markdown-escape is a single exported function, I probably don't need it as a node module lol
@@ -173,7 +173,7 @@ function expiredUpdateEvent (newMessage, member) {
         value: `<#${newMessage.channel.id}> (${newMessage.channel.name})\n[メッセージへ移動](https://discord.com/channels/${newMessage.channel.guild.id}/${newMessage.channel.id}/${newMessage.id})`
       }, {
         name: '変更前',
-        value: `取得できません。保持期間（${process.env.MESSAGE_HISTORY_DAYS}日）を過ぎているため、変更前の内容は保存されていません。`
+        value: `取得できません。保持期間（${getRetentionDays()}日）を過ぎているため、変更前の内容は保存されていません。`
       }, {
         name: 'ID',
         value: `\`\`\`ini\nユーザー = ${newMessage.author.id}\nメッセージ = ${newMessage.id}\`\`\``

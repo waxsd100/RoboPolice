@@ -45,7 +45,7 @@ module.exports = {
       const user = global.bot.users.get(lastCachedMessage.userID)
       channelDeleteEvent.embeds[0].fields.push({
         name: '最後のメッセージ',
-        value: `Author: **${user.username}#${user.discriminator}**\n${lastCachedMessage.content}`
+        value: `Author: **${user ? `${user.username}#${user.discriminator}` : lastCachedMessage.userID}**\n${lastCachedMessage.content}`
       })
     }
     if (channel.permissionOverwrites.size !== 0) {

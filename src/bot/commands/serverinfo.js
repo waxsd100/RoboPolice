@@ -35,8 +35,9 @@ module.exports = {
         url: message.channel.guild.iconURL
       }
     }
-    if (message.channel.guild.emojis.length === 0) {
-      fields.push({
+    const availableEmojis = message.channel.guild.emojis.filter(e => e.available)
+    if (availableEmojis.length === 0) {
+      embed.fields.push({
         name: 'Emojis',
         value: 'なし'
       })
@@ -46,12 +47,10 @@ module.exports = {
         0: []
       }
       let counter = 0 // Dynamically create embed fields based on character count
-      message.channel.guild.emojis.forEach(emoji => {
+      availableEmojis.forEach(emoji => {
         if (emojiObj[counter].join('\n').length < 950) {
-          if (!emoji.available) return
           emojiObj[counter].push(`<${emoji.animated ? 'a' : ''}:${emoji.name}:${emoji.id}> ${escape(emoji.name)} ${emoji.roles.length !== 0 ? '<- 🔒 role restricted' : ''}`)
         } else {
-          if (!emoji.available) return
           counter++
           emojiObj[counter] = []
           emojiObj[counter].push(`<${emoji.animated ? 'a' : ''}:${emoji.name}:${emoji.id}>`)

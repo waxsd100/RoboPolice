@@ -18,7 +18,9 @@ module.exports = async (event, type) => {
         }
 
         const eventLogs = global.bot.guildSettingsCache[guildId].event_logs
-        const logChannelId = eventLogs[event.name] || (event.name === 'guildMemberUpdate' && (eventLogs.guildMemberNickUpdate || eventLogs.guildMemberVerify || eventLogs.guildMemberBoostUpdate))
+        const logChannelId = eventLogs[event.name] ||
+          (event.name === 'guildMemberUpdate' && (eventLogs.guildMemberNickUpdate || eventLogs.guildMemberVerify || eventLogs.guildMemberBoostUpdate)) ||
+          (event.name === 'guildMemberRemove' && eventLogs.guildMemberKick)
         const logChannel = logChannelId && global.bot.getChannel(logChannelId)
         if (!logChannel) return
 
@@ -34,7 +36,7 @@ module.exports = async (event, type) => {
         }
 
         if (guildId !== true && !global.bot.guildSettingsCache[guildId]) return // true means skip guildsettings fetch
-        if (guildId !== true && event.name !== 'guildMemberUpdate' && global.bot.guildSettingsCache[guildId].eventIsDisabled(event.name)) return
+        if (guildId !== true && event.name !== 'guildMemberUpdate' && event.name !== 'guildMemberRemove' && global.bot.guildSettingsCache[guildId].eventIsDisabled(event.name)) return
         await event.handle.apply(this, args)
       }
     })
@@ -52,13 +54,14 @@ function getGuildIdByEvent (type, args) {
     case 'channelCreate':
     case 'channelDelete':
     case 'channelUpdate': {
-      return args[0].guild.id
+      return args[0]?.guild?.id
     }
     case 'guildBanAdd':
     case 'guildBanRemove':
     case 'guildEmojisUpdate':
     case 'guildStickersUpdate':
     case 'guildMemberAdd':
+    case 'guildMemberRemove':
     case 'guildMemberUpdate':
     case 'guildRoleCreate':
     case 'guildRoleDelete':
@@ -66,8 +69,10 @@ function getGuildIdByEvent (type, args) {
     case 'guildUpdate': {
       return args[0]?.id
     }
+    case 'presenceUpdate':
     case 'voiceChannelJoin':
     case 'voiceChannelLeave':
+    case 'voiceChannelSwitch':
     case 'voiceStateUpdate': {
       return args[0]?.guild?.id // voiceStateUpdate can return just a user id and cached voice state
     }
@@ -76,8 +81,9 @@ function getGuildIdByEvent (type, args) {
       return true // yes this coulda been left to default, but this explicitly states the purpose. This needs to run whether it's configured or not
     }
     case 'messageDeleteBulk': {
-      if (!args[0][0].channel.guild.id) return
-      return args[0][0].channel.guild.id // this is fine because discord will atleast send message id and channel
+      const first = args[0]?.[0]
+      if (!first) return
+      return first.channel?.guild?.id || first.guildID || first.guildId
     }
     default: {
       return true

@@ -2,15 +2,26 @@ const sa = require('superagent')
 
 require('dotenv').config()
 let globalHookErrors = 0
+let warnedMissingUrl = false
 
 setInterval(() => {
   if (globalHookErrors > 0) globalHookErrors-- // This timeout exists so that if the shard manager starts to spew errors, I don't get IP banned from Discord.
-}, 5000)
+}, 5000).unref?.()
+
+function getWebhookUrl () {
+  if (process.env.DISCORD_WEBHOOK_URL) return process.env.DISCORD_WEBHOOK_URL
+  if (!warnedMissingUrl) {
+    warnedMissingUrl = true
+    global.logger?.warn('Discord webhook url not specified, disabling webhook notifier.')
+  }
+  return null
+}
 
 function fatal (message) {
-  if (globalHookErrors < 5) {
+  const url = getWebhookUrl()
+  if (url && globalHookErrors < 5) {
     sa
-      .post(process.env.DISCORD_WEBHOOK_URL)
+      .post(url)
       .send({
         avatar_url: 'https://cdn4.iconfinder.com/data/icons/ionicons/512/icon-ios7-bell-512.png',
         username: `Fatal Error LoggerBot Webhook Notification`,
@@ -27,9 +38,10 @@ function fatal (message) {
 }
 
 function error (message) {
-  if (globalHookErrors < 5) {
+  const url = getWebhookUrl()
+  if (url && globalHookErrors < 5) {
     sa
-      .post(process.env.DISCORD_WEBHOOK_URL)
+      .post(url)
       .send({
         avatar_url: 'https://cdn4.iconfinder.com/data/icons/ionicons/512/icon-ios7-bell-512.png',
         username: `Error LoggerBot Webhook Notification`,
@@ -46,9 +58,10 @@ function error (message) {
 }
 
 function warn (message) {
-  if (globalHookErrors < 5) {
+  const url = getWebhookUrl()
+  if (url && globalHookErrors < 5) {
     sa
-      .post(process.env.DISCORD_WEBHOOK_URL)
+      .post(url)
       .send({
         avatar_url: 'https://cdn4.iconfinder.com/data/icons/ionicons/512/icon-ios7-bell-512.png',
         username: `Warning LoggerBot Webhook Notification`,
@@ -65,9 +78,10 @@ function warn (message) {
 }
 
 function generic (message) {
-  if (globalHookErrors < 5) {
+  const url = getWebhookUrl()
+  if (url && globalHookErrors < 5) {
     sa
-      .post(process.env.DISCORD_WEBHOOK_URL)
+      .post(url)
       .send({
         avatar_url: 'https://cdn4.iconfinder.com/data/icons/ionicons/512/icon-ios7-bell-512.png',
         username: `Generic LoggerBot Webhook Notification`,
@@ -84,9 +98,10 @@ function generic (message) {
 }
 
 function custom (message) {
-  if (globalHookErrors < 5) {
+  const url = getWebhookUrl()
+  if (url && globalHookErrors < 5) {
     sa
-      .post(process.env.DISCORD_WEBHOOK_URL)
+      .post(url)
       .send({
         avatar_url: message.avatar_url || 'https://cdn4.iconfinder.com/data/icons/ionicons/512/icon-ios7-bell-512.png',
         embeds: [{
@@ -107,12 +122,3 @@ exports.warn = warn
 exports.generic = generic
 exports.fatal = fatal
 exports.custom = custom
-
-if (!process.env.DISCORD_WEBHOOK_URL) {
-  global.logger.warn('Discord webhook url not specified, disabling webhook notifier.')
-  exports.error = () => { }
-  exports.warn = () => { }
-  exports.generic = () => { }
-  exports.fatal = () => { }
-  exports.custom = () => { }
-}

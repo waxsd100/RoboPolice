@@ -15,7 +15,6 @@ module.exports = {
   name: 'guildStickersUpdate',
   type: 'on',
   handle: async (guild, stickers, oldStickers) => {
-    console.log("STICKER UPDATED")
     let type
     const guildStickersUpdateEvent = {
       guildID: guild.id,
@@ -48,12 +47,16 @@ module.exports = {
     } else if (oldStickers.length > stickers.length) {
       const removedStickers = oldStickers.filter(e => !stickers.find(o => o.id === e.id))
       sticker = removedStickers[0]
+      if (!sticker) return
       type = 'removed'
       guildStickersUpdateEvent.embeds[0].fields[0].name = 'Removed sticker'
       guildStickersUpdateEvent.embeds[0].fields[0].value = `名前 = ${sticker.name}\nDescription = ${sticker.description}\nFormat = ${STICKER_FORMAT_TYPES[sticker.format_type]}`
     } else {
       type = 'updated'
-      sticker = stickers.find(e => oldStickers.find(o => o.id === e.id).name !== e.name)
+      sticker = stickers.find(e => {
+        const old = oldStickers.find(o => o.id === e.id)
+        return old && (old.name !== e.name || old.description !== e.description)
+      })
       if (!sticker) return
       guildStickersUpdateEvent.embeds[0].fields[0].name = 'Updated sticker'
       guildStickersUpdateEvent.embeds[0].fields[0].value = `名前 = ${sticker.name}\nDescription = ${sticker.description}\nFormat = ${STICKER_FORMAT_TYPES[sticker.format_type]}`
@@ -70,7 +73,7 @@ module.exports = {
     }
     await setTimeout(async () => {
       const num = AUDIT_ID[type]
-      const logs = await guild.getAuditLog({ limit: 5, actionType: num }).catch((err) => {console.log(err)})
+      const logs = await guild.getAuditLog({ limit: 5, actionType: num }).catch(() => {})
       if (!logs) return
       const log = logs.entries.find(e => e?.targetID === sticker.id && Date.now() - ((e.id / 4194304) + 1420070400000) < 3000)
       if (log && log.user) { // if the audit log is less than 3 seconds off
