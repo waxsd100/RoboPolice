@@ -174,3 +174,49 @@ test('/setup chooses every event to begin with in a channel that logs nothing, a
   assert.match(shown[0].embeds[0].description, /最初から「すべて」を選んであります/)
   assert.deepEqual(saved[0], ['here', ALL_EVENTS], 'every event saved for this channel')
 })
+
+test('setcmd text command registers the current slashcommandconstants definitions', async () => {
+  const setcmd = require('../../src/bot/commands/setcmd')
+  const { developerCommands } = require('../../src/bot/utils/slashcommandconstants')
+  let guildEdited
+  let globalEdited
+  global.bot = {
+    bulkEditGuildCommands: async (guildId, cmds) => { guildEdited = [guildId, cmds] },
+    bulkEditCommands: async cmds => { globalEdited = cmds }
+  }
+  const msg = {
+    id: 'm1',
+    channel: {
+      guild: { id: 'g1' },
+      createMessage: async () => {}
+    }
+  }
+  await setcmd.func(msg, 'guild')
+  await setcmd.func(msg, 'global')
+  assert.equal(guildEdited[0], 'g1')
+  assert.equal(guildEdited[1].length, commands.length + developerCommands.length)
+  assert.equal(globalEdited.length, commands.length)
+})
+
+test('eventmiddleware handles raw messageDeleteBulk payloads and voiceChannelSwitch guild checks without crashing', async () => {
+  const middleware = require('../../src/bot/modules/eventmiddleware')
+  const listeners = {}
+  let handled = 0
+  global.bot = {
+    user: { id: 'bot' },
+    guildSettingsCache: {
+      g1: {
+        event_logs: {},
+        eventIsDisabled: () => true
+      }
+    },
+    getChannel: () => null,
+    on: (name, fn) => { listeners[name] = fn }
+  }
+  await middleware({ name: 'messageDeleteBulk', handle: async () => { handled++ } }, 'on')
+  await middleware({ name: 'voiceChannelSwitch', handle: async () => { handled++ } }, 'on')
+  await listeners.messageDeleteBulk([])
+  await listeners.messageDeleteBulk([{ id: '1', guildID: 'g1' }])
+  await listeners.voiceChannelSwitch({ id: 'u1', guild: { id: 'g1' } }, { id: 'c2', guild: { id: 'g1' } }, { id: 'c1', guild: { id: 'g1' } })
+  assert.equal(handled, 0, 'unconfigured guild events do not bypass middleware or crash on raw payloads')
+})

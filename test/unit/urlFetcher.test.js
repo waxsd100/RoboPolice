@@ -1,14 +1,17 @@
 const { test, describe, after, before } = require('node:test')
 const assert = require('node:assert/strict')
-const { fetchPageText, fetchImage, htmlToText, decodeBody, isBlockedAddress } = require('../../src/bot/utils/urlFetcher')
+const { fetchPageText, fetchImage, htmlToText, decodeBody, decodeEntities, isBlockedAddress } = require('../../src/bot/utils/urlFetcher')
 const { startServer } = require('../helpers/fakes')
 
 describe('isBlockedAddress', () => {
   for (const [address, family] of [
     ['127.0.0.1', 4], ['10.1.2.3', 4], ['172.16.0.1', 4], ['192.168.1.1', 4], ['169.254.169.254', 4],
     ['100.64.0.1', 4], ['0.0.0.0', 4], ['224.0.0.1', 4],
+    ['192.0.2.1', 4], ['192.88.99.1', 4], ['198.51.100.1', 4], ['203.0.113.1', 4],
     ['::1', 6], ['::', 6], ['fd00::1', 6], ['fe80::1', 6], ['::ffff:127.0.0.1', 6], ['::ffff:10.0.0.1', 6],
-    ['::127.0.0.1', 6], ['::ffff:7f00:1', 6], ['64:ff9b::127.0.0.1', 6], ['2002:7f00:1::', 6]
+    ['::ffff:0:127.0.0.1', 6], ['::ffff:0:7f00:1', 6],
+    ['::127.0.0.1', 6], ['::ffff:7f00:1', 6], ['64:ff9b::127.0.0.1', 6], ['2002:7f00:1::', 6],
+    ['2001::1', 6], ['2001:2::1', 6], ['2001:20::1', 6], ['2001:db8::1', 6]
   ]) {
     test(`blocks ${address}`, () => assert.equal(isBlockedAddress(address, family), true))
   }
@@ -17,6 +20,12 @@ describe('isBlockedAddress', () => {
   }
   test('accepts the IPv6 family as dns.lookup reports it', () => {
     assert.equal(isBlockedAddress('::1', 'IPv6'), true)
+  })
+})
+
+describe('decodeEntities', () => {
+  test('refuses null and UTF-16 surrogate code points while decoding valid ones', () => {
+    assert.equal(decodeEntities('a&#0;b&#x0;c&#xd800;d&#xdfff;e&#x6771;'), 'a&#0;b&#x0;c&#xd800;d&#xdfff;e東')
   })
 })
 

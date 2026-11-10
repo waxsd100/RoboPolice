@@ -47,14 +47,15 @@ module.exports = {
     const logs = await newChannel.guild.getAuditLog({ actionType: 10, limit: 10 }).catch(() => {})
     if (!logs) return
     const log = logs.entries.find(e => e.targetID === newChannel.id && (new Date().getTime() - new Date((e.id / 4194304) + 1420070400000).getTime() < 3000))
-    if (!log) return
-    const user = log.user
-    if (user && user?.bot && !global.bot.guildSettingsCache[newChannel.guild.id].isLogBots()) return
-    if (user) {
-      const member = newChannel.guild.members.get(user.id)
-      channelCreateEvent.embeds[0].author.name = `${user.username}#${user.discriminator} ${member && member.nick ? `(${member.nick})` : ''}`
-      channelCreateEvent.embeds[0].author.icon_url = user.avatarURL
-      channelCreateEvent.embeds[0].fields[1].value = `\`\`\`ini\nユーザー = ${user.id}\nチャンネル = ${newChannel.id}\`\`\``
+    if (log) {
+      const user = log.user
+      if (user && user?.bot && !global.bot.guildSettingsCache[newChannel.guild.id].isLogBots()) return
+      if (user) {
+        const member = newChannel.guild.members.get(user.id)
+        channelCreateEvent.embeds[0].author.name = `${user.username}#${user.discriminator} ${member && member.nick ? `(${member.nick})` : ''}`
+        channelCreateEvent.embeds[0].author.icon_url = user.avatarURL
+        channelCreateEvent.embeds[0].fields[1].value = `\`\`\`ini\nユーザー = ${user.id}\nチャンネル = ${newChannel.id}\`\`\``
+      }
     }
     await send(channelCreateEvent)
   }

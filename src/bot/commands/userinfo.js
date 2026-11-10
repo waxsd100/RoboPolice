@@ -14,7 +14,8 @@ const notablePermissions = [
 module.exports = {
   func: async message => {
     let member = message.member
-    if (message.mentions.length !== 0) member = message.channel.guild.members.get(message.mentions[0].id)
+    if (message.mentions.length !== 0) member = message.channel.guild.members.get(message.mentions[0].id) || message.member
+    if (!member) return
     const fields = []
     const perms = []
     Object.keys(member.permissions.json).forEach((perm) => {
@@ -22,7 +23,7 @@ module.exports = {
         perms.push(`\`${perm}\``)
       }
     })
-    const roles = member.roles.map(r => message.channel.guild.roles.get(r)).sort((a, b) => b.position - a.position)
+    const roles = member.roles.map(r => message.channel.guild.roles.get(r)).filter(Boolean).sort((a, b) => b.position - a.position)
     fields.push({
       name: '名前',
       value: `${member.username}#${member.discriminator} ${member.nick ? `(**${member.nick}**)` : ''} (${member.id})`

@@ -33,4 +33,18 @@ describe('withLinkCards', () => {
     assert.equal(content, '<https://youtu.be/zzzzzzzzzzz>')
     assert.equal(embeds[0].title, 'YouTube の動画')
   })
+
+  test('preserves masked links whose label is a URL and URLs containing parentheses', async () => {
+    installYouTubeStore()
+    const { content } = await withLinkCards([
+      '[https://example.com/page](https://example.com/page)',
+      '[Wikipedia](https://ja.wikipedia.org/wiki/Foo_(bar))',
+      'https://ja.wikipedia.org/wiki/Baz_(qux).'
+    ].join(' '))
+    assert.equal(content, [
+      '[https://example.com/page](<https://example.com/page>)',
+      '[Wikipedia](<https://ja.wikipedia.org/wiki/Foo_(bar)>)',
+      '<https://ja.wikipedia.org/wiki/Baz_(qux)>.'
+    ].join(' '))
+  })
 })

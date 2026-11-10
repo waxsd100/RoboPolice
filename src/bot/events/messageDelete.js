@@ -3,7 +3,7 @@ const getMessageFromDB = require('../../db/interfaces/postgres/read').getMessage
 const getMessageFromBatch = require('../../db/messageBatcher').getMessage
 const deleteMessage = require('../../db/interfaces/postgres/delete').deleteMessage
 const cacheGuild = require('../utils/cacheGuild')
-const { isBeyondRetention, messageTimestamp } = require('../utils/retention')
+const { getRetentionDays, isBeyondRetention, messageTimestamp } = require('../utils/retention')
 const discordKnowledge = require('../modules/discordKnowledge')
 
 module.exports = {
@@ -106,7 +106,7 @@ function expiredMessageEvent (message) {
       description: `<#${message.channel.id}> でメッセージが削除されました`,
       fields: [{
         name: '内容',
-        value: `取得できません。保持期間（${process.env.MESSAGE_HISTORY_DAYS}日）を過ぎているため、内容は保存されていません。`
+        value: `取得できません。保持期間（${getRetentionDays()}日）を過ぎているため、内容は保存されていません。`
       }, {
         name: '日時',
         value: `<t:${Math.round(messageTimestamp(message.id) / 1000)}:F>`

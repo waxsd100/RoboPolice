@@ -22,7 +22,7 @@ module.exports = {
       }]
     }
     if (!guild.members.find(m => m.username === role.name)) { // if this isn't an auto role
-      if (role.managed && role.tags.bot_id && guild.members.find(m => m.username === role.name)) {
+      if (role.managed && role.tags?.bot_id) {
         guildRoleCreateEvent.embeds[0].fields[1].value = 'Bot'
       }
       const logs = await guild.getAuditLog({ limit: 5, actionType: 30 }).catch(() => {})
@@ -42,10 +42,12 @@ module.exports = {
         await send(guildRoleCreateEvent)
       }
     } else {
-      guildRoleCreateEvent.embeds[0].fields[1] = {
+      guildRoleCreateEvent.embeds[0].fields[1].value = 'Bot'
+      guildRoleCreateEvent.embeds[0].fields[2] = {
         name: 'ID',
         value: `\`\`\`ini\nロール = ${role.id}\n実行者 = Automatically created by invite\`\`\``
       }
+      await send(guildRoleCreateEvent)
     }
   }
 }

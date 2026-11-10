@@ -4,10 +4,10 @@ const arrayCompare = require('../utils/arraycompare')
 const markdownEscape = require('markdown-escape')
 
 const canUseExternal = guild => {
-  const logChannelID = global.bot.guildSettingsCache[guild.id].event_logs.guildMemberUpdate
+  const logChannelID = global.bot.guildSettingsCache[guild.id]?.event_logs?.guildMemberUpdate
   if (logChannelID) {
     const logChannel = global.bot.getChannel(logChannelID)
-    const permOverwrite = !!logChannel.permissionOverwrites.get(guild.id)?.json.useExternalEmojis
+    const permOverwrite = !!logChannel?.permissionOverwrites?.get(guild.id)?.json.useExternalEmojis
     if (permOverwrite) return true
   }
   return !!guild.roles.get(guild.id)?.permissions.json.useExternalEmojis
@@ -42,7 +42,7 @@ module.exports = {
       if (member.bot && !global.bot.guildSettingsCache[guild.id].isLogBots()) return
       guildMemberUpdate.eventName = 'guildMemberNickUpdate'
       guildMemberUpdate.embeds[0].description = `${member.mention} ${member.nick ? `(現在: ${member.nick})` : ''} のニックネームが変更されました`
-      delete guildMemberUpdate.author
+      delete guildMemberUpdate.embeds[0].author
       guildMemberUpdate.embeds[0].fields[0] = {
         name: '変更後の名前',
         value: `${member.nick ? member.nick : member.username}#${member.discriminator}`
@@ -86,8 +86,8 @@ module.exports = {
     }
     // if member cached and roles not different, stop here.
     if ((oldMember && arrayCompare(member.roles, oldMember.roles) && (member.communicationDisabledUntil === oldMember.communicationDisabledUntil))) return // if roles are the same stop fetching audit logs
-    const logs = await guild.getAuditLog({ limit: 5 })
-    if (!logs.entries[0]) return
+    const logs = await guild.getAuditLog({ limit: 5 }).catch(() => ({ entries: [] }))
+    if (!logs?.entries?.[0]) return
     const possibleRoleLog = logs.entries.find(e => e.targetID === member.id && e.actionType === 25 && Date.now() - ((e.id / 4194304) + 1420070400000) < 3000)
     const possibleTimeoutLog = logs.entries.find(e => e.targetID === member.id && e.actionType === 24 && (e.before.communication_disabled_until || e.after.communication_disabled_until) && Date.now() - ((e.id / 4194304) + 1420070400000) < 3000)
     if (possibleRoleLog) {
@@ -129,7 +129,7 @@ module.exports = {
       })
       if (!guildMemberUpdate.embeds[0].fields[0].value) return
       await send(guildMemberUpdate)
-    } else if (possibleTimeoutLog) {
+    } else if (possibleTimeoutLog && possibleTimeoutLog.user) {
       guildMemberUpdate.embeds[0].description = `${member.username}#${member.discriminator} (${member.mention}) ${member.communicationDisabledUntil ? 'がタイムアウトされました' : 'のタイムアウトが解除されました'}`
       guildMemberUpdate.embeds[0].author = {
         name: `${member.username}#${member.discriminator}`,

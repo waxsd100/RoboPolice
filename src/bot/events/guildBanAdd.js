@@ -40,18 +40,20 @@ module.exports = {
         global.logger.warn(`Guild Ban Add was unable to fetch audit logs in guild ${guild.name} (${guild.id})`)
         return
       }
-      const log = logs.entries.find(e => e.targetID === user.id && actionStartedTime.getTime() - new Date((e.id / 4194304) + 1420070400000).getTime() < 60000)
+      const log = logs.entries.find(e => e.targetID === user.id && Date.now() - ((e.id / 4194304) + 1420070400000) < 60000)
       if (!log) {
         global.logger.warn(`Guild Ban Add on ${guild.name} (${guild.id}) was not able to match a log.`)
+        await send(guildBanAddEvent)
         return
       }
-      if (!log.user) return
       const perp = log.user
-      if (log.reason) guildBanAddEvent.embeds[0].fields[1].value = log.reason
-      guildBanAddEvent.embeds[0].fields[2].value = `\`\`\`ini\nユーザー = ${user.id}\n実行者 = ${perp.id}\`\`\``
-      guildBanAddEvent.embeds[0].footer = {
-        text: `${perp.username}#${perp.discriminator}`,
-        icon_url: perp.avatarURL
+      if (perp) {
+        if (log.reason) guildBanAddEvent.embeds[0].fields[1].value = log.reason
+        guildBanAddEvent.embeds[0].fields[2].value = `\`\`\`ini\nユーザー = ${user.id}\n実行者 = ${perp.id}\`\`\``
+        guildBanAddEvent.embeds[0].footer = {
+          text: `${perp.username}#${perp.discriminator}`,
+          icon_url: perp.avatarURL
+        }
       }
       await send(guildBanAddEvent)
     }, 5000)

@@ -5,8 +5,9 @@ module.exports = {
   type: 'on',
   handle: async (member, oldState) => {
     const state = member.voiceState
+    if (!oldState || !state.channelID || !oldState.channelID) return
     const channel = member.guild.channels.get(state.channelID)
-    if (!oldState || !state.channelID || oldState.channelID) return
+    if (!channel) return
     if ((state.selfDeaf !== oldState.selfDeaf) || (state.selfMute !== oldState.selfMute)) return
     if (state.mute === oldState.mute && state.deaf === oldState.deaf) return
     if (global.bot.guildSettingsCache[member.guild.id].isChannelIgnored(state.channelID)) return
@@ -18,7 +19,7 @@ module.exports = {
           name: `${member.username}#${member.discriminator} ${member.nick ? `(${member.nick})` : ''}`,
           icon_url: member.avatarURL
         },
-        description: `**${member.username}#${member.discriminator}** ${member.nick ? `(${member.nick})` : ''} had のボイス状態が変更されました`,
+        description: `**${member.username}#${member.discriminator}** ${member.nick ? `(${member.nick})` : ''} のボイス状態が変更されました`,
         fields: [{
           name: 'ボイスチャンネル',
           value: `<#${channel.id}> (${channel.name})`
@@ -30,7 +31,7 @@ module.exports = {
       }]
     }
     // if (member.guild.voiceStates.size < 20) {
-    const logs = await member.guild.getAuditLogs({ limit: 5, actionType: 24 }).catch(() => {})
+    const logs = await member.guild.getAuditLog({ limit: 5, actionType: 24 }).catch(() => {})
     if (!logs) return
     const log = logs.entries.find(e => e.targetID === member.id && (Date.now() - ((e.id / 4194304) + 1420070400000) < 3000))
     if (!log) return
@@ -47,6 +48,8 @@ module.exports = {
         text: `${user.username}#${user.discriminator}`,
         icon_url: user.avatarURL
       }
+    } else {
+      voiceStateUpdateEvent.embeds[0].fields[voiceStateUpdateEvent.embeds[0].fields.length - 1].value += '```'
     }
     await send(voiceStateUpdateEvent)
   }

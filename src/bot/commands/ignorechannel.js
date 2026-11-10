@@ -9,7 +9,8 @@ module.exports = {
       toIgnore = suffix
     }
     const disabled = await ignoreChannel(message.channel.guild.id, toIgnore) // return a boolean representing whether a channel is ignored or not
-    const respStr = `<#${toIgnore}> (${message.channel.guild.channels.get(toIgnore).name}) の設定を切り替えました。このチャンネルのイベントを${disabled ? '記録しません' : '記録します'}`
+    const channelName = message.channel.guild.channels.get(toIgnore)?.name || message.channel.name || toIgnore
+    const respStr = `<#${toIgnore}> (${channelName}) の設定を切り替えました。このチャンネルのイベントを${disabled ? '記録しません' : '記録します'}`
     message.channel.createMessage({
       embeds: [{
         description: respStr,

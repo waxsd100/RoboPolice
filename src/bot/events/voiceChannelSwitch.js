@@ -4,7 +4,8 @@ module.exports = {
   name: 'voiceChannelSwitch',
   type: 'on',
   handle: async (member, channel, oldChannel) => {
-    if (global.bot.guildSettingsCache[channel.guild.id].isChannelIgnored(channel.id)) return
+    const settings = global.bot.guildSettingsCache[channel.guild.id]
+    if (settings.isChannelIgnored(channel.id) || settings.isChannelIgnored(oldChannel.id)) return
     await send({
       guildID: channel.guild.id,
       eventName: 'voiceChannelSwitch',
