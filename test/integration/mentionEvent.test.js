@@ -1103,6 +1103,79 @@ describe('mention → event / forum post (integration)', () => {
     }
   })
 
+  test('chat: attached and replied-to images are passed as inlineData to Gemini (even without text), and described visually for uncensored models', async (t) => {
+    t.mock.method(global.logger, 'info', () => {})
+    t.mock.method(urlFetcher, 'fetchImage', async url => ({ buffer: Buffer.from(`bytes:${url}`), contentType: 'image/png' }))
+    const { channel, replies } = createChannel()
+
+    // 1. Mention with an attached image and no text
+    const requests1 = installGemini([body => {
+      const parts = body.contents[0].parts
+      assert.match(parts[0].text, /（本文なし。添付された画像を見て返事や作成をしてください）/)
+      assert.match(parts[1].text, /## 添付・返信先の画像/)
+      assert.equal(parts[2].text, '添付画像')
+      assert.deepEqual(parts[3], { inlineData: { mimeType: 'image/png', data: Buffer.from('bytes:https://cdn.discordapp.com/attachments/1/2/photo.png?ex=1').toString('base64') } })
+      return [call('submit_chat_reply', { text: '美味しそうなラーメンの画像だね！' })]
+    }])
+    await mentionEvent.handle(mention(channel, '<@BOT>', {
+      attachments: [{ url: 'https://cdn.discordapp.com/attachments/1/2/photo.png?ex=1', filename: 'photo.png', content_type: 'image/png' }]
+    }))
+    assert.equal(requests1.length, 1)
+    assert.equal(replies[0].state.content, '美味しそうなラーメンの画像だね！')
+
+    // 2. Reply to a message that has an attached image
+    MESSAGES['201/620'] = {
+      content: '昨日の晩ごはん',
+      author: { id: REQUESTER, username: `user${REQUESTER}` },
+      attachments: [{ url: 'https://cdn.discordapp.com/attachments/1/2/dinner.jpg', filename: 'dinner.jpg', content_type: 'image/jpeg' }]
+    }
+    try {
+      const requests2 = installGemini([body => {
+        const parts = body.contents[0].parts
+        assert.match(parts[1].text, /## 添付・返信先の画像/)
+        assert.equal(parts[2].text, '添付画像')
+        assert.deepEqual(parts[3], { inlineData: { mimeType: 'image/png', data: Buffer.from('bytes:https://cdn.discordapp.com/attachments/1/2/dinner.jpg').toString('base64') } })
+        return [call('submit_chat_reply', { text: 'ハンバーグかな？すごく美味しそう！' })]
+      }])
+      await mentionEvent.handle(mention(channel, '<@BOT> これ何に見える？', { messageReference: { messageID: '620', channelID: '201' } }))
+      assert.equal(requests2.length, 1)
+      assert.equal(replies[1].state.content, 'ハンバーグかな？すごく美味しそう！')
+
+      // 3. Uncensored model (--1) with an attached/replied-to image gets a visual description injected into the prompt
+      process.env.UNCENSORED_API_URL = 'https://gemma-heretic-12345-an.a.run.app/v1'
+      process.env.OWNER_GUILD_IDS = channel.guild.id
+      try {
+        let openAiUserContent = null
+        global.fetch = async (url, init) => {
+          const body = JSON.parse(init.body)
+          if (/google-ai-studio/.test(url)) {
+            return {
+              ok: true,
+              json: async () => ({
+                candidates: [{ content: { role: 'model', parts: [{ text: '白いお皿に乗ったハンバーグと目玉焼きの写真' }] } }]
+              })
+            }
+          }
+          openAiUserContent = body.messages.find(m => m.role === 'user').content
+          return {
+            ok: true,
+            json: async () => ({
+              choices: [{ message: { role: 'assistant', content: '目玉焼き乗せハンバーグ最高だね！' } }]
+            })
+          }
+        }
+        await mentionEvent.handle(mention(channel, '<@BOT> --1 この画像についてコメントして', { messageReference: { messageID: '620', channelID: '201' } }))
+        assert.equal(replies[2].state.content, '目玉焼き乗せハンバーグ最高だね！')
+        assert.match(openAiUserContent, /## 添付・返信先画像の内容（視覚情報）\n白いお皿に乗ったハンバーグと目玉焼きの写真/)
+      } finally {
+        delete process.env.UNCENSORED_API_URL
+        delete process.env.OWNER_GUILD_IDS
+      }
+    } finally {
+      delete MESSAGES['201/620']
+    }
+  })
+
   test('chat: replying to the bot\'s answer continues the conversation', async () => {
     MESSAGES['201/610'] = { content: '<@BOT> おすすめの動画ある？', author: { id: REQUESTER, username: `user${REQUESTER}` } }
     MESSAGES['201/611'] = { content: 'マイクラ実況の最新回がおすすめ！', author: { id: 'BOT', username: 'bot' }, messageReference: { messageID: '610', channelID: '201' } }

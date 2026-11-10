@@ -3,7 +3,7 @@ const { test, describe } = require('node:test')
 const assert = require('node:assert/strict')
 const urlFetcher = require('../../src/bot/utils/urlFetcher')
 const sharp = require('sharp')
-const { foreignEmojis, emojiPictures, emojiGroups, combinedPictures, picturesFor } = require('../../src/bot/utils/foreignEmojis')
+const { foreignEmojis, emojiPictures, emojiGroups, combinedPictures, attachedPictures, picturesFor } = require('../../src/bot/utils/foreignEmojis')
 
 const id = n => String(n).padStart(18, '1')
 const code = (name, n) => `<:${name}:${id(n)}>`
@@ -85,5 +85,31 @@ describe('combined emojis', () => {
     serve(t, { [id(1)]: () => full(RED), [id(2)]: () => full(RED), [id(3)]: () => dot(RED), [id(4)]: () => dot(GREEN) })
     const pictures = await picturesFor([`${code('big1', 1)}${code('big2', 2)} と ${code('kusa', 3)}${code('naki', 4)}`], { emojis: [{ id: id(1) }, { id: id(2) }] })
     assert.deepEqual(pictures.map(p => [p.name, !!p.combined]), [[':big1::big2:', true], ['kusa', false], ['naki', false]])
+  })
+
+  test('attachedPictures fetches up to 4 unique image URLs and marks them with attachment: true', async (t) => {
+    t.mock.method(urlFetcher, 'fetchImage', async url => {
+      if (url.includes('fail')) throw new Error('404')
+      return { buffer: Buffer.from(`img:${url}`), contentType: 'image/jpeg' }
+    })
+    const single = await attachedPictures(['https://cdn.example/a.jpg', 'https://cdn.example/a.jpg'])
+    assert.equal(single.length, 1)
+    assert.equal(single[0].name, '添付画像')
+    assert.equal(single[0].attachment, true)
+    assert.equal(single[0].mimeType, 'image/jpeg')
+
+    const multi = await attachedPictures([
+      'https://cdn.example/1.jpg',
+      'https://cdn.example/fail.jpg',
+      'https://cdn.example/2.jpg',
+      'https://cdn.example/3.jpg',
+      'https://cdn.example/4.jpg',
+      'https://cdn.example/5.jpg'
+    ])
+    assert.deepEqual(multi.map(p => [p.name, p.url]), [
+      ['添付画像1', 'https://cdn.example/1.jpg'],
+      ['添付画像3', 'https://cdn.example/2.jpg'],
+      ['添付画像4', 'https://cdn.example/3.jpg']
+    ])
   })
 })
