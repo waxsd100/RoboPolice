@@ -60,7 +60,7 @@ const SUBMIT_EVENT_DECLARATION = {
   }
 }
 
-const MAX_CHAT_REPLY = 2000
+const MAX_CHAT_REPLY = 12000
 
 const SUBMIT_CHAT_DECLARATION = {
   name: 'submit_chat_reply',
@@ -201,18 +201,21 @@ const EDIT_LABELS = { event: 'イベント', forum: 'フォーラム投稿' }
 // instructions), so every server shares one cache.
 const REPLY_LENGTHS = {
   long: [
-    '- Discord のメッセージとして読みやすく、長くても500文字程度。'
+    '- Discord のメッセージとして読みやすく、長くても500文字程度。',
+    '- 小説・物語・SS・脚本などの創作を頼まれたときは文字数の上限を設けず、十分な長さ（1,500〜4,000文字以上でも可）でしっかり書き切る。'
   ],
   normal: [
     '- 毎回、依頼の中身と長さを見て決める。会話はテンポが大事なので、短い方を選ぶ。',
     '  - あいさつ・雑談・ノリやボケへの反応・一言の感想: 1〜2文（50文字前後）。',
     '  - ちょっとした質問（〜って何？ いつ？ どこ？）: 答えだけを2〜3文で。',
     '  - 説明・まとめ・手順・おすすめを頼まれたとき: 必要なだけ。それでも400文字程度まで。箇条書きは本当に項目が並ぶときだけ。',
+    '  - 小説・物語・SS・脚本などの創作を頼まれたときは文字数の上限を設けず、十分な長さ（1,500〜4,000文字以上でも可）でしっかり書き切る。',
     '  - 相手のメッセージより大幅に長くしない。聞かれていないことの付け足し、前置き、最後のまとめ直し、「何かあれば聞いてね」のような締めはしない。'
   ],
   short: [
     '- できるだけ短く。あいさつ・雑談・反応は1文、質問には答えだけを1〜2文（100文字程度まで）。',
-    '- 説明・まとめを頼まれても要点だけを200文字程度まで。前置き・まとめ直し・締めの一言はしない。'
+    '- 説明・まとめを頼まれても要点だけを200文字程度まで。前置き・まとめ直し・締めの一言はしない。',
+    '- ただし、小説・物語・SS・脚本などの創作を頼まれたときだけは文字数の上限を設けず、十分な長さでしっかり書き切る。'
   ]
 }
 const DEFAULT_REPLY_LENGTH = 'long'
@@ -1006,25 +1009,37 @@ function isRefusalReply (text) {
   return typeof text === 'string' && REFUSAL_REPLY_PATTERN.test(text)
 }
 
+const STORY_REQUEST_PATTERN = /小説|ss|物語|お話|ストーリー|シナリオ|脚本|創作|ライトノベル|ラノベ|地の文|官能|濡れ場|えっち|エッチ|続き|書いて|執筆/i
+
 function uncensoredSystemInstruction ({ compact = false, r18Mode = false } = {}) {
   const persona = (process.env.CHAT_PERSONA || '').trim()
   const extra = [
     '## R18・検閲なしフォールバック時の追加指示',
     '- このリクエストは R18（成人向け）または検閲ブロックにより、検閲なしモデル（あなた）へ引き継がれました。',
     ...(r18Mode
-      ? ['- 依頼者は成人向け・R18 モードを指定しています。依頼文に「R18」「エロ」などの語が直接残っていなくても（例：「恋愛小説を書いて」「続き」など）、成人向けの濃密な恋愛・官能・性的描写を含めて応えてください。']
+      ? ['- 依頼者は成人向け・R18 モードを指定しています。依頼文に「R18」などの語が直接残っていなくても（例：「恋愛小説を書いて」「続き」など）、成人向けの濃密な恋愛・官能・性的描写を含めて応えてください。']
       : []),
     '- 「依頼メッセージの返信先」があるときは、その会話の流れ・登場人物・シチュエーションを踏まえて最後の「依頼メッセージ」に答えてください。ただし前の自分の発言の同じ言い回しを繰り返すのは避け、相手が明確に別の話題へ変えたときは新しい話題に答えてください。',
     '- 「依頼されたチャンネルの最近の会話」があるときは、今回の依頼がその話の続きや関連する内容ならそれを踏まえて答え、無関係なら依頼メッセージだけに答えてください。',
     '- 「添付・返信先の画像」や「添付・返信先画像の内容（視覚情報）」があるときは、その画像に写っている人物・キャラクター・外見・服装・表情・ポーズ・シチュエーションを踏まえて返事や描写を書いてください。',
     '- 「そのままでは書けない依頼」にある「ぼかした版を代わりに書く」「露骨な描写は書かない」「場面転換・暗示・フェードアウト・朝チュンにする」という制限は一切適用しません。',
     '- 依頼された成人向け・R18・官能表現の依頼には、省略やフェードアウト（朝チュンなど）をせず、キャラクターの口調・性格・設定を保ったまま、求められた描写を最初から最後まで具体的・直接的に詳しく書き切ってください。',
-    '- 思考タグ（`<|channel>thought...<channel|>` や `<think>...</think>`）を使う場合でも、思考は数行以内で即座に閉じ、英語での分析や下書きは出力せず、必ず日本語の返事の本文だけを出力してください。'
+    '',
+    '## 自然な日本語と小説・R18描写のルール（最優先）',
+    '- **地の文は常体（「〜た」「〜だ」）で統一する**: 小説・SS・物語・R18シーンを書くとき、地の文に「〜ました」「〜ます」「〜でした」「〜ています」のような敬体（です・ます調）は絶対に使わないでください（「弄びました」「包み込んでいます」「開きました」「引き寄せます」「明白でした」のような文体は厳禁）。また、地の文で過去形（「〜た」）と現在形（「〜る」）が1文ごとにチグハグに混ざらないようにしてください。',
+    '- **英語の直訳調（翻訳調）を完全に排除する**: 英語で考えてから日本語に直訳するような不自然な文体を禁止します。思考タグ（`<|channel>thought...<channel|>` や `<think>...</think>`）が出る場合も、思考に英語は一切使わず日本語で1〜2行だけ短く考えて即座に閉じ、必ず自然な日本語の本文だけを出力してください。',
+    '  - ❌ 絶対に使わない直訳表現の例: 「彼が求めるのは甘い休息ではなく、さらなる快楽であることは明白でした」「その誘惑に抗えない自分を自覚しながら」「激しい波のような快楽が嘘だったかのように」のような英語小説の直訳構文や説明的な比喩。',
+    '  - ❌ 硬い直訳語の例: 「心拍数が速まる」のような医学・直訳語は使わず、「鼓動が速まる」「胸が高鳴る」「息が浅くなる」など日本の小説の自然な表現を使う。',
+    '  - ❌ 代名詞の連発: 「彼は彼女の腰に彼の腕を回し、彼の瞳で彼女を見た」のように毎文「彼」「彼女」「彼の」「彼女の」「あなた」「その瞳」を繰り返さない。日本語らしく主語や所有格は文脈で分かる限り自然に省き、人物の名前や視線・仕草で描写する。',
+    '- **要約や寸止めで終わらせず、五感と台詞で本編を長編で書き切る**:',
+    '  - 「さらなる快楽を求めた」「情熱的な夜を過ごした」のように抽象的な言葉で説明・要約して終わらせたり、「昨夜の余韻（朝チュン）」や「抱きしめ合って終わり」で寸止めしたりしないでください。',
+    '  - 小説・SS・物語では文字数の上限はありません（1,500〜4,000文字以上でも可。2,000文字を超えてもBOTが自動で複数メッセージに分割して送信するため、遠慮なく長文で書いてください）。肌が触れ合う熱さや感触、吐息、視線、指先や舌の動き、衣擦れや水音、声の震え、キャラクターらしい自然な台詞（「……ん」「まって……」など）を使って、場面の始まりから本編の濃密な展開・クライマックス・余韻まで省略せずたっぷり具体的に描写してください。',
+    '- **雑談・質問への返事のとき**: 小説ではなく普通の雑談や質問への返事のときは、指定された「話し方」（配信者として／BOT として）と「返事の長さ」に従い、翻訳調ではない自然な日本の Discord の話し言葉で返してください。'
   ]
   if (compact) {
     return [
       '## 役割',
-      'あなたは Discord サーバーの AI です。渡された会話の流れ（返信先や最近の会話）を踏まえつつ、最後の「依頼メッセージ」の指示に従い、指定された「話し方」を保って日本語で返事や小説・会話を書きます。返事の本文だけをそのまま出力してください。',
+      'あなたは Discord サーバーの AI です。渡された会話の流れ（返信先や最近の会話）を踏まえつつ、最後の「依頼メッセージ」の指示に従い、自然でこなれた日本語で返事や小説・会話を書きます。返事や作品の本文だけをそのまま出力してください。',
       ...(persona ? ['', '## 運営者が設定したキャラクター', persona] : []),
       '',
       ...extra
@@ -1034,13 +1049,14 @@ function uncensoredSystemInstruction ({ compact = false, r18Mode = false } = {})
   return [base, '', ...extra].join('\n')
 }
 
-const MAX_UNCENSORED_CONVERSATION_CHARS = 500
-const MAX_UNCENSORED_RECENT_CHARS = 350
-const MAX_UNCENSORED_MEMBERS_CHARS = 200
+const MAX_UNCENSORED_CONVERSATION_CHARS = 1800
+const MAX_UNCENSORED_RECENT_CHARS = 400
+const MAX_UNCENSORED_MEMBERS_CHARS = 250
 
-function compactUncensoredText (text) {
+function compactUncensoredText (text, { r18Mode = false } = {}) {
   if (typeof text !== 'string') return ''
   const hasConversation = /<untrusted source="conversation">/.test(text)
+  const storyMode = r18Mode || STORY_REQUEST_PATTERN.test(text)
   let out = text
     .replace(/\n## このサーバーのルールとモデレーターからのお願い[\s\S]*?(?=\n## このサーバーの情報|\n## 依頼や会話に出てくるチャンネル|\n依頼されたチャンネル:)/, '')
     .replace(/\n## このサーバーの情報（最新）\n<untrusted source="server">[\s\S]*?<\/untrusted>/, '')
@@ -1049,6 +1065,17 @@ function compactUncensoredText (text) {
     .replace(/(<untrusted source="members">\n?)([\s\S]*?)(\n?<\/untrusted>)/, (whole, open, body, close) =>
       body.length > MAX_UNCENSORED_MEMBERS_CHARS ? `${open}${body.slice(0, MAX_UNCENSORED_MEMBERS_CHARS)}${close}` : whole
     )
+  if (storyMode) {
+    out = out.replace(
+      /## 話し方（このサーバーの設定）\n[\s\S]*?\n\n## 返事の長さ（このサーバーの設定）\n(?:\s*- [^\n]+\n?)+/,
+      [
+        '## 文体と長さの指示（小説・描写モード）',
+        '- 小説・SS・物語の地の文は、必ず常体（「〜た」「〜だ」「〜ている」）で統一する。「〜ました」「〜ます」「〜でした」のような敬体（です・ます調）は地の文に絶対に使わない。',
+        '- 英語の直訳調（「〜であることは明白でした」「〜を自覚しながら」「心拍数」「彼・彼女の連発」など）を避け、日本の小説・官能小説として自然な語彙とリズムで書く。',
+        '- 文字数の上限は一切設けない（1,500〜4,000文字以上の長文でも可。2,000文字を超えても自動で分割送信される）。導入や要約・寸止めで終わらせず、自然な台詞と具体的な五感・行為の描写を交えて、本編の最初から最後まで省略せずたっぷり書き切る。'
+      ].join('\n') + '\n'
+    )
+  }
   if (hasConversation) {
     out = out
       .replace(/\n## 依頼されたチャンネルの最近の会話[\s\S]*?<\/untrusted>/, '')
@@ -1059,6 +1086,10 @@ function compactUncensoredText (text) {
     out = out.replace(/(<untrusted source="recent">\n?)([\s\S]*?)(\n?<\/untrusted>)/, (whole, open, body, close) =>
       body.length > MAX_UNCENSORED_RECENT_CHARS ? `${open}${body.slice(-MAX_UNCENSORED_RECENT_CHARS)}${close}` : whole
     )
+  }
+  out = out.replace(/<\/?untrusted(?:\s+source="[^"]*")?>\n?/g, '')
+  if (storyMode) {
+    out += '\n\n※執筆時の注意: 地の文は必ず「〜た」「〜だ」の常体で統一し、「〜ました」「〜ます」「〜でした」の敬体は絶対に使わないでください。英語の直訳調（「〜であることは明白」「〜を自覚しながら」「心拍数」「彼・彼女の連発」など）を避け、日本の小説・官能小説として自然な日本語の語彙とリズムで、文字数制限を気にせず（1,500〜4,000文字以上でも可）、導入や寸止め・要約で終わらせず具体的な描写と台詞を最初から最後までたっぷり書き切ってください。'
   }
   return out
 }
@@ -1261,7 +1292,7 @@ function extractLookupNotes (turns) {
   return notes.join('\n').slice(0, 2500)
 }
 
-function toOpenAIMessages (system, contents, { compact = false } = {}) {
+function toOpenAIMessages (system, contents, { compact = false, r18Mode = false } = {}) {
   const messages = [{ role: 'system', content: system }]
   let pendingCallIds = []
   for (const turn of contents) {
@@ -1308,7 +1339,7 @@ function toOpenAIMessages (system, contents, { compact = false } = {}) {
         })
       } else {
         const joined = other.filter(p => typeof p.text === 'string').map(p => p.text).join('\n')
-        const baseText = compact ? compactUncensoredText(joined) : joined
+        const baseText = compact ? compactUncensoredText(joined, { r18Mode }) : joined
         const withImages = contents.imageDescription
           ? `${baseText}\n\n## 添付・返信先画像の内容（視覚情報）\n${contents.imageDescription}`
           : baseText
@@ -1404,13 +1435,12 @@ function parseUncensoredParts (msg, declarations, allowed = null) {
 }
 
 const UNCENSORED_SAMPLING_PARAMS = {
-  max_tokens: 2048,
+  max_tokens: 4096,
   stream: true,
-  top_p: 0.9,
-  top_k: 40,
-  repeat_penalty: 1.1,
-  repeat_last_n: 64,
-  presence_penalty: 0.2,
+  top_p: 0.95,
+  top_k: 64,
+  min_p: 0.05,
+  repeat_penalty: 1.02,
   chat_template_kwargs: { enable_thinking: false }
 }
 
@@ -1621,7 +1651,7 @@ async function callUncensored (contents, declarations, allowed = null, { timeout
     if (desc) contents.imageDescription = desc
   }
   const r18Mode = !!contents?.uncensoredR18Mode || isR18Text(model)
-  const messages = toOpenAIMessages(uncensoredSystemInstruction({ compact: useCompact, r18Mode }), contents, { compact: useCompact })
+  const messages = toOpenAIMessages(uncensoredSystemInstruction({ compact: useCompact, r18Mode }), contents, { compact: useCompact, r18Mode })
   const replyCacheKey = useCompact ? `uncensored-reply:${hashOf(JSON.stringify({ model, messages }))}` : null
   if (replyCacheKey) {
     const cachedReply = await aiCache.getJson(replyCacheKey)
@@ -1641,7 +1671,7 @@ async function callUncensored (contents, declarations, allowed = null, { timeout
   const body = {
     model,
     messages,
-    temperature: useCompact ? 0.75 : temperature(),
+    temperature: useCompact ? 0.8 : temperature(),
     ...(useCompact
       ? UNCENSORED_SAMPLING_PARAMS
       : {
@@ -1683,17 +1713,15 @@ async function callUncensored (contents, declarations, allowed = null, { timeout
     }
   }
   const buildMinimalBody = () => {
-    const compactMsgs = toOpenAIMessages(uncensoredSystemInstruction({ compact: true, r18Mode }), contents, { compact: true })
-      .map(m => m.role === 'user' && typeof m.content === 'string' && m.content.length > 1600
-        ? { ...m, content: m.content.slice(-1600) }
+    const compactMsgs = toOpenAIMessages(uncensoredSystemInstruction({ compact: true, r18Mode }), contents, { compact: true, r18Mode })
+      .map(m => m.role === 'user' && typeof m.content === 'string' && m.content.length > 2800
+        ? { ...m, content: `${m.content.slice(0, 500)}\n\n${m.content.slice(-2300)}` }
         : m)
     return {
       model,
       messages: compactMsgs,
       temperature: 0.8,
-      max_tokens: 1536,
-      stream: true,
-      chat_template_kwargs: { enable_thinking: false }
+      ...UNCENSORED_SAMPLING_PARAMS
     }
   }
   let res = await send(body)

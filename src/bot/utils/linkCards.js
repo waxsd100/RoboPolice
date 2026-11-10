@@ -6,7 +6,7 @@ const youtubeDB = require('../../db/interfaces/postgres/youtube')
 const { parseVideoId } = require('./youtube')
 
 const MAX_CARDS = 4
-const MAX_CONTENT = 2000
+const MAX_CONTENT = 12000
 const YOUTUBE_RED = 0xFF0000
 const OEMBED_TIMEOUT_MS = 5000
 

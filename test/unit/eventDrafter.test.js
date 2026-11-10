@@ -1129,6 +1129,13 @@ describe('explicit cache and thinking', () => {
     assert.equal(cloudRunBody.model, 'gemma-4-31B-it-The-DECKARD-HERETIC-UNCENSORED-Thinking.Q4_K_M')
     assert.equal(cloudRunBody.tools, undefined, 'Cloud Run llama-server uses compact mode without tool schema overhead')
     assert.equal(cloudRunBody.stream, true)
+    assert.equal(cloudRunBody.repeat_penalty, 1.02)
+    assert.equal(cloudRunBody.min_p, 0.05)
+    assert.equal(cloudRunBody.presence_penalty, undefined)
+    assert.match(cloudRunBody.messages[0].content, /地の文は常体（「〜た」「〜だ」）で統一する/)
+    assert.match(cloudRunBody.messages.at(-1).content, /## 文体と長さの指示（小説・描写モード）/)
+    assert.doesNotMatch(cloudRunBody.messages.at(-1).content, /長くても500文字程度/)
+    assert.doesNotMatch(cloudRunBody.messages.at(-1).content, /<untrusted/)
 
     // 2. Normal Gemini block fallback uses Model 1 (UNCENSORED_MODEL)
     let blockedFallbackModel = null
