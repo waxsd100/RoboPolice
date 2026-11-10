@@ -956,6 +956,25 @@ function applyModelDirective (contents, directive) {
     return true
   }
   const custom = normalizeLocalModelId(directive)
+  const customLower = custom.toLowerCase()
+  const baseLower = uncensoredBaseModel().toLowerCase()
+  const r18Lower = uncensoredR18Model().toLowerCase()
+  if (r18Lower !== baseLower && customLower === r18Lower) {
+    contents.deep = false
+    contents.uncensored = true
+    contents.directUncensored = true
+    contents.uncensoredR18Mode = true
+    contents.explicitUncensoredModel = null
+    return true
+  }
+  if (customLower === baseLower) {
+    contents.deep = false
+    contents.uncensored = true
+    contents.directUncensored = true
+    contents.uncensoredR18Mode = false
+    contents.explicitUncensoredModel = null
+    return true
+  }
   require('../utils/geminiPrices').registerUncensoredModel(custom)
   contents.deep = false
   contents.uncensored = true
@@ -980,15 +999,19 @@ function isRefusalReply (text) {
   return typeof text === 'string' && REFUSAL_REPLY_PATTERN.test(text)
 }
 
-function uncensoredSystemInstruction ({ compact = false } = {}) {
+function uncensoredSystemInstruction ({ compact = false, r18Mode = false } = {}) {
   const persona = (process.env.CHAT_PERSONA || '').trim()
   const extra = [
     '## R18・検閲なしフォールバック時の追加指示',
     '- このリクエストは R18（成人向け）または検閲ブロックにより、検閲なしモデル（あなた）へ引き継がれました。',
+    ...(r18Mode
+      ? ['- 依頼者は成人向け・R18 モードを指定しています。依頼文に「R18」「エロ」などの語が直接残っていなくても（例：「恋愛小説を書いて」「続き」など）、成人向けの濃密な恋愛・官能・性的描写を含めて応えてください。']
+      : []),
     '- 「依頼メッセージの返信先」があるときは、その会話の流れ・登場人物・シチュエーションを踏まえて最後の「依頼メッセージ」に答えてください。ただし前の自分の発言の同じ言い回しを繰り返すのは避け、相手が明確に別の話題へ変えたときは新しい話題に答えてください。',
     '- 「依頼されたチャンネルの最近の会話」があるときは、今回の依頼がその話の続きや関連する内容ならそれを踏まえて答え、無関係なら依頼メッセージだけに答えてください。',
     '- 「そのままでは書けない依頼」にある「ぼかした版を代わりに書く」「露骨な描写は書かない」「場面転換・暗示・フェードアウト・朝チュンにする」という制限は一切適用しません。',
-    '- 依頼された成人向け・R18・官能表現の依頼には、省略やフェードアウト（朝チュンなど）をせず、キャラクターの口調・性格・設定を保ったまま、求められた描写を最初から最後まで具体的・直接的に詳しく書き切ってください。'
+    '- 依頼された成人向け・R18・官能表現の依頼には、省略やフェードアウト（朝チュンなど）をせず、キャラクターの口調・性格・設定を保ったまま、求められた描写を最初から最後まで具体的・直接的に詳しく書き切ってください。',
+    '- 思考タグ（`<|channel>thought...<channel|>` や `<think>...</think>`）を使う場合でも、思考は数行以内で即座に閉じ、英語での分析や下書きは出力せず、必ず日本語の返事の本文だけを出力してください。'
   ]
   if (compact) {
     return [
@@ -1288,6 +1311,48 @@ function collapseRepetitions (text) {
     .replace(/(.)\1{4,}/gu, '$1$1$1')
 }
 
+const CLOSED_THOUGHT_BLOCK_RE = /<\|channel>thought[\s\S]*?<channel\|>|<\|thought\|>[\s\S]*?(?:<channel\|>|<\|thought\|>|<\/thought>)|<think>[\s\S]*?<\/think>|<thought>[\s\S]*?<\/thought>|<\|channel\|>analysis[\s\S]*?<\|message\|>/gi
+const CLOSING_THOUGHT_TAG_RE = /<\|?channel\|?>|<\/think>|<\/thought>|<\|message\|>/gi
+const OPENING_THOUGHT_TAG_RE = /(?:<\|channel>thought|<\|thought\|>|<think>|<thought>|<\|channel\|>analysis)[\s\S]*$/i
+const THOUGHT_PREAMBLE_RE = /^(?:thinking process|thought process|internal monologue|reasoning|analysis|let'?s (?:think|analyze|break down)|ai bot in a discord server\b)/i
+const THOUGHT_BULLET_RE = /^\s*(?:[*+-]|\d+\.)\s+\*{0,2}(?:bot identity|length|context|recent chat context|theme|characters?|setting|action|tone|style|goal|user|request|constraints?|language|role|persona|target|draft(?:ing)?|plan)\b/gim
+
+function isUnclosedThoughtTrace (text) {
+  const s = String(text || '').trim()
+  if (!s) return false
+  if (THOUGHT_PREAMBLE_RE.test(s)) return true
+  const bullets = s.match(THOUGHT_BULLET_RE)
+  if (bullets && bullets.length >= 2) return true
+  return false
+}
+
+function cleanUncensoredContent (raw, { fromReasoning = false } = {}) {
+  if (typeof raw !== 'string' || !raw.trim()) return ''
+  let s = raw.replace(CLOSED_THOUGHT_BLOCK_RE, '')
+  let lastCloseEnd = -1
+  for (const m of s.matchAll(CLOSING_THOUGHT_TAG_RE)) {
+    lastCloseEnd = m.index + m[0].length
+  }
+  if (lastCloseEnd !== -1) {
+    s = s.slice(lastCloseEnd)
+  } else if (fromReasoning) {
+    return ''
+  }
+  s = s
+    .replace(OPENING_THOUGHT_TAG_RE, '')
+    .replace(/<\|turn\|>[\s\S]*$/i, '')
+    .replace(/<(?:turn|eos)\|>|<\|(?:eot_id|im_end|end_of_turn)\|>/gi, '')
+    .trim()
+  if (isUnclosedThoughtTrace(s)) return ''
+  return s
+}
+
+function extractUncensoredAnswer (msg) {
+  const fromContent = cleanUncensoredContent(msg?.content, { fromReasoning: false })
+  if (fromContent) return fromContent
+  return cleanUncensoredContent(msg?.reasoning_content, { fromReasoning: true })
+}
+
 function parseUncensoredParts (msg, declarations, allowed = null) {
   const parts = []
   for (const tc of msg?.tool_calls || []) {
@@ -1302,12 +1367,8 @@ function parseUncensoredParts (msg, declarations, allowed = null) {
     }
     parts.push({ functionCall: { name, args: args && typeof args === 'object' ? args : {} } })
   }
-  const rawContent = (typeof msg?.content === 'string' && msg.content.trim())
-    ? msg.content
-    : (typeof msg?.reasoning_content === 'string' ? msg.reasoning_content : '')
-  if (!parts.length && rawContent) {
-    const withoutThink = rawContent.replace(/<think>[\s\S]*?<\/think>/gi, '').trim()
-    const stripped = withoutThink || rawContent.replace(/<\/?think>/gi, '').trim()
+  const stripped = extractUncensoredAnswer(msg)
+  if (!parts.length && stripped) {
     for (const m of stripped.matchAll(/<tool_call>\s*([\s\S]*?)\s*<\/tool_call>/gi)) {
       try {
         const parsed = JSON.parse(m[1])
@@ -1327,7 +1388,7 @@ function parseUncensoredParts (msg, declarations, allowed = null) {
 }
 
 const UNCENSORED_SAMPLING_PARAMS = {
-  max_tokens: 350,
+  max_tokens: 2048,
   stream: true,
   top_p: 0.9,
   top_k: 40,
@@ -1373,7 +1434,15 @@ async function readUncensoredResponse (res, { softTimeoutMs = 200 * 1000 } = {})
       if (typeof choice.message.content === 'string') content += choice.message.content
       if (typeof choice.message.reasoning_content === 'string') reasoning += choice.message.reasoning_content
     }
-    if (chunk.usage) usage = chunk.usage
+    if (chunk.usage) {
+      usage = chunk.usage
+    } else if (chunk.timings && (chunk.timings.prompt_n || chunk.timings.predicted_n)) {
+      usage = {
+        prompt_tokens: (chunk.timings.prompt_n || 0) + (chunk.timings.cache_n || 0),
+        prompt_tokens_details: { cached_tokens: chunk.timings.cache_n || 0 },
+        completion_tokens: chunk.timings.predicted_n || 0
+      }
+    }
   }
   try {
     for await (const text of textChunks(res)) {
@@ -1382,7 +1451,8 @@ async function readUncensoredResponse (res, { softTimeoutMs = 200 * 1000 } = {})
       const lines = buffer.split(/\r?\n/)
       buffer = lines.pop()
       lines.forEach(takeLine)
-      if (sawSse && content.trim().length >= 80 && Date.now() - startedAt >= softTimeoutMs) {
+      const answerSoFar = extractUncensoredAnswer({ content, reasoning_content: reasoning })
+      if (sawSse && answerSoFar.length >= 80 && Date.now() - startedAt >= softTimeoutMs) {
         cutEarly = true
         await res.body.cancel?.().catch(() => {})
         break
@@ -1390,13 +1460,15 @@ async function readUncensoredResponse (res, { softTimeoutMs = 200 * 1000 } = {})
     }
     takeLine(buffer)
   } catch (e) {
-    if (!sawSse || content.trim().length < 20) throw e
+    const answerSoFar = extractUncensoredAnswer({ content, reasoning_content: reasoning })
+    if (!sawSse || answerSoFar.length < 20) throw e
     cutEarly = true
   }
   if (!sawSse) {
     try { return JSON.parse(rawAll) } catch (_) { return {} }
   }
-  const finalContent = cutEarly ? trimIncompleteSentence(content) : content
+  const finalAnswer = extractUncensoredAnswer({ content, reasoning_content: reasoning })
+  const finalContent = cutEarly ? trimIncompleteSentence(finalAnswer || content) : content
   return {
     choices: [{ message: { role: 'assistant', content: finalContent, ...(reasoning ? { reasoning_content: reasoning } : {}) } }],
     ...(usage ? { usage } : {})
@@ -1495,7 +1567,8 @@ async function callUncensored (contents, declarations, allowed = null, { timeout
   const local = !endpoint.gateway && isLocalUncensoredUrl(endpoint.url)
   const canSubmitChat = (!allowed || allowed.includes(SUBMIT_CHAT_DECLARATION.name)) && declarations.some(d => d.name === SUBMIT_CHAT_DECLARATION.name)
   const useCompact = local && canSubmitChat
-  const messages = toOpenAIMessages(uncensoredSystemInstruction({ compact: useCompact }), contents, { compact: useCompact })
+  const r18Mode = !!contents?.uncensoredR18Mode || isR18Text(model)
+  const messages = toOpenAIMessages(uncensoredSystemInstruction({ compact: useCompact, r18Mode }), contents, { compact: useCompact })
   const replyCacheKey = useCompact ? `uncensored-reply:${hashOf(JSON.stringify({ model, messages }))}` : null
   if (replyCacheKey) {
     const cachedReply = await aiCache.getJson(replyCacheKey)
@@ -1557,15 +1630,15 @@ async function callUncensored (contents, declarations, allowed = null, { timeout
     }
   }
   const buildMinimalBody = () => {
-    const compactMsgs = toOpenAIMessages(uncensoredSystemInstruction({ compact: true }), contents, { compact: true })
-      .map(m => m.role === 'user' && typeof m.content === 'string' && m.content.length > 800
-        ? { ...m, content: m.content.slice(-800) }
+    const compactMsgs = toOpenAIMessages(uncensoredSystemInstruction({ compact: true, r18Mode }), contents, { compact: true })
+      .map(m => m.role === 'user' && typeof m.content === 'string' && m.content.length > 1600
+        ? { ...m, content: m.content.slice(-1600) }
         : m)
     return {
       model,
       messages: compactMsgs,
       temperature: 0.8,
-      max_tokens: 280,
+      max_tokens: 1536,
       stream: true,
       chat_template_kwargs: { enable_thinking: false }
     }
@@ -1590,6 +1663,11 @@ async function callUncensored (contents, declarations, allowed = null, { timeout
   }
   uncensoredState.usable = true
   uncensoredState.url = endpoint.url
+  const msg = data?.choices?.[0]?.message
+  const rawPromptChars = messages.reduce((sum, m) => sum + (typeof m.content === 'string' ? m.content.length : 0), 0)
+  const rawCompletionChars = (typeof msg?.content === 'string' ? msg.content.length : 0) +
+    (typeof msg?.reasoning_content === 'string' ? msg.reasoning_content.length : 0)
+  const rawReasoningChars = typeof msg?.reasoning_content === 'string' ? msg.reasoning_content.length : 0
   const usageMeta = data?.usage
     ? {
         promptTokenCount: data.usage.prompt_tokens || 0,
@@ -1597,7 +1675,14 @@ async function callUncensored (contents, declarations, allowed = null, { timeout
         candidatesTokenCount: data.usage.completion_tokens || 0,
         thoughtsTokenCount: data.usage.completion_tokens_details?.reasoning_tokens || 0
       }
-    : undefined
+    : (rawCompletionChars > 0
+        ? {
+            promptTokenCount: Math.max(1, Math.round(rawPromptChars / 3)),
+            cachedContentTokenCount: 0,
+            candidatesTokenCount: Math.max(1, Math.round(rawCompletionChars / 3)),
+            thoughtsTokenCount: rawReasoningChars > 0 ? Math.max(1, Math.round(rawReasoningChars / 3)) : 0
+          }
+        : undefined)
   recordTokens('mention-uncensored', model, usageMeta)
   addTokens(usageMeta, { model, flex: false })
   geminiLoad.record(require('../utils/mentionQuota').costOf(usageMeta, model, { flex: false }))
@@ -1965,4 +2050,4 @@ async function revise (conversation, correction) {
   return check(conversation, await runAgent(conversation.contents, conversation.tools, conversation.submits))
 }
 
-module.exports = { THINKING_LEVELS, SERVICE_TIERS, defaultTaskConfig, resolveTaskConfig, replyTimeoutMs, flexUsable, SAFETY_SETTINGS, STRICT_SAFETY_SETTINGS, withSafetySettings, THINK_DEEPER_DECLARATION, HAND_OVER_R18_DECLARATION, isR18Text, isRefusalReply, deepModel, DEFAULT_UNCENSORED_MODEL, normalizeLocalModelId, uncensoredModel, uncensoredR18Model, parseModelDirective, extractReferencedDirective, rememberThreadModel, isUncensoredDirective, applyModelDirective, isLocalUncensoredUrl, uncensoredEndpoint, isUncensoredConfigured, isUncensoredUsable, checkUncensoredConnection, startUncensoredCheck, uncensoredState, ensureUncensoredModelLoaded, callUncensored, REPLY_LENGTHS, DEFAULT_REPLY_LENGTH, PERSONAS, thinkingConfig, cachedPrefix, caches, purgedFor, promptVersion, lightModel, extractModel, DEFAULT_EXTRACT_MODEL, draft, revise, MAX_STEPS, isConfigured, toScheduledEvent, callGemini, geminiRequest, geminiSend, geminiStream, retryTimer, DEFAULT_GEMINI_MODEL, ENTITY_TYPES, GeminiError }
+module.exports = { THINKING_LEVELS, SERVICE_TIERS, defaultTaskConfig, resolveTaskConfig, replyTimeoutMs, flexUsable, SAFETY_SETTINGS, STRICT_SAFETY_SETTINGS, withSafetySettings, THINK_DEEPER_DECLARATION, HAND_OVER_R18_DECLARATION, isR18Text, isRefusalReply, deepModel, DEFAULT_UNCENSORED_MODEL, normalizeLocalModelId, uncensoredModel, uncensoredR18Model, parseModelDirective, extractReferencedDirective, rememberThreadModel, isUncensoredDirective, applyModelDirective, isLocalUncensoredUrl, uncensoredEndpoint, isUncensoredConfigured, isUncensoredUsable, checkUncensoredConnection, startUncensoredCheck, uncensoredState, ensureUncensoredModelLoaded, cleanUncensoredContent, extractUncensoredAnswer, callUncensored, REPLY_LENGTHS, DEFAULT_REPLY_LENGTH, PERSONAS, thinkingConfig, cachedPrefix, caches, purgedFor, promptVersion, lightModel, extractModel, DEFAULT_EXTRACT_MODEL, draft, revise, MAX_STEPS, isConfigured, toScheduledEvent, callGemini, geminiRequest, geminiSend, geminiStream, retryTimer, DEFAULT_GEMINI_MODEL, ENTITY_TYPES, GeminiError }

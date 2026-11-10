@@ -1246,6 +1246,80 @@ describe('explicit cache and thinking', () => {
     assert.deepEqual(loadCalledWith, { model: 'gemma-4-31B-it-The-DECKARD-HERETIC-UNCENSORED-Thinking.Q4_K_M' })
     assert.ok(modelsChecks >= 2)
 
+    // 6. Gemma 4 thinking blocks (<|channel>thought...<channel|>) and unclosed English prompt-analysis traces are stripped/rejected
+    const { extractUncensoredAnswer } = require('../../src/bot/modules/eventDrafter')
+    const leakedThoughtSample = [
+      'AI bot in a Discord server.',
+      '  * Bot identity (not pretending to be the streamer).',
+      '  * Length: Readable as a Discord message, max ~500 chars.',
+      '  * Context: The channel `<#1552498516801093754>` has age restrictions/adult themes.',
+      '  * Recent chat context: A user (@wakokara) asked for "the continuation" of an R18 scene.',
+      '  * Theme: A quiet night, emotional connection turning physical/passionate.',
+      '  * Start by addressing the user briefly or just diving in. (Discord style usually favors getting straight'
+    ].join('\n')
+    assert.equal(extractUncensoredAnswer({ content: '', reasoning_content: leakedThoughtSample }), '')
+    assert.equal(extractUncensoredAnswer({ content: leakedThoughtSample }), '')
+    assert.equal(
+      extractUncensoredAnswer({ content: `<|channel>thought\n${leakedThoughtSample}\n<channel|>窓の外で雨が静かに降っていた。` }),
+      '窓の外で雨が静かに降っていた。'
+    )
+    assert.equal(
+      extractUncensoredAnswer({ content: `${leakedThoughtSample}\n<channel|>窓の外で雨が静かに降っていた。` }),
+      '窓の外で雨が静かに降っていた。'
+    )
+    assert.equal(
+      extractUncensoredAnswer({ content: '', reasoning_content: `${leakedThoughtSample}\n<channel|>窓の外で雨が静かに降っていた。` }),
+      '窓の外で雨が静かに降っていた。'
+    )
+
+    // When Model 2 returns only an unclosed thought trace (even in a reply thread with footer model ID),
+    // it never leaks the English thought trace and falls back to Model 1.
+    const attemptedModels = []
+    global.fetch = async (url, init = {}) => {
+      if (/\/v1\/models$/.test(url) && (!init.method || init.method === 'GET')) {
+        return {
+          ok: true,
+          json: async () => ({
+            data: [
+              { id: 'gemma-4-31B-it-ARA-heretic.IQ4_XS', status: { value: 'loaded' } },
+              { id: 'gemma-4-31B-it-The-DECKARD-HERETIC-UNCENSORED-Thinking.Q4_K_M', status: { value: 'loaded' } }
+            ]
+          })
+        }
+      }
+      const b = JSON.parse(init.body)
+      attemptedModels.push(b.model)
+      if (/Thinking/i.test(b.model)) {
+        return {
+          ok: true,
+          json: async () => ({
+            choices: [{ message: { role: 'assistant', content: '', reasoning_content: leakedThoughtSample } }]
+          })
+        }
+      }
+      return {
+        ok: true,
+        json: async () => ({
+          choices: [{ message: { role: 'assistant', content: '雨音の響く部屋で、二人はそっと唇を重ねた。' } }]
+        })
+      }
+    }
+    const recoveredReply = await draft({
+      request: '恋愛小説を書いて',
+      referenced: {
+        text: '[2026-11-09T10:00:05.000Z] あなた（BOT）: 前の返事\n-# model: gemma-4-31B-it-The-DECKARD-HERETIC-UNCENSORED-Thinking.Q4_K_M · tokens: in 57 (cached 0) · out 0 · 3 Gemini calls',
+        othersText: '',
+        count: 1
+      },
+      channelName: 'general',
+      guild,
+      tools: quietTools,
+      now: NOW
+    })
+    assert.equal(recoveredReply.text, '雨音の響く部屋で、二人はそっと唇を重ねた。')
+    assert.ok(attemptedModels.some(m => /Thinking/i.test(m)), 'tried Model 2 first')
+    assert.equal(attemptedModels.at(-1), 'gemma-4-31B-it-ARA-heretic.IQ4_XS', 'fell back to Model 1 after unclosed thought')
+
     delete process.env.UNCENSORED_R18_MODEL
 
     process.env.UNCENSORED_API_URL = 'https://api.featherless.ai/v1'
