@@ -284,6 +284,27 @@ describe('readThread', () => {
     await assert.rejects(tools().readThread('202', '403'), /依頼者がこのチャンネル/)
     await assert.rejects(tools().readThread('201', '999'), /Unknown Message/)
   })
+
+  test('collects image URLs from attachments and embeds across the reply chain', async () => {
+    installBot({
+      guilds: [guild],
+      messages: {
+        '201/610': {
+          content: 'この画像見て',
+          author: { id: REQUESTER, username: 'me' },
+          attachments: [{ filename: 'cat.png?ex=1', url: 'https://cdn.example/cat.png?ex=1' }],
+          embeds: [{ image: { url: 'https://cdn.example/banner.jpg' } }]
+        },
+        '201/611': {
+          content: 'かわいい！',
+          author: { id: 'BOT', username: 'bot' },
+          messageReference: { messageID: '610', channelID: '201' }
+        }
+      }
+    })
+    const thread = await tools().readThread('201', '611')
+    assert.deepEqual(thread.images, ['https://cdn.example/cat.png?ex=1', 'https://cdn.example/banner.jpg'])
+  })
 })
 
 describe('withServerEmojis', () => {

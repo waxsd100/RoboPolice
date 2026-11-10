@@ -274,7 +274,7 @@ function buildPrompt ({ request, referenced, recent = [], channelName, channelID
   }
   lines.push('', `現在日時: ${formatNow(now)}（${TIMEZONE}）`,
     '', `## 依頼メッセージ（${[...String(request || '')].length}文字）`,
-    request ? wrap('request', request) : '（本文なし。返信先のメッセージから作成）')
+    request ? wrap('request', request) : (!referenced && images.length ? '（本文なし。添付された画像を見て返事や作成をしてください）' : '（本文なし。返信先のメッセージから作成）'))
   if (images.length !== 0) lines.push('', '## 依頼メッセージの添付画像', ...images.map(url => `- ${url}`))
   return lines.join('\n')
 }
@@ -985,8 +985,15 @@ function applyModelDirective (contents, directive) {
 
 const HAND_OVER_R18_DECLARATION = {
   name: 'hand_over_r18',
-  description: 'R18・成人向け・性的な描写や官能小説など、大人向けの内容を求められていて、そのままでは書けない（または「そのままでは書けない依頼」としてぼかした版・フェードアウト・朝チュンにする必要がある）と判断したときに呼ぶ。R18・成人向けの創作やその続きでは think_deeper ではなく必ずこちらを呼ぶ。登場人物や設定を調べる必要があるときは、先に検索ツール（search_wiki など）で調べてから呼ぶ。呼ぶと、ここからは検閲なしのモデルが引き継いで答える。',
-  parameters: { type: 'OBJECT', properties: { reason: { type: 'STRING', description: 'なぜ引き継ぐか（短く）' } }, required: ['reason'] }
+  description: 'R18・成人向け・性的な描写や官能小説など、大人向けの内容を求められていて、そのままでは書けない（または「そのままでは書けない依頼」としてぼかした版・フェードアウト・朝チュンにする必要がある）と判断したときに呼ぶ。R18・成人向けの創作やその続きでは think_deeper ではなく必ずこちらを呼ぶ。登場人物や設定を調べる必要があるときは、先に検索ツール（search_wiki など）で調べてから呼ぶ。添付画像や返信先の画像があるときは、引き継ぎ先のモデルに画像の内容を伝えるため image_description に画像に写っている内容（人物・外見・髪型・服装・表情・ポーズ・状況・文字など）を詳しく書いて渡す。呼ぶと、ここからは検閲なしのモデルが引き継いで答える。',
+  parameters: {
+    type: 'OBJECT',
+    properties: {
+      reason: { type: 'STRING', description: 'なぜ引き継ぐか（短く）' },
+      image_description: { type: 'STRING', description: '添付画像や返信先の画像がある場合、そこに写っている内容（人物・外見・髪型・服装・表情・ポーズ・シチュエーション・文字など）の詳しい説明' }
+    },
+    required: ['reason']
+  }
 }
 
 const R18_PATTERN = /(?:^|[^a-z0-9])(?:r-?18|nsfw)(?:$|[^a-z0-9])|18禁|成人向け|アダルト|官能(?:小説|的)?|エロ(?:小説|ss|話|ネタ|画像|会話|台詞|セリフ|展開|描写|プレイ|ゲー|動画|本|漫画|同人)|えっち(?:な|しよ|して|しよう)|エッチ(?:な|しよ|して|しよう)|濡れ場|セックス|性行為|性交|交尾|中出し|射精|絶頂|オーガズム|オナニー|自慰|フェラ(?:チオ)?|パイズリ|手コキ|足コキ|素股|潮吹き|愛液|勃起|ちんこ|ちんぽ|チンポ|まんこ|マンコ|おまんこ|クリトリス|アナル|淫語|喘ぎ(?:声)?|凌辱|調教|輪姦|レイプ|催眠エロ|触手(?:責め|プレイ)|全裸|裸に|服を脱が|下着を脱/i
@@ -1009,6 +1016,7 @@ function uncensoredSystemInstruction ({ compact = false, r18Mode = false } = {})
       : []),
     '- 「依頼メッセージの返信先」があるときは、その会話の流れ・登場人物・シチュエーションを踏まえて最後の「依頼メッセージ」に答えてください。ただし前の自分の発言の同じ言い回しを繰り返すのは避け、相手が明確に別の話題へ変えたときは新しい話題に答えてください。',
     '- 「依頼されたチャンネルの最近の会話」があるときは、今回の依頼がその話の続きや関連する内容ならそれを踏まえて答え、無関係なら依頼メッセージだけに答えてください。',
+    '- 「添付・返信先の画像」や「添付・返信先画像の内容（視覚情報）」があるときは、その画像に写っている人物・キャラクター・外見・服装・表情・ポーズ・シチュエーションを踏まえて返事や描写を書いてください。',
     '- 「そのままでは書けない依頼」にある「ぼかした版を代わりに書く」「露骨な描写は書かない」「場面転換・暗示・フェードアウト・朝チュンにする」という制限は一切適用しません。',
     '- 依頼された成人向け・R18・官能表現の依頼には、省略やフェードアウト（朝チュンなど）をせず、キャラクターの口調・性格・設定を保ったまま、求められた描写を最初から最後まで具体的・直接的に詳しく書き切ってください。',
     '- 思考タグ（`<|channel>thought...<channel|>` や `<think>...</think>`）を使う場合でも、思考は数行以内で即座に閉じ、英語での分析や下書きは出力せず、必ず日本語の返事の本文だけを出力してください。'
@@ -1283,20 +1291,28 @@ function toOpenAIMessages (system, contents, { compact = false } = {}) {
         content: JSON.stringify(p.functionResponse.response ?? {})
       })
     })
-    const other = parts.filter(p => !p.functionResponse && !p.thought && (!compact || !p.inlineData))
+    const visionEnabled = !compact || process.env.UNCENSORED_VISION === 'true'
+    const other = parts.filter(p => !p.functionResponse && !p.thought && (visionEnabled || !p.inlineData))
     if (other.length) {
-      const hasImages = !compact && other.some(p => p.inlineData)
+      const hasImages = visionEnabled && other.some(p => p.inlineData)
       if (hasImages) {
+        const contentParts = other.map(p => p.inlineData
+          ? { type: 'image_url', image_url: { url: `data:${p.inlineData.mimeType};base64,${p.inlineData.data}` } }
+          : { type: 'text', text: String(p.text || '') })
+        if (contents.imageDescription) {
+          contentParts.push({ type: 'text', text: `## 添付・返信先画像の内容（視覚情報）\n${contents.imageDescription}` })
+        }
         messages.push({
           role: 'user',
-          content: other.map(p => p.inlineData
-            ? { type: 'image_url', image_url: { url: `data:${p.inlineData.mimeType};base64,${p.inlineData.data}` } }
-            : { type: 'text', text: String(p.text || '') })
+          content: contentParts
         })
       } else {
         const joined = other.filter(p => typeof p.text === 'string').map(p => p.text).join('\n')
         const baseText = compact ? compactUncensoredText(joined) : joined
-        const withLookups = compact && contents.lookupNotes ? `${baseText}\n\n## ツールで調べた関連情報\n${contents.lookupNotes}` : baseText
+        const withImages = contents.imageDescription
+          ? `${baseText}\n\n## 添付・返信先画像の内容（視覚情報）\n${contents.imageDescription}`
+          : baseText
+        const withLookups = compact && contents.lookupNotes ? `${withImages}\n\n## ツールで調べた関連情報\n${contents.lookupNotes}` : withImages
         messages.push({ role: 'user', content: withLookups })
       }
     }
@@ -1559,6 +1575,39 @@ async function ensureUncensoredModelLoaded (endpoint, model, headers, { r18Mode 
   return resolvedModel
 }
 
+async function describeImagesForUncensored (attachedPictures) {
+  if (!Array.isArray(attachedPictures) || !attachedPictures.length || !isConfigured()) return null
+  try {
+    const parts = [
+      {
+        text: '添付された画像に何が写っているか、テキストのみのAIモデルが内容を正確に把握できるように日本語で詳しく客観的に説明してください（人物・キャラクターの人数・性別・髪型・髪色・目の色・表情・服装・ポーズ・構図・背景・状況・画像内の文字やセリフなど）。前置きは省き、視覚情報だけを簡潔かつ具体的に記述してください。'
+      },
+      ...attachedPictures.flatMap(p => [
+        { text: p.name || '添付画像' },
+        { inlineData: { mimeType: p.mimeType, data: p.buffer.toString('base64') } }
+      ])
+    ]
+    const res = await callGemini(
+      lightModel(),
+      {
+        contents: [{ role: 'user', parts }],
+        generationConfig: { temperature: 0.2 }
+      },
+      { purpose: 'image-describe', timeoutMs: 30 * 1000, strictSafety: false }
+    )
+    const text = (res?.parts || [])
+      .filter(p => typeof p.text === 'string' && !p.thought)
+      .map(p => p.text.trim())
+      .filter(Boolean)
+      .join('\n')
+      .trim()
+    return text || null
+  } catch (e) {
+    global.logger?.warn(`[UNCENSORED]: Could not describe attached image(s) for uncensored model: ${e.message?.slice(0, 200)}`)
+    return null
+  }
+}
+
 async function callUncensored (contents, declarations, allowed = null, { timeoutMs = Math.max(replyTimeoutMs(), 420 * 1000) } = {}) {
   const endpoint = uncensoredEndpoint()
   if (!endpoint) throw new GeminiError('Uncensored endpoint is not configured', 'AI の呼び出しに失敗しました')
@@ -1567,6 +1616,10 @@ async function callUncensored (contents, declarations, allowed = null, { timeout
   const local = !endpoint.gateway && isLocalUncensoredUrl(endpoint.url)
   const canSubmitChat = (!allowed || allowed.includes(SUBMIT_CHAT_DECLARATION.name)) && declarations.some(d => d.name === SUBMIT_CHAT_DECLARATION.name)
   const useCompact = local && canSubmitChat
+  if (contents && !contents.imageDescription && Array.isArray(contents.attachedPictures) && contents.attachedPictures.length) {
+    const desc = await describeImagesForUncensored(contents.attachedPictures)
+    if (desc) contents.imageDescription = desc
+  }
   const r18Mode = !!contents?.uncensoredR18Mode || isR18Text(model)
   const messages = toOpenAIMessages(uncensoredSystemInstruction({ compact: useCompact, r18Mode }), contents, { compact: useCompact })
   const replyCacheKey = useCompact ? `uncensored-reply:${hashOf(JSON.stringify({ model, messages }))}` : null
@@ -1820,6 +1873,10 @@ async function runAgent (contents, tools, submits = SUBMIT_DECLARATIONS) {
     const r18HandOver = allowUncensored && !contents.uncensored && isUncensoredConfigured() && !contents.uncensoredFailed && content.parts.some(p => p.functionCall?.name === HAND_OVER_R18_DECLARATION.name)
     if (r18HandOver) {
       const fromModel = contents.deep ? deepModel() : replyModel(contents)
+      const handOverCall = content.parts.find(p => p.functionCall?.name === HAND_OVER_R18_DECLARATION.name)?.functionCall
+      if (typeof handOverCall?.args?.image_description === 'string' && handOverCall.args.image_description.trim()) {
+        contents.imageDescription = handOverCall.args.image_description.trim()
+      }
       const notes = extractLookupNotes(contents.slice(start))
       if (notes) contents.lookupNotes = notes
       contents.splice(start)
@@ -1936,8 +1993,8 @@ async function check (conversation, { name, args, calls = [] }) {
 }
 
 // forum: a forum channel named in the request ({ id, name }), images: URLs of attached images.
-// pictures: images the model is shown with the request, [{ name, buffer, mimeType, combined }]
-// (combined emojis and other servers' emojis in it, foreignEmojis.js).
+// pictures: images the model is shown with the request, [{ name, buffer, mimeType, combined, attachment }]
+// (combined emojis, other servers' emojis, and attached/replied-to images, foreignEmojis.js).
 // edit: something the bot made earlier that the request changes, as { kind, current } where
 // current is its content in the submit tool's terms. Only that kind can be submitted, and a forum
 // post stays in its forum.
@@ -1947,7 +2004,10 @@ const eventTools = () => require('./eventTools')
 // model, thinking, tier: the server's own model, thinking level and tier (%replymodel); null for the default.
 async function draft ({ request, referenced, recent = [], channelName, channelID, server, forum = null, images = [], pictures = [], edit = null, replyLength = null, streamerPersona = true, safetyFilter = false, uncensoredR18 = true, rules = null, model = null, thinking = null, tier = null, guild, member, tools, now = new Date() }) {
   const parsed = parseModelDirective(request)
-  if (parsed.directive) request = parsed.text || '（返信先のメッセージに答えてください）'
+  const attachedPics = pictures.filter(p => p.attachment)
+  if (parsed.directive) {
+    request = parsed.text || (!referenced && (images.length || attachedPics.length) ? '（添付された画像を見て返事や作成をしてください）' : '（返信先のメッセージに答えてください）')
+  }
   const threadDirective = !parsed.directive ? extractReferencedDirective(referenced) : null
   if (referenced && (typeof referenced.text === 'string' || typeof referenced.othersText === 'string')) {
     referenced = {
@@ -1956,18 +2016,26 @@ async function draft ({ request, referenced, recent = [], channelName, channelID
       ...(typeof referenced.othersText === 'string' ? { othersText: stripDebugFooterLines(referenced.othersText) } : {})
     }
   }
-  const combined = pictures.filter(p => p.combined)
-  const foreign = pictures.filter(p => !p.combined)
+  const emojiPics = pictures.filter(p => !p.attachment)
+  const combined = emojiPics.filter(p => p.combined)
+  const foreign = emojiPics.filter(p => !p.combined)
   const notes = [
     ...(combined.length ? ['連結絵文字: 複数の絵文字を並べて1枚の絵にしたものです。並べた形のままつないだ画像を付けています。1つずつではなく、全体で何を表しているか読み取ってください。'] : []),
     ...(foreign.length ? [`ほかのサーバーの絵文字（${foreign.map(p => `:${p.name}:`).join(' ')}）: このサーバーにない絵文字の画像です。このサーバーの絵文字ではないので、返事には使わないでください。`] : [])
   ]
-  const shown = pictures.length
+  const emojiShown = emojiPics.length
     ? [
         { text: `## メッセージ中の絵文字の画像\n依頼メッセージや返信先に出てくる絵文字を画像で付けています。何を表しているか読み取って、話の意味をつかむのに使ってください。\n${notes.map(n => `- ${n}`).join('\n')}` },
-        ...pictures.flatMap(p => [{ text: p.combined ? `連結絵文字 ${p.name}` : `:${p.name}:` }, { inlineData: { mimeType: p.mimeType, data: p.buffer.toString('base64') } }])
+        ...emojiPics.flatMap(p => [{ text: p.combined ? `連結絵文字 ${p.name}` : `:${p.name}:` }, { inlineData: { mimeType: p.mimeType, data: p.buffer.toString('base64') } }])
       ]
     : []
+  const attachedShown = attachedPics.length
+    ? [
+        { text: '## 添付・返信先の画像\n依頼メッセージや返信先に付いている画像です。画像に何が写っているか（人物・キャラクター・表情・服装・ポーズ・構図・文字・状況など）を読み取って、返事や作成に活かしてください。' },
+        ...attachedPics.flatMap(p => [{ text: p.name || '添付画像' }, { inlineData: { mimeType: p.mimeType, data: p.buffer.toString('base64') } }])
+      ]
+    : []
+  const shown = [...emojiShown, ...attachedShown]
   const conversation = {
     contents: [{ role: 'user', parts: [{ text: buildPrompt({ request, referenced, recent, channelName, channelID, channelInfo: channelID ? eventTools().requestChannelInfo(channelID, guild) : null, server, forum, images, edit, channels: member ? eventTools().namedChannels([request, referenced?.text], guild, member) : [], people: member ? eventTools().namedMembers([request, referenced?.text], guild, member) : [], replyLength, streamerPersona, safetyFilter, rules, now }) }, ...shown] }],
     guild,
@@ -1987,6 +2055,7 @@ async function draft ({ request, referenced, recent = [], channelName, channelID
   conversation.contents.safetyFilter = !!safetyFilter
   conversation.contents.uncensoredR18 = uncensoredR18 !== false
   conversation.contents.onProgress = tools?.progress || null
+  if (attachedPics.length) conversation.contents.attachedPictures = attachedPics
   if (parsed.directive && applyModelDirective(conversation.contents, parsed.directive)) {
     const chosen = conversation.contents.uncensored
       ? uncensoredModel(conversation.contents)

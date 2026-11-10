@@ -210,6 +210,21 @@ function formatMessage (m, requesterID = null) {
   return lines.join('\n')
 }
 
+function messageImages (m) {
+  const urls = []
+  for (const a of m?.attachments || []) {
+    if (a?.url && (/^image\//.test(a.content_type || '') || /\.(jpe?g|png|webp|gif|avif)(?:[?#]|$)/i.test(a.filename || a.url || ''))) {
+      urls.push(a.url)
+    }
+  }
+  for (const e of m?.embeds || []) {
+    for (const image of [e?.image, e?.thumbnail]) {
+      if (image?.url && !urls.includes(image.url)) urls.push(image.url)
+    }
+  }
+  return urls
+}
+
 // Thrown to end the whole draft (the requester cancelled or stopped answering). Unlike a tool error
 // it is not handed back to the model.
 class StopDrafting extends Error {}
@@ -261,6 +276,7 @@ function createTools ({ guild, member, ask, progress = () => {} }) {
         }
       }
     }
+    const images = [...new Set(messages.flatMap(m => messageImages(m)))].slice(-4)
     return {
       text: messages.map(m => formatMessage(m, member.id)).join('\n'),
       count: messages.length,
@@ -269,6 +285,7 @@ function createTools ({ guild, member, ask, progress = () => {} }) {
       // knowledge, and with it the same jokes.
       othersText: messages.filter(m => m.author?.id !== global.bot.user.id).map(m => formatMessage(m, member.id)).join('\n'),
       messageIds: messages.map(m => m.id).filter(Boolean),
+      images,
       ...(lastBotModel ? { lastBotModel } : {})
     }
   }

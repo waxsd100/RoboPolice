@@ -12,6 +12,7 @@ const urlFetcher = require('./urlFetcher')
 
 const MAX_EMOJIS = 6
 const MAX_GROUPS = 3
+const MAX_ATTACHED_IMAGES = 4
 // Runs of emojis looked at to find them: most are emojis merely written next to each other.
 const MAX_CANDIDATES = 8
 const MAX_SIDE = 8
@@ -181,12 +182,33 @@ async function combinedPictures (groups, cache = tileCache()) {
   return { combined, pictures }
 }
 
-// Everything to show the model for `texts`: combined emojis first, then other servers' emojis
-// (emojis written next to each other that are not one picture among them, one by one).
-async function picturesFor (texts, guild) {
-  const { combined, pictures } = await combinedPictures(emojiGroups(texts))
-  const foreign = await emojiPictures(foreignEmojis(texts, guild, combined))
-  return [...pictures, ...foreign]
+// Attached or replied-to images in the request or thread, for the model:
+// [{ name, url, buffer, mimeType, attachment: true }]. One that cannot be fetched is left out.
+async function attachedPictures (urls = []) {
+  const unique = [...new Set((urls || []).filter(Boolean))].slice(0, MAX_ATTACHED_IMAGES)
+  if (!unique.length) return []
+  const fetched = await Promise.all(unique.map((url, i) => urlFetcher.fetchImage(url)
+    .then(({ buffer, contentType }) => ({
+      name: unique.length === 1 ? '添付画像' : `添付画像${i + 1}`,
+      url,
+      buffer,
+      mimeType: contentType || 'image/png',
+      attachment: true
+    }))
+    .catch(() => null)))
+  return fetched.filter(Boolean)
 }
 
-module.exports = { foreignEmojis, emojiPictures, emojiGroups, combinedPictures, picturesFor, isCombined, numberedNames, MAX_EMOJIS }
+// Everything to show the model for `texts`: combined emojis first, then other servers' emojis
+// (emojis written next to each other that are not one picture among them, one by one), and any
+// attached or replied-to images.
+async function picturesFor (texts, guild, imageUrls = []) {
+  const [{ combined, pictures }, attached] = await Promise.all([
+    combinedPictures(emojiGroups(texts)),
+    attachedPictures(imageUrls)
+  ])
+  const foreign = await emojiPictures(foreignEmojis(texts, guild, combined))
+  return [...pictures, ...foreign, ...attached]
+}
+
+module.exports = { foreignEmojis, emojiPictures, emojiGroups, combinedPictures, attachedPictures, picturesFor, isCombined, numberedNames, MAX_EMOJIS, MAX_ATTACHED_IMAGES }

@@ -6,7 +6,7 @@ const { embedQuery } = require('../utils/embeddings')
 const { withLinkCards } = require('../utils/linkCards')
 const { safeLinks } = require('../utils/linkSafety')
 const { reportInjection } = require('../utils/untrusted')
-const { picturesFor } = require('../utils/foreignEmojis')
+const { picturesFor, attachedPictures } = require('../utils/foreignEmojis')
 const { EMBED_COLORS } = require('../utils/constants')
 const { hasStaffAccess } = require('../utils/staffAccess')
 const { isCreator } = require('../utils/creatorIds')
@@ -183,8 +183,18 @@ function namedForum (message) {
 
 function attachedImages (message) {
   return (message.attachments || [])
-    .filter(a => /^image\//.test(a.content_type || '') || /\.(jpe?g|png|webp|gif|avif)$/i.test(a.filename || ''))
+    .filter(a => /^image\//.test(a.content_type || '') || /\.(jpe?g|png|webp|gif|avif)(?:[?#]|$)/i.test(a.filename || a.url || ''))
     .map(a => a.url)
+}
+
+function embeddedImages (message) {
+  const urls = []
+  for (const e of message.embeds || []) {
+    for (const img of [e?.image, e?.thumbnail]) {
+      if (img?.url && !urls.includes(img.url)) urls.push(img.url)
+    }
+  }
+  return urls
 }
 
 function extractRequest (message) {
@@ -434,8 +444,9 @@ async function handle (message) {
 
   let request = extractRequest(message)
   const attached = attachedImages(message)
+  const embedded = embeddedImages(message)
   const repliedTo = message.messageReference?.messageID
-  if (!request && !repliedTo) {
+  if (!request && !repliedTo && !attached.length && !embedded.length) {
     return message.channel.createMessage({ content: '話したいことか、イベントやフォーラム投稿にしたい内容（文章・URL・メッセージリンク）を添えるか、元のメッセージに返信する形でメンションしてください。', ...reference }).catch(() => {})
   }
   if (inProgress.has(message.author.id)) {
@@ -515,9 +526,12 @@ async function handle (message) {
             return []
           })
       ])
-      // Combined emojis and other servers' emojis in what was said are shown to the model as
-      // images, for this request only.
-      const pictures = directR18 ? [] : await picturesFor([request, referenced?.text], guild).catch(() => [])
+      // Combined emojis, other servers' emojis, and attached/replied-to images in what was said are
+      // shown to the model as images, for this request only.
+      const threadImages = edit ? [] : [...new Set([...attached, ...embedded, ...(referenced?.images || [])])]
+      const pictures = directR18
+        ? await attachedPictures(threadImages).catch(() => [])
+        : await picturesFor([request, referenced?.text], guild, threadImages).catch(() => [])
       // A reply brings its conversation in (`referenced`); otherwise only what was just said in the
       // channel that bears on the request (`recent`), never the bot's own earlier replies.
       let result = await draft({
