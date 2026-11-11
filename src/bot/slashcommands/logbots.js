@@ -1,3 +1,4 @@
+const Eris = require('eris')
 const { toggleLogBots } = require('../../db/interfaces/postgres/update')
 const { EMBED_COLORS } = require('../utils/constants')
 const { getEmbedFooter, getAuthorField } = require('../utils/embeds')
@@ -22,7 +23,8 @@ module.exports = {
             : pick(interaction, { ja: 'BOT が送ったメッセージの編集・削除はログに __出さない__ ようにしました。', en: 'Edits and deletions of bots\' messages are __no longer logged__.' }),
           color: EMBED_COLORS.GREEN,
           ...common
-        }]
+        }],
+        flags: Eris.Constants.MessageFlags.EPHEMERAL
       }).catch(() => {})
     } catch (e) {
       global.logger.error(e)
@@ -32,7 +34,8 @@ module.exports = {
           description: pick(interaction, { ja: 'logbots を切り替えられませんでした。もう一度お試しください。', en: 'Could not change logbots. Please try again.' }),
           color: EMBED_COLORS.RED,
           ...common
-        }]
+        }],
+        flags: Eris.Constants.MessageFlags.EPHEMERAL
       }).catch(() => {})
     }
   }

@@ -41,7 +41,7 @@ const HELP_EVENTS = [
 exports.commands = [
   {
     name: 'help',
-    ...describe('How to use the bot: setting it up, and what each log event records', 'BOT の使い方（設定方法、各ログイベントで記録される内容）'),
+    ...describe('How to use the bot: initial setup, AI mention features, and what each log event records', 'BOT の使い方（初期設定、AIメンション機能、各ログイベントの内容）'),
     options: [
       {
         type: STRING,
@@ -52,15 +52,23 @@ exports.commands = [
       {
         type: STRING,
         name: 'guide',
-        ...describe('How to set the bot up', 'BOT の設定方法'),
-        choices: [choice('usage', 'Usage', '使い方')]
+        ...describe('Guides for setting up logging and using AI mentions', '初期設定・ログ設定やAIメンションの使い方ガイド'),
+        choices: [
+          choice('usage', 'Usage & Initial Setup', '使い方・初期設定'),
+          choice('assistant', 'AI Mention, Events & Forums', 'AIメンション・イベント・フォーラム')
+        ]
       }
     ]
   },
   {
     name: 'setup',
-    ...describe('Set the bot up: what this channel logs, and how the assistant replies', 'BOT の設定（このチャンネルに記録するログ、AI の返事）'),
+    ...describe('Set the bot up: check status, choose log events, and configure the AI assistant', 'BOT の初期設定・確認（ステータス診断、記録するログ、AI の返事の設定）'),
     options: [
+      {
+        type: SUB_COMMAND,
+        name: 'status',
+        ...describe('Check current setup status, required permissions, and quick setup menus', '初期設定の状況・必要な権限の診断と、ログ・AI設定メニューを表示する')
+      },
       {
         type: SUB_COMMAND,
         name: 'via_presets',

@@ -1,3 +1,4 @@
+const Eris = require('eris')
 const { ignoreChannel, clearIgnoredChannels } = require('../../db/interfaces/postgres/update')
 const { EMBED_COLORS } = require('../utils/constants.js')
 const { getAuthorField, getEmbedFooter } = require('../utils/embeds.js')
@@ -18,9 +19,11 @@ module.exports = {
           description: global.bot.guildSettingsCache[interaction.guildID].ignoredChannels.map(id => {
             return `<#${id}> (${id})`
           }).join('\n') || pick(interaction, { ja: 'ログの対象外にしているチャンネルはありません。', en: 'No channel is left out of the logs.' }),
+          color: EMBED_COLORS.PURPLED_BLUE,
           author: getAuthorField(interaction.member.user),
           footer: getEmbedFooter(global.bot.user)
-        }]
+        }],
+        flags: Eris.Constants.MessageFlags.EPHEMERAL
       }).catch(global.logger.error)
     } else if (resetIgnoredChannelsOption) {
       await clearIgnoredChannels(interaction.guildID)
@@ -31,7 +34,8 @@ module.exports = {
           color: EMBED_COLORS.GREEN,
           author: getAuthorField(interaction.member.user),
           footer: getEmbedFooter(global.bot.user)
-        }]
+        }],
+        flags: Eris.Constants.MessageFlags.EPHEMERAL
       }).catch(() => {})
     } else {
       const channelOption = interaction.data.options?.find(o => o.name === 'channel-to-ignore')
@@ -44,7 +48,8 @@ module.exports = {
               url: interaction.member.user.dynamicAvatarURL(null, 64)
             },
             color: EMBED_COLORS.RED
-          }]
+          }],
+          flags: Eris.Constants.MessageFlags.EPHEMERAL
         }).catch(_ => {})
       }
       const channel = channelOption?.value || interaction.channel.id
@@ -59,8 +64,9 @@ module.exports = {
             url: interaction.member.user.dynamicAvatarURL(null, 64)
           },
           color: EMBED_COLORS.GREEN
-        }]
-      })
+        }],
+        flags: Eris.Constants.MessageFlags.EPHEMERAL
+      }).catch(() => {})
     }
   }
 }

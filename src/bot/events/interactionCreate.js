@@ -6,7 +6,8 @@ const { getEmbedFooter, getAuthorField } = require('../utils/embeds')
 const { NewsThreadChannel, PrivateThreadChannel, PublicThreadChannel } = require('eris')
 const { isCreator } = require('../utils/creatorIds')
 const { hasStaffAccess } = require('../utils/staffAccess')
-const { pick } = require('../utils/i18n') // also keeps each interaction's language
+const { langOf, pick } = require('../utils/i18n') // also keeps each interaction's language
+const { formatPermissions } = require('../utils/displayLabels')
 
 let slashCommands = fs.readdirSync(path.resolve('src', 'bot', 'slashcommands')).map(filename => {
   return require(path.resolve('src', 'bot', 'slashcommands', filename))
@@ -14,6 +15,13 @@ let slashCommands = fs.readdirSync(path.resolve('src', 'bot', 'slashcommands')).
 
 const waitingCustomIDs = new Map()
 const waitingTimeouts = new Map()
+
+function replyComponentNotice (interaction, content) {
+  if (typeof interaction.createMessage !== 'function') return Promise.resolve()
+  return Promise.resolve()
+    .then(() => interaction.createMessage({ content, flags: Eris.Constants.MessageFlags.EPHEMERAL }))
+    .catch(() => {})
+}
 
 module.exports = {
   name: 'interactionCreate',
@@ -25,16 +33,26 @@ module.exports = {
         return
       }
       if (interaction instanceof Eris.ComponentInteraction) {
-        if (interaction.data.custom_id && waitingCustomIDs.has(interaction.data.custom_id)) {
-          if (interaction.member.user.id === waitingCustomIDs.get(interaction.data.custom_id).userID) {
+        const entry = interaction.data?.custom_id ? waitingCustomIDs.get(interaction.data.custom_id) : null
+        if (entry) {
+          const clickerID = interaction.member?.user?.id || interaction.user?.id
+          if (clickerID === entry.userID) {
             interaction.acknowledge().catch(() => {}).then(() => {
-              waitingCustomIDs.get(interaction.data.custom_id)?.run(interaction)
+              entry.run(interaction)
               resolve()
             })
             return
           }
+          replyComponentNotice(interaction, pick(interaction, {
+            ja: `このボタン・メニューは実行した本人（<@${entry.userID}>）のみ操作できます。`,
+            en: `Only <@${entry.userID}>, who started this action, can use these controls.`
+          })).finally(() => resolve())
+          return
         }
-        resolve()
+        replyComponentNotice(interaction, pick(interaction, {
+          ja: 'このボタン・メニューの有効期限が切れました。もう一度コマンドを実行してください。',
+          en: 'These controls have expired. Please run the command again.'
+        })).finally(() => resolve())
       } else if (interaction instanceof Eris.CommandInteraction) {
         const channel = global.bot.getChannel(interaction.channel.id)
         if (!channel || channel instanceof Eris.VoiceChannel) {
@@ -55,6 +73,10 @@ module.exports = {
         const command = slashCommands.find(c => c.name === interaction.data.name)
         if (command) {
           if (command?.type === 'creator' && !isCreator(interaction.member.user.id)) {
+            interaction.createMessage({
+              content: pick(interaction, { ja: 'このコマンドはBOT開発者専用です。', en: 'This command is only for the bot\'s developers.' }),
+              flags: Eris.Constants.MessageFlags.EPHEMERAL
+            }).catch(() => {})
             resolve()
             return
           }
@@ -63,7 +85,10 @@ module.exports = {
               embeds: [{
                 title: pick(interaction, { ja: '実行できません', en: 'Cannot run here' }),
                 color: EMBED_COLORS.YELLOW_ORANGE,
-                description: pick(interaction, { ja: `__${command.name}__ はスレッドでは使えません。`, en: `__${command.name}__ cannot be run in a thread.` }),
+                description: pick(interaction, {
+                  ja: `\`/${command.name}\` はスレッド内では使えません。通常のテキストチャンネルで実行してください。`,
+                  en: `\`/${command.name}\` cannot be run in a thread. Please run it in a text channel.`
+                }),
                 footer: getEmbedFooter(global.bot.user),
                 author: getAuthorField(interaction.member.user),
                 thumbnail: {
@@ -78,17 +103,19 @@ module.exports = {
           const subcommand = interaction.data.options?.find(o => o.type === 1 || !('value' in o))?.name
           const userPerms = command.subcommandPerms?.[subcommand]?.userPerms ?? command.userPerms
           const botPerms = command.subcommandPerms?.[subcommand]?.botPerms ?? command.botPerms
+          const lang = langOf(interaction)
           if (userPerms && userPerms.length !== 0 && !isCreator(interaction.member.user.id) && !hasStaffAccess(interaction.member.roles, global.bot.guilds.get(interaction.guildID))) {
             const userChannelPerms = interaction.channel.permissionsOf(interaction.member.user.id).json
             const missingPermissions = userPerms.filter(bpName => !userChannelPerms[bpName])
             if (missingPermissions.length !== 0) {
+              const formatted = formatPermissions(missingPermissions, lang)
               interaction.createMessage({
                 embeds: [{
                   title: pick(interaction, { ja: '権限が足りません', en: 'Missing permissions' }),
                   color: EMBED_COLORS.YELLOW_ORANGE,
                   description: pick(interaction, {
-                    ja: `${command.name} を使うには次の権限が必要です: ${missingPermissions.map(perm => `\`${perm}\``).join(', ')}`,
-                    en: `You need these permissions to run ${command.name}: ${missingPermissions.map(perm => `\`${perm}\``).join(', ')}`
+                    ja: `\`/${command.name}\` を使うには次の権限が必要です: ${formatted}`,
+                    en: `You need these permissions to run \`/${command.name}\`: ${formatted}`
                   }),
                   footer: getEmbedFooter(global.bot.user),
                   author: getAuthorField(interaction.member.user),
@@ -106,13 +133,14 @@ module.exports = {
             const botChannelPermissions = interaction.channel.permissionsOf(global.bot.user.id).json
             const missingPermissions = botPerms.filter(bpName => !botChannelPermissions[bpName])
             if (missingPermissions.length !== 0) {
+              const formatted = formatPermissions(missingPermissions, lang)
               interaction.createMessage({
                 embeds: [{
                   title: pick(interaction, { ja: 'BOT の権限が足りません', en: 'The bot is missing permissions' }),
                   color: EMBED_COLORS.YELLOW_ORANGE,
                   description: pick(interaction, {
-                    ja: `${command.name} を実行するには、BOT に次の権限が必要です: ${missingPermissions.map(perm => `\`${perm}\``).join(', ')}`,
-                    en: `I need these permissions to run ${command.name}: ${missingPermissions.map(perm => `\`${perm}\``).join(', ')}`
+                    ja: `\`/${command.name}\` を実行するには、このチャンネル（またはサーバー設定）で BOT に次の権限を付与してください: ${formatted}\n\n推奨権限つきの招待リンクは \`/invite\`、現在の権限診断は \`/setup status\` で確認できます。`,
+                    en: `I need these permissions in this channel (or server settings) to run \`/${command.name}\`: ${formatted}\n\nSee \`/invite\` for recommended invite links, or \`/setup status\` to check permissions.`
                   }),
                   footer: getEmbedFooter(global.bot.user),
                   author: getAuthorField(interaction.member.user),
@@ -153,11 +181,13 @@ module.exports = {
   },
   awaitCustomID (id, userIDToLock, timeoutMs = 60000) {
     return new Promise((resolve, reject) => {
-      waitingTimeouts.set(id, setTimeout(() => {
+      const timer = setTimeout(() => {
         waitingCustomIDs.delete(id)
         waitingTimeouts.delete(id)
         reject(new Error(`Custom ID ${id} did not receive a response.`))
-      }, timeoutMs))
+      }, timeoutMs)
+      timer.unref?.()
+      waitingTimeouts.set(id, timer)
       waitingCustomIDs.set(id, {
         userID: userIDToLock,
         run: (...toReturn) => {

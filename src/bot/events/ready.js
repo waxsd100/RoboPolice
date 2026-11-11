@@ -17,6 +17,7 @@ module.exports = {
 
     if (global.bot.shards.find(s => s.id === 0)) { // only check for missing settings once
       await checkForMissingSettings()
+      await require('../utils/syncSlashCommands').syncGlobalSlashCommands()
       prune.startScheduler() // one worker owns the sweep so shards don't duplicate the delete
       embeddingIndexer.startIndexer() // the same worker embeds videos and messages for every server
       require('../modules/summaryBatch').startBatchWatcher() // ...and watches the video summary batches (/youtube summarize)

@@ -61,3 +61,35 @@ test('an existing log channel of that name is used; a server that logs something
   s = setUp(t)
   assert.equal(await autoLog.startLogging(s.guild), null)
 })
+
+test('sends onboarding embed on setup and posts manual-setup guide to systemChannelID when Manage Channels is missing', async t => {
+  const messages = []
+  t.mock.method(update, 'setEventsLogId', async () => {})
+  global.bot = {
+    user: { id: 'BOT' },
+    guildSettingsCache: { g1: { getEventLogRaw: () => ({}) } },
+    createChannel: async () => ({ id: 'new', name: 'robopolice-logs' }),
+    createMessage: async (channelID, m) => messages.push([channelID, m])
+  }
+  const guildOk = {
+    id: 'g1',
+    channels: new Map(),
+    members: new Map([['BOT', { permissions: { has: p => ['manageChannels', 'manageWebhooks', 'viewAuditLog'].includes(p) } }]])
+  }
+  await autoLog.startLogging(guildOk)
+  assert.equal(messages[0][1].embeds[0].title, '🚀 ロボポリス 初期設定ガイド')
+  assert.equal(messages[0][1].embeds[0].fields.length, 3)
+
+  messages.length = 0
+  const guildMissing = {
+    id: 'g1',
+    systemChannelID: 'sys-1',
+    channels: new Map([['sys-1', { id: 'sys-1', permissionsOf: () => ({ json: { viewChannel: true, sendMessages: true } }) }]]),
+    members: new Map([['BOT', { permissions: { has: p => p === 'manageWebhooks' } }]])
+  }
+  assert.equal(await autoLog.startLogging(guildMissing), null)
+  assert.equal(messages.length, 1)
+  assert.equal(messages[0][0], 'sys-1')
+  assert.match(messages[0][1].embeds[0].description, /チャンネルの管理/)
+  assert.match(messages[0][1].embeds[0].description, /\/setup status/)
+})
