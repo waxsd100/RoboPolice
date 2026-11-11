@@ -602,6 +602,9 @@ function configureGateway () {
   // Tests script each Gemini call; the explicit cache is tested on its own (eventDrafter.test.js).
   process.env.GEMINI_EXPLICIT_CACHE = 'false'
   delete process.env.VIDEO_SUMMARY_FPS
+  delete process.env.SOKUDAN_URL
+  delete process.env.SOKUDAN_API_KEY
+  delete process.env.SOKUDAN_BOOL_THRESHOLD
   installAiCacheStore()
 }
 

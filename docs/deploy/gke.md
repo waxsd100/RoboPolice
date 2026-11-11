@@ -78,6 +78,15 @@ NetworkPolicy で届きません）。
 `/setup`・メンションなどを試します。gVisor の中で動かない場合は、k8s-platform の `docs/ARCHITECTURE.md` の 1 章の
 `wax100.io/sandbox=false` を見てください。
 
+### 2.1 `GeneLab/sokudan-ja-310m` サイドカー／別サービス（任意）
+
+メンション時の事前ルーティング（イベント／フォーラム／雑談の分類、長文・推論依頼の直接 `deepModel` 振り分け、婉曲的な R18 依頼の検知）、プロンプトインジェクション・ソフト拒否（朝チュン）検知、および `replyPolish` の事前判定を高速・低コストで行う軽量日本語判断モデル [`GeneLab/sokudan-ja-310m`](https://huggingface.co/GeneLab/sokudan-ja-310m) を動かす場合は、リポジトリの `Dockerfile.sokudan` を使って別サービス（または同一 Pod 内サイドカー）として起動します。
+
+- **ビルド**: `Dockerfile.sokudan`（ビルド時にモデルの重みを `/app/model` に同梱するため、起動時外部通信やアカウント登録は不要です）
+- **ポート**: `8000`（ヘルスチェック: `GET /health`、推論エンドポイント: `POST /v1/systemone`）
+- **リソース目安（CPU 推論）**: requests `cpu: 250m`, `memory: 1.5Gi` / limits `memory: 2Gi`
+- **BOT 側の環境変数**: `SOKUDAN_URL=http://<sokudan の Service 名>:8000`（ローカルの `docker compose up -d` では `http://sokudan:8000` が自動設定されます）
+
 ## 3. 本番に昇格する
 
 ```bash

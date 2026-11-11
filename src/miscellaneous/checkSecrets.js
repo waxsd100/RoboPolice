@@ -99,7 +99,7 @@ const SECRET_RULES = [
   {
     id: 'env-secret-assignment',
     description: 'Hardcoded secret value assigned to sensitive environment variable',
-    regex: /(?:^|;\s*)\s*(?:export\s+)?(BOT_TOKEN|DISCORD_WEBHOOK_URL|GEMINI_API_KEY|CLOUDFLARE_AI_GATEWAY_TOKEN|CF_ACCESS_CLIENT_SECRET|UNCENSORED_API_KEY|GCP_SERVICE_ACCOUNT_KEY|STEAM_API_KEY|TWITCH_CLIENT_SECRET|YOUTUBE_API_KEY|YOUTUBE_WEBSUB_SECRET|REDIS_PASSWORD|PGPASSWORD|AES_KEY)\s*=\s*['"]?([^\s'"#;,]+)['"]?/g,
+    regex: /(?:^|;\s*)\s*(?:export\s+)?(BOT_TOKEN|DISCORD_WEBHOOK_URL|GEMINI_API_KEY|CLOUDFLARE_AI_GATEWAY_TOKEN|CF_ACCESS_CLIENT_SECRET|UNCENSORED_API_KEY|SOKUDAN_API_KEY|GCP_SERVICE_ACCOUNT_KEY|STEAM_API_KEY|TWITCH_CLIENT_SECRET|YOUTUBE_API_KEY|YOUTUBE_WEBSUB_SECRET|REDIS_PASSWORD|PGPASSWORD|AES_KEY)\s*=\s*['"]?([^\s'"#;,]+)['"]?/g,
     validateMatch: match => {
       const val = String(match[2] || '').trim()
       if (val.length < 16) return false

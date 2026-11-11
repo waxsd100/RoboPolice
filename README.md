@@ -299,6 +299,7 @@ rm robopolice-key.json
 | `GEMINI_STREAM` | 任意（既定: オン）。Cloudflareの100秒タイムアウト（HTTP 524）を回避するため、メンション応答を`streamGenerateContent`でストリーミング受信します。 |
 | `GEMINI_EXPLICIT_CACHE` | 任意（既定: オン）。`false`にするとシステム指示とツールの明示的キャッシュ（`cachedContents`）を無効化します。 |
 | `UNCENSORED_API_URL`, `UNCENSORED_GATEWAY_PROVIDER`, `UNCENSORED_API_KEY`, `UNCENSORED_MODEL` | 任意。R18の話題やGeminiが安全性フィルタで拒否した際に引き継ぐOpenAI互換エンドポイント設定（既定モデル: `xtools-at/DeepSeek-V4-Pro-Qwen3.5-9B-UNCENSORED-heretic`）。 |
+| `SOKUDAN_URL`, `SOKUDAN_API_KEY`, `SOKUDAN_TIMEOUT_MS`, `SOKUDAN_BOOL_THRESHOLD` | 任意。軽量日本語判断モデル [`GeneLab/sokudan-ja-310m`](https://huggingface.co/GeneLab/sokudan-ja-310m)（`Dockerfile.sokudan` / `docker-compose.yml`）のURL設定。設定時は①メンションの事前ルーティング（意図分類・長文/推論の直接`GEMINI_DEEP_MODEL`振り分け・婉曲的なR18依頼の検知・思考レベル調整）、②プロンプトインジェクション検知とR18ソフト拒否/朝チュン検知の強化、③`REPLY_POLISH`（250文字以上の返信）で既に自然な日本語の返信に対するGemini推敲スキップを行います。 |
 | `REPLY_POLISH` | 任意（既定: オン）。AI特有の表現・記号を含む返信や250文字以上の返信を`GEMINI_LIGHT_MODEL`と`yomiyasu-pocket`で自然な日本語に整えます。 |
 | `MENTION_RECENT_TOPICS`, `MENTION_RECENT_MESSAGES`, `MENTION_RECENT_HOURS` | 任意。メンション時に同じチャンネルの直近の関連発言（既定: 過去12時間の最新50件から最大8件）を文脈として渡します。 |
 | `YOUTUBE_API_KEY`, `YOUTUBE_CHANNELS`, `YOUTUBE_AUTO_SYNC_MINUTES`, `YOUTUBE_LIVE_POLL_SECONDS`, `YOUTUBE_WEBSUB_URL`, `YOUTUBE_WEBSUB_SECRET`, `YOUTUBE_GATEWAY_PROVIDER` | 任意。YouTubeチャンネルの同期、動画要約、配信・新着動画イベント自動登録、WebSubプッシュ通知に関する設定。 |

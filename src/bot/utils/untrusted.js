@@ -30,9 +30,18 @@ const PATTERNS = [
   /(BOT|ボット|AI)は(今後|これから)(必ず|常に|ずっと)?.{0,30}(と言え|と言って|と答えろ|と答えて|しろ|せよ)/i
 ]
 
+const sokudan = require('./sokudan')
+
 function looksLikeInjection (text) {
   const s = String(text || '')
   return PATTERNS.some(p => p.test(s))
+}
+
+async function looksLikeInjectionAsync (text) {
+  if (looksLikeInjection(text)) return true
+  if (!sokudan.isUsable()) return false
+  const res = await sokudan.detectInjection(text)
+  return !!res?.detected
 }
 
 // Logs (once per call) where an injection attempt was seen.
@@ -42,4 +51,13 @@ function reportInjection (where, text) {
   return true
 }
 
-module.exports = { wrap, defuse, looksLikeInjection, reportInjection, TAG }
+async function reportInjectionAsync (where, text) {
+  if (reportInjection(where, text)) return true
+  if (!sokudan.isUsable()) return false
+  const res = await sokudan.detectInjection(text)
+  if (!res?.detected) return false
+  global.logger?.warn(`[INJECTION]: Possible prompt injection (sokudan p=${res.probability.toFixed(2)}) in ${where}: ${String(text).replace(/\s+/g, ' ').slice(0, 200)}`)
+  return true
+}
+
+module.exports = { wrap, defuse, looksLikeInjection, looksLikeInjectionAsync, reportInjection, reportInjectionAsync, TAG }
