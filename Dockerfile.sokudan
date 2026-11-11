@@ -11,8 +11,7 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PIP_NO_CACHE_DIR=1 \
     HF_HOME=/app/hf_cache \
     SOKUDAN_MODEL=/app/model \
-    SOKUDAN_HOST=0.0.0.0 \
-    SOKUDAN_PORT=8000 \
+    PORT=8000 \
     SOKUDAN_BACKEND=auto \
     SOKUDAN_DEVICE=auto
 
@@ -32,6 +31,8 @@ USER sokudan
 EXPOSE 8000
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
-  CMD python -c "import os, urllib.request; port = os.environ.get('SOKUDAN_PORT', '8000'); urllib.request.urlopen(f'http://127.0.0.1:{port}/health', timeout=4).read()" || exit 1
+  CMD python -c "import os, urllib.request; port = os.environ.get('SOKUDAN_PORT') or os.environ.get('PORT') or '8000'; urllib.request.urlopen(f'http://127.0.0.1:{port}/health', timeout=4).read()" || exit 1
 
-CMD ["sh", "-c", "exec sokudan serve --model \"${SOKUDAN_MODEL}\" --host \"${SOKUDAN_HOST}\" --port \"${SOKUDAN_PORT}\" --backend \"${SOKUDAN_BACKEND}\" --device \"${SOKUDAN_DEVICE}\""]
+# Auto-binds `::` (dual-stack IPv6 + IPv4) when IPv6 is available so Railway Private Networking
+# (`*.railway.internal` over IPv6) and Docker/GKE IPv4 networking both work out of the box.
+CMD ["sh", "-c", "HOST=\"${SOKUDAN_HOST:-$(python -c \"import socket; s=socket.socket(socket.AF_INET6); s.bind(('::', 0)); s.close(); print('::')\" 2>/dev/null || echo 0.0.0.0)}\"; LISTEN_PORT=\"${SOKUDAN_PORT:-${PORT:-8000}}\"; exec sokudan serve --model \"${SOKUDAN_MODEL}\" --host \"${HOST}\" --port \"${LISTEN_PORT}\" --backend \"${SOKUDAN_BACKEND}\" --device \"${SOKUDAN_DEVICE}\""]
