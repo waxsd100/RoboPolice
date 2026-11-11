@@ -1,6 +1,6 @@
 const Eris = require('eris')
 const { v4: uuidv4 } = require('uuid')
-const { draft, revise, isConfigured, isUncensoredConfigured, isUncensoredDirective, rememberThreadModel, isR18Text, ENTITY_TYPES } = require('./eventDrafter')
+const { draft, revise, isConfigured, isUncensoredConfigured, isUncensoredDirective, rememberThreadModel, isR18Text, STORY_REQUEST_PATTERN, ENTITY_TYPES } = require('./eventDrafter')
 const { createTools, describeServer, worthSearching, withServerEmojis, withServerChannels, StopDrafting } = require('./eventTools')
 const { embedQuery } = require('../utils/embeddings')
 const { withLinkCards } = require('../utils/linkCards')
@@ -137,7 +137,7 @@ function splitChatMessages (content, footer) {
 // replies to, what the tools read): linkSafety.js. Links left out are logged.
 function checkedText (text, result, guild) {
   if (!text) return text
-  const { text: clean, removed } = safeLinks(text, result.conversation?.contents)
+  const { text: clean, removed } = safeLinks(text, result.conversation?.contents, result.conversation?.toolUrls)
   if (removed.length) global.logger.warn(`[INJECTION]: Left out link(s) that came from nowhere in a reply in ${guild.id}: ${removed.join(' ').slice(0, 300)}`)
   return clean
 }
@@ -540,14 +540,19 @@ async function handle (message) {
         if (!queryVecPromise) queryVecPromise = embedQuery(request)
         return queryVecPromise
       }
+      const combinedQuery = [request, referenced?.othersText].filter(Boolean).join('\n')
+      const communityKeyword = /サーバー|チャンネル|配信|動画|youtube|twitch|steam|ゲーム|イベント|フォーラム|ルール|wiki|メンバー|キャラ|名言|<#\d+>|<@!?\d+>/i
+      const slimProfile = Boolean(edit) ||
+        (!worthSearching(combinedQuery) && !attached.length && !embedded.length) ||
+        (STORY_REQUEST_PATTERN.test(request) && !communityKeyword.test(combinedQuery))
       const [server, recent] = await Promise.all([
         directR18
           ? null
-          : describeServer(guild, member, message.channel.id, { query: request, context: referenced?.othersText, queryVector }).catch(e => {
+          : describeServer(guild, member, message.channel.id, { query: request, context: referenced?.othersText, queryVector, slim: slimProfile }).catch(e => {
             global.logger.warn(`Could not describe server ${guild.id}: ${e.message}`)
             return null
           }),
-        edit
+        (edit || referenced)
           ? []
           : relatedRecent(message, request, { queryVector }).catch(e => {
             global.logger.warn(`Could not read the recent talk in ${message.channel.id}: ${e.message}`)

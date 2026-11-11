@@ -642,4 +642,29 @@ describe('describeServer: what the server is like', () => {
     assert.match(text, /### このサーバーのノリ（メンバーの会話から）\nゆるくて、ツッコミが多い/)
     installLoreStore()
   })
+
+  test('slim mode omits heavy YouTube/Twitch/Steam/metadata sections while keeping server name, style, and up to 8 emoji codes', async (t) => {
+    configureGateway()
+    process.env.SERVER_LORE = 'true'
+    t.after(() => {
+      delete process.env.SERVER_LORE
+      delete guild.emojis
+      delete guild.description
+      delete guild.memberCount
+      delete guild.rulesChannelID
+      installLoreStore()
+    })
+    installYouTubeStore({ 100: { channel: { channel_ref: '@x', title: 'のばまんch', synced_at: new Date('2026-10-29T12:00:00Z') }, videos: [{}] } })
+    installLoreStore({ styles: { 100: 'ゆるい雰囲気' }, facts: [{ id: 1, fact: '内輪ネタA' }] })
+    guild.description = '詳しい説明'
+    guild.memberCount = 9999
+    guild.rulesChannelID = '201'
+    guild.emojis = Array.from({ length: 12 }, (_, i) => ({ id: String(800 + i), name: `em${i}` }))
+    const slimText = await describeServer(guild, member, '201', { slim: true })
+    assert.match(slimText, /^サーバー名: /)
+    assert.match(slimText, /### このサーバーのノリ（メンバーの会話から）\nゆるい雰囲気/)
+    assert.match(slimText, /### サーバー絵文字（返事で使うときは、この書き方のまま書く）\n<:em0:800>/)
+    assert.doesNotMatch(slimText, /<:em8:808>/, 'capped at 8 emojis')
+    assert.doesNotMatch(slimText, /### YouTube|説明:|メンバー数:|ルールチャンネル:|内輪ネタA/)
+  })
 })
