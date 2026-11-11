@@ -2,6 +2,7 @@ const crypto = require('crypto')
 const { SUBMIT_FORUM_DECLARATION, IMAGE_INSTRUCTION_PROPERTY, toForumPost, imageUrlsOf, imageInstructionOf, MAX_IMAGE_CANDIDATES } = require('./forumPost')
 const { withoutCharCount } = require('../utils/textClean')
 const { wrap } = require('../utils/untrusted')
+const { urlsIn } = require('../utils/linkSafety')
 const { Agent } = require('undici')
 const { gatewayURL, gatewayAuthHeaders, isGatewayConfigured, hasDefaultEndpoint, customBase } = require('../utils/aiGateway')
 const { textChunks } = require('../utils/jsonItems')
@@ -756,7 +757,7 @@ function forgetCache (name) {
 // over to by calling think_deeper first. If it refuses (its safety filters or policy), the usual
 // model answers instead, from the request again. It runs on Flex inference (half the price, but queued
 // for up to about 15 minutes; GEMINI_DEEP_FLEX=false for the standard tier) and thinks at
-// GEMINI_DEEP_THINKING_LEVEL (default high). It has no explicit cache: requests go in full.
+// GEMINI_DEEP_THINKING_LEVEL (default high), caching its instructions and tools via cachedPrefix.
 const DEFAULT_DEEP_MODEL = 'gemini-4-argon'
 const DEEP_TIMEOUT_MS = 20 * 60 * 1000
 const DEEP_PROGRESS = 'じっくり考えています…（強いモデルで考えるため、数分かかることがあります）'
@@ -1778,6 +1779,158 @@ async function callUncensored (contents, declarations, allowed = null, { timeout
   return { role: 'model', parts }
 }
 
+const HIGH_THINKING_PATTERN = /https?:\/\/|イベント|フォーラム|告知|募集|登録|投稿|まとめ|比較|計算|推理|分析|解説|詳しく|なぜ|理由|手順|コード|プログラム|設計|企画|スケジュール|カレンダー|\d+\s*(?:月|日|時|分|時間)|明日|明後日|来週|今週末|毎週|定例/i
+const QUESTION_OR_LOOKUP_PATTERN = /[?？]|何|なに|なんの|いつ|どこ|誰|だれ|どう|なぜ|なんで|どれ|いくら|教え|調べ|探し|おすすめ|オススメ|ルール|チャンネル|動画|配信|ゲーム|マイクラ|wiki/i
+
+// Chooses how much Gemini 3 thinks for a mention when neither the server (%replymodel) nor
+// GEMINI_THINKING_LEVEL fixed a level: greetings and short reactions think at minimal, brief
+// single-turn questions at low, multi-step or medium chats at medium, and event/forum drafts,
+// edits, stories, URLs or reasoning-heavy requests at high.
+function adaptiveThinkingLevel (contents) {
+  if (contents?.isEdit || contents?.isRevision || contents?.hasForum) return 'high'
+  let raw = ''
+  if (typeof contents?.requestText === 'string') {
+    raw = contents.requestText
+  } else {
+    const firstText = String(contents?.[0]?.parts?.[0]?.text || '')
+    const m = firstText.match(/<untrusted source="request">\n([\s\S]*?)\n<\/untrusted>/)
+    raw = m ? m[1] : firstText
+  }
+  if (!raw.trim()) return 'high'
+  if (HIGH_THINKING_PATTERN.test(raw) || STORY_REQUEST_PATTERN.test(raw)) return 'high'
+  const stripped = raw
+    .replace(/<a?:\w+:\d+>|<[@#][!&]?\d+>|https?:\/\/\S+|:\w+:/g, '')
+    .replace(/[\s\p{P}\p{S}]/gu, '')
+  const len = [...stripped].length
+  if (len > 160) return 'high'
+  const firstStep = !Array.isArray(contents) || contents.length <= 1
+  if (len <= 12 && firstStep && !contents?.hasReference && !contents?.hasPictures && !QUESTION_OR_LOOKUP_PATTERN.test(raw)) {
+    return 'minimal'
+  }
+  if (len <= 60 && firstStep && !contents?.hasPictures) return 'low'
+  return 'medium'
+}
+
+const UNTRUSTED_WRAP_RE = /^<untrusted source="([^"]+)">\n([\s\S]*)\n<\/untrusted>$/
+const TOOL_MASK_THRESHOLD = 1200
+const TOOL_MASK_KEEP_CHARS = 500
+const TOOL_MASK_MAX_URLS = 5
+
+function unwrapUntrusted (text) {
+  const m = String(text || '').match(UNTRUSTED_WRAP_RE)
+  return m ? { source: m[1], inner: m[2] } : { source: null, inner: String(text || '') }
+}
+
+// Masks bulky functionResponse payloads from earlier tool steps before sending `contents` over the
+// wire, while leaving the most recent tool-response turn intact and never mutating `contents`
+// itself (so safeLinks still sees every URL in conversation.contents).
+function compactContentsForWire (contents) {
+  if (process.env.TOOL_OBSERVATION_MASK === 'false' || !Array.isArray(contents) || contents.length < 4) return contents
+  const toolTurnIndices = []
+  for (let i = 0; i < contents.length; i++) {
+    const turn = contents[i]
+    if (turn?.role === 'user' && Array.isArray(turn.parts) && turn.parts.some(p => p.functionResponse)) {
+      toolTurnIndices.push(i)
+    }
+  }
+  if (toolTurnIndices.length <= 1) return contents
+  const maskSet = new Set(toolTurnIndices.slice(0, -1))
+  let changed = false
+  const next = contents.map((turn, idx) => {
+    if (!maskSet.has(idx)) return turn
+    let turnChanged = false
+    const parts = turn.parts.map(part => {
+      const raw = part.functionResponse?.response?.result
+      if (typeof raw !== 'string' || raw.length <= TOOL_MASK_THRESHOLD) return part
+      const { source, inner } = unwrapUntrusted(raw)
+      if (inner.length <= TOOL_MASK_THRESHOLD) return part
+      const head = inner.slice(0, TOOL_MASK_KEEP_CHARS)
+      const headUrls = urlsIn(head)
+      const extraUrls = [...urlsIn(inner.slice(TOOL_MASK_KEEP_CHARS))].filter(u => !headUrls.has(u)).slice(0, TOOL_MASK_MAX_URLS)
+      const urlLine = extraUrls.length ? `\n参照URL: ${extraUrls.join(' ')}` : ''
+      const omitted = Math.max(0, inner.length - head.length)
+      const maskedInner = `${head}${urlLine}\n…（前ステップで確認済み・残り ${omitted} 文字省略）`
+      const masked = source ? wrap(source, maskedInner) : maskedInner
+      turnChanged = true
+      changed = true
+      return {
+        ...part,
+        functionResponse: {
+          ...part.functionResponse,
+          response: { ...part.functionResponse.response, result: masked }
+        }
+      }
+    })
+    return turnChanged ? { ...turn, parts } : turn
+  })
+  return changed ? next : contents
+}
+
+const TOOL_COMPRESS_MIN_CHARS = 3000
+
+// Compresses large read-tool outputs (>= 3,000 chars) using extractModel() on Flex before they are
+// appended to the main conversation, keeping exact URLs in contents.toolUrls so safeLinks never
+// strips a legitimate link from the compressed page.
+async function compressToolResult (toolName, args, response, contents) {
+  if (
+    process.env.TOOL_RESULT_COMPRESS === 'false' ||
+    !isConfigured() ||
+    toolName === 'ask_user' ||
+    typeof response?.result !== 'string' ||
+    response.result.length < TOOL_COMPRESS_MIN_CHARS
+  ) {
+    return response
+  }
+  if (contents) {
+    if (!Array.isArray(contents.toolUrls)) contents.toolUrls = []
+    for (const u of urlsIn(response.result)) {
+      if (!contents.toolUrls.includes(u)) contents.toolUrls.push(u)
+    }
+  }
+  const { source, inner } = unwrapUntrusted(response.result)
+  if (inner.length < TOOL_COMPRESS_MIN_CHARS) return response
+  const reqContext = String(contents?.requestText || '').slice(0, 500)
+  const argSummary = args && Object.keys(args).length ? JSON.stringify(args).slice(0, 300) : 'なし'
+  const extractPrompt = [
+    '以下のツールの取得結果から、利用者の依頼に答えるために必要な事実・日時・数値・固有名詞・引用・URL・Discord ID（<#ID>、<@ID>、<a?:name:ID>）・画像URLだけを漏れなく抜き出して、簡潔にまとめてください。',
+    '- 推測や補足は一切書かず、資料に書かれている事実だけを残すこと。',
+    '- URL・日時・時刻・金額・ID は1文字も変えず原文のまま残すこと。',
+    '- 広告・ナビゲーション・無関係な話題・重複は省き、1000文字以内に収めること。',
+    '',
+    `依頼: ${wrap('request', reqContext || '（依頼文なし）')}`,
+    `ツール: ${toolName} (${argSummary})`,
+    `取得結果:\n${wrap(toolName, inner)}`
+  ].join('\n')
+  try {
+    const model = extractModel()
+    const extracted = await callGemini(
+      model,
+      {
+        contents: [{ role: 'user', parts: [{ text: extractPrompt }] }],
+        generationConfig: {
+          temperature: 0,
+          ...thinkingConfig(model, { setting: 'GEMINI_EXTRACT_THINKING_LEVEL', fallback: 'minimal' })
+        }
+      },
+      { purpose: 'toolCompress', timeoutMs: 25 * 1000, flex: true }
+    )
+    const summary = (extracted?.parts || [])
+      .filter(p => typeof p.text === 'string' && !p.thought)
+      .map(p => p.text.trim())
+      .filter(Boolean)
+      .join('\n')
+      .trim()
+    if (!summary || summary.length + 80 >= inner.length) return response
+    const compressedInner = `${summary}\n（長文のため関連箇所を抽出・原文 ${inner.length} 文字）`
+    return {
+      ...response,
+      result: wrap(source || toolName, compressedInner)
+    }
+  } catch (_) {
+    return response
+  }
+}
+
 async function generate (contents, declarations, allowed = null, { deep = false, uncensored = false } = {}) {
   if (uncensored) return callUncensored(contents, declarations, allowed)
   const model = deep ? deepModel() : replyModel(contents)
@@ -1789,26 +1942,33 @@ async function generate (contents, declarations, allowed = null, { deep = false,
     toolConfig: { functionCallingConfig: { mode: 'ANY', ...(allowed ? { allowedFunctionNames: allowed } : {}) } }
   }
   const generationConfig = { temperature: temperature(), ...thinkingConfig(model, deep ? { setting: 'GEMINI_DEEP_THINKING_LEVEL', fallback: 'high' } : undefined) }
-  // The server's own thinking level (%replymodel), for the usual model only.
-  if (!deep && contents.thinking && generationConfig.thinkingConfig) generationConfig.thinkingConfig = { thinkingLevel: contents.thinking }
+  // The server's own thinking level (%replymodel), for the usual model only; otherwise scale
+  // thinking effort with request complexity unless GEMINI_THINKING_LEVEL was set explicitly.
+  if (!deep && generationConfig.thinkingConfig) {
+    if (contents.thinking) {
+      generationConfig.thinkingConfig = { thinkingLevel: contents.thinking }
+    } else if (!process.env.GEMINI_THINKING_LEVEL && process.env.GEMINI_ADAPTIVE_THINKING !== 'false') {
+      generationConfig.thinkingConfig = { ...generationConfig.thinkingConfig, thinkingLevel: adaptiveThinkingLevel(contents) }
+    }
+  }
   // The busier the bot as a whole, the less a reply thinks (geminiLoad.js).
   if (generationConfig.thinkingConfig) generationConfig.thinkingConfig = { ...generationConfig.thinkingConfig, thinkingLevel: geminiLoad.cappedThinking(generationConfig.thinkingConfig.thinkingLevel) }
-  if (deep) {
-    return callGemini(model, { ...prefix, contents, generationConfig }, { purpose: 'mention-deep', timeoutMs: DEEP_TIMEOUT_MS, flex: process.env.GEMINI_DEEP_FLEX !== 'false', stream: true, strictSafety })
-  }
-  const replyFlex = contents.tier === 'flex'
+  const wireContents = compactContentsForWire(contents)
+  const callOptions = deep
+    ? { purpose: 'mention-deep', timeoutMs: DEEP_TIMEOUT_MS, flex: process.env.GEMINI_DEEP_FLEX !== 'false', stream: true, strictSafety }
+    : { purpose: 'mention', timeoutMs: replyTimeoutMs(), flex: contents.tier === 'flex', stream: true, strictSafety }
   // The last step, limited to submitting (allowed), has its own toolConfig: sent in full, since a
   // request that uses a cache cannot set one.
   const cache = allowed ? null : await cachedPrefix(model, prefix)
   if (cache) {
     try {
-      return await callGemini(model, { cachedContent: cache, contents, generationConfig }, { purpose: 'mention', timeoutMs: replyTimeoutMs(), flex: replyFlex, stream: true, strictSafety })
+      return await callGemini(model, { cachedContent: cache, contents: wireContents, generationConfig }, callOptions)
     } catch (e) {
       if (!/cachedContent|CachedContent|cached content/i.test(e.message) || e.blocked) throw e
       forgetCache(cache) // gone on Gemini's side: once more in full
     }
   }
-  return callGemini(model, { ...prefix, contents, generationConfig }, { purpose: 'mention', timeoutMs: replyTimeoutMs(), flex: replyFlex, stream: true, strictSafety })
+  return callGemini(model, { ...prefix, contents: wireContents, generationConfig }, callOptions)
 }
 
 // Runs the model with the read-only tools until it submits a draft, appending every turn to
@@ -1954,7 +2114,9 @@ async function runAgent (contents, tools, submits = SUBMIT_DECLARATIONS) {
     // Sequential, not parallel: two ask_user calls would otherwise fight over the same message.
     const responses = []
     for (const c of calls) {
-      responses.push({ functionResponse: { name: c.name, response: await tools.call(c.name, c.args) } })
+      const rawResponse = await tools.call(c.name, c.args)
+      const compressedResponse = await compressToolResult(c.name, c.args, rawResponse, contents)
+      responses.push({ functionResponse: { name: c.name, response: compressedResponse } })
     }
     contents.push({ role: 'user', parts: responses })
   }
@@ -2006,6 +2168,9 @@ function toScheduledEvent (draft, guild, now, { keepStart = null } = {}) {
 async function check (conversation, { name, args, calls = [] }) {
   const { guild, member, now, forum, edit } = conversation
   conversation.lastCalls = calls
+  if (Array.isArray(conversation.contents?.toolUrls) && conversation.contents.toolUrls.length) {
+    conversation.toolUrls = conversation.contents.toolUrls
+  }
   if (name === SUBMIT_CHAT_DECLARATION.name) {
     const cleaned = stripDebugFooterLines(String(args.text || '')).trim().slice(0, MAX_CHAT_REPLY) || '……'
     return { kind: 'chat', text: cleaned, conversation }
@@ -2083,6 +2248,11 @@ async function draft ({ request, referenced, recent = [], channelName, channelID
   conversation.contents.safetyFilter = !!safetyFilter
   conversation.contents.uncensoredR18 = uncensoredR18 !== false
   conversation.contents.onProgress = tools?.progress || null
+  conversation.contents.requestText = request
+  conversation.contents.isEdit = !!edit
+  conversation.contents.hasForum = !!forum
+  conversation.contents.hasReference = !!referenced
+  conversation.contents.hasPictures = attachedPics.length > 0 || images.length > 0
   if (attachedPics.length) conversation.contents.attachedPictures = attachedPics
   if (parsed.directive && applyModelDirective(conversation.contents, parsed.directive)) {
     const chosen = conversation.contents.uncensored
@@ -2119,6 +2289,8 @@ async function draft ({ request, referenced, recent = [], channelName, channelID
 async function revise (conversation, correction) {
   const parsed = parseModelDirective(correction)
   if (parsed.directive) correction = parsed.text || correction
+  conversation.contents.isRevision = true
+  conversation.contents.requestText = correction
   conversation.contents.push({
     role: 'user',
     parts: conversation.lastCalls.map(call => ({
@@ -2147,4 +2319,4 @@ async function revise (conversation, correction) {
   return check(conversation, await runAgent(conversation.contents, conversation.tools, conversation.submits))
 }
 
-module.exports = { THINKING_LEVELS, SERVICE_TIERS, defaultTaskConfig, resolveTaskConfig, replyTimeoutMs, flexUsable, SAFETY_SETTINGS, STRICT_SAFETY_SETTINGS, withSafetySettings, THINK_DEEPER_DECLARATION, HAND_OVER_R18_DECLARATION, isR18Text, isRefusalReply, deepModel, DEFAULT_UNCENSORED_MODEL, normalizeLocalModelId, uncensoredModel, uncensoredR18Model, parseModelDirective, extractReferencedDirective, rememberThreadModel, isUncensoredDirective, applyModelDirective, isLocalUncensoredUrl, uncensoredEndpoint, isUncensoredConfigured, isUncensoredUsable, checkUncensoredConnection, startUncensoredCheck, uncensoredState, ensureUncensoredModelLoaded, cleanUncensoredContent, extractUncensoredAnswer, callUncensored, REPLY_LENGTHS, DEFAULT_REPLY_LENGTH, PERSONAS, thinkingConfig, cachedPrefix, caches, purgedFor, promptVersion, lightModel, extractModel, DEFAULT_EXTRACT_MODEL, draft, revise, MAX_STEPS, isConfigured, toScheduledEvent, callGemini, geminiRequest, geminiSend, geminiStream, retryTimer, DEFAULT_GEMINI_MODEL, ENTITY_TYPES, GeminiError }
+module.exports = { THINKING_LEVELS, SERVICE_TIERS, defaultTaskConfig, resolveTaskConfig, replyTimeoutMs, flexUsable, SAFETY_SETTINGS, STRICT_SAFETY_SETTINGS, withSafetySettings, THINK_DEEPER_DECLARATION, HAND_OVER_R18_DECLARATION, isR18Text, isRefusalReply, STORY_REQUEST_PATTERN, adaptiveThinkingLevel, compactContentsForWire, compressToolResult, deepModel, DEFAULT_UNCENSORED_MODEL, normalizeLocalModelId, uncensoredModel, uncensoredR18Model, parseModelDirective, extractReferencedDirective, rememberThreadModel, isUncensoredDirective, applyModelDirective, isLocalUncensoredUrl, uncensoredEndpoint, isUncensoredConfigured, isUncensoredUsable, checkUncensoredConnection, startUncensoredCheck, uncensoredState, ensureUncensoredModelLoaded, cleanUncensoredContent, extractUncensoredAnswer, callUncensored, REPLY_LENGTHS, DEFAULT_REPLY_LENGTH, PERSONAS, thinkingConfig, cachedPrefix, caches, purgedFor, promptVersion, lightModel, extractModel, DEFAULT_EXTRACT_MODEL, draft, revise, MAX_STEPS, isConfigured, toScheduledEvent, callGemini, geminiRequest, geminiSend, geminiStream, retryTimer, DEFAULT_GEMINI_MODEL, ENTITY_TYPES, GeminiError }

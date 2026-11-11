@@ -310,7 +310,7 @@ describe('draft', () => {
       counts.set(`gemini-load:${Math.floor(Date.now() / load.BUCKET_MS)}`, 1200000) // 60%
       await load.refresh()
       let requests = installGemini([[call('submit_chat_reply', { text: 'やあ' })]])
-      await draft({ request: 'やあ', channelName: 'general', guild, tools, now: NOW })
+      await draft({ request: '来週のイベント企画を比較して詳しく解説して', channelName: 'general', guild, tools, now: NOW })
       assert.equal(requests[0].body.generationConfig.thinkingConfig.thinkingLevel, 'medium', 'medium at 50%')
       assert.equal(requests[0].body.serviceTier, undefined)
 
@@ -318,7 +318,7 @@ describe('draft', () => {
       load.reset()
       await load.refresh()
       requests = installGemini([[call('submit_chat_reply', { text: 'やあ' })]])
-      await draft({ request: 'やあ', channelName: 'general', guild, tools, now: NOW })
+      await draft({ request: '来週のイベント企画を比較して詳しく解説して', channelName: 'general', guild, tools, now: NOW })
       assert.equal(requests[0].body.generationConfig.thinkingConfig.thinkingLevel, 'low', 'low at 80%')
       assert.equal(requests[0].body.serviceTier, 'flex')
       requests = installGemini([[{ text: '知識' }]])
@@ -1354,5 +1354,133 @@ describe('explicit cache and thinking', () => {
     assert.equal(isUncensoredUsable(), false)
     const fallbackToGemini = await draft({ request: 'R18のエロ小説を書いて', channelName: 'general', guild, tools: quietTools, now: NOW })
     assert.equal(fallbackToGemini.text, 'Geminiが代わりに答えるよ')
+  })
+
+  test('gemini-4-argon (deep) caches its systemInstruction and tools via cachedPrefix and reuses it across turns', async () => {
+    const requests = []
+    let turn = 0
+    global.fetch = async (url, init = {}) => {
+      const method = init.method || 'GET'
+      const body = init.body ? JSON.parse(init.body) : null
+      requests.push({ url, method, body })
+      if (method === 'GET' && /\/cachedContents\?/.test(url)) {
+        return { ok: true, json: async () => ({ cachedContents: [] }) }
+      }
+      if (url.endsWith('/cachedContents')) {
+        return { ok: true, json: async () => ({ name: `cachedContents/deep-${requests.length}`, expireTime: new Date(Date.now() + 3600e3).toISOString() }) }
+      }
+      turn++
+      if (turn === 1) {
+        return { ok: true, json: async () => ({ candidates: [{ content: { role: 'model', parts: [call('lookup', { q: 'a' })] } }] }) }
+      }
+      return { ok: true, json: async () => ({ candidates: [{ content: { role: 'model', parts: [call('submit_chat_reply', { text: '深い考察の答え' })] } }] }) }
+    }
+    const deepTools = {
+      declarations: [{ name: 'lookup', description: '調べる', parameters: { type: 'OBJECT', properties: { q: { type: 'STRING' } } } }],
+      call: async () => ({ result: '短い結果' })
+    }
+    const res = await draft({ request: '--deep 詳しく解説して', channelName: 'general', guild, tools: deepTools, now: NOW })
+    assert.equal(res.text, '深い考察の答え')
+    const cacheCreates = requests.filter(r => r.url.endsWith('/cachedContents'))
+    assert.equal(cacheCreates.length, 1, 'cached once for gemini-4-argon and reused on step 2')
+    assert.equal(cacheCreates[0].body.model, 'models/gemini-4-argon')
+    assert.ok(!cacheCreates[0].body.tools[0].functionDeclarations.some(d => d.name === 'think_deeper'))
+    const deepCalls = requests.filter(r => /models\/gemini-4-argon:streamGenerateContent/.test(r.url))
+    assert.equal(deepCalls.length, 2)
+    for (const c of deepCalls) {
+      assert.match(c.body.cachedContent, /^cachedContents\/deep-/)
+      assert.equal(c.body.systemInstruction, undefined)
+      assert.equal(c.body.tools, undefined)
+    }
+  })
+
+  test('adaptiveThinkingLevel scales effort by request complexity and respects explicit overrides', async () => {
+    const { adaptiveThinkingLevel } = require('../../src/bot/modules/eventDrafter')
+    assert.equal(adaptiveThinkingLevel(Object.assign([{}], { requestText: 'やあ' })), 'minimal')
+    assert.equal(adaptiveThinkingLevel(Object.assign([{}], { requestText: 'こんばんは <:nobaman_wave:950>' })), 'minimal')
+    assert.equal(adaptiveThinkingLevel(Object.assign([{}], { requestText: '最近どんな感じ？' })), 'low')
+    assert.equal(adaptiveThinkingLevel(Object.assign([{}, {}, {}], { requestText: '最近どんな感じ？' })), 'medium', 'steps up after tool results arrive')
+    assert.equal(adaptiveThinkingLevel(Object.assign([{}], { requestText: '来週のイベントを登録して' })), 'high')
+    assert.equal(adaptiveThinkingLevel(Object.assign([{}], { requestText: '幼馴染との恋愛小説を書いて' })), 'high')
+    assert.equal(adaptiveThinkingLevel(Object.assign([{}], { requestText: 'やあ', isEdit: true })), 'high')
+
+    process.env.GEMINI_EXPLICIT_CACHE = 'false'
+    process.env.GEMINI_ADAPTIVE_THINKING = 'false'
+    try {
+      const requests = installGemini([[call('submit_chat_reply', { text: 'やあ' })]])
+      await draft({ request: 'やあ', channelName: 'general', guild, tools: quietTools, now: NOW })
+      assert.equal(requests[0].body.generationConfig.thinkingConfig.thinkingLevel, 'high', 'GEMINI_ADAPTIVE_THINKING=false restores fixed high')
+    } finally {
+      delete process.env.GEMINI_ADAPTIVE_THINKING
+    }
+  })
+
+  test('compactContentsForWire masks older long tool outputs while keeping the latest step intact, and compressToolResult extracts long outputs via extractModel preserving URLs for safeLinks', async () => {
+    const { compactContentsForWire } = require('../../src/bot/modules/eventDrafter')
+    const { wrap } = require('../../src/bot/utils/untrusted')
+    const { safeLinks } = require('../../src/bot/utils/linkSafety')
+
+    const step1Result = wrap('fetch_url', `${'あ'.repeat(1600)}\n詳細リンク: https://example.com/deep/page`)
+    const step2Result = wrap('fetch_url', `${'い'.repeat(1600)}\n最新リンク: https://example.com/latest`)
+    const history = [
+      { role: 'user', parts: [{ text: '依頼' }] },
+      { role: 'model', parts: [call('fetch_url', { url: 'https://example.com/1' })] },
+      { role: 'user', parts: [{ functionResponse: { name: 'fetch_url', response: { result: step1Result } } }] },
+      { role: 'model', parts: [call('fetch_url', { url: 'https://example.com/2' })] },
+      { role: 'user', parts: [{ functionResponse: { name: 'fetch_url', response: { result: step2Result } } }] }
+    ]
+    const wire = compactContentsForWire(history)
+    assert.notEqual(wire, history)
+    assert.equal(history[2].parts[0].functionResponse.response.result, step1Result, 'original contents not mutated')
+    assert.match(wire[2].parts[0].functionResponse.response.result, /前ステップで確認済み・残り \d+ 文字省略/)
+    assert.match(wire[2].parts[0].functionResponse.response.result, /https:\/\/example\.com\/deep\/page/, 'URL preserved in masked digest')
+    assert.equal(wire[4].parts[0].functionResponse.response.result, step2Result, 'most recent tool step stays untouched')
+
+    process.env.GEMINI_EXPLICIT_CACHE = 'false'
+    const hugePage = wrap('fetch_url', `イベント詳細ページ\n${'無関係な広告テキスト。'.repeat(350)}\n申し込みページ: https://tickets.example.jp/entry/999\n開催日時: 2026-11-20 19:00`)
+    const requests = []
+    let mainStep = 0
+    global.fetch = async (url, init) => {
+      const body = JSON.parse(init.body)
+      requests.push({ url, body })
+      if (/gemini-3\.1-flash-lite/.test(url)) {
+        return {
+          ok: true,
+          json: async () => ({
+            candidates: [{ content: { role: 'model', parts: [{ text: '開催日時: 2026-11-20 19:00' }] } }]
+          })
+        }
+      }
+      mainStep++
+      if (mainStep === 1) {
+        return {
+          ok: true,
+          json: async () => ({
+            candidates: [{ content: { role: 'model', parts: [call('fetch_url', { url: 'https://example.jp/event' })] } }]
+          })
+        }
+      }
+      return {
+        ok: true,
+        json: async () => ({
+          candidates: [{ content: { role: 'model', parts: [call('submit_chat_reply', { text: '申し込みはこちら https://tickets.example.jp/entry/999' })] } }]
+        })
+      }
+    }
+    const pageTools = {
+      declarations: [{ name: 'fetch_url', description: 'URL取得', parameters: { type: 'OBJECT', properties: { url: { type: 'STRING' } } } }],
+      call: async () => ({ result: hugePage })
+    }
+    const result = await draft({ request: 'https://example.jp/event の内容を教えて', channelName: 'general', guild, tools: pageTools, now: NOW })
+    const extractCalls = requests.filter(r => /gemini-3\.1-flash-lite/.test(r.url))
+    assert.equal(extractCalls.length, 1, 'extractModel called once on >=3000 char tool output')
+    assert.equal(extractCalls[0].body.serviceTier, 'flex')
+    const secondMainCall = requests.filter(r => /gemini-3\.8-flash/.test(r.url))[1]
+    const sentToolText = secondMainCall.body.contents[2].parts[0].functionResponse.response.result
+    assert.ok(sentToolText.length < 300, 'main model receives compact extracted summary instead of 3500+ chars')
+    assert.match(sentToolText, /長文のため関連箇所を抽出/)
+    const checked = safeLinks(result.text, result.conversation.contents, result.conversation.toolUrls)
+    assert.deepEqual(checked.removed, [], 'URL from raw page is preserved in toolUrls even if omitted from summary')
+    assert.match(checked.text, /https:\/\/tickets\.example\.jp\/entry\/999/)
   })
 })

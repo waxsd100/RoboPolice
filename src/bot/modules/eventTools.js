@@ -170,7 +170,7 @@ const HISTORY_SCAN = 1000
 const MAX_HISTORY_RESULTS = 40
 const MAX_HISTORY_TEXT = 500
 const MAX_TOPIC = 100
-const MAX_PROFILE_EMOJIS = 15
+const MAX_PROFILE_EMOJIS = 8
 const MAX_YOUTUBE_RESULTS = 15
 const LIVE_LABELS = { live: '配信中', upcoming: '配信予定' }
 
@@ -772,6 +772,7 @@ function namedMembers (texts, guild, requester) {
 // The server's emojis for the model. With descriptions (emojiDescriber.js), one per line with what
 // it shows and when to use it, those closest in meaning to the request first (`vectorOf()`
 // resolves to its embedding, or null); otherwise just the codes.
+const MAX_EMOJI_NOTE_CHARS = 80
 async function emojiSection (guild, vectorOf) {
   const emojis = usableEmojis(guild)
   if (!emojis.length) return []
@@ -789,7 +790,7 @@ async function emojiSection (guild, vectorOf) {
   const ordered = [...emojis].sort((a, b) => (rank.get(a.id) ?? Infinity) - (rank.get(b.id) ?? Infinity))
   return [
     `${head}。話に合いそうな順:`,
-    ...ordered.slice(0, MAX_PROFILE_EMOJIS).map(e => notes[e.id] ? `- ${emojiCode(e)} ${notes[e.id]}` : `- ${emojiCode(e)}`)
+    ...ordered.slice(0, MAX_PROFILE_EMOJIS).map(e => notes[e.id] ? `- ${emojiCode(e)} ${String(notes[e.id]).replace(/\s+/g, ' ').slice(0, MAX_EMOJI_NOTE_CHARS)}` : `- ${emojiCode(e)}`)
   ]
 }
 
@@ -809,8 +810,9 @@ function worthSearching (text) {
 // Messages of the server close in meaning to the request (`vector`), in channels the requester and
 // the bot can read, for the server profile: lines. Only when stored messages are embedded
 // (`vectorOf()` is asked for only then).
-const MAX_RELATED_MESSAGES = 5
-const MIN_MESSAGE_SCORE = 0.6
+const MAX_RELATED_MESSAGES = 3
+const MIN_MESSAGE_SCORE = 0.65
+const MAX_RELATED_MESSAGE_CHARS = 120
 async function relatedMessages (guild, member, vectorOf) {
   if (!messageEmbeddingsEnabled()) return []
   const channels = [...guild.channels.values()].filter(c => canRead(c, member.id) && canRead(c, global.bot.user.id))
@@ -825,17 +827,34 @@ async function relatedMessages (guild, member, vectorOf) {
     .slice(0, MAX_RELATED_MESSAGES)
     .map(m => {
       const who = guild.members.get(m.author_id)
-      return `- ${new Date(m.ts).toISOString().slice(0, 10)} #${guild.channels.get(m.channel_id)?.name || m.channel_id} ${who ? displayName(who) : 'メンバー'}: ${fromStoredContent(m.content).replace(/\s+/g, ' ').slice(0, 150)}`
+      return `- ${new Date(m.ts).toISOString().slice(0, 10)} #${guild.channels.get(m.channel_id)?.name || m.channel_id} ${who ? displayName(who) : 'メンバー'}: ${fromStoredContent(m.content).replace(/\s+/g, ' ').slice(0, MAX_RELATED_MESSAGE_CHARS)}`
     })
 }
 
 // The server as the requester can see it. Sent with every request, fresh each time, so questions
 // about "this server" need no lookups. query: what was asked; context: the conversation it replies
 // to (readThread), if any. Both choose the knowledge and the emojis put first.
-async function describeServer (guild, member, requestChannelID, { query = '', context = '', queryVector = null } = {}) {
+// slim: for bare greetings, edits, or pure creative stories that do not touch server data, send
+// only the server name, style, and compact emoji codes.
+async function describeServer (guild, member, requestChannelID, { query = '', context = '', queryVector = null, slim = false } = {}) {
   // Ensure the channel cache is readable before building the profile.
   guild.channels.values()
   const lines = [`サーバー名: ${guild.name}`]
+  if (slim) {
+    const lore = serverLore.enabled()
+      ? await serverLore.relatedLore(guild.id, () => Promise.resolve(null)).catch(() => ({ facts: [], style: null }))
+      : { facts: [], style: null }
+    if (lore.style) lines.push('', '### このサーバーのノリ（メンバーの会話から）', lore.style)
+    const emojis = usableEmojis(guild)
+    if (emojis.length) {
+      lines.push(
+        '',
+        '### サーバー絵文字（返事で使うときは、この書き方のまま書く）',
+        emojis.slice(0, MAX_PROFILE_EMOJIS).map(emojiCode).join(' ')
+      )
+    }
+    return lines.join('\n')
+  }
   if (guild.description) lines.push(`説明: ${guild.description}`)
   if (guild.memberCount) lines.push(`メンバー数: ${guild.memberCount}`)
   if (guild.rulesChannelID) lines.push(`ルールチャンネル: <#${guild.rulesChannelID}>（内容は get_server_rules で読む）`)

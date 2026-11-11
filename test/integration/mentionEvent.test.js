@@ -878,11 +878,17 @@ describe('mention → event / forum post (integration)', () => {
     } finally {
       installReplyLengthStore()
     }
-    // Without it, the default.
-    const requests = installGemini([[call('submit_chat_reply', { text: 'やあ' })]])
+    // Without it, adaptive thinking scales from minimal (greetings) to high (complex requests).
+    let requests = installGemini([[call('submit_chat_reply', { text: 'やあ' })]])
     await mentionEvent.handle(mention(channel, '<@BOT> やあ'))
-    const reply = requests.find(r => /:streamGenerateContent/.test(r.url))
+    let reply = requests.find(r => /:streamGenerateContent/.test(r.url))
     assert.match(reply.url, /gemini-3\.8-flash:streamGenerateContent/)
+    assert.equal(reply.body.generationConfig.thinkingConfig.thinkingLevel, 'minimal')
+    assert.doesNotMatch(reply.body.contents[0].parts[0].text, /### YouTube/, 'slim server profile on bare greeting')
+
+    requests = installGemini([[call('submit_chat_reply', { text: '企画案です' })]])
+    await mentionEvent.handle(mention(channel, '<@BOT> 来週のイベントの企画案を比較して詳しく解説して'))
+    reply = requests.find(r => /:streamGenerateContent/.test(r.url))
     assert.equal(reply.body.generationConfig.thinkingConfig.thinkingLevel, 'high')
   })
 
