@@ -1064,6 +1064,128 @@ describe('mention → event / forum post (integration)', () => {
     assert.match(footer, /^-# model: gemini-3\.8-flash → xtools-at\/DeepSeek-V4-Pro-Qwen3\.5-9B-UNCENSORED-heretic · tokens: in 400 \(cached 0\) · out 40 · 2 Gemini calls · fallback: gemini-3\.8-flash refused \(PROHIBITED_CONTENT\) → xtools-at\/DeepSeek-V4-Pro-Qwen3\.5-9B-UNCENSORED-heretic$/)
   })
 
+  test('chat: Cloud Run thinking model streams SSE replies without leaking thoughts, records timings in %debugfooter, and falls back to Model 1 on cold-start reply threads', async (t) => {
+    t.mock.method(global.logger, 'info', () => {})
+    t.mock.method(global.logger, 'warn', () => {})
+    const { uncensoredState, caches } = require('../../src/bot/modules/eventDrafter')
+    const { installReplyLengthStore } = require('../helpers/fakes')
+
+    const enc = new TextEncoder()
+    const sseBody = events => {
+      const bytes = enc.encode(events.map(e => e === '[DONE]' ? 'data: [DONE]\r\n\r\n' : `data: ${JSON.stringify(e)}\r\n\r\n`).join(''))
+      return [bytes.subarray(0, 29), bytes.subarray(29, 71), bytes.subarray(71)]
+    }
+
+    process.env.UNCENSORED_API_URL = 'https://gemma-heretic-12345-an.a.run.app/v1'
+    const { channel, replies } = createChannel()
+    process.env.OWNER_GUILD_IDS = channel.guild.id
+    installReplyLengthStore({}, {}, { [channel.guild.id]: true })
+
+    MESSAGES['201/810'] = { id: '810', timestamp: Date.now() - 20000, content: '<@BOT> --r18 続きお願い', author: { id: REQUESTER, username: `user${REQUESTER}` } }
+    const priorBotReply = {
+      id: '811',
+      timestamp: Date.now() - 15000,
+      content: '前のシーンの続きだよ。\n-# model: gemma-4-31B-it-The-DECKARD-HERETIC-UNCENSORED-Thinking.Q4_K_M · tokens: in 57 (cached 0) · out 0 · 3 Gemini calls',
+      author: { id: 'BOT', username: 'bot' },
+      messageReference: { messageID: '810', channelID: '201' }
+    }
+    MESSAGES['201/811'] = priorBotReply
+
+    t.after(() => {
+      delete process.env.UNCENSORED_API_URL
+      delete process.env.OWNER_GUILD_IDS
+      delete MESSAGES['201/810']
+      delete MESSAGES['201/811']
+      uncensoredState.usable = null
+      uncensoredState.url = null
+      uncensoredState.detectedModel = null
+      uncensoredState.detectedR18Model = null
+      installReplyLengthStore()
+      caches.clear()
+    })
+
+    let truncateModel2 = false
+    const chatPayloads = []
+    const prevFetch = global.fetch
+    global.fetch = async (url, init = {}) => {
+      if (!String(url).includes('gemma-heretic-12345-an.a.run.app')) {
+        return prevFetch(url, init)
+      }
+      if (/\/v1\/models$/.test(url) && (!init.method || init.method === 'GET')) {
+        return {
+          ok: true,
+          json: async () => ({
+            data: [
+              { id: 'gemma-4-31B-it-ARA-heretic.IQ4_XS', status: { value: 'loaded' } },
+              { id: 'gemma-4-31B-it-The-DECKARD-HERETIC-UNCENSORED-Thinking.Q4_K_M', status: { value: 'loaded' } }
+            ]
+          })
+        }
+      }
+      const body = JSON.parse(init.body)
+      chatPayloads.push(body)
+      if (/Thinking/i.test(body.model) && truncateModel2) {
+        return {
+          ok: true,
+          body: sseBody([
+            {
+              choices: [{
+                delta: {
+                  reasoning_content: 'AI bot in a Discord server.\n  * Bot identity (not pretending to be the streamer).\n  * Length: Readable as a Discord message, max ~500 chars.\n  * Start by addressing the user briefly or just diving in. (Discord style usually favors getting straight'
+                }
+              }]
+            },
+            '[DONE]'
+          ])
+        }
+      }
+      if (/Thinking/i.test(body.model)) {
+        return {
+          ok: true,
+          body: sseBody([
+            { choices: [{ delta: { content: '<|channel>thought\nAI bot in a Discord server.\n* Bot identity\n* Recent chat context\n<channel|>' } }] },
+            { choices: [{ delta: { content: '窓の外で雨が静かに降っていた。二人は寄り添い、熱い吐息を重ねた。' } }], timings: { prompt_n: 400, cache_n: 100, predicted_n: 180 } },
+            '[DONE]'
+          ])
+        }
+      }
+      return {
+        ok: true,
+        body: sseBody([
+          { choices: [{ delta: { content: '雨音の響く部屋で、二人はそっと唇を重ねた。' } }], timings: { prompt_n: 350, cache_n: 50, predicted_n: 95 } },
+          '[DONE]'
+        ])
+      }
+    }
+
+    // 1. Model 2 streams Gemma 4 <|channel>thought...<channel|> + Japanese story: thought is stripped and timings populate %debugfooter
+    await mentionEvent.handle(mention(channel, '恋愛小説を書いて', { messageReference: { messageID: '811', channelID: '201' }, referencedMessage: priorBotReply }))
+    assert.equal(chatPayloads.length, 1)
+    assert.equal(chatPayloads[0].model, 'gemma-4-31B-it-The-DECKARD-HERETIC-UNCENSORED-Thinking.Q4_K_M')
+    assert.doesNotMatch(chatPayloads[0].messages.at(-1).content, /-# model:/, 'debug footer stripped from reply-thread prompt context')
+    assert.match(chatPayloads[0].messages[0].content, /成人向け・R18 モードを指定しています/)
+    const [storyText, storyFooter] = replies[0].state.content.split('\n')
+    assert.equal(storyText, '窓の外で雨が静かに降っていた。二人は寄り添い、熱い吐息を重ねた。')
+    assert.doesNotMatch(replies[0].state.content, /AI bot in a Discord server|<\|?channel/)
+    assert.match(storyFooter, /^-# model: gemma-4-31B-it-The-DECKARD-HERETIC-UNCENSORED-Thinking\.Q4_K_M · tokens: in (?:500|700) \(cached 100\) · out 180 · \d+ Gemini calls?$/)
+
+    // 2. Cold-start state + Model 2 truncates mid-thought: never leaks English thought trace and falls back to auto-discovered Model 1
+    caches.clear()
+    uncensoredState.detectedModel = null
+    uncensoredState.detectedR18Model = null
+    chatPayloads.length = 0
+    replies.length = 0
+    truncateModel2 = true
+
+    await mentionEvent.handle(mention(channel, 'もっと続きを書いて', { messageReference: { messageID: '811', channelID: '201' }, referencedMessage: priorBotReply }))
+    assert.equal(chatPayloads.at(-1).model, 'gemma-4-31B-it-ARA-heretic.IQ4_XS')
+    const [fallbackText, fallbackFooter] = replies[0].state.content.split('\n')
+    assert.equal(fallbackText, '雨音の響く部屋で、二人はそっと唇を重ねた。')
+    assert.doesNotMatch(replies[0].state.content, /AI bot in a Discord server|Bot identity/)
+    assert.match(fallbackFooter, /fallback: gemma-4-31B-it-The-DECKARD-HERETIC-UNCENSORED-Thinking\.Q4_K_M unavailable → gemma-4-31B-it-ARA-heretic\.IQ4_XS$/)
+    assert.doesNotMatch(fallbackFooter, /out 0\b/)
+  })
+
   test('chat: server emojis are offered to the model, and :name: becomes the emoji', async () => {
     guild.emojis = [{ id: '950', name: 'nobaman_wave' }]
     try {
