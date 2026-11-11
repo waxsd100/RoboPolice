@@ -925,7 +925,7 @@ function isUncensoredDirective (request, referenced = null) {
   return true
 }
 
-function applyModelDirective (contents, directive) {
+function applyModelDirective (contents, directive, { inherited = false } = {}) {
   if (!directive || !contents) return false
   const lower = normalizeDirectiveValue(directive).toLowerCase()
   if (lower === 'deep' || lower === 'argon') {
@@ -949,6 +949,7 @@ function applyModelDirective (contents, directive) {
     contents.directUncensored = true
     contents.uncensoredR18Mode = false
     contents.explicitUncensoredModel = null
+    contents.inheritedUncensoredModel = false
     return true
   }
   if (lower === '2' || lower === 'r18' || lower === 'deckard') {
@@ -957,6 +958,7 @@ function applyModelDirective (contents, directive) {
     contents.directUncensored = true
     contents.uncensoredR18Mode = true
     contents.explicitUncensoredModel = null
+    contents.inheritedUncensoredModel = false
     return true
   }
   const custom = normalizeLocalModelId(directive)
@@ -969,6 +971,7 @@ function applyModelDirective (contents, directive) {
     contents.directUncensored = true
     contents.uncensoredR18Mode = true
     contents.explicitUncensoredModel = null
+    contents.inheritedUncensoredModel = false
     return true
   }
   if (customLower === baseLower) {
@@ -977,6 +980,7 @@ function applyModelDirective (contents, directive) {
     contents.directUncensored = true
     contents.uncensoredR18Mode = false
     contents.explicitUncensoredModel = null
+    contents.inheritedUncensoredModel = false
     return true
   }
   require('../utils/geminiPrices').registerUncensoredModel(custom)
@@ -984,6 +988,8 @@ function applyModelDirective (contents, directive) {
   contents.uncensored = true
   contents.directUncensored = true
   contents.explicitUncensoredModel = custom
+  contents.inheritedUncensoredModel = !!inherited
+  if (/deckard|r-?18|uncensored-thinking/i.test(custom)) contents.uncensoredR18Mode = true
   return true
 }
 
@@ -1359,18 +1365,24 @@ function collapseRepetitions (text) {
     .replace(/(.)\1{4,}/gu, '$1$1$1')
 }
 
-const CLOSED_THOUGHT_BLOCK_RE = /<\|channel>thought[\s\S]*?<channel\|>|<\|thought\|>[\s\S]*?(?:<channel\|>|<\|thought\|>|<\/thought>)|<think>[\s\S]*?<\/think>|<thought>[\s\S]*?<\/thought>|<\|channel\|>analysis[\s\S]*?<\|message\|>/gi
-const CLOSING_THOUGHT_TAG_RE = /<\|?channel\|?>|<\/think>|<\/thought>|<\|message\|>/gi
-const OPENING_THOUGHT_TAG_RE = /(?:<\|channel>thought|<\|thought\|>|<think>|<thought>|<\|channel\|>analysis)[\s\S]*$/i
-const THOUGHT_PREAMBLE_RE = /^(?:thinking process|thought process|internal monologue|reasoning|analysis|let'?s (?:think|analyze|break down)|ai bot in a discord server\b)/i
-const THOUGHT_BULLET_RE = /^\s*(?:[*+-]|\d+\.)\s+\*{0,2}(?:bot identity|length|context|recent chat context|theme|characters?|setting|action|tone|style|goal|user|request|constraints?|language|role|persona|target|draft(?:ing)?|plan)\b/gim
+const CLOSED_THOUGHT_BLOCK_RE = /<\|channel>\s*thought[\s\S]*?<channel\|>|<\|thought\|>[\s\S]*?(?:<channel\|>|<\|thought\|>|<\/thought>)|<think>[\s\S]*?<\/think>|<thought>[\s\S]*?<\/thought>|<\|channel\|>\s*analysis[\s\S]*?(?:<\|channel\|>\s*final\b|<\|message\|>)/gi
+const CLOSING_THOUGHT_TAG_RE = /<channel\|>|<\/think>|<\/thought>|<\|channel\|>\s*final\b|<\|message\|>/gi
+const OPENING_THOUGHT_TAG_RE = /(?:<\|channel>\s*thought|<\|thought\|>|<think>|<thought>|<\|channel\|>\s*analysis)[\s\S]*$/i
+const THOUGHT_PREAMBLE_RE = /^(?:thinking process|thought process|internal monologue|let'?s (?:analyze|break down) the (?:user|request|prompt)|ai bot in a discord server\b|(?:okay,\s*)?the user (?:is asking|wants|asked)\b)/i
+const PROMPT_META_BULLET_RE = /^\s*(?:[*+-]|\d+\.)\s+\*{0,2}(?:bot identity|recent chat context|chat context|channel context|user(?:'s)? request|analyze the request|constraints?|persona)\b|(?:not pretending to be the streamer|readable as a discord message|addressing the user)/gim
+const JAPANESE_CHAR_RE = /[ぁ-んァ-ヶ一-龠々]/g
 
 function isUnclosedThoughtTrace (text) {
   const s = String(text || '').trim()
   if (!s) return false
   if (THOUGHT_PREAMBLE_RE.test(s)) return true
-  const bullets = s.match(THOUGHT_BULLET_RE)
-  if (bullets && bullets.length >= 2) return true
+  const nonWs = s.replace(/\s+/g, '')
+  if (!nonWs.length) return false
+  const jpCount = (nonWs.match(JAPANESE_CHAR_RE) || []).length
+  if (jpCount / nonWs.length < 0.15) {
+    const metaMatches = s.match(PROMPT_META_BULLET_RE)
+    if (metaMatches && metaMatches.length >= 2) return true
+  }
   return false
 }
 
@@ -1438,6 +1450,7 @@ function parseUncensoredParts (msg, declarations, allowed = null) {
 const UNCENSORED_SAMPLING_PARAMS = {
   max_tokens: 4096,
   stream: true,
+  stream_options: { include_usage: true },
   top_p: 0.95,
   top_k: 64,
   min_p: 0.05,
@@ -1651,7 +1664,7 @@ async function callUncensored (contents, declarations, allowed = null, { timeout
     const desc = await describeImagesForUncensored(contents.attachedPictures)
     if (desc) contents.imageDescription = desc
   }
-  const r18Mode = !!contents?.uncensoredR18Mode || isR18Text(model)
+  const r18Mode = !!contents?.uncensoredR18Mode || isR18Text(model) || /deckard|r-?18|uncensored-thinking/i.test(model)
   const messages = toOpenAIMessages(uncensoredSystemInstruction({ compact: useCompact, r18Mode }), contents, { compact: useCompact, r18Mode })
   const replyCacheKey = useCompact ? `uncensored-reply:${hashOf(JSON.stringify({ model, messages }))}` : null
   if (replyCacheKey) {
@@ -2003,11 +2016,18 @@ async function runAgent (contents, tools, submits = SUBMIT_DECLARATIONS) {
       if (contents.uncensored && !contents.geminiBlocked) {
         const currentModel = uncensoredModel(contents)
         const baseModel = uncensoredBaseModel()
-        if (contents.uncensoredR18Mode && !contents.explicitUncensoredModel && !contents.triedUncensoredBase && baseModel !== currentModel) {
+        const canFallbackToBase = !contents.triedUncensoredBase &&
+          baseModel !== currentModel &&
+          ((contents.uncensoredR18Mode && !contents.explicitUncensoredModel) ||
+            contents.inheritedUncensoredModel ||
+            currentModel.toLowerCase() === uncensoredR18Model().toLowerCase())
+        if (canFallbackToBase) {
           global.logger?.warn(`[UNCENSORED]: ${currentModel} failed (${e.message.slice(0, 200)}); trying ${baseModel}`)
           addFallback(`${currentModel} unavailable → ${baseModel}`)
           contents.splice(start)
           contents.uncensoredR18Mode = false
+          contents.explicitUncensoredModel = null
+          contents.inheritedUncensoredModel = false
           contents.triedUncensoredBase = true
           step = -1
           continue
@@ -2266,7 +2286,7 @@ async function draft ({ request, referenced, recent = [], channelName, channelID
     const initial = replyModel(conversation.contents)
     const fallback = uncensoredModel(conversation.contents)
     global.logger?.info(`[GEMINI]: R18 detected in request; ${fallback} answers instead of ${initial}`)
-  } else if (threadDirective && applyModelDirective(conversation.contents, threadDirective)) {
+  } else if (threadDirective && applyModelDirective(conversation.contents, threadDirective, { inherited: true })) {
     const chosen = conversation.contents.uncensored
       ? uncensoredModel(conversation.contents)
       : (conversation.contents.deep ? deepModel() : replyModel(conversation.contents))
@@ -2319,4 +2339,4 @@ async function revise (conversation, correction) {
   return check(conversation, await runAgent(conversation.contents, conversation.tools, conversation.submits))
 }
 
-module.exports = { THINKING_LEVELS, SERVICE_TIERS, defaultTaskConfig, resolveTaskConfig, replyTimeoutMs, flexUsable, SAFETY_SETTINGS, STRICT_SAFETY_SETTINGS, withSafetySettings, THINK_DEEPER_DECLARATION, HAND_OVER_R18_DECLARATION, isR18Text, isRefusalReply, STORY_REQUEST_PATTERN, adaptiveThinkingLevel, compactContentsForWire, compressToolResult, deepModel, DEFAULT_UNCENSORED_MODEL, normalizeLocalModelId, uncensoredModel, uncensoredR18Model, parseModelDirective, extractReferencedDirective, rememberThreadModel, isUncensoredDirective, applyModelDirective, isLocalUncensoredUrl, uncensoredEndpoint, isUncensoredConfigured, isUncensoredUsable, checkUncensoredConnection, startUncensoredCheck, uncensoredState, ensureUncensoredModelLoaded, cleanUncensoredContent, extractUncensoredAnswer, callUncensored, REPLY_LENGTHS, DEFAULT_REPLY_LENGTH, PERSONAS, thinkingConfig, cachedPrefix, caches, purgedFor, promptVersion, lightModel, extractModel, DEFAULT_EXTRACT_MODEL, draft, revise, MAX_STEPS, isConfigured, toScheduledEvent, callGemini, geminiRequest, geminiSend, geminiStream, retryTimer, DEFAULT_GEMINI_MODEL, ENTITY_TYPES, GeminiError }
+module.exports = { THINKING_LEVELS, SERVICE_TIERS, defaultTaskConfig, resolveTaskConfig, replyTimeoutMs, flexUsable, SAFETY_SETTINGS, STRICT_SAFETY_SETTINGS, withSafetySettings, THINK_DEEPER_DECLARATION, HAND_OVER_R18_DECLARATION, isR18Text, isRefusalReply, STORY_REQUEST_PATTERN, adaptiveThinkingLevel, compactContentsForWire, compressToolResult, deepModel, DEFAULT_UNCENSORED_MODEL, normalizeLocalModelId, uncensoredModel, uncensoredR18Model, parseModelDirective, extractReferencedDirective, rememberThreadModel, isUncensoredDirective, applyModelDirective, isLocalUncensoredUrl, uncensoredEndpoint, isUncensoredConfigured, isUncensoredUsable, checkUncensoredConnection, startUncensoredCheck, uncensoredState, ensureUncensoredModelLoaded, cleanUncensoredContent, extractUncensoredAnswer, UNCENSORED_SAMPLING_PARAMS, readUncensoredResponse, callUncensored, REPLY_LENGTHS, DEFAULT_REPLY_LENGTH, PERSONAS, thinkingConfig, cachedPrefix, caches, purgedFor, promptVersion, lightModel, extractModel, DEFAULT_EXTRACT_MODEL, draft, revise, MAX_STEPS, isConfigured, toScheduledEvent, callGemini, geminiRequest, geminiSend, geminiStream, retryTimer, DEFAULT_GEMINI_MODEL, ENTITY_TYPES, GeminiError }

@@ -1253,80 +1253,6 @@ describe('explicit cache and thinking', () => {
     assert.deepEqual(loadCalledWith, { model: 'gemma-4-31B-it-The-DECKARD-HERETIC-UNCENSORED-Thinking.Q4_K_M' })
     assert.ok(modelsChecks >= 2)
 
-    // 6. Gemma 4 thinking blocks (<|channel>thought...<channel|>) and unclosed English prompt-analysis traces are stripped/rejected
-    const { extractUncensoredAnswer } = require('../../src/bot/modules/eventDrafter')
-    const leakedThoughtSample = [
-      'AI bot in a Discord server.',
-      '  * Bot identity (not pretending to be the streamer).',
-      '  * Length: Readable as a Discord message, max ~500 chars.',
-      '  * Context: The channel `<#1552498516801093754>` has age restrictions/adult themes.',
-      '  * Recent chat context: A user (@wakokara) asked for "the continuation" of an R18 scene.',
-      '  * Theme: A quiet night, emotional connection turning physical/passionate.',
-      '  * Start by addressing the user briefly or just diving in. (Discord style usually favors getting straight'
-    ].join('\n')
-    assert.equal(extractUncensoredAnswer({ content: '', reasoning_content: leakedThoughtSample }), '')
-    assert.equal(extractUncensoredAnswer({ content: leakedThoughtSample }), '')
-    assert.equal(
-      extractUncensoredAnswer({ content: `<|channel>thought\n${leakedThoughtSample}\n<channel|>窓の外で雨が静かに降っていた。` }),
-      '窓の外で雨が静かに降っていた。'
-    )
-    assert.equal(
-      extractUncensoredAnswer({ content: `${leakedThoughtSample}\n<channel|>窓の外で雨が静かに降っていた。` }),
-      '窓の外で雨が静かに降っていた。'
-    )
-    assert.equal(
-      extractUncensoredAnswer({ content: '', reasoning_content: `${leakedThoughtSample}\n<channel|>窓の外で雨が静かに降っていた。` }),
-      '窓の外で雨が静かに降っていた。'
-    )
-
-    // When Model 2 returns only an unclosed thought trace (even in a reply thread with footer model ID),
-    // it never leaks the English thought trace and falls back to Model 1.
-    const attemptedModels = []
-    global.fetch = async (url, init = {}) => {
-      if (/\/v1\/models$/.test(url) && (!init.method || init.method === 'GET')) {
-        return {
-          ok: true,
-          json: async () => ({
-            data: [
-              { id: 'gemma-4-31B-it-ARA-heretic.IQ4_XS', status: { value: 'loaded' } },
-              { id: 'gemma-4-31B-it-The-DECKARD-HERETIC-UNCENSORED-Thinking.Q4_K_M', status: { value: 'loaded' } }
-            ]
-          })
-        }
-      }
-      const b = JSON.parse(init.body)
-      attemptedModels.push(b.model)
-      if (/Thinking/i.test(b.model)) {
-        return {
-          ok: true,
-          json: async () => ({
-            choices: [{ message: { role: 'assistant', content: '', reasoning_content: leakedThoughtSample } }]
-          })
-        }
-      }
-      return {
-        ok: true,
-        json: async () => ({
-          choices: [{ message: { role: 'assistant', content: '雨音の響く部屋で、二人はそっと唇を重ねた。' } }]
-        })
-      }
-    }
-    const recoveredReply = await draft({
-      request: '恋愛小説を書いて',
-      referenced: {
-        text: '[2026-11-09T10:00:05.000Z] あなた（BOT）: 前の返事\n-# model: gemma-4-31B-it-The-DECKARD-HERETIC-UNCENSORED-Thinking.Q4_K_M · tokens: in 57 (cached 0) · out 0 · 3 Gemini calls',
-        othersText: '',
-        count: 1
-      },
-      channelName: 'general',
-      guild,
-      tools: quietTools,
-      now: NOW
-    })
-    assert.equal(recoveredReply.text, '雨音の響く部屋で、二人はそっと唇を重ねた。')
-    assert.ok(attemptedModels.some(m => /Thinking/i.test(m)), 'tried Model 2 first')
-    assert.equal(attemptedModels.at(-1), 'gemma-4-31B-it-ARA-heretic.IQ4_XS', 'fell back to Model 1 after unclosed thought')
-
     delete process.env.UNCENSORED_R18_MODEL
 
     process.env.UNCENSORED_API_URL = 'https://api.featherless.ai/v1'
@@ -1482,5 +1408,324 @@ describe('explicit cache and thinking', () => {
     const checked = safeLinks(result.text, result.conversation.contents, result.conversation.toolUrls)
     assert.deepEqual(checked.removed, [], 'URL from raw page is preserved in toolUrls even if omitted from summary')
     assert.match(checked.text, /https:\/\/tickets\.example\.jp\/entry\/999/)
+  })
+})
+
+describe('uncensored thinking models and SSE streaming', () => {
+  const { afterEach } = require('node:test')
+  const { extractUncensoredAnswer, readUncensoredResponse, uncensoredState, caches } = require('../../src/bot/modules/eventDrafter')
+  const { tokenCounts, logTokens } = require('../../src/bot/utils/geminiUsage')
+  const quietTools = { declarations: [], call: async () => ({}) }
+
+  const LEAKED_THOUGHT_REPORT = [
+    'AI bot in a Discord server.',
+    '',
+    '  *   Bot identity (not pretending to be the streamer).',
+    '  *   Length: Readable as a Discord message, max ~500 chars.',
+    '  *   Context: The channel `<#1552498516801093754>` has age restrictions/adult themes (R18 content allowed and encouraged), so it should lean into romantic/intimate scenes if appropriate.',
+    '  *   Recent chat context: A user (@wakokara) asked for "the continuation" of an R18 scene, then said hello to the model. Someone else made a comment about their nickname ("don\'t call me \'shikepitsu inkya\'"). The current request is from @wakokara asking for a romance novel/story.',
+    'Write a short romantic story snippet.',
+    '    *   Theme: A quiet night, emotional connection turning physical/passionate.',
+    '    *   Start by addressing the user briefly or just diving in. (Discord style usually favors getting straight'
+  ].join('\n')
+
+  // Encodes OpenAI SSE events into small arbitrary byte slices (splitting multi-byte UTF-8 and JSON lines)
+  // to exercise real chunked network reads in readUncensoredResponse.
+  function createSseBody (events, { chunkBytes = 19, failWith = null, onCancel = null } = {}) {
+    const enc = new TextEncoder()
+    const raw = events.map(e => e === '[DONE]' ? 'data: [DONE]\r\n\r\n' : `data: ${JSON.stringify(e)}\r\n\r\n`).join('')
+    const bytes = enc.encode(raw)
+    const slices = []
+    for (let i = 0; i < bytes.length; i += chunkBytes) {
+      slices.push(bytes.subarray(i, i + chunkBytes))
+    }
+    return {
+      cancel: async () => { if (onCancel) onCancel() },
+      async * [Symbol.asyncIterator] () {
+        for (const s of slices) yield s
+        if (failWith) throw failWith
+      }
+    }
+  }
+
+  beforeEach(() => {
+    configureGateway()
+    logTokens()
+    caches.clear()
+    uncensoredState.usable = null
+    uncensoredState.url = null
+    uncensoredState.detectedModel = null
+    uncensoredState.detectedR18Model = null
+  })
+
+  afterEach(() => {
+    delete process.env.UNCENSORED_API_URL
+    delete process.env.UNCENSORED_MODEL
+    delete process.env.UNCENSORED_R18_MODEL
+    caches.clear()
+    uncensoredState.usable = null
+    uncensoredState.url = null
+    uncensoredState.detectedModel = null
+    uncensoredState.detectedR18Model = null
+  })
+
+  test('strips closed thinking blocks across model formats and rejects unclosed thoughts, while preserving legitimate replies with <channel> or bullet lists', () => {
+    // 1. Closed thought blocks (Gemma 4 <|channel>thought...<channel|>, template-prefilled <channel|>, Qwen <think>, Harmony)
+    assert.equal(
+      extractUncensoredAnswer({ content: `<|channel>thought\n${LEAKED_THOUGHT_REPORT}\n<channel|>窓の外で雨が静かに降っていた。<|turn|>` }),
+      '窓の外で雨が静かに降っていた。'
+    )
+    assert.equal(
+      extractUncensoredAnswer({ content: `${LEAKED_THOUGHT_REPORT}\n<channel|>窓の外で雨が静かに降っていた。` }),
+      '窓の外で雨が静かに降っていた。',
+      'strips pre-tag thought when <|channel>thought was already in the GGUF prompt template'
+    )
+    assert.equal(
+      extractUncensoredAnswer({ content: '', reasoning_content: `${LEAKED_THOUGHT_REPORT}\n<channel|>窓の外で雨が静かに降っていた。` }),
+      '窓の外で雨が静かに降っていた。',
+      'recovers post-<channel|> answer if llama-server routed the entire stream into reasoning_content'
+    )
+    assert.equal(
+      extractUncensoredAnswer({ content: '<|channel>thought\n最初の思考\n<channel|>こんにちは！<|channel>thought\n途中で切れた追加思考' }),
+      'こんにちは！',
+      'strips a trailing unclosed thought block while keeping the completed answer'
+    )
+    assert.equal(
+      extractUncensoredAnswer({ content: '<|channel|>analysis\nCheck user intent.\n<|channel|>final\nおやすみなさい！<|im_end|>' }),
+      'おやすみなさい！'
+    )
+
+    // 2. Unclosed / truncated thoughts MUST be rejected (never leaked as chat replies)
+    assert.equal(extractUncensoredAnswer({ content: '', reasoning_content: LEAKED_THOUGHT_REPORT }), '')
+    assert.equal(extractUncensoredAnswer({ content: '', reasoning_content: 'ユーザーの意図を確認しています。恋愛小説を書きます。' }), '', 'pure reasoning_content without a closing tag is never leaked even in Japanese')
+    assert.equal(extractUncensoredAnswer({ content: '<|channel>thought\nユーザーの依頼を確認しよう。雨の日の恋愛小説を書けばいいんだな…' }), '', 'unclosed <|channel>thought in Japanese must not match <|channel> as a closing tag')
+    assert.equal(extractUncensoredAnswer({ content: '<think>\nユーザーの依頼を確認しよう。途中でトークン上限…' }), '')
+    assert.equal(extractUncensoredAnswer({ content: LEAKED_THOUGHT_REPORT }), '')
+    assert.equal(
+      extractUncensoredAnswer({
+        content: [
+          '* Bot identity (not pretending to be the streamer).',
+          '* Recent chat context: @わこから asked for "恋愛小説を書いて" after "シケピツ陰キャ".',
+          '* Length: Readable as a Discord message.'
+        ].join('\n')
+      }),
+      '',
+      'untagged English prompt-meta analysis is rejected even without preamble and when quoting short Japanese strings'
+    )
+    assert.equal(
+      extractUncensoredAnswer({ content: 'Thinking Process:\n1. Analyze the request from the user.\n2. Draft response...' }),
+      ''
+    )
+
+    // 3. Negative / preservation invariants: legitimate replies must NOT be truncated or falsely rejected
+    const channelPlaceholderReply = 'チャンネルを除外するときは `%ignorechannel <channel>` と入力してね！'
+    assert.equal(
+      extractUncensoredAnswer({ content: channelPlaceholderReply }),
+      channelPlaceholderReply,
+      'literal <channel> (without pipe) in a normal reply must never be treated as Gemma <channel|>'
+    )
+
+    const japaneseWithEnglishBullets = [
+      'TRPGのキャラクターシート案を作ってみたよ！',
+      '- Role: タンク（前衛）',
+      '- Style: 近接防御',
+      '- Persona: 寡黙な騎士'
+    ].join('\n')
+    assert.equal(
+      extractUncensoredAnswer({ content: japaneseWithEnglishBullets }),
+      japaneseWithEnglishBullets,
+      'legitimate Japanese reply containing English bullet labels must not be rejected as a thought trace'
+    )
+
+    const conversationalEnglishOutline = [
+      'Let\'s think about a cozy scene outline!',
+      '- Theme: Quiet rainy evening',
+      '- Setting: Small warm cafe',
+      '- Action: Sharing an umbrella'
+    ].join('\n')
+    assert.equal(
+      extractUncensoredAnswer({ content: conversationalEnglishOutline }),
+      conversationalEnglishOutline,
+      'legitimate English outline without prompt-meta markers must be preserved'
+    )
+  })
+
+  test('reassembles fragmented SSE chunks, waits for post-thought answer before soft-timeout cutting, and aborts on mid-thought stream errors', async () => {
+    // 1. Fragmented multi-byte UTF-8 SSE stream with reasoning_content + timings
+    let cancelled = false
+    const okRes = {
+      body: createSseBody([
+        { choices: [{ delta: { reasoning_content: 'AI bot in a Discord server.\n* Bot identity' } }] },
+        { choices: [{ delta: { content: '<|channel>thought\n短い思考\n<channel|>' } }] },
+        { choices: [{ delta: { content: '窓の外では静かに雨が降っていた。' } }] },
+        { choices: [{ delta: { content: '二人は寄り添い、そっと指先を絡めた。' } }], timings: { prompt_n: 320, cache_n: 80, predicted_n: 145 } },
+        '[DONE]'
+      ], { chunkBytes: 13, onCancel: () => { cancelled = true } })
+    }
+    const parsed = await readUncensoredResponse(okRes)
+    assert.equal(cancelled, false)
+    assert.equal(extractUncensoredAnswer(parsed.choices[0].message), '窓の外では静かに雨が降っていた。二人は寄り添い、そっと指先を絡めた。')
+    assert.deepEqual(parsed.usage, {
+      prompt_tokens: 400,
+      prompt_tokens_details: { cached_tokens: 80 },
+      completion_tokens: 145
+    })
+
+    // 2. Soft timeout (softTimeoutMs: 0): must NOT cut early while still inside a >80-char thought block,
+    //    and once >=80 chars of real Japanese answer arrive, cuts cleanly at the last complete sentence.
+    let cutCancelled = false
+    const answer80Plus = '窓の外では冷たい雨が静かに降り続いており、薄暗い部屋のなかには二人だけの穏やかな時間がゆっくりと流れていた。彼女は少し照れたように微笑みながら、彼の温かい手をそっと握りしめた。そして彼は彼女の頬に手を伸ばしかけて途中の文'
+    const softCutRes = {
+      body: createSseBody([
+        { choices: [{ delta: { content: `<|channel>thought\n${'Thinking step in English before answering. '.repeat(6)}\n` } }] },
+        { choices: [{ delta: { content: `<channel|>${answer80Plus}` } }] },
+        { choices: [{ delta: { content: 'ここはキャンセル後なので読まれないチャンク。' } }] },
+        '[DONE]'
+      ], { chunkBytes: 64, onCancel: () => { cutCancelled = true } })
+    }
+    const softCutData = await readUncensoredResponse(softCutRes, { softTimeoutMs: 0 })
+    assert.equal(cutCancelled, true, 'cancelled stream only after >=80 chars of real answer arrived')
+    assert.equal(
+      softCutData.choices[0].message.content,
+      '窓の外では冷たい雨が静かに降り続いており、薄暗い部屋のなかには二人だけの穏やかな時間がゆっくりと流れていた。彼女は少し照れたように微笑みながら、彼の温かい手をそっと握りしめた。',
+      'thought block stripped and trailing incomplete sentence trimmed cleanly'
+    )
+
+    // 3. Stream network error mid-thought (>100 chars of thought, 0 chars of answer) MUST throw instead of returning partial thought
+    const midThoughtFailRes = {
+      body: createSseBody([
+        { choices: [{ delta: { content: `<|channel>thought\n${LEAKED_THOUGHT_REPORT}` } }] }
+      ], { chunkBytes: 40, failWith: new Error('socket hang up') })
+    }
+    await assert.rejects(
+      readUncensoredResponse(midThoughtFailRes),
+      /socket hang up/,
+      'does not salvage unclosed thinking text as a partial answer on stream drop'
+    )
+  })
+
+  test('sends sufficient max_tokens for thinking models, preserves R18 instruction when --r18 is stripped, and records streamed token usage', async (t) => {
+    t.mock.method(global.logger, 'info', () => {})
+    process.env.UNCENSORED_API_URL = 'https://gemma-heretic-12345-an.a.run.app/v1'
+    process.env.UNCENSORED_MODEL = 'gemma-4-31B-it-ARA-heretic.IQ4_XS.gguf'
+    process.env.UNCENSORED_R18_MODEL = 'gemma-4-31B-it-The-DECKARD-HERETIC-UNCENSORED-Thinking.Q4_K_M.gguf'
+
+    const payloads = []
+    global.fetch = async (url, init = {}) => {
+      if (/\/v1\/models$/.test(url)) {
+        return {
+          ok: true,
+          json: async () => ({
+            data: [
+              { id: 'gemma-4-31B-it-ARA-heretic.IQ4_XS', status: { value: 'loaded' } },
+              { id: 'gemma-4-31B-it-The-DECKARD-HERETIC-UNCENSORED-Thinking.Q4_K_M', status: { value: 'loaded' } }
+            ]
+          })
+        }
+      }
+      const b = JSON.parse(init.body)
+      payloads.push(b)
+      // Simulate a server that rejects stream_options on first call with 400 only when requested, else streams SSE
+      if (b.messages.at(-1).content.includes('400テスト') && payloads.length === 1) {
+        return { ok: false, status: 400, text: async () => 'unknown field' }
+      }
+      return {
+        ok: true,
+        body: createSseBody([
+          { choices: [{ delta: { reasoning_content: LEAKED_THOUGHT_REPORT } }] },
+          { choices: [{ delta: { content: '静かな夜、二人は熱い吐息を重ねながら抱き合った。' } }], timings: { prompt_n: 210, cache_n: 40, predicted_n: 190 } },
+          '[DONE]'
+        ])
+      }
+    }
+
+    // --r18 strips the flag from the user prompt ("恋愛小説を書いて"), so the system prompt must carry the R18 mode directive
+    const r18Reply = await draft({ request: '--r18 恋愛小説を書いて', channelName: 'general', guild, tools: quietTools, now: NOW })
+    assert.equal(r18Reply.text, '静かな夜、二人は熱い吐息を重ねながら抱き合った。')
+    assert.equal(payloads[0].model, 'gemma-4-31B-it-The-DECKARD-HERETIC-UNCENSORED-Thinking.Q4_K_M')
+    assert.ok(payloads[0].max_tokens >= 1536, `expected max_tokens >= 1536 so thinking models do not truncate mid-thought, got ${payloads[0].max_tokens}`)
+    assert.deepEqual(payloads[0].stream_options, { include_usage: true })
+    assert.doesNotMatch(payloads[0].messages.at(-1).content, /--r18/)
+    assert.match(payloads[0].messages[0].content, /成人向け・R18 モードを指定しています/)
+    assert.deepEqual(
+      tokenCounts()['mention-uncensored (gemma-4-31B-it-The-DECKARD-HERETIC-UNCENSORED-Thinking.Q4_K_M)'],
+      { calls: 1, prompt: 250, cached: 40, output: 190, thoughts: 0 }
+    )
+
+    // Non-R18 directive (--1) must NOT inject the R18-mandate instruction into a normal question
+    payloads.length = 0
+    await draft({ request: '--1 今日の晩ごはんの相談に乗って', channelName: 'general', guild, tools: quietTools, now: NOW })
+    assert.equal(payloads[0].model, 'gemma-4-31B-it-ARA-heretic.IQ4_XS')
+    assert.doesNotMatch(payloads[0].messages[0].content, /成人向け・R18 モードを指定しています/)
+
+    // HTTP 400 fallback (buildMinimalBody) must also keep max_tokens >= 1024 and R18 instruction
+    payloads.length = 0
+    await draft({ request: '--2 400テストの恋愛小説を書いて', channelName: 'general', guild, tools: quietTools, now: NOW })
+    assert.equal(payloads.length, 2)
+    assert.ok(payloads[1].max_tokens >= 1024, `minimal fallback max_tokens must still accommodate thinking blocks, got ${payloads[1].max_tokens}`)
+    assert.match(payloads[1].messages[0].content, /成人向け・R18 モードを指定しています/)
+  })
+
+  test('falls back from Model 2 to auto-discovered Model 1 via SSE when Model 2 truncates mid-thought on a cold-started reply thread', async (t) => {
+    t.mock.method(global.logger, 'info', () => {})
+    t.mock.method(global.logger, 'warn', () => {})
+    // Cold start: UNCENSORED_MODEL and UNCENSORED_R18_MODEL are NOT set in env; models exist only on router /v1/models
+    process.env.UNCENSORED_API_URL = 'https://gemma-heretic-12345-an.a.run.app/v1'
+
+    const attemptedModels = []
+    global.fetch = async (url, init = {}) => {
+      if (/\/v1\/models$/.test(url) && (!init.method || init.method === 'GET')) {
+        return {
+          ok: true,
+          json: async () => ({
+            data: [
+              { id: 'gemma-4-31B-it-ARA-heretic.IQ4_XS', status: { value: 'loaded' } },
+              { id: 'gemma-4-31B-it-The-DECKARD-HERETIC-UNCENSORED-Thinking.Q4_K_M', status: { value: 'loaded' } }
+            ]
+          })
+        }
+      }
+      const b = JSON.parse(init.body)
+      attemptedModels.push(b.model)
+      if (/Thinking/i.test(b.model)) {
+        // Model 2 spends its entire generation inside an unclosed thought block (exact production failure mode)
+        return {
+          ok: true,
+          body: createSseBody([
+            { choices: [{ delta: { reasoning_content: LEAKED_THOUGHT_REPORT } }] },
+            '[DONE]'
+          ])
+        }
+      }
+      return {
+        ok: true,
+        body: createSseBody([
+          { choices: [{ delta: { content: '雨音の響く部屋で、二人はそっと唇を重ねた。' } }] },
+          '[DONE]'
+        ])
+      }
+    }
+
+    // Simulate real eventTools.readThread output: footer stripped from text, model stored in lastBotModel
+    const result = await draft({
+      request: '恋愛小説を書いて',
+      referenced: {
+        text: '[2026-11-09T10:00:05.000Z] あなた（BOT）: 前の返事だよ',
+        othersText: '',
+        lastBotModel: 'gemma-4-31B-it-The-DECKARD-HERETIC-UNCENSORED-Thinking.Q4_K_M',
+        count: 1
+      },
+      channelName: 'general',
+      guild,
+      tools: quietTools,
+      now: NOW
+    })
+
+    assert.equal(result.text, '雨音の響く部屋で、二人はそっと唇を重ねた。')
+    assert.deepEqual(attemptedModels, [
+      'gemma-4-31B-it-The-DECKARD-HERETIC-UNCENSORED-Thinking.Q4_K_M',
+      'gemma-4-31B-it-The-DECKARD-HERETIC-UNCENSORED-Thinking.Q4_K_M',
+      'gemma-4-31B-it-ARA-heretic.IQ4_XS'
+    ], 'retries Model 2 once with minimal body, then falls back to auto-discovered Model 1')
   })
 })
