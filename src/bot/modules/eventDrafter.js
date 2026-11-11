@@ -8,6 +8,7 @@ const { gatewayURL, gatewayAuthHeaders, isGatewayConfigured, hasDefaultEndpoint,
 const { textChunks } = require('../utils/jsonItems')
 const geminiLoad = require('../utils/geminiLoad')
 const aiCache = require('../utils/aiCache')
+const sokudan = require('../utils/sokudan')
 const { currentUsage, recordTokens, addTokens, addModel, addFallback } = require('../utils/geminiUsage')
 
 // A fixed model, not an alias such as gemini-flash-latest: an explicit cache (below) is made for one
@@ -1016,6 +1017,13 @@ function isRefusalReply (text) {
   return typeof text === 'string' && REFUSAL_REPLY_PATTERN.test(text)
 }
 
+async function isRefusalReplyAsync (text) {
+  if (isRefusalReply(text)) return true
+  if (!sokudan.isUsable()) return false
+  const res = await sokudan.detectRefusalReply(text)
+  return !!res?.refused
+}
+
 const STORY_REQUEST_PATTERN = /小説|ss|物語|お話|ストーリー|シナリオ|脚本|創作|ライトノベル|ラノベ|地の文|官能|濡れ場|えっち|エッチ|続き|書いて|執筆/i
 
 function uncensoredSystemInstruction ({ compact = false, r18Mode = false } = {}) {
@@ -1816,6 +1824,8 @@ function adaptiveThinkingLevel (contents) {
     .replace(/[\s\p{P}\p{S}]/gu, '')
   const len = [...stripped].length
   if (len > 160) return 'high'
+  const sokudanLevel = contents?.sokudanDecision?.thinkingLevel
+  if (sokudanLevel && THINKING_LEVELS.includes(sokudanLevel)) return sokudanLevel
   const firstStep = !Array.isArray(contents) || contents.length <= 1
   if (len <= 12 && firstStep && !contents?.hasReference && !contents?.hasPictures && !QUESTION_OR_LOOKUP_PATTERN.test(raw)) {
     return 'minimal'
@@ -2113,7 +2123,7 @@ async function runAgent (contents, tools, submits = SUBMIT_DECLARATIONS) {
     contents.push(content)
     const calls = content.parts.filter(p => p.functionCall).map(p => p.functionCall)
     const submitted = calls.find(c => submits.some(d => d.name === c.name))
-    if (submitted && allowUncensored && !contents.uncensored && isUncensoredConfigured() && !contents.uncensoredFailed && submitted.name === SUBMIT_CHAT_DECLARATION.name && isRefusalReply(submitted.args?.text)) {
+    if (submitted && allowUncensored && !contents.uncensored && isUncensoredConfigured() && !contents.uncensoredFailed && submitted.name === SUBMIT_CHAT_DECLARATION.name && await isRefusalReplyAsync(submitted.args?.text)) {
       const fromModel = contents.deep ? deepModel() : replyModel(contents)
       const notes = extractLookupNotes(contents.slice(start))
       if (notes) contents.lookupNotes = notes
@@ -2298,6 +2308,23 @@ async function draft ({ request, referenced, recent = [], channelName, channelID
     const initial = replyModel(conversation.contents)
     const fallback = uncensoredModel(conversation.contents)
     global.logger?.info(`[GEMINI]: R18 detected in reply thread; ${fallback} answers instead of ${initial}`)
+  } else if (sokudan.isUsable()) {
+    const decision = await sokudan.classifyMentionRequest(request, referenced?.text)
+    if (decision) {
+      conversation.contents.sokudanDecision = decision
+      if (decision.isR18 && conversation.contents.uncensoredR18 && isUncensoredConfigured()) {
+        conversation.contents.uncensored = true
+        conversation.contents.directUncensored = true
+        conversation.contents.uncensoredR18Mode = true
+        const initial = replyModel(conversation.contents)
+        const fallback = uncensoredModel(conversation.contents)
+        global.logger?.info(`[SOKUDAN]: R18 intent detected in request (p=${decision.r18Prob.toFixed(2)}); ${fallback} answers instead of ${initial}`)
+      } else if (decision.needsDeep && deepModel() && !edit && decision.intent === 'chat') {
+        conversation.contents.deep = true
+        global.logger?.info(`[SOKUDAN]: Deep reasoning/creative request detected (p=${decision.deepProb.toFixed(2)}); routing directly to ${deepModel()}`)
+        await tools?.progress?.(DEEP_PROGRESS)
+      }
+    }
   }
   return check(conversation, await runAgent(conversation.contents, tools, conversation.submits))
 }
@@ -2335,8 +2362,22 @@ async function revise (conversation, correction) {
     const initial = replyModel(conversation.contents)
     const fallback = uncensoredModel(conversation.contents)
     global.logger?.info(`[GEMINI]: R18 detected in revision; ${fallback} answers instead of ${initial}`)
+  } else if (conversation.contents.uncensoredR18 !== false && !conversation.contents.uncensored && isUncensoredConfigured() && sokudan.isUsable()) {
+    const decision = await sokudan.classifyMentionRequest(correction)
+    if (decision) {
+      conversation.contents.sokudanDecision = decision
+      if (decision.isR18) {
+        conversation.contents.deep = false
+        conversation.contents.uncensored = true
+        conversation.contents.directUncensored = true
+        conversation.contents.uncensoredR18Mode = true
+        const initial = replyModel(conversation.contents)
+        const fallback = uncensoredModel(conversation.contents)
+        global.logger?.info(`[SOKUDAN]: R18 intent detected in revision (p=${decision.r18Prob.toFixed(2)}); ${fallback} answers instead of ${initial}`)
+      }
+    }
   }
   return check(conversation, await runAgent(conversation.contents, conversation.tools, conversation.submits))
 }
 
-module.exports = { THINKING_LEVELS, SERVICE_TIERS, defaultTaskConfig, resolveTaskConfig, replyTimeoutMs, flexUsable, SAFETY_SETTINGS, STRICT_SAFETY_SETTINGS, withSafetySettings, THINK_DEEPER_DECLARATION, HAND_OVER_R18_DECLARATION, isR18Text, isRefusalReply, STORY_REQUEST_PATTERN, adaptiveThinkingLevel, compactContentsForWire, compressToolResult, deepModel, DEFAULT_UNCENSORED_MODEL, normalizeLocalModelId, uncensoredModel, uncensoredR18Model, parseModelDirective, extractReferencedDirective, rememberThreadModel, isUncensoredDirective, applyModelDirective, isLocalUncensoredUrl, uncensoredEndpoint, isUncensoredConfigured, isUncensoredUsable, checkUncensoredConnection, startUncensoredCheck, uncensoredState, ensureUncensoredModelLoaded, cleanUncensoredContent, extractUncensoredAnswer, UNCENSORED_SAMPLING_PARAMS, readUncensoredResponse, callUncensored, REPLY_LENGTHS, DEFAULT_REPLY_LENGTH, PERSONAS, thinkingConfig, cachedPrefix, caches, purgedFor, promptVersion, lightModel, extractModel, DEFAULT_EXTRACT_MODEL, draft, revise, MAX_STEPS, isConfigured, toScheduledEvent, callGemini, geminiRequest, geminiSend, geminiStream, retryTimer, DEFAULT_GEMINI_MODEL, ENTITY_TYPES, GeminiError }
+module.exports = { THINKING_LEVELS, SERVICE_TIERS, defaultTaskConfig, resolveTaskConfig, replyTimeoutMs, flexUsable, SAFETY_SETTINGS, STRICT_SAFETY_SETTINGS, withSafetySettings, THINK_DEEPER_DECLARATION, HAND_OVER_R18_DECLARATION, isR18Text, isRefusalReply, isRefusalReplyAsync, STORY_REQUEST_PATTERN, adaptiveThinkingLevel, compactContentsForWire, compressToolResult, deepModel, DEFAULT_UNCENSORED_MODEL, normalizeLocalModelId, uncensoredModel, uncensoredR18Model, parseModelDirective, extractReferencedDirective, rememberThreadModel, isUncensoredDirective, applyModelDirective, isLocalUncensoredUrl, uncensoredEndpoint, isUncensoredConfigured, isUncensoredUsable, checkUncensoredConnection, startUncensoredCheck, uncensoredState, ensureUncensoredModelLoaded, cleanUncensoredContent, extractUncensoredAnswer, UNCENSORED_SAMPLING_PARAMS, readUncensoredResponse, callUncensored, REPLY_LENGTHS, DEFAULT_REPLY_LENGTH, PERSONAS, thinkingConfig, cachedPrefix, caches, purgedFor, promptVersion, lightModel, extractModel, DEFAULT_EXTRACT_MODEL, draft, revise, MAX_STEPS, isConfigured, toScheduledEvent, callGemini, geminiRequest, geminiSend, geminiStream, retryTimer, DEFAULT_GEMINI_MODEL, ENTITY_TYPES, GeminiError }

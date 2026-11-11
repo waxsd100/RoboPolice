@@ -26,6 +26,7 @@ module.exports = {
       require('../modules/twitchSync').startTwitch() // ...and the archives of the Twitch channels (TWITCH_CHANNELS)
       require('../modules/steamSync').startSteam() // ...and the games and reviews of the Steam accounts (STEAM_ACCOUNTS)
       require('../modules/eventDrafter').startUncensoredCheck() // ...and checks whether the uncensored fallback model (UNCENSORED_API_URL) responds
+      require('../utils/sokudan').startSokudanCheck() // ...and checks whether the Sokudan System-1 decision sidecar (SOKUDAN_URL) responds
       // ...and, once, finds the channel of messages stored before channels were recorded.
       require('../../miscellaneous/backfillChannels').startBackfill()
     }

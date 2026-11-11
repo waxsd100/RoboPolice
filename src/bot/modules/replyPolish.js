@@ -14,6 +14,7 @@
 const fs = require('fs')
 const path = require('path')
 const { callGemini, lightModel, thinkingConfig } = require('./eventDrafter')
+const sokudan = require('../utils/sokudan')
 
 const POCKET_DIR = path.resolve(__dirname, '..', '..', '..', 'vendor', 'yomiyasu-pocket')
 const TIMEOUT_MS = 30 * 1000
@@ -82,6 +83,13 @@ const DISCORD_NOTE = [
 async function polish (text, { guildID = null } = {}) {
   const before = String(text || '')
   if (!enabled() || !needsPolish(before)) return before
+  if (!AI_PATTERNS.test(before) && sokudan.isUsable()) {
+    const check = await sokudan.detectStiffAiReply(before)
+    if (check && check.needsPolish === false) {
+      global.logger?.info(`[POLISH]: Skipped polishing a natural reply in ${guildID} (sokudan score=${check.score?.toFixed?.(2) ?? 'n/a'}, p=${check.probability?.toFixed?.(2) ?? 'n/a'})`)
+      return before
+    }
+  }
   try {
     const m = lightModel()
     const content = await callGemini(m, {
@@ -102,4 +110,4 @@ async function polish (text, { guildID = null } = {}) {
   }
 }
 
-module.exports = { polish, needsPolish, enabled, rejected, keptParts, POCKET_DIR }
+module.exports = { polish, needsPolish, enabled, rejected, keptParts, AI_PATTERNS, POCKET_DIR }

@@ -5,7 +5,7 @@ const { createTools, describeServer, worthSearching, withServerEmojis, withServe
 const { embedQuery } = require('../utils/embeddings')
 const { withLinkCards } = require('../utils/linkCards')
 const { safeLinks } = require('../utils/linkSafety')
-const { reportInjection } = require('../utils/untrusted')
+const { reportInjectionAsync } = require('../utils/untrusted')
 const { picturesFor, attachedPictures } = require('../utils/foreignEmojis')
 const { EMBED_COLORS } = require('../utils/constants')
 const { hasStaffAccess } = require('../utils/staffAccess')
@@ -526,8 +526,8 @@ async function handle (message) {
         ? await tools.readThread(message.messageReference.channelID || message.channel.id, repliedTo).catch(e => ({ text: `（読めませんでした: ${e.message}）`, count: 1 }))
         : null
       // Attempts to take over the model are only logged: the prompt marks all of this as data.
-      reportInjection(`a mention by ${message.author.id} in ${guild.id}`, request)
-      if (referenced) reportInjection(`the conversation a mention in ${guild.id} replies to`, referenced.text)
+      await reportInjectionAsync(`a mention by ${message.author.id} in ${guild.id}`, request)
+      if (referenced) await reportInjectionAsync(`the conversation a mention in ${guild.id} replies to`, referenced.text)
       // Fetched fresh for every request. Without it the draft still works, just with less context.
       // Knowledge is looked up by what the members said, not the bot's own earlier replies.
       // What was just being talked about in the channel, as far as it bears on the request
