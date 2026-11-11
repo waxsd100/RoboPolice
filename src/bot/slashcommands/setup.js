@@ -1,10 +1,21 @@
 const Eris = require('eris')
 const { v4: uuidv4 } = require('uuid')
 const update = require('../../db/interfaces/postgres/update')
+const replySettings = require('../../db/interfaces/postgres/replySettings')
+const youtubeDB = require('../../db/interfaces/postgres/youtube')
+const emojiDescriber = require('../modules/emojiDescriber')
+const { DEFAULT_REPLY_LENGTH } = require('../modules/eventDrafter')
+const { rulesChannels } = require('../modules/serverRules')
 const { EMBED_COLORS, PRESET_EVENT_MAP, ALL_EVENTS } = require('../utils/constants')
 const { getEmbedFooter, getAuthorField } = require('../utils/embeds')
+const { formatPermissions, formatEventName } = require('../utils/displayLabels')
+const { isCreator } = require('../utils/creatorIds')
+const { hasStaffAccess } = require('../utils/staffAccess')
+const { isOwnerGuild } = require('../utils/priority')
 const { langOf, pick } = require('../utils/i18n')
 const { handleAssistantSetup } = require('../modules/assistantSetup')
+
+const MENU_TIMEOUT_MS = 5 * 60 * 1000
 
 // The Japanese text, or its English for an English client.
 const EN = {
@@ -80,19 +91,21 @@ const EN = {
   ログ出力チャンネル一覧: 'Logging channels',
   'このサーバーではどのイベントも記録していません。設定方法は `/setup` または `/help` をご覧ください。': 'No event is logged in this server. See `/setup` or `/help` to set it up.'
 }
+
 function say (interaction, ja) {
   return langOf(interaction) === 'en' && EN[ja] ? EN[ja] : ja
 }
 
 function missingPermissionsText (interaction, missing) {
-  const list = missing.map(p => `**${p}**`).join(', ')
+  const lang = langOf(interaction)
+  const list = formatPermissions(missing, lang)
   return pick(interaction, {
-    ja: `ログ設定を更新できません。このチャンネルで次の権限が必要です: ${list}。詳しくは \`/help guide: 使い方\` をご覧ください。`,
-    en: `Could not change the logging settings: the bot needs these permissions in this channel: ${list}. See \`/help guide: Usage\` for more.`
+    ja: `ログ設定を更新できません。このチャンネルで BOT に次の権限が必要です: ${list}。詳しくは \`/setup status\` または \`/help guide: 使い方・初期設定\` をご覧ください。`,
+    en: `Could not change the logging settings: the bot needs these permissions in this channel: ${list}. See \`/setup status\` or \`/help guide: Usage & Initial Setup\` for more.`
   })
 }
 
-async function returnMissingPerms (channelID, userID, events) {
+async function returnMissingPerms (channelID, userID) {
   const requiredPerms = ['manageWebhooks', 'viewAuditLog', 'viewChannel', 'sendMessages', 'embedLinks', 'readMessageHistory', 'useExternalEmojis']
   let logChannelPerms
   try {
@@ -102,6 +115,7 @@ async function returnMissingPerms (channelID, userID, events) {
     // missing channel
     return
   }
+  if (!logChannelPerms) return
   return requiredPerms.filter(rp => !logChannelPerms[rp])
 }
 
@@ -110,16 +124,74 @@ function nothingLogsHere (guildEvents, channelID) {
   return !Object.values(guildEvents).includes(channelID)
 }
 
-// A button that saves the menu as it is shown (the menu itself only answers when its choice changes).
-function saveRow (interaction, uuid) {
+function activeCountHere (guildEvents, channelID) {
+  return ALL_EVENTS.filter(eventName => guildEvents[eventName] === channelID).length
+}
+
+function channelLogField (interaction, guildEvents, channelID) {
+  const count = activeCountHere(guildEvents, channelID)
+  const otherChannels = new Set(Object.values(guildEvents).filter(id => id && id !== channelID)).size
+  const currentText = count === 0
+    ? pick(interaction, { ja: '未設定（まだ出力していません）', en: 'None yet' })
+    : count === ALL_EVENTS.length
+      ? pick(interaction, { ja: `すべてのイベント（${ALL_EVENTS.length} 種類）`, en: `All events (${ALL_EVENTS.length})` })
+      : pick(interaction, { ja: `${count} 種類のイベント`, en: `${count} event(s)` })
+  const otherText = otherChannels > 0
+    ? pick(interaction, { ja: `\n（ほか ${otherChannels} チャンネルでも出力中）`, en: `\n(${otherChannels} other channel(s) also log events)` })
+    : ''
+  return {
+    name: pick(interaction, { ja: 'このチャンネルの現在の出力', en: 'Currently logged here' }),
+    value: `${currentText}${otherText}`
+  }
+}
+
+function savedBanner (interaction, channelID, count) {
+  if (count > 0) {
+    return pick(interaction, {
+      ja: `✅ **保存しました** — <#${channelID}> に **${count} 種類**のイベントを記録します。`,
+      en: `✅ **Saved** — logging **${count}** event(s) to <#${channelID}>.`
+    })
+  }
+  return pick(interaction, {
+    ja: `✅ **保存しました** — <#${channelID}> へのログ出力を解除しました。`,
+    en: `✅ **Saved** — stopped logging to <#${channelID}>.`
+  })
+}
+
+// Action row with "Save as selected" first (for new channels where "All" is pre-selected) plus
+// navigation buttons to switch setup modes without re-typing /setup.
+function saveRow (interaction, uuid, mode) {
+  const switchLabel = mode === 'preset'
+    ? pick(interaction, { ja: '個別に選ぶ', en: 'Choose one by one' })
+    : pick(interaction, { ja: 'まとめて選ぶ', en: 'Choose in groups' })
   return {
     type: Eris.Constants.ComponentTypes.ACTION_ROW,
-    components: [{
-      type: Eris.Constants.ComponentTypes.BUTTON,
-      style: Eris.Constants.ButtonStyles.PRIMARY,
-      custom_id: `${uuid}:save`,
-      label: pick(interaction, { ja: 'このまま保存', en: 'Save as selected' })
-    }]
+    components: [
+      {
+        type: Eris.Constants.ComponentTypes.BUTTON,
+        style: Eris.Constants.ButtonStyles.PRIMARY,
+        custom_id: `${uuid}:save`,
+        label: pick(interaction, { ja: 'このまま保存', en: 'Save as selected' })
+      },
+      {
+        type: Eris.Constants.ComponentTypes.BUTTON,
+        style: Eris.Constants.ButtonStyles.SECONDARY,
+        custom_id: `${uuid}:switch`,
+        label: switchLabel
+      },
+      {
+        type: Eris.Constants.ComponentTypes.BUTTON,
+        style: Eris.Constants.ButtonStyles.SECONDARY,
+        custom_id: `${uuid}:assistant`,
+        label: pick(interaction, { ja: 'AIの設定', en: 'AI settings' })
+      },
+      {
+        type: Eris.Constants.ComponentTypes.BUTTON,
+        style: Eris.Constants.ButtonStyles.SECONDARY,
+        custom_id: `${uuid}:status`,
+        label: pick(interaction, { ja: '設定状況を確認', en: 'Setup status' })
+      }
+    ]
   }
 }
 
@@ -130,25 +202,75 @@ function saveHint (interaction) {
   })
 }
 
-// Waits for a choice in the menu or the save button; resolves like the menu's interaction (the
-// button gives what the menu shows as chosen).
-async function awaitChoice (uuid, userID, components) {
+// Waits for a choice in the menu, the save button, or one of the mode-switch buttons.
+async function awaitSetupAction (uuid, userID, components) {
   const { awaitCustomID, cancelCustomID } = require('../events/interactionCreate')
   const chosen = components[0].components[0].options.filter(o => o.default).map(o => o.value)
+  const ids = [uuid, `${uuid}:save`, `${uuid}:switch`, `${uuid}:assistant`, `${uuid}:status`]
   try {
     return await Promise.any([
-      awaitCustomID(uuid, userID),
-      awaitCustomID(`${uuid}:save`, userID).then(() => ({ data: { values: chosen } }))
+      awaitCustomID(uuid, userID, MENU_TIMEOUT_MS).then(res => ({ action: 'select', values: res?.data?.values || [] })),
+      awaitCustomID(`${uuid}:save`, userID, MENU_TIMEOUT_MS).then(() => ({ action: 'select', values: chosen })),
+      awaitCustomID(`${uuid}:switch`, userID, MENU_TIMEOUT_MS).then(() => ({ action: 'switch' })),
+      awaitCustomID(`${uuid}:assistant`, userID, MENU_TIMEOUT_MS).then(() => ({ action: 'assistant' })),
+      awaitCustomID(`${uuid}:status`, userID, MENU_TIMEOUT_MS).then(() => ({ action: 'status' }))
     ])
   } finally {
-    cancelCustomID(uuid)
-    cancelCustomID(`${uuid}:save`)
+    for (const id of ids) cancelCustomID(id)
   }
 }
 
-async function handlePresetSetup (interaction, recursionUUID) {
+function mayCheckOrChangeLogs (interaction) {
+  const member = interaction.member
+  if (isCreator(member.user.id)) return true
+  const guild = global.bot.guilds?.get?.(interaction.guildID)
+  if (guild && (guild.ownerID === member.user.id || hasStaffAccess(member.roles, guild))) return true
+  const perms = interaction.channel.permissionsOf(member.user.id)?.json || {}
+  return Boolean(perms.manageWebhooks && perms.manageChannels && perms.viewAuditLog)
+}
+
+function mayViewStatus (interaction) {
+  if (mayCheckOrChangeLogs(interaction)) return true
+  const perms = interaction.channel.permissionsOf(interaction.member.user.id)?.json || {}
+  return Boolean(perms.manageGuild || perms.manageChannels || perms.manageWebhooks || perms.viewAuditLog || perms.administrator)
+}
+
+function groupLogsByChannel (guildSettings, lang) {
+  const raw = guildSettings?.getEventLogRaw?.() || {}
+  const byChannel = new Map()
+  for (const eventName of ALL_EVENTS) {
+    const channelId = raw[eventName]
+    if (!channelId) continue
+    if (!byChannel.has(channelId)) byChannel.set(channelId, [])
+    byChannel.get(channelId).push(eventName)
+  }
+  const lines = []
+  for (const [channelId, events] of byChannel.entries()) {
+    if (events.length === ALL_EVENTS.length) {
+      lines.push(lang === 'en'
+        ? `<#${channelId}> — **All events (${ALL_EVENTS.length})**`
+        : `<#${channelId}> — **すべてのイベント（${ALL_EVENTS.length} 種類）**`)
+    } else {
+      const names = events.map(e => formatEventName(e, lang))
+      const shown = names.slice(0, 8).join(lang === 'en' ? ', ' : '、')
+      const more = names.length > 8
+        ? (lang === 'en' ? ` …and ${names.length - 8} more` : ` …ほか ${names.length - 8} 件`)
+        : ''
+      lines.push(lang === 'en'
+        ? `<#${channelId}> — **${events.length} event(s)**: ${shown}${more}`
+        : `<#${channelId}> — **${events.length} 種類**: ${shown}${more}`)
+    }
+  }
+  return lines
+}
+
+async function handlePresetSetup (interaction, recursionOrOpts) {
+  const opts = typeof recursionOrOpts === 'string'
+    ? { recursionUUID: recursionOrOpts }
+    : (recursionOrOpts || {})
   const guildEvents = global.bot.guildSettingsCache[interaction.guildID].getEventLogRaw()
-  const followupUUID = recursionUUID || uuidv4()
+  const followupUUID = opts.recursionUUID || uuidv4()
+  const asEdit = Boolean(opts.recursionUUID || opts.asEdit)
   let components
   try {
     components = [{
@@ -205,17 +327,19 @@ async function handlePresetSetup (interaction, recursionUUID) {
           default: interaction.channel.id === guildEvents.voiceChannelLeave && interaction.channel.id === guildEvents.voiceChannelSwitch && interaction.channel.id === guildEvents.voiceStateUpdate && interaction.channel.id === guildEvents.voiceChannelJoin
         }]
       }]
-    }, saveRow(interaction, followupUUID)]
+    }, saveRow(interaction, followupUUID, 'preset')]
+    const intro = `${say(interaction, '下の選択メニューから、**このチャンネル**へ出力するイベントのプリセットを選んでください。詳しい使い方は `/help guide: Usage` と `/help` をご覧ください。')}\n\n${saveHint(interaction)}`
     const setupEmbed = {
       title: say(interaction, 'ログ設定ユーティリティ'),
-      description: `${say(interaction, '下の選択メニューから、**このチャンネル**へ出力するイベントのプリセットを選んでください。詳しい使い方は `/help guide: Usage` と `/help` をご覧ください。')}\n\n${saveHint(interaction)}`,
-      color: EMBED_COLORS.PURPLED_BLUE,
+      description: opts.savedNote ? `${opts.savedNote}\n\n${intro}` : intro,
+      color: opts.savedNote ? EMBED_COLORS.GREEN : EMBED_COLORS.PURPLED_BLUE,
+      fields: [channelLogField(interaction, guildEvents, interaction.channel.id)],
       thumbnail: {
         url: interaction.member.user.dynamicAvatarURL(null, 64)
       }
     }
-    if (recursionUUID) {
-      await interaction.editOriginalMessage({ embeds: [setupEmbed], flags: Eris.Constants.MessageFlags.EPHEMERAL, components })
+    if (asEdit) {
+      await interaction.editOriginalMessage({ content: '', embeds: [setupEmbed], flags: Eris.Constants.MessageFlags.EPHEMERAL, components })
     } else {
       await interaction.createMessage({ embeds: [setupEmbed], flags: Eris.Constants.MessageFlags.EPHEMERAL, components })
     }
@@ -224,20 +348,23 @@ async function handlePresetSetup (interaction, recursionUUID) {
     return
   }
 
-  let buttonResponse
-
+  let result
   try {
-    buttonResponse = await awaitChoice(followupUUID, interaction.member.user.id, components)
+    result = await awaitSetupAction(followupUUID, interaction.member.user.id, components)
   } catch (_) {
     return
   }
+
+  if (result.action === 'switch') return handleIndividualSetup(interaction, { asEdit: true })
+  if (result.action === 'assistant') return handleAssistantSetup(interaction, { asEdit: true })
+  if (result.action === 'status') return handleStatusSetup(interaction, { asEdit: true })
 
   let eventsToLog = []
   let eventsToRemove = []
 
   for (const presetName in PRESET_EVENT_MAP) {
     for (const eventName of PRESET_EVENT_MAP[presetName]) {
-      if (buttonResponse.data.values?.includes(presetName)) {
+      if (result.values.includes(presetName)) {
         if (presetName === 'all') {
           eventsToLog = ALL_EVENTS
           eventsToRemove = []
@@ -251,7 +378,7 @@ async function handlePresetSetup (interaction, recursionUUID) {
     }
   }
 
-  const missingPermissions = await returnMissingPerms(interaction.channel.id, global.bot.user.id, eventsToLog)
+  const missingPermissions = await returnMissingPerms(interaction.channel.id, global.bot.user.id)
   if (!missingPermissions) return // null is returned if the log channel cannot be found
   else if (missingPermissions.length !== 0) {
     await interaction.editOriginalMessage({
@@ -264,6 +391,7 @@ async function handlePresetSetup (interaction, recursionUUID) {
         footer: getEmbedFooter(global.bot.user),
         author: getAuthorField(interaction.member.user)
       }],
+      components: [],
       flags: Eris.Constants.MessageFlags.EPHEMERAL
     })
     return
@@ -276,12 +404,20 @@ async function handlePresetSetup (interaction, recursionUUID) {
     global.logger.error('Setup failure to update guild document settings for guild', interaction.guildID, e)
     return
   }
-  handlePresetSetup(interaction, followupUUID)
+  const uniqueLogged = [...new Set(eventsToLog)].length
+  return handlePresetSetup(interaction, {
+    recursionUUID: followupUUID,
+    savedNote: savedBanner(interaction, interaction.channel.id, uniqueLogged)
+  })
 }
 
-async function handleIndividualSetup (interaction, recursionUUID) {
+async function handleIndividualSetup (interaction, recursionOrOpts) {
+  const opts = typeof recursionOrOpts === 'string'
+    ? { recursionUUID: recursionOrOpts }
+    : (recursionOrOpts || {})
   const guildEvents = global.bot.guildSettingsCache[interaction.guildID].getEventLogRaw()
-  const followupUUID = recursionUUID || uuidv4()
+  const followupUUID = opts.recursionUUID || uuidv4()
+  const asEdit = Boolean(opts.recursionUUID || opts.asEdit)
   let components
   try {
     components = [{
@@ -289,7 +425,7 @@ async function handleIndividualSetup (interaction, recursionUUID) {
       components: [{
         type: Eris.Constants.ComponentTypes.SELECT_MENU,
         custom_id: followupUUID,
-        max_values: 24,
+        max_values: 25,
         min_values: 0,
         options: [{
           label: say(interaction, 'すべて'),
@@ -301,194 +437,137 @@ async function handleIndividualSetup (interaction, recursionUUID) {
           label: say(interaction, 'チャンネル作成'),
           description: say(interaction, 'チャンネルが作成されたとき'),
           value: 'channelCreate',
-          default: guildEvents
-            .channelCreate ===
-            interaction.channel.id
+          default: guildEvents.channelCreate === interaction.channel.id
         },
         {
           label: say(interaction, 'チャンネル更新'),
           description: say(interaction, 'チャンネル設定が変更されたとき'),
           value: 'channelUpdate',
-          default: guildEvents
-            .channelUpdate ===
-            interaction.channel.id
+          default: guildEvents.channelUpdate === interaction.channel.id
         },
         {
           label: say(interaction, 'チャンネル削除'),
           description: say(interaction, 'チャンネルが削除されたとき'),
           value: 'channelDelete',
-          default: guildEvents
-            .channelDelete ===
-            interaction.channel.id
+          default: guildEvents.channelDelete === interaction.channel.id
         },
         {
           label: say(interaction, 'メンバーBAN'),
           description: say(interaction, 'メンバーがBANされたとき'),
           value: 'guildBanAdd',
-          default: guildEvents
-            .guildBanAdd ===
-            interaction.channel.id
+          default: guildEvents.guildBanAdd === interaction.channel.id
         },
         {
           label: say(interaction, 'メンバーBAN解除'),
           description: say(interaction, 'メンバーのBANが解除されたとき'),
           value: 'guildBanRemove',
-          default: guildEvents
-            .guildBanRemove ===
-            interaction.channel.id
+          default: guildEvents.guildBanRemove === interaction.channel.id
         },
         {
           label: say(interaction, 'ロール作成'),
           description: say(interaction, 'ロールが作成されたとき'),
           value: 'guildRoleCreate',
-          default: guildEvents
-            .guildRoleCreate ===
-            interaction.channel.id
+          default: guildEvents.guildRoleCreate === interaction.channel.id
         },
         {
           label: say(interaction, 'ロール削除'),
           description: say(interaction, 'ロールが削除されたとき'),
           value: 'guildRoleDelete',
-          default: guildEvents
-            .guildRoleDelete ===
-            interaction.channel.id
+          default: guildEvents.guildRoleDelete === interaction.channel.id
         },
         {
           label: say(interaction, 'ロール更新'),
           description: say(interaction, 'ロールが更新されたとき'),
           value: 'guildRoleUpdate',
-          default: guildEvents
-            .guildRoleUpdate ===
-            interaction.channel.id
+          default: guildEvents.guildRoleUpdate === interaction.channel.id
         },
         {
           label: say(interaction, 'サーバー設定変更'),
-          description:
-            say(interaction, 'サーバー設定が変更されたとき'),
-
+          description: say(interaction, 'サーバー設定が変更されたとき'),
           value: 'guildUpdate',
-          default: guildEvents
-            .guildUpdate ===
-            interaction.channel.id
+          default: guildEvents.guildUpdate === interaction.channel.id
         },
         {
           label: say(interaction, 'サーバー絵文字変更'),
-          description:
-            say(interaction, '絵文字が追加・削除されたとき'),
+          description: say(interaction, '絵文字が追加・削除されたとき'),
           value: 'guildEmojisUpdate',
-          default: guildEvents
-            .guildEmojisUpdate ===
-            interaction.channel.id
+          default: guildEvents.guildEmojisUpdate === interaction.channel.id
         },
         {
           label: say(interaction, 'メッセージ削除'),
-          description:
-            say(interaction, 'メッセージが1件削除されたとき'),
-
+          description: say(interaction, 'メッセージが1件削除されたとき'),
           value: 'messageDelete',
-          default: guildEvents
-            .messageDelete ===
-            interaction.channel.id
+          default: guildEvents.messageDelete === interaction.channel.id
         },
         {
           label: say(interaction, 'メッセージ一括削除'),
-          description:
-            say(interaction, 'メッセージの一括削除やBANに伴う削除が行われたとき'),
+          description: say(interaction, 'メッセージの一括削除やBANに伴う削除が行われたとき'),
           value: 'messageDeleteBulk',
-          default: guildEvents
-            .messageDeleteBulk ===
-            interaction.channel.id
+          default: guildEvents.messageDeleteBulk === interaction.channel.id
         },
         {
           label: say(interaction, 'メッセージ編集'),
           description: say(interaction, 'メッセージが編集されたとき'),
           value: 'messageUpdate',
-          default: guildEvents
-            .messageUpdate ===
-            interaction.channel.id
+          default: guildEvents.messageUpdate === interaction.channel.id
         },
         {
           label: say(interaction, 'メンバー参加'),
-          description:
-            say(interaction, 'メンバーがサーバーに参加したとき'),
+          description: say(interaction, 'メンバーがサーバーに参加したとき'),
           value: 'guildMemberAdd',
-          default: guildEvents
-            .guildMemberAdd ===
-            interaction.channel.id
+          default: guildEvents.guildMemberAdd === interaction.channel.id
         },
         {
           label: say(interaction, 'メンバーキック'),
           description: say(interaction, 'メンバーがキックされたとき'),
           value: 'guildMemberKick',
-          default: guildEvents
-            .guildMemberKick ===
-            interaction.channel.id
+          default: guildEvents.guildMemberKick === interaction.channel.id
         },
         {
           label: say(interaction, 'メンバー退出'),
-          description:
-            say(interaction, 'メンバーがサーバーから退出したとき'),
+          description: say(interaction, 'メンバーがサーバーから退出したとき'),
           value: 'guildMemberRemove',
-          default: guildEvents
-            .guildMemberRemove ===
-            interaction.channel.id
+          default: guildEvents.guildMemberRemove === interaction.channel.id
         },
         {
           label: say(interaction, 'ニックネーム変更'),
-          description:
-            say(interaction, 'メンバーがニックネームを変更したとき（条件付きで記録されます）'),
+          description: say(interaction, 'メンバーがニックネームを変更したとき（条件付きで記録されます）'),
           value: 'guildMemberNickUpdate',
-          default: guildEvents
-            .guildMemberNickUpdate ===
-            interaction.channel.id
+          default: guildEvents.guildMemberNickUpdate === interaction.channel.id
         },
         {
           label: say(interaction, 'ロール付与・剥奪'),
-          description:
-            say(interaction, 'メンバーがロールを付与・剥奪されたとき'),
+          description: say(interaction, 'メンバーがロールを付与・剥奪されたとき'),
           value: 'guildMemberUpdate',
-          default: guildEvents
-            .guildMemberUpdate ===
-            interaction.channel.id
+          default: guildEvents.guildMemberUpdate === interaction.channel.id
         },
         {
           label: say(interaction, 'メンバー認証通過'),
-          description:
-            say(interaction, 'メンバーがコミュニティのルールに同意したとき'),
+          description: say(interaction, 'メンバーがコミュニティのルールに同意したとき'),
           value: 'guildMemberVerify',
-          default: guildEvents
-            .guildMemberVerify ===
-            interaction.channel.id
+          default: guildEvents.guildMemberVerify === interaction.channel.id
         },
         {
           label: say(interaction, 'ボイス退出'),
-          description:
-            say(interaction, 'メンバーがボイスチャンネルから退出したとき'),
+          description: say(interaction, 'メンバーがボイスチャンネルから退出したとき'),
           value: 'voiceChannelLeave',
-          default: guildEvents
-            .voiceChannelLeave ===
-            interaction.channel.id
+          default: guildEvents.voiceChannelLeave === interaction.channel.id
         },
         {
           label: say(interaction, 'ボイス参加'),
-          description:
-            say(interaction, 'メンバーがボイスチャンネルに参加したとき'),
+          description: say(interaction, 'メンバーがボイスチャンネルに参加したとき'),
           value: 'voiceChannelJoin',
-          default: guildEvents.voiceChannelJoin ===
-            interaction.channel.id
+          default: guildEvents.voiceChannelJoin === interaction.channel.id
         },
         {
           label: say(interaction, 'ボイス移動'),
-          description:
-            say(interaction, 'メンバーがボイスチャンネルを移動したとき'),
+          description: say(interaction, 'メンバーがボイスチャンネルを移動したとき'),
           value: 'voiceChannelSwitch',
-          default: guildEvents.voiceChannelSwitch ===
-            interaction.channel.id
+          default: guildEvents.voiceChannelSwitch === interaction.channel.id
         },
         {
           label: say(interaction, 'ボイスミュート'),
-          description:
-            say(interaction, 'メンバーがミュート・スピーカーミュートされたとき'),
+          description: say(interaction, 'メンバーがミュート・スピーカーミュートされたとき'),
           value: 'voiceStateUpdate',
           default: guildEvents.voiceStateUpdate === interaction.channel.id
         },
@@ -497,45 +576,49 @@ async function handleIndividualSetup (interaction, recursionUUID) {
           description: say(interaction, 'メンバーがカスタムステータスを変更したとき'),
           value: 'presenceUpdate',
           default: guildEvents.presenceUpdate === interaction.channel.id
-        }
-        ]
+        }]
       }]
-    }, saveRow(interaction, followupUUID)]
+    }, saveRow(interaction, followupUUID, 'individual')]
+    const intro = `${say(interaction, '下の選択メニューから、**このチャンネル**へ出力するイベントを個別に選んでください。詳しい使い方は `/help guide: Usage` と `/help` をご覧ください。')}\n\n${saveHint(interaction)}`
     const setupEmbed = {
       title: say(interaction, 'ログ設定ユーティリティ'),
-      description: `${say(interaction, '下の選択メニューから、**このチャンネル**へ出力するイベントを個別に選んでください。詳しい使い方は `/help guide: Usage` と `/help` をご覧ください。')}\n\n${saveHint(interaction)}`,
-      color: EMBED_COLORS.PURPLED_BLUE,
+      description: opts.savedNote ? `${opts.savedNote}\n\n${intro}` : intro,
+      color: opts.savedNote ? EMBED_COLORS.GREEN : EMBED_COLORS.PURPLED_BLUE,
+      fields: [channelLogField(interaction, guildEvents, interaction.channel.id)],
       thumbnail: {
         url: interaction.member.user.dynamicAvatarURL(null, 64)
       }
     }
-    if (recursionUUID) {
-      await interaction.editOriginalMessage({ embeds: [setupEmbed], flags: Eris.Constants.MessageFlags.EPHEMERAL, components })
+    if (asEdit) {
+      await interaction.editOriginalMessage({ content: '', embeds: [setupEmbed], flags: Eris.Constants.MessageFlags.EPHEMERAL, components })
     } else {
       await interaction.createMessage({ embeds: [setupEmbed], flags: Eris.Constants.MessageFlags.EPHEMERAL, components })
     }
   } catch (e) {
-    global.logger.error('Error handling preset menu', e)
+    global.logger.error('Error handling individual event menu', e)
     return
   }
 
-  let buttonResponse
-
+  let result
   try {
-    buttonResponse = await awaitChoice(followupUUID, interaction.member.user.id, components)
+    result = await awaitSetupAction(followupUUID, interaction.member.user.id, components)
   } catch (_) {
     return
   }
 
+  if (result.action === 'switch') return handlePresetSetup(interaction, { asEdit: true })
+  if (result.action === 'assistant') return handleAssistantSetup(interaction, { asEdit: true })
+  if (result.action === 'status') return handleStatusSetup(interaction, { asEdit: true })
+
   let eventsToLog = []
   let eventsToRemove = []
 
-  if (buttonResponse.data.values?.includes('all')) {
+  if (result.values.includes('all')) {
     eventsToLog = ALL_EVENTS
     eventsToRemove = []
   } else {
     for (const eventName of ALL_EVENTS) {
-      if (buttonResponse.data.values?.includes(eventName)) {
+      if (result.values.includes(eventName)) {
         eventsToLog.push(eventName)
       } else if (guildEvents[eventName] === interaction.channel.id) {
         eventsToRemove.push(eventName)
@@ -543,7 +626,7 @@ async function handleIndividualSetup (interaction, recursionUUID) {
     }
   }
 
-  const missingPermissions = await returnMissingPerms(interaction.channel.id, global.bot.user.id, eventsToLog)
+  const missingPermissions = await returnMissingPerms(interaction.channel.id, global.bot.user.id)
   if (!missingPermissions) return // null is returned if the log channel cannot be found
   else if (missingPermissions.length !== 0) {
     await interaction.editOriginalMessage({
@@ -556,6 +639,7 @@ async function handleIndividualSetup (interaction, recursionUUID) {
         footer: getEmbedFooter(global.bot.user),
         author: getAuthorField(interaction.member.user)
       }],
+      components: [],
       flags: Eris.Constants.MessageFlags.EPHEMERAL
     })
     return
@@ -568,26 +652,369 @@ async function handleIndividualSetup (interaction, recursionUUID) {
     global.logger.error('Setup failure to update guild document settings for guild', interaction.guildID, e)
     return
   }
-  handleIndividualSetup(interaction, followupUUID)
+  return handleIndividualSetup(interaction, {
+    recursionUUID: followupUUID,
+    savedNote: savedBanner(interaction, interaction.channel.id, eventsToLog.length)
+  })
 }
 
 async function handleListLogSetup (interaction) {
-  const logLines = []
-  for (const eventName of ALL_EVENTS) {
-    if (global.bot.guildSettingsCache[interaction.guildID].getEventLogID(eventName)) {
-      const logIdForEvent = global.bot.guildSettingsCache[interaction.guildID].getEventLogID(eventName)
-      logLines.push(`${eventName}: <#${logIdForEvent}> (${logIdForEvent})`)
+  const lang = langOf(interaction)
+  const guildSettings = global.bot.guildSettingsCache[interaction.guildID]
+  const grouped = groupLogsByChannel(guildSettings, lang)
+  const ignored = guildSettings?.ignoredChannels || []
+  const logBots = Boolean(guildSettings?.isLogBots?.())
+  const fields = [
+    {
+      name: pick(interaction, { ja: 'ログ対象外のチャンネル（/ignorechannel）', en: 'Ignored channels (/ignorechannel)' }),
+      value: ignored.length ? ignored.map(id => `<#${id}>`).join('・') : pick(interaction, { ja: 'なし', en: 'None' }),
+      inline: true
+    },
+    {
+      name: pick(interaction, { ja: '他のBOTの記録（/logbots）', en: 'Other bots\' messages (/logbots)' }),
+      value: logBots
+        ? pick(interaction, { ja: 'オン（編集・削除も記録）', en: 'On (edits & deletions logged)' })
+        : pick(interaction, { ja: 'オフ（初期値）', en: 'Off (default)' }),
+      inline: true
     }
-  }
+  ]
   interaction.createMessage({
     embeds: [{
       title: say(interaction, 'ログ出力チャンネル一覧'),
       author: getAuthorField(interaction.member.user),
-      description: logLines.length !== 0 ? logLines.join('\n') : say(interaction, 'このサーバーではどのイベントも記録していません。設定方法は `/setup` または `/help` をご覧ください。'),
-      color: EMBED_COLORS.PURPLED_BLUE
+      description: grouped.length !== 0
+        ? grouped.join('\n')
+        : say(interaction, 'このサーバーではどのイベントも記録していません。設定方法は `/setup` または `/help` をご覧ください。'),
+      fields,
+      color: EMBED_COLORS.PURPLED_BLUE,
+      footer: getEmbedFooter(global.bot.user)
     }],
     flags: Eris.Constants.MessageFlags.EPHEMERAL
   }).catch(() => {})
+}
+
+function buildPermissionCheckField (interaction, missingInChannel) {
+  const lang = langOf(interaction)
+  const guild = global.bot.guilds?.get?.(interaction.guildID)
+  const me = guild?.members?.get?.(global.bot.user.id)
+  const hasInvitePerms = Boolean(me?.permissions?.has?.('manageGuild') && me?.permissions?.has?.('manageChannels'))
+  const hasManageEvents = Boolean(me?.permissions?.has?.('manageEvents'))
+  const channelCheck = !missingInChannel || missingInChannel.length === 0
+    ? pick(interaction, {
+      ja: `✅ **このチャンネルへのログ出力**: 準備OK（<#${interaction.channel.id}>）`,
+      en: `✅ **Logging to this channel**: Ready (<#${interaction.channel.id}>)`
+    })
+    : pick(interaction, {
+      ja: `⚠️ **このチャンネルへのログ出力**: <#${interaction.channel.id}> で ${formatPermissions(missingInChannel, lang)} が不足しています`,
+      en: `⚠️ **Logging to this channel**: Missing ${formatPermissions(missingInChannel, lang)} in <#${interaction.channel.id}>`
+    })
+  const inviteCheck = hasInvitePerms
+    ? pick(interaction, { ja: '✅ **招待リンク追跡**: 有効', en: '✅ **Invite tracking**: Ready' })
+    : pick(interaction, {
+      ja: '💡 **招待リンク追跡**: 未付与（使う場合は BOT に「**サーバーの管理**」「**チャンネルの管理**」が必要）',
+      en: '💡 **Invite tracking**: Optional (grant **Manage Server** & **Manage Channels** to track join invites)'
+    })
+  const eventCheck = hasManageEvents
+    ? pick(interaction, { ja: '✅ **イベント作成・配信自動登録**: 有効', en: '✅ **Scheduled events & stream auto-events**: Ready' })
+    : pick(interaction, {
+      ja: '💡 **イベント作成・配信自動登録**: 未付与（使う場合は BOT に「**イベントの管理**」が必要）',
+      en: '💡 **Scheduled events & stream auto-events**: Optional (grant **Manage Events** to use)'
+    })
+  return [channelCheck, inviteCheck, eventCheck].join('\n')
+}
+
+function creatorMenuRow (interaction, customId) {
+  return {
+    type: Eris.Constants.ComponentTypes.ACTION_ROW,
+    components: [{
+      type: Eris.Constants.ComponentTypes.SELECT_MENU,
+      custom_id: customId,
+      placeholder: pick(interaction, {
+        ja: '🔧 開発者設定を切り替え（ベクトル化・セーフティ・デバッグ表示）',
+        en: '🔧 Developer settings (embeddings, safety, debug footer)'
+      }),
+      min_values: 1,
+      max_values: 1,
+      options: [
+        {
+          label: pick(interaction, { ja: 'ベクトル化: オン（メッセージ＋絵文字）', en: 'Embeddings: On (messages & emojis)' }),
+          description: pick(interaction, { ja: 'このサーバーでメッセージと絵文字のベクトル化を有効にする', en: 'Enable message and emoji embeddings here' }),
+          value: 'embed:on'
+        },
+        {
+          label: pick(interaction, { ja: 'ベクトル化: オフ（メッセージ＋絵文字）', en: 'Embeddings: Off (messages & emojis)' }),
+          description: pick(interaction, { ja: 'このサーバーでメッセージと絵文字のベクトル化を停止する', en: 'Disable message and emoji embeddings here' }),
+          value: 'embed:off'
+        },
+        {
+          label: pick(interaction, { ja: 'ベクトル化: 既定に戻す', en: 'Embeddings: Reset to default' }),
+          description: pick(interaction, { ja: 'オーナーサーバーはオン、それ以外はオフの既定に戻す', en: 'On for owner servers, off otherwise' }),
+          value: 'embed:default'
+        },
+        {
+          label: pick(interaction, { ja: 'セーフティ: 厳格（フィルタON・R18引き継ぎOFF）', en: 'Safety: Strict (filter ON, R18 OFF)' }),
+          description: pick(interaction, { ja: 'Geminiセーフティフィルタを有効にし、R18引き継ぎを無効にする', en: 'Enable Gemini safety filter and disable uncensored handover' }),
+          value: 'safety:strict'
+        },
+        {
+          label: pick(interaction, { ja: 'セーフティ: 緩和（フィルタOFF・R18引き継ぎON）', en: 'Safety: Relaxed (filter OFF, R18 ON)' }),
+          description: pick(interaction, { ja: 'セーフティフィルタをオフにし、R18モデル引き継ぎを有効にする', en: 'Disable Gemini safety filter and enable uncensored handover' }),
+          value: 'safety:relaxed'
+        },
+        {
+          label: pick(interaction, { ja: 'セーフティ: 既定に戻す', en: 'Safety: Reset to default' }),
+          description: pick(interaction, { ja: 'オーナーサーバーは緩和、それ以外は厳格の既定に戻す', en: 'Relaxed for owner servers, strict otherwise' }),
+          value: 'safety:default'
+        },
+        {
+          label: pick(interaction, { ja: 'デバッグフッター: オン', en: 'Debug footer: On' }),
+          description: pick(interaction, { ja: '返信の末尾にモデル名とトークン使用量を表示する', en: 'Show model and token usage under replies' }),
+          value: 'debug:on'
+        },
+        {
+          label: pick(interaction, { ja: 'デバッグフッター: オフ', en: 'Debug footer: Off' }),
+          description: pick(interaction, { ja: '返信末尾のデバッグ表示を非表示にする', en: 'Hide model and token usage footer' }),
+          value: 'debug:off'
+        }
+      ]
+    }]
+  }
+}
+
+async function applyCreatorChoice (interaction, guildID, choice) {
+  const guild = global.bot.guilds?.get?.(guildID)
+  if (choice === 'embed:on' || choice === 'embed:off' || choice === 'embed:default') {
+    const val = choice === 'embed:default' ? null : choice === 'embed:on'
+    await replySettings.setEmbedding(guildID, 'all', val)
+    if (val === true || (val === null && isOwnerGuild(guildID))) {
+      if (guild) emojiDescriber.schedule(guild)
+    }
+    return pick(interaction, { ja: '✅ ベクトル化（Embedding）設定を更新しました。', en: '✅ Updated embedding settings.' })
+  }
+  if (choice === 'safety:strict' || choice === 'safety:relaxed' || choice === 'safety:default') {
+    const val = choice === 'safety:default' ? null : choice === 'safety:strict'
+    await replySettings.setSafety(guildID, 'all', val)
+    return pick(interaction, { ja: '✅ セーフティ・R18設定を更新しました。', en: '✅ Updated safety & R18 settings.' })
+  }
+  if (choice === 'debug:on' || choice === 'debug:off') {
+    await replySettings.setDebugFooter(guildID, choice === 'debug:on')
+    return pick(interaction, { ja: '✅ デバッグフッター設定を更新しました。', en: '✅ Updated debug footer setting.' })
+  }
+  return null
+}
+
+async function handleStatusSetup (interaction, { asEdit = false, initialNote = null } = {}) {
+  const { awaitCustomID, cancelCustomID } = require('../events/interactionCreate')
+  const lang = langOf(interaction)
+  if (!mayViewStatus(interaction)) {
+    const msg = pick(interaction, {
+      ja: '設定状況を確認・変更するには「サーバーの管理」「チャンネルの管理」「ウェブフックの管理」いずれかの権限が必要です。',
+      en: 'Viewing or changing setup status requires Manage Server, Manage Channels, or Manage Webhooks.'
+    })
+    return interaction.createMessage({ content: msg, flags: Eris.Constants.MessageFlags.EPHEMERAL }).catch(() => {})
+  }
+
+  let note = initialNote
+  for (let first = true; ; first = false) {
+    const guildID = interaction.guildID
+    const guild = global.bot.guilds?.get?.(guildID)
+    const guildSettings = global.bot.guildSettingsCache?.[guildID]
+    const groupedLogs = groupLogsByChannel(guildSettings, lang)
+    const ignored = guildSettings?.ignoredChannels || []
+    const logBots = Boolean(guildSettings?.isLogBots?.())
+    const missingInChannel = (await returnMissingPerms(interaction.channel.id, global.bot.user.id)) || []
+    const ai = await replySettings.getReplySettings(guildID).catch(() => ({}))
+    const liveOn = process.env.YOUTUBE_API_KEY
+      ? await youtubeDB.liveEventsOn(guildID).catch(() => false)
+      : null
+    let detectedRules = []
+    if (guild?.channels?.size) {
+      detectedRules = (await rulesChannels(guild).catch(() => [])).map(c => c.id)
+    } else if (guild?.rulesChannelID) {
+      detectedRules = [guild.rulesChannelID]
+    }
+
+    const personaText = ai.streamerPersona !== false
+      ? pick(interaction, { ja: '配信者として話す', en: 'As the streamer' })
+      : pick(interaction, { ja: 'BOT として話す', en: 'As the bot' })
+    const lengthKey = ai.replyLength || DEFAULT_REPLY_LENGTH
+    const lengthMap = {
+      long: pick(interaction, { ja: '長め', en: 'Long' }),
+      normal: pick(interaction, { ja: '内容に合わせる', en: 'Fitted' }),
+      short: pick(interaction, { ja: '短め', en: 'Short' })
+    }
+    const aiLines = [
+      pick(interaction, { ja: `・話し方: **${personaText}** ／ 返事の長さ: **${lengthMap[lengthKey] || lengthKey}**`, en: `・Persona: **${personaText}** / Length: **${lengthMap[lengthKey] || lengthKey}**` }),
+      ...(liveOn !== null
+        ? [pick(interaction, {
+            ja: `・配信・新着動画の自動イベント登録: **${liveOn ? '有効' : '無効'}**`,
+            en: `・Streams & uploads as events: **${liveOn ? 'On' : 'Off'}**`
+          })]
+        : []),
+      ai.assistantRules
+        ? pick(interaction, { ja: `・AI へのお願い（\`/assistantrules\`）: 設定あり（${[...ai.assistantRules].length} 文字）`, en: `・Moderator rules (\`/assistantrules\`): Set (${[...ai.assistantRules].length} chars)` })
+        : pick(interaction, { ja: '・AI へのお願い（`/assistantrules`）: 未設定', en: '・Moderator rules (`/assistantrules`): None' }),
+      detectedRules.length
+        ? pick(interaction, { ja: `・サーバールール参照: ${detectedRules.map(id => `<#${id}>`).join('・')}`, en: `・Rules channel(s): ${detectedRules.map(id => `<#${id}>`).join(', ')}` })
+        : pick(interaction, { ja: '・サーバールール参照: ルールチャンネル未検出', en: '・Rules channel(s): None detected' })
+    ]
+
+    const logSummary = groupedLogs.length
+      ? groupedLogs.join('\n')
+      : pick(interaction, {
+        ja: '⚠️ **未設定** — 下の「ログ設定（まとめて）」ボタンから、このチャンネルへすぐ出力を開始できます。',
+        en: '⚠️ **Not configured** — press "Log presets" below to start logging to this channel.'
+      })
+    const logExtras = pick(interaction, {
+      ja: `対象外チャンネル: ${ignored.length ? ignored.map(id => `<#${id}>`).join('・') : 'なし'} ／ BOTの記録: ${logBots ? 'オン' : 'オフ'}`,
+      en: `Ignored: ${ignored.length ? ignored.map(id => `<#${id}>`).join(', ') : 'None'} / Log bots: ${logBots ? 'On' : 'Off'}`
+    })
+
+    const creator = isCreator(interaction.member.user.id)
+    const fields = [
+      {
+        name: pick(interaction, { ja: '📋 監査ログの設定状況', en: '📋 Audit Logging' }),
+        value: `${logSummary}\n${logExtras}`
+      },
+      {
+        name: pick(interaction, { ja: '🤖 AI（@メンション）の設定状況', en: '🤖 AI Assistant (@mention)' }),
+        value: aiLines.join('\n')
+      },
+      {
+        name: pick(interaction, { ja: '🔐 BOT 権限チェックリスト', en: '🔐 Bot Permissions Check' }),
+        value: buildPermissionCheckField(interaction, missingInChannel)
+      }
+    ]
+
+    if (creator) {
+      const onOff = v => v ? pick(interaction, { ja: 'オン', en: 'On' }) : pick(interaction, { ja: 'オフ', en: 'Off' })
+      fields.push({
+        name: pick(interaction, { ja: '🔧 開発者設定（このサーバー）', en: '🔧 Developer Settings (this server)' }),
+        value: pick(interaction, {
+          ja: [
+            `・ベクトル化: メッセージ **${onOff(ai.embedMessages)}** ／ 絵文字 **${onOff(ai.embedEmojis)}**`,
+            `・セーフティ: フィルタ **${onOff(ai.safetyFilter)}** ／ R18引き継ぎ **${onOff(ai.uncensoredR18)}**`,
+            `・デバッグフッター: **${onOff(ai.debugFooter)}**（モデル変更は \`${process.env.GLOBAL_BOT_PREFIX || '%'}replymodel\`、上限変更は \`${process.env.GLOBAL_BOT_PREFIX || '%'}tokenlimit\`）`
+          ].join('\n'),
+          en: [
+            `・Embeddings: messages **${onOff(ai.embedMessages)}** / emojis **${onOff(ai.embedEmojis)}**`,
+            `・Safety: filter **${onOff(ai.safetyFilter)}** / R18 handover **${onOff(ai.uncensoredR18)}**`,
+            `・Debug footer: **${onOff(ai.debugFooter)}**`
+          ].join('\n')
+        })
+      })
+    }
+
+    const id = uuidv4()
+    const canEditLogs = mayCheckOrChangeLogs(interaction) && missingInChannel.length === 0
+    const logsHereCount = activeCountHere(guildSettings?.getEventLogRaw?.() || {}, interaction.channel.id)
+    const buttonComponents = [
+      {
+        type: Eris.Constants.ComponentTypes.BUTTON,
+        style: Eris.Constants.ButtonStyles.PRIMARY,
+        custom_id: `${id}:preset`,
+        disabled: !canEditLogs,
+        label: pick(interaction, { ja: 'ログ設定（まとめて）', en: 'Log presets' })
+      },
+      {
+        type: Eris.Constants.ComponentTypes.BUTTON,
+        style: Eris.Constants.ButtonStyles.SECONDARY,
+        custom_id: `${id}:individual`,
+        disabled: !canEditLogs,
+        label: pick(interaction, { ja: 'ログ設定（個別）', en: 'Individual events' })
+      },
+      {
+        type: Eris.Constants.ComponentTypes.BUTTON,
+        style: Eris.Constants.ButtonStyles.SECONDARY,
+        custom_id: `${id}:assistant`,
+        label: pick(interaction, { ja: 'AI（メンション）設定', en: 'AI settings' })
+      },
+      ...(logsHereCount > 0 && mayCheckOrChangeLogs(interaction)
+        ? [{
+            type: Eris.Constants.ComponentTypes.BUTTON,
+            style: Eris.Constants.ButtonStyles.DANGER,
+            custom_id: `${id}:stophere`,
+            label: pick(interaction, { ja: 'このチャンネルのログを停止', en: 'Stop logging here' })
+          }]
+        : [])
+    ]
+
+    const components = [
+      ...(creator ? [creatorMenuRow(interaction, `${id}:dev`)] : []),
+      {
+        type: Eris.Constants.ComponentTypes.ACTION_ROW,
+        components: buttonComponents
+      }
+    ]
+
+    const baseDesc = pick(interaction, {
+      ja: 'このサーバーの現在の設定と必要な権限の診断です。下のボタンからそのまま各設定画面へ移動できます。',
+      en: 'Current settings and permission check for this server. Use the buttons below to configure logging or the AI assistant.'
+    })
+    const statusEmbed = {
+      title: pick(interaction, { ja: '🛠️ ロボポリス 設定ステータス・初期設定ガイド', en: '🛠️ RoboPolice Setup Status & Guide' }),
+      description: note ? `${note}\n\n${baseDesc}` : baseDesc,
+      color: note?.startsWith('✅') ? EMBED_COLORS.GREEN : EMBED_COLORS.PURPLED_BLUE,
+      fields,
+      author: getAuthorField(interaction.member.user),
+      footer: getEmbedFooter(global.bot.user)
+    }
+
+    try {
+      if (first && !asEdit) {
+        await interaction.createMessage({ embeds: [statusEmbed], components, flags: Eris.Constants.MessageFlags.EPHEMERAL })
+      } else {
+        await interaction.editOriginalMessage({ content: '', embeds: [statusEmbed], components, flags: Eris.Constants.MessageFlags.EPHEMERAL })
+      }
+    } catch (e) {
+      global.logger.error('Error showing setup status', e)
+      return
+    }
+
+    const watchedIds = [
+      `${id}:preset`,
+      `${id}:individual`,
+      `${id}:assistant`,
+      ...(logsHereCount > 0 && mayCheckOrChangeLogs(interaction) ? [`${id}:stophere`] : []),
+      ...(creator ? [`${id}:dev`] : [])
+    ]
+    let clicked
+    try {
+      clicked = await Promise.any(watchedIds.map(cid =>
+        awaitCustomID(cid, interaction.member.user.id, MENU_TIMEOUT_MS).then(res => ({ cid, res }))
+      ))
+    } catch (_) {
+      return
+    } finally {
+      for (const cid of watchedIds) cancelCustomID(cid)
+    }
+
+    if (clicked.cid === `${id}:preset`) return handlePresetSetup(interaction, { asEdit: true })
+    if (clicked.cid === `${id}:individual`) return handleIndividualSetup(interaction, { asEdit: true })
+    if (clicked.cid === `${id}:assistant`) return handleAssistantSetup(interaction, { asEdit: true })
+    if (clicked.cid === `${id}:stophere`) {
+      try {
+        await update.clearEventByID(guildID, interaction.channel.id)
+        note = pick(interaction, {
+          ja: `✅ <#${interaction.channel.id}> へのログ出力をすべて解除しました。`,
+          en: `✅ Stopped logging all events to <#${interaction.channel.id}>.`
+        })
+      } catch (e) {
+        global.logger.error('Error stopping logging from status menu', e)
+        note = pick(interaction, { ja: '❌ ログ出力の解除に失敗しました。', en: '❌ Could not stop logging.' })
+      }
+      continue
+    }
+    if (clicked.cid === `${id}:dev`) {
+      const selected = clicked.res?.data?.values?.[0]
+      try {
+        note = await applyCreatorChoice(interaction, guildID, selected)
+      } catch (e) {
+        global.logger.error('Error updating developer setting from status menu', e)
+        note = pick(interaction, { ja: '❌ 設定の更新に失敗しました。', en: '❌ Could not update setting.' })
+      }
+    }
+  }
 }
 
 module.exports = {
@@ -595,11 +1022,15 @@ module.exports = {
   userPerms: ['manageWebhooks', 'manageChannels', 'viewAuditLog'],
   botPerms: ['manageWebhooks', 'viewAuditLog'],
   subcommandPerms: {
-    assistant: { userPerms: [], botPerms: [] }
+    assistant: { userPerms: [], botPerms: [] },
+    status: { userPerms: [], botPerms: [] },
+    list: { userPerms: ['manageWebhooks', 'manageChannels', 'viewAuditLog'], botPerms: [] }
   },
   noThread: true,
   func: async interaction => {
-    if (interaction.data.options?.find(o => o.name === 'via_presets')) {
+    if (interaction.data.options?.find(o => o.name === 'status')) {
+      await handleStatusSetup(interaction)
+    } else if (interaction.data.options?.find(o => o.name === 'via_presets')) {
       await handlePresetSetup(interaction)
     } else if (interaction.data.options?.find(o => o.name === 'via_individual_event')) {
       await handleIndividualSetup(interaction)
@@ -607,6 +1038,8 @@ module.exports = {
       await handleListLogSetup(interaction)
     } else if (interaction.data.options?.find(o => o.name === 'assistant')) {
       await handleAssistantSetup(interaction)
+    } else {
+      await handleStatusSetup(interaction)
     }
   }
 }

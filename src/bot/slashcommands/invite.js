@@ -3,37 +3,79 @@ const { EMBED_COLORS } = require('../utils/constants.js')
 const { getEmbedFooter } = require('../utils/embeds')
 const { pick } = require('../utils/i18n')
 
+// Permission presets:
+// - recommended (318364830896): logging + auto #robopolice-logs + invite tracking + file attachments + Manage Events + public threads/forums
+// - tracking    (537218224):    logging + Manage Channels + Manage Server (invite tracking)
+// - basic       (537218176):    basic audit logging only (manual /setup)
+const PERM_BASIC = '537218176'
+const PERM_TRACKING = '537218224'
+const PERM_RECOMMENDED = '318364830896'
+
 module.exports = {
   name: 'invite',
   func: async interaction => {
     const id = global.bot.user.id
-    const basic = `https://discord.com/oauth2/authorize?client_id=${id}&scope=bot+applications.commands&permissions=537218176`
-    const tracking = `https://discord.com/oauth2/authorize?client_id=${id}&scope=bot+applications.commands&permissions=537218224`
-    interaction.createMessage({
+    const recommended = `https://discord.com/oauth2/authorize?client_id=${id}&scope=bot+applications.commands&permissions=${PERM_RECOMMENDED}`
+    const tracking = `https://discord.com/oauth2/authorize?client_id=${id}&scope=bot+applications.commands&permissions=${PERM_TRACKING}`
+    const basic = `https://discord.com/oauth2/authorize?client_id=${id}&scope=bot+applications.commands&permissions=${PERM_BASIC}`
+    return interaction.createMessage({
       embeds: [{
         title: pick(interaction, { ja: '招待リンク', en: 'Invite links' }),
         description: pick(interaction, {
-          ja: '用途別の招待リンクです。必要最小限の権限だけを付与できるよう（最小権限の原則）、目的ごとに分けてあります。\n\n招待したあとの設定方法は `/help guide: 使い方` を参照してください。',
-          en: 'Invite links by what they are for, so the bot is given no more permissions than it needs.\n\nSee `/help guide: Usage` for setting it up once invited.'
+          ja: '用途別の招待リンクです。迷った場合は一番上の **推奨（すべての機能）** を選べば、招待直後から自動ログ設定・招待追跡・AIによるイベント＆フォーラム作成まですべて使えます。\n\n招待後の確認は `/setup status`、詳しい手順は `/help guide: 使い方・初期設定` をご覧ください。',
+          en: 'Invite links by use case. Choose **Recommended (all features)** to have automatic log setup, invite tracking, and AI event & forum creation ready right away.\n\nRun `/setup status` after inviting to verify everything.'
         }),
         color: EMBED_COLORS.PURPLED_BLUE,
         thumbnail: {
           url: interaction.member.user.dynamicAvatarURL(null, 64)
         },
-        fields: [{
-          name: pick(interaction, { ja: '通常の招待（最小権限）', en: 'Usual invite (fewest permissions)' }),
-          value: pick(interaction, {
-            ja: `[この招待リンク](${basic}) から、必要最小限の権限で招待できます。`,
-            en: `[This invite link](${basic}) invites the bot with the fewest permissions it needs.`
-          })
-        }, {
-          name: pick(interaction, { ja: '招待トラッキング用（サーバーの管理・チャンネルの管理が必要）', en: 'With invite tracking (needs Manage Server and Manage Channels)' }),
-          value: pick(interaction, {
-            ja: `[この招待リンク](${tracking}) から、参加ログで使われた招待を記録するのに必要な権限つきで招待できます。Discord はこれらの権限が無いと BOT に招待の情報を送らないため、\`チャンネルの管理\`（チャンネル単位の権限の上書きでも可）と \`サーバーの管理\` が**必要**です（チャンネルの管理: 作られた招待をその場で受け取る / サーバーの管理: サーバーの招待一覧を取得する）。`,
-            en: `[This invite link](${tracking}) invites the bot with the permissions it needs to log the invite a member joined with. \`Manage Channels\` (a channel permission overwrite will do) and \`Manage Server\` are **required**, as Discord does not send the bot invites without them (Manage Channels: invites as they are made / Manage Server: the server's invites).`
-          })
-        }],
+        fields: [
+          {
+            name: pick(interaction, { ja: '⭐ 推奨：すべての機能（自動ログ・招待追跡・イベント＆フォーラム作成）', en: '⭐ Recommended: All features (auto-log, invite tracking, events & forums)' }),
+            value: pick(interaction, {
+              ja: `[この招待リンク](${recommended}) から、スタッフ用ログチャンネル（\`#robopolice-logs\`）の自動作成、参加時の招待リンク追跡、カバー画像添付、\`@メンション\` でのイベント・フォーラム投稿作成、YouTube配信の自動イベント登録に必要な権限をまとめて付与できます。`,
+              en: `[This invite link](${recommended}) includes permissions for automatic \`#robopolice-logs\` setup, join-invite tracking, cover image attachments, \`@mention\` event & forum creation, and automatic YouTube stream events.`
+            })
+          },
+          {
+            name: pick(interaction, { ja: '📋 監査ログ＋招待トラッキング用（サーバーの管理・チャンネルの管理を含む）', en: '📋 Audit logs + invite tracking (Manage Server & Manage Channels)' }),
+            value: pick(interaction, {
+              ja: `[この招待リンク](${tracking}) は監査ログと参加時の招待リンク記録用の構成です（イベント自動作成は使いません）。`,
+              en: `[This invite link](${tracking}) includes audit logging and join-invite tracking without event management.`
+            })
+          },
+          {
+            name: pick(interaction, { ja: '🔒 最小権限（基本ログのみ・手動セットアップ）', en: '🔒 Minimal permissions (basic logs only, manual /setup)' }),
+            value: pick(interaction, {
+              ja: `[この招待リンク](${basic}) から必要最小限の権限だけで招待できます（招待後にログ用チャンネルで \`/setup status\` を実行してください）。`,
+              en: `[This invite link](${basic}) grants only the minimum logging permissions (run \`/setup status\` in your log channel afterwards).`
+            })
+          }
+        ],
         footer: getEmbedFooter(global.bot.user)
+      }],
+      components: [{
+        type: Eris.Constants.ComponentTypes.ACTION_ROW,
+        components: [
+          {
+            type: Eris.Constants.ComponentTypes.BUTTON,
+            style: Eris.Constants.ButtonStyles.LINK,
+            url: recommended,
+            label: pick(interaction, { ja: '推奨（すべての機能）', en: 'Recommended (All)' })
+          },
+          {
+            type: Eris.Constants.ComponentTypes.BUTTON,
+            style: Eris.Constants.ButtonStyles.LINK,
+            url: tracking,
+            label: pick(interaction, { ja: 'ログ＋招待追跡', en: 'Logs + Invites' })
+          },
+          {
+            type: Eris.Constants.ComponentTypes.BUTTON,
+            style: Eris.Constants.ButtonStyles.LINK,
+            url: basic,
+            label: pick(interaction, { ja: '最小権限', en: 'Minimal' })
+          }
+        ]
       }],
       flags: Eris.Constants.MessageFlags.EPHEMERAL
     })

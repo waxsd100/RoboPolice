@@ -1,13 +1,15 @@
 const Eris = require('eris')
 const { isCreator } = require('../utils/creatorIds')
 const { hasStaffAccess } = require('../utils/staffAccess')
+const { formatPermission, formatPermissions } = require('../utils/displayLabels')
 
 module.exports = async message => {
   if (message.author.bot || !message.member || message.channel instanceof Eris.TextVoiceChannel) return
   if (message.content.startsWith(process.env.GLOBAL_BOT_PREFIX)) {
-    const cmd = message.content.substring(process.env.GLOBAL_BOT_PREFIX.length).split(' ')[0].toLowerCase()
-    const splitSuffix = message.content.substr(process.env.GLOBAL_BOT_PREFIX).split(' ')
-    const suffix = splitSuffix.slice(1, splitSuffix.length).join(' ')
+    const rest = message.content.substring(process.env.GLOBAL_BOT_PREFIX.length)
+    const parts = rest.split(/\s+/)
+    const cmd = parts[0].toLowerCase()
+    const suffix = rest.substring(parts[0].length).trim()
     processCommand(message, cmd, suffix)
   }
 }
@@ -31,13 +33,14 @@ function processCommand (message, commandName, suffix) {
     message.channel.createMessage('このコマンドはBOT開発者専用です。')
     return
   } else if (command.type === 'admin' && !(message.member.permissions.has('administrator') || message.author.id === message.channel.guild.ownerID || hasStaffAccess(message.member.roles, message.channel.guild))) {
-    message.channel.createMessage('このコマンドは管理者専用です。使用には「管理者」権限が必要です。')
+    message.channel.createMessage('このコマンドは管理者専用です。使用には **管理者** 権限が必要です。')
     return
   } else if (command.perm && !(message.member.permissions.has(command.perm) || message.author.id === message.channel.guild.ownerID || hasStaffAccess(message.member.roles, message.channel.guild))) {
-    message.channel.createMessage(`このコマンドの使用には、サーバーのオーナーであるか ${command.perm} 権限が必要です。`)
+    message.channel.createMessage(`このコマンドの使用には、サーバーのオーナーであるか **${formatPermission(command.perm, 'ja')}** 権限が必要です。`)
     return
   } else if (command.perms && message.author.id !== message.channel.guild.ownerID && !hasStaffAccess(message.member.roles, message.channel.guild) && command.perms.find(p => !message.member.permissions.has(p))) {
-    message.channel.createMessage(`このコマンドの使用には、サーバーのオーナーであるか次の権限が必要です: ${command.perms.join(', ')}`)
+    const missing = command.perms.filter(p => !message.member.permissions.has(p))
+    message.channel.createMessage(`このコマンドの使用には、サーバーのオーナーであるか次の権限が必要です: ${formatPermissions(missing, 'ja')}`)
     return
   }
   global.logger.info(`${message.author.username}#${message.author.discriminator} (${message.author.id}) in ${message.channel.id} sent ${commandName} with the args "${suffix}". The guild is called "${message.channel.guild.name}", owned by ${message.channel.guild.ownerID} and has ${message.channel.guild.memberCount} members.`)
