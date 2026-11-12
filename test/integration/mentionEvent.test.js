@@ -1692,6 +1692,66 @@ describe('mention → event / forum post (integration)', () => {
     await first
   })
 
+  test('chat in a themed channel (#のばまんの動画について語る) passes channel theme, keeps full YouTube profile even on short prompts, and looks up videos via search_youtube', async (t) => {
+    const { perms } = require('../helpers/fakes')
+    const replies = []
+    const videoChannel = {
+      id: '210',
+      name: 'のばまんの動画について語る',
+      topic: 'のばまんの動画の感想や名作を語るチャンネル',
+      type: 0,
+      guild,
+      permissionsOf: () => perms(['viewChannel', 'readMessageHistory', 'sendMessages']),
+      async createMessage (payload) {
+        const reply = { id: `reply${repliesByID.size + 1}`, channel: videoChannel, state: { content: '', embeds: [], components: [], files: [] }, history: [] }
+        repliesByID.set(reply.id, reply)
+        reply.apply = update => {
+          reply.state = { ...reply.state, ...update }
+          reply.history.push(reply.state)
+        }
+        reply.apply(payload)
+        reply.edit = async update => reply.apply(update)
+        replies.push(reply)
+        return reply
+      }
+    }
+    guild.channels.set('210', videoChannel)
+    t.after(() => { guild.channels.delete('210') })
+
+    installYouTubeStore({
+      100: {
+        channel: { channel_id: 'UCnobaman', channel_ref: '@nobaman', title: 'のばまんゲームス', url: 'https://www.youtube.com/@nobaman', synced_at: new Date('2026-10-29T12:00:00Z') },
+        videos: [
+          { video_id: 'prepImpact01', title: '飛行機墜落シミュレーター「プリペアフォーインパクト」', description: '緊急着水に挑戦', live_status: 'none', published_at: new Date('2026-08-10T00:00:00Z'), url: 'https://www.youtube.com/watch?v=prepImpact01' },
+          { video_id: 'resortGolf2', title: 'ゴルフ場を破壊するゲーム「リゾートボスゴルフ」', description: '自由すぎるゴルフ場経営', live_status: 'none', published_at: new Date('2026-07-05T00:00:00Z'), url: 'https://www.youtube.com/watch?v=resortGolf2' }
+        ]
+      }
+    })
+
+    const requests = installGemini([
+      [call('search_youtube', { query: 'のばまん 隠れた 名作 おすすめ' })],
+      body => {
+        const [yt] = lastToolResponses(body)
+        assert.match(yt.response.result, /プリペアフォーインパクト/)
+        assert.match(yt.response.result, /リゾートボスゴルフ/)
+        return [call('submit_chat_reply', { text: 'のばまんの動画で隠れた名作といえば、[プリペアフォーインパクト](https://www.youtube.com/watch?v=prepImpact01) と [リゾートボスゴルフ](https://www.youtube.com/watch?v=resortGolf2) が外せないよ！' })]
+      }
+    ])
+
+    await mentionEvent.handle(mention(videoChannel, '<@BOT> 隠れた名作教えて'))
+    const firstPrompt = requests[0].body.contents[0].parts[0].text
+    const systemPrompt = requests[0].body.systemInstruction.parts[0].text
+    assert.match(firstPrompt, /依頼されたチャンネル: #のばまんの動画について語る（ID: 210、text）\n {2}チャンネルの説明: のばまんの動画の感想や名作を語るチャンネル/)
+    assert.match(firstPrompt, /### YouTube\nのばまんゲームス/)
+    assert.match(systemPrompt, /そのチャンネルのテーマに沿った発言・返事をする/)
+    assert.match(replies[0].state.content, /プリペアフォーインパクト/)
+
+    // Even a 4-char prompt ("名作は？", below worthSearching's 5-char threshold) keeps the full YouTube profile in a themed channel.
+    const shortRequests = installGemini([[call('submit_chat_reply', { text: 'リゾートボスゴルフも名作だよ！' })]])
+    await mentionEvent.handle(mention(videoChannel, '<@BOT> 名作は？'))
+    assert.match(shortRequests[0].body.contents[0].parts[0].text, /### YouTube\nのばまんゲームス/)
+  })
+
   describe('who can use it', () => {
     test('ignores messages that do not @mention the bot', async () => {
       const { channel, replies } = createChannel()

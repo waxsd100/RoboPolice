@@ -11,7 +11,7 @@ const wikiKnowledge = require('./wikiKnowledge')
 const gameMentions = require('./gameMentions')
 const gameLinks = require('./gameLinks')
 const emojiStore = require('../../db/interfaces/postgres/emojis')
-const { embed, blend, model: embeddingModel } = require('../utils/embeddings')
+const { embed, embedQuery, blend, model: embeddingModel } = require('../utils/embeddings')
 const { fromStoredContent } = require('../../db/interfaces/postgres/create')
 const semanticSearch = require('./semanticSearch')
 const { messageEmbeddingsEnabled } = require('./embeddingIndexer')
@@ -138,10 +138,10 @@ const DECLARATIONS = [
   },
   {
     name: 'search_youtube',
-    description: 'このサーバーに設定された YouTube チャンネルについて保存している情報（チャンネル概要、最近の動画、配信予定・配信中）を探す。動画・配信・チャンネルについての依頼で使う。query を省くと新しい順に返す。',
+    description: 'このサーバーに設定された YouTube チャンネルについて保存している情報（チャンネル概要、最近の動画、保存済みの要約、配信予定・配信中）を探す。動画・配信・チャンネルについての依頼や、おすすめの動画・名作・神回・好きな動画を聞かれたとき、動画や配信をテーマにしたチャンネルでの質問で使う。query を省くと新しい順に返す。',
     parameters: {
       type: 'OBJECT',
-      properties: { query: { type: 'STRING', description: '題名・説明に含まれる語（空白区切りで AND）' } }
+      properties: { query: { type: 'STRING', description: '探したい動画の題名・説明・要約・内容を表す語（空白区切り。意味が近い動画も探す。おすすめ全般や名作を知りたいときは省略するか、ジャンル・雰囲気の語を入れる）' } }
     }
   },
   {
@@ -494,13 +494,15 @@ function formatVideo (v) {
 }
 
 const matchesAll = (words, text) => words.every(w => text.toLowerCase().includes(w))
+const YOUTUBE_META_WORDS = /^(?:おすすめ|オススメ|推奨|動画|配信|実況|神回|名作|隠れた名作|隠れた|面白い|おもしろい|好き|好きな|人気|ランキング|最近|直近|過去|アーカイブ|youtube|ユーチューブ|つべ|のばまん|nobaman)$/i
 
 async function searchYouTube (guildID, query) {
-  const words = String(query || '').toLowerCase().split(/\s+/).filter(Boolean)
+  const rawWords = String(query || '').toLowerCase().split(/\s+/).filter(Boolean)
+  const words = rawWords.filter(w => !YOUTUBE_META_WORDS.test(w))
   const knowledge = await youtubeDB.getKnowledge(guildID)
   // Summaries of linked videos from other channels are knowledge too.
   const others = (await youtubeDB.getOtherSummaries(guildID))
-    .filter(s => matchesAll(words, s.summary))
+    .filter(s => matchesAll(words.length ? words : rawWords, s.summary))
     .map(s => `- https://www.youtube.com/watch?v=${s.video_id}\n  内容の要約: ${linkTimestamps(s.summary.replace(/\s+/g, ' ').slice(0, 400), s.video_id)}`)
   const otherLines = others.length ? ['', `その他の要約済み動画（${others.length} 件）:`, ...others.slice(0, MAX_YOUTUBE_RESULTS)] : []
 
@@ -509,9 +511,11 @@ async function searchYouTube (guildID, query) {
   const channels = (knowledge.channels || [knowledge.channel]).filter(c => c.synced_at)
   if (!channels.length) return ['YouTube チャンネルはまだ情報を取得していません（しばらくすると自動で取得されます）', ...otherLines].join('\n')
   const channelName = new Map(channels.map(c => [c.channel_id, c.title]))
-  const matches = videos.filter(v => matchesAll(words, `${v.title}\n${v.description || ''}\n${v.summary || ''}`))
+  const videoText = v => `${v.title}\n${v.description || ''}\n${v.summary || ''}`
+  const matches = videos.filter(v => matchesAll(words, videoText(v)))
+  const rawMatches = rawWords.length ? videos.filter(v => matchesAll(rawWords, videoText(v))) : matches
   // By meaning when embeddings exist, so different wording still finds the video.
-  const ranked = words.length
+  const ranked = rawWords.length
     ? await semanticSearch.rankVideos(guildID, videos, query).catch(e => {
       global.logger.warn(`Semantic YouTube search failed, using keywords: ${e.message}`)
       return null
@@ -519,14 +523,21 @@ async function searchYouTube (guildID, query) {
     : null
   // Otherwise lives first: "the next stream" is the usual question.
   const ordered = ranked || [...matches.filter(v => LIVE_LABELS[v.live_status]), ...matches.filter(v => !LIVE_LABELS[v.live_status])]
+  const renderVideo = v => channels.length > 1 && channelName.get(v.channel_id) ? formatVideo(v).replace(/^- /, `- 【${channelName.get(v.channel_id)}】`) : formatVideo(v)
+  const fallbackVideos = (!ranked && words.length && !matches.length && !others.length && videos.length)
+    ? [...videos.filter(v => v.summary), ...videos.filter(v => !v.summary)].slice(0, MAX_YOUTUBE_RESULTS)
+    : []
   return [
     ...channels.map(c => `チャンネル: ${c.title}（${c.url}、取得 ${new Date(c.synced_at).toISOString()}）${c.description ? `\n  概要: ${c.description.replace(/\s+/g, ' ').slice(0, 200)}` : ''}`),
     `保存している動画 ${videos.length} 件、うち内容の要約あり ${videos.filter(v => v.summary).length} 件`,
     ranked
-      ? `「${query}」に意味が近い順の動画（語をすべて含むもの ${matches.length} 件を優先）:`
+      ? `「${query}」に意味が近い順の動画（語をすべて含むもの ${rawMatches.length} 件を優先）:`
       : words.length ? `「${query}」に一致した動画: ${matches.length} 件` : '新しい順の動画:',
-    ...ordered.slice(0, MAX_YOUTUBE_RESULTS).map(v => channels.length > 1 && channelName.get(v.channel_id) ? formatVideo(v).replace(/^- /, `- 【${channelName.get(v.channel_id)}】`) : formatVideo(v)),
+    ...ordered.slice(0, MAX_YOUTUBE_RESULTS).map(renderVideo),
     ...(!ranked && matches.length > MAX_YOUTUBE_RESULTS ? [`…ほか ${matches.length - MAX_YOUTUBE_RESULTS} 件（query で絞り込めます）`] : []),
+    ...(fallbackVideos.length
+      ? ['', '（指定の語が直接含まれる動画はありませんでした。以下は保存済みの動画です。内容が合うものがあればここから選んでください）', ...fallbackVideos.map(renderVideo)]
+      : []),
     ...otherLines
   ].filter(Boolean).join('\n')
 }
@@ -721,12 +732,59 @@ function withServerChannels (text, guild, member) {
   return text.replace(pattern, (whole, name) => `<#${byName.get(name).id}>`)
 }
 
-// What the channel a request was made in is, for "このチャンネルについて教えて": its name, kind,
-// category (or, for a thread, the channel it is in) and description. Null when unknown.
+const GENERIC_CHANNEL_NAME = /^(?:general|chat|main|lobby|lounge|random|free|talk|bot|bots|bot[-_]?commands?|commands?|cmd|test|testing|sandbox|雑談|メイン|なんでも|フリー|ロビー|ラウンジ|おしゃべり|会話|チャット|全体|総合|ボット|コマンド|テスト|お試し|砂場|質問|相談)(?:[-_\s・｜|]*\d+)?$/iu
+const SHORT_TOPIC_PROMPT = /[?？]|おすすめ|オススメ|名作|神回|教え|語ろ|好き|感想|評価|魅力|コツ/i
+const MAX_THEME_CACHE = 128
+const CHANNEL_THEME_WEIGHT = 0.45
+const themeVectorCache = new Map()
+
+function cleanChannelLabel (name) {
+  const s = String(name || '')
+    .replace(/^[\p{Extended_Pictographic}\uFE0F\u200D\p{S}\p{P}\s]+/gu, '')
+    .replace(/^\d+\s*[-_｜|・:：]\s*/u, '')
+    .replace(/^[\p{Extended_Pictographic}\uFE0F\u200D\p{S}\p{P}\s]+/gu, '')
+    .replace(/[\p{Extended_Pictographic}\uFE0F\u200D\s]+$/gu, '')
+    .trim()
+  if (!s || GENERIC_CHANNEL_NAME.test(s)) return ''
+  return s
+}
+
+// Extracts the topical theme of the channel (name, parent channel for threads, and non-generic
+// description), or '' for generic channels such as #general or #雑談.
+function channelTheme (channelID, guild, fallbackName = '') {
+  const c = (channelID && (global.bot?.getChannel?.(channelID) || guild?.channels?.get?.(channelID))) || null
+  if (c && c.guild?.id && guild?.id && c.guild.id !== guild.id) return ''
+  const isThread = c && [10, 11, 12].includes(c.type)
+  const parent = c?.parentID ? guild?.channels?.get?.(c.parentID) || global.bot?.getChannel?.(c.parentID) : null
+  const ownName = cleanChannelLabel(c?.name || fallbackName)
+  const parentName = isThread ? cleanChannelLabel(parent?.name) : ''
+  const parts = [ownName, parentName && parentName !== ownName ? parentName : ''].filter(Boolean)
+  if (!parts.length) return ''
+  const topic = (c?.topic || (isThread ? parent?.topic : '') || '').replace(/\s+/g, ' ').trim().slice(0, MAX_TOPIC)
+  if (topic && !/^(?:なんでも|自由|雑談)/.test(topic)) parts.push(topic)
+  return parts.join(' — ')
+}
+
+async function cachedThemeVector (theme) {
+  const key = `${embeddingModel()}\n${theme}`
+  const hit = themeVectorCache.get(key)
+  if (hit) {
+    themeVectorCache.delete(key)
+    themeVectorCache.set(key, hit)
+    return hit
+  }
+  const vec = await embedQuery(theme)
+  if (themeVectorCache.size >= MAX_THEME_CACHE) themeVectorCache.delete(themeVectorCache.keys().next().value)
+  themeVectorCache.set(key, vec)
+  return vec
+}
+
+// What the channel a request was made in is: its name, kind, category (or, for a thread, the
+// channel it is in) and description. Null when unknown.
 function requestChannelInfo (channelID, guild) {
-  const c = global.bot.getChannel?.(channelID)
-  if (!c || (c.guild?.id && c.guild.id !== guild.id)) return null
-  const parent = c.parentID ? guild.channels.get(c.parentID) || global.bot.getChannel?.(c.parentID) : null
+  const c = global.bot?.getChannel?.(channelID) || guild?.channels?.get?.(channelID)
+  if (!c || (c.guild?.id && guild?.id && c.guild.id !== guild.id)) return null
+  const parent = c.parentID ? guild?.channels?.get?.(c.parentID) || global.bot?.getChannel?.(c.parentID) : null
   const isThread = [10, 11, 12].includes(c.type)
   return [
     `#${c.name}（ID: ${c.id}、${CHANNEL_TYPES[c.type] || c.type}${c.nsfw || (isThread && parent?.nsfw) ? '、年齢制限あり' : ''}`,
@@ -833,7 +891,8 @@ async function relatedMessages (guild, member, vectorOf) {
 
 // The server as the requester can see it. Sent with every request, fresh each time, so questions
 // about "this server" need no lookups. query: what was asked; context: the conversation it replies
-// to (readThread), if any. Both choose the knowledge and the emojis put first.
+// to (readThread), if any. In a themed channel (e.g. #のばまんの動画について語る) without a reply
+// thread, the channel's theme also steers which knowledge, lore, past talk and emojis come first.
 // slim: for bare greetings, edits, or pure creative stories that do not touch server data, send
 // only the server name, style, and compact emoji codes.
 async function describeServer (guild, member, requestChannelID, { query = '', context = '', queryVector = null, slim = false } = {}) {
@@ -864,28 +923,32 @@ async function describeServer (guild, member, requestChannelID, { query = '', co
   // part of the conversation is used. Embedded once, when first needed, and only when there is
   // something to search with: a bare greeting or a few emojis ("おはよう", "w") need no lookup.
   const recent = String(context || '').slice(-MAX_CONTEXT_FOR_SEARCH)
+  const theme = !recent.trim() ? channelTheme(requestChannelID, guild) : ''
   const texts = [recent, query].filter(t => t.trim())
+  const searchable = worthSearching(texts.join('\n'))
   let embedding = null
   const vectorOf = () => {
-    if (!worthSearching(texts.join('\n'))) return Promise.resolve(null)
+    if (!searchable && !(theme && SHORT_TOPIC_PROMPT.test(query))) return Promise.resolve(null)
     if (!embedding) {
-      if (!recent.trim() && typeof queryVector === 'function') {
-        embedding = Promise.resolve(queryVector()).catch(e => {
-          global.logger.warn(`Could not embed the request in ${guild.id}: ${e.message}`)
-          return null
-        })
-      } else {
-        embedding = embed(texts, 'RETRIEVAL_QUERY')
-          .then(vectors => vectors.length === 1 ? vectors[0] : blend(vectors, [CONTEXT_WEIGHT, 1 - CONTEXT_WEIGHT]))
-          .catch(e => {
-            global.logger.warn(`Could not embed the request in ${guild.id}: ${e.message}`)
-            return null
-          })
-      }
+      embedding = (async () => {
+        if (!searchable) return cachedThemeVector(theme)
+        if (!recent.trim()) {
+          const qPromise = typeof queryVector === 'function' ? Promise.resolve(queryVector()) : embedQuery(query)
+          if (!theme) return qPromise
+          const [qVec, tVec] = await Promise.all([qPromise, cachedThemeVector(theme)])
+          return qVec && tVec ? blend([qVec, tVec], [1 - CHANNEL_THEME_WEIGHT, CHANNEL_THEME_WEIGHT]) : (qVec || tVec)
+        }
+        const vectors = await embed(texts, 'RETRIEVAL_QUERY')
+        return vectors.length === 1 ? vectors[0] : blend(vectors, [CONTEXT_WEIGHT, 1 - CONTEXT_WEIGHT])
+      })().catch(e => {
+        global.logger.warn(`Could not embed the request in ${guild.id}: ${e.message}`)
+        return null
+      })
     }
     return embedding
   }
-  const known = wikiKnowledge.searchable() ? await wikiKnowledge.relatedKnowledge(texts.join('\n'), await vectorOf()).catch(() => []) : []
+  const knowledgeText = [theme, ...texts].filter(Boolean).join('\n')
+  const known = wikiKnowledge.searchable() ? await wikiKnowledge.relatedKnowledge(knowledgeText, await vectorOf()).catch(() => []) : []
   if (known.length) {
     lines.push('', '### コミュニティの知識（wiki と配信者の X より。依頼に関係しそうなもの）',
       'キャラクターが何者かはここ（と search_wiki）で確かめ、絵文字の説明（見た目）から決めつけないこと。', ...known)
@@ -925,4 +988,4 @@ async function describeServer (guild, member, requestChannelID, { query = '', co
   return lines.join('\n')
 }
 
-module.exports = { worthSearching, createTools, formatMessage, describeServer, withServerEmojis, withServerChannels, namedChannels, namedMembers, requestChannelInfo, searchYouTube, searchTwitch, searchSteam, MESSAGE_LINK, CHANNEL_LINK, StopDrafting }
+module.exports = { worthSearching, createTools, formatMessage, describeServer, withServerEmojis, withServerChannels, namedChannels, namedMembers, requestChannelInfo, channelTheme, SHORT_TOPIC_PROMPT, searchYouTube, searchTwitch, searchSteam, MESSAGE_LINK, CHANNEL_LINK, StopDrafting }

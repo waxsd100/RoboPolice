@@ -580,6 +580,21 @@ describe('draft', () => {
     assert.equal(outOfRange[0].body.generationConfig.temperature, 1)
   })
 
+  test('aligns topic interpretation and tool choice with themed channels while keeping persona constant', async () => {
+    const { adaptiveThinkingLevel } = require('../../src/bot/modules/eventDrafter')
+    const requests = installGemini([[call('submit_chat_reply', { text: 'プリペアフォーインパクトが名作だよ' })]])
+    await draft({ request: '隠れた名作教えて', channelName: 'のばまんの動画について語る', guild, tools, now: NOW })
+    const system = requests[0].body.systemInstruction.parts[0].text
+    assert.match(system, /そのチャンネルのテーマに沿った発言・返事をする/)
+    assert.match(system, /動画のチャンネルなら動画の話として search_youtube/)
+    assert.match(system, /「ここは〇〇のチャンネルだよ」などと注意せずそのまま答える/)
+    assert.match(system, /チャンネルの名前や説明に合わせるのは、何の話題として受け取るかと返事の中身だけです/)
+    assert.doesNotMatch(system, /チャンネルの情報は、案内や「このチャンネルについて」の質問に答えるためのもの/)
+    assert.equal(adaptiveThinkingLevel({ requestText: 'おはよう' }), 'minimal')
+    assert.equal(adaptiveThinkingLevel({ requestText: '名作教えて' }), 'low')
+    assert.equal(adaptiveThinkingLevel({ requestText: '神回教えて' }), 'low')
+  })
+
   test('tells the model what the channels a message names are', async () => {
     const { createMember } = require('../helpers/fakes')
     const seen = createGuild({ channels: [{ id: '202', name: 'ボイス', type: 2, readers: ['1'] }] })

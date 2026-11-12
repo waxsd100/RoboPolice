@@ -464,6 +464,19 @@ describe('search_youtube', () => {
     assert.match(text, /「マイクラ {2}城」に一致した動画: 1 件\n- マイクラ 建築/)
     assert.doesNotMatch(text, /雑談/)
   })
+
+  test('strips recommendation meta-words instead of matching 0 titles, and falls back to stored videos (summarized first) when no keyword or embedding matches', async () => {
+    const withIds = videos.map((v, i) => ({ ...v, video_id: `vid${i}` }))
+    installYouTubeStore({ 100: { channel: synced, videos: withIds } }, { 100: { vid2: '雑談の神回まとめ' } })
+    const metaText = (await tools().call('search_youtube', { query: 'のばまん 隠れた 名作 おすすめ 動画' })).result
+    assert.match(metaText, /新しい順の動画:\n- \[配信予定/)
+    assert.doesNotMatch(metaText, /一致した動画: 0 件/)
+
+    const fallbackText = (await tools().call('search_youtube', { query: 'プリペア神企画' })).result
+    assert.match(fallbackText, /「プリペア神企画」に一致した動画: 0 件/)
+    assert.match(fallbackText, /指定の語が直接含まれる動画はありませんでした。以下は保存済みの動画です/)
+    assert.ok(fallbackText.indexOf('マイクラ 雑談') < fallbackText.indexOf('マイクラ 建築'), 'summarized videos come first in fallback')
+  })
 })
 
 describe('YouTube summaries in the tools', () => {
@@ -628,9 +641,42 @@ describe('about_member', () => {
   })
 })
 
+describe('channelTheme', () => {
+  const { channelTheme } = require('../../src/bot/modules/eventTools')
+
+  test('extracts non-generic channel names, parent channel themes for threads, and topics while ignoring generic channels', () => {
+    const g = createGuild({
+      channels: [
+        { id: '10', name: 'general', type: 0 },
+        { id: '11', name: '💬｜雑談-1', type: 0 },
+        { id: '12', name: '📺｜01_のばまんの動画について語る✨', type: 0 },
+        { id: '13', name: 'bot-commands', type: 0 }
+      ]
+    })
+    Object.assign(g.channels.get('11'), { topic: 'なんでも自由に雑談' })
+    Object.assign(g.channels.get('12'), { topic: '過去動画の感想や名作を語る場所' })
+    installBot({ guilds: [g] })
+    const genericThread = { id: '14', name: '質問', type: 11, parentID: '12', guild: g }
+    const specificThread = { id: '15', name: 'プリペア回', type: 11, parentID: '12', guild: g }
+    const foreignChannel = { id: '16', name: 'マイクラ建築', type: 0, guild: { id: '999' } }
+    const getChannel = global.bot.getChannel
+    global.bot.getChannel = id => ({ 14: genericThread, 15: specificThread, 16: foreignChannel }[id] || getChannel(id))
+
+    assert.equal(channelTheme('10', g), '')
+    assert.equal(channelTheme('11', g), '')
+    assert.equal(channelTheme('13', g), '')
+    assert.equal(channelTheme('12', g), 'のばまんの動画について語る — 過去動画の感想や名作を語る場所')
+    assert.equal(channelTheme('14', g), 'のばまんの動画について語る — 過去動画の感想や名作を語る場所')
+    assert.equal(channelTheme('15', g), 'プリペア回 — のばまんの動画について語る — 過去動画の感想や名作を語る場所')
+    assert.equal(channelTheme('16', g), '')
+    assert.equal(channelTheme(null, g, 'マイクラ建築'), 'マイクラ建築')
+    assert.equal(channelTheme(null, g, '雑談'), '')
+  })
+})
+
 describe('describeServer: what the server is like', () => {
   const { describeServer } = require('../../src/bot/modules/eventTools')
-  const { installYouTubeStore, installLoreStore, configureGateway } = require('../helpers/fakes')
+  const { installYouTubeStore, installLoreStore, installEmbeddingModel, configureGateway } = require('../helpers/fakes')
 
   test('the server\'s style and knowledge go into the profile', async (t) => {
     configureGateway()
@@ -641,6 +687,50 @@ describe('describeServer: what the server is like', () => {
     const text = await describeServer(guild, member, '201')
     assert.match(text, /### このサーバーのノリ（メンバーの会話から）\nゆるくて、ツッコミが多い/)
     installLoreStore()
+  })
+
+  test('steers server lore toward a themed channel when the request omits the subject, while leaving #general and reply threads unsteered', async (t) => {
+    configureGateway()
+    process.env.SERVER_LORE = 'true'
+    installYouTubeStore()
+    installEmbeddingModel()
+    const { embed, toBase64 } = require('../../src/bot/utils/embeddings')
+    const [minecraftVec, horrorVec] = await embed(['マイクラ建築', '怖いホラー'])
+    installLoreStore({
+      facts: {
+        100: [
+          { kind: 'ネタ', name: '天空城プロジェクト', content: 'マイクラで作られた巨大城', week: '2026-10', embedding: toBase64(minecraftVec) },
+          { kind: 'ネタ', name: '深夜ホラー絶叫回', content: '怖いゲームの配信', week: '2026-10', embedding: toBase64(horrorVec) }
+        ]
+      }
+    })
+    guild.channels.set('210', {
+      id: '210',
+      name: 'マイクラ建築',
+      type: 0,
+      guild,
+      permissionsOf: () => ({ has: () => true })
+    })
+    installBot({ guilds: [guild] })
+    t.after(() => {
+      delete process.env.SERVER_LORE
+      guild.channels.delete('210')
+      installLoreStore()
+    })
+
+    const inGeneral = await describeServer(guild, member, '201', { query: '隠れた名作教えて' })
+    assert.doesNotMatch(inGeneral, /天空城プロジェクト|深夜ホラー絶叫回/)
+
+    const inThemed = await describeServer(guild, member, '210', { query: '隠れた名作教えて' })
+    assert.match(inThemed, /天空城プロジェクト/)
+    assert.doesNotMatch(inThemed, /深夜ホラー絶叫回/)
+
+    const shortInThemed = await describeServer(guild, member, '210', { query: '名作は？' })
+    assert.match(shortInThemed, /天空城プロジェクト/)
+
+    const replyOverride = await describeServer(guild, member, '210', { query: 'おすすめ教えて', context: 'さっき怖いホラー配信の話をしてた' })
+    assert.match(replyOverride, /深夜ホラー絶叫回/)
+    assert.doesNotMatch(replyOverride, /天空城プロジェクト/)
   })
 
   test('slim mode omits heavy YouTube/Twitch/Steam/metadata sections while keeping server name, style, and up to 8 emoji codes', async (t) => {
