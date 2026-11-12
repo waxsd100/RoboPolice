@@ -250,11 +250,11 @@ describe('the assumption the long wait relies on', () => {
   })
 })
 
-describe('existing summaries (migration 050 + lightweight AI rewrite)', () => {
+describe('existing summaries (migration 051 + lightweight AI rewrite)', () => {
   const { retryTimer, GeminiError } = require('../../src/bot/modules/eventDrafter')
-  const applyMigration050 = require('../../src/db/migrations/050_youtube_summary_format')
+  const applyMigration051 = require('../../src/db/migrations/051_youtube_summary_format')
 
-  test('migration 050 cleans chatter, headings, bold, and irregular timestamps from existing DB rows and drops chatter-only rows', async () => {
+  test('migration 051 cleans chatter, headings, bold, and irregular timestamps from existing DB rows and drops chatter-only rows', async () => {
     const dbRows = new Map([
       ['v1', 'はい、要約しました！\n### まとめ\n* **[00:05]** 挨拶とマイクテスト完了\n以上です。（45文字）'],
       ['v2', '- [0:00] 既に整っている要約'],
@@ -286,7 +286,7 @@ describe('existing summaries (migration 050 + lightweight AI rewrite)', () => {
         return { rows: [] }
       }
     }
-    await applyMigration050(fakeClient)
+    await applyMigration051(fakeClient)
     assert.ok(sqlLog.some(s => /ADD COLUMN IF NOT EXISTS format_version/.test(s) && /COMMENT ON COLUMN youtube_summaries\.format_version/.test(s)))
     assert.equal(dbRows.get('v1'), '- [0:05] 挨拶とマイクテスト完了')
     assert.equal(dbRows.get('v2'), '- [0:00] 既に整っている要約')
