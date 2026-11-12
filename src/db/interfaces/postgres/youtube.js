@@ -12,13 +12,19 @@ const pool = require('../../clients/postgres')
 // Rows per multi-row INSERT: a first sync can store thousands of videos.
 const INSERT_CHUNK = 500
 
+const toInt = v => v === null || v === undefined ? null : Number(v)
+const normalizeChannel = c => ({ ...c, subscriber_count: toInt(c.subscriber_count), view_count: toInt(c.view_count) })
+const normalizeVideo = v => ({ ...v, view_count: toInt(v.view_count), like_count: toInt(v.like_count), comment_count: toInt(v.comment_count) })
+
 // A video row as the rest of the bot reads it, with its watch page.
 const VIDEO_COLUMNS = `v.video_id, v.channel_id, v.title, v.description, v.published_at, v.live_status,
-  v.scheduled_start, v.duration, 'https://www.youtube.com/watch?v=' || v.video_id AS url`
+  v.scheduled_start, v.actual_start, v.actual_end, v.duration, v.view_count, v.like_count, v.comment_count, v.stats_updated_at,
+  'https://www.youtube.com/watch?v=' || v.video_id AS url`
 
 // The channels the bot follows with their details: channel_id, channel_ref, title, description,
-// handle, url, synced_at, backfill_token, position.
-const BOT_CHANNELS = `SELECT c.channel_id, c.channel_ref, c.title, c.description, c.handle, c.url, c.synced_at, c.backfill_token, c.position
+// handle, url, subscriber_count, view_count, synced_at, backfill_token, position.
+const BOT_CHANNELS = `SELECT c.channel_id, c.channel_ref, c.title, c.description, c.handle, c.url,
+  c.subscriber_count, c.view_count, c.synced_at, c.backfill_token, c.position
   FROM youtube_channels c`
 
 // What a server stores refers to its guilds row, made here if it has none yet.
@@ -36,7 +42,7 @@ async function collectGarbage (db = pool) {
 // The channels the bot follows: [{ channel_id, channel_ref, title, … }], in the order set.
 async function listChannels () {
   const rows = await pool.query(`${BOT_CHANNELS} ORDER BY c.position, c.channel_id`)
-  return rows.rows
+  return rows.rows.map(normalizeChannel)
 }
 
 // Makes the bot follow exactly `channels` ([{ ref, id }], already resolved), in that order. Those
@@ -74,15 +80,45 @@ async function getVideoIds (channelID = null) {
 async function insertVideos (db, channelID, videos) {
   // A page re-read during backfill can repeat a video; one row per ID keeps ON CONFLICT happy.
   const unique = [...new Map(videos.map(v => [v.id, v])).values()]
+  const checkedAt = new Date()
   for (let i = 0; i < unique.length; i += INSERT_CHUNK) {
     const rows = unique.slice(i, i + INSERT_CHUNK)
-      .map(v => [v.id, channelID, v.title, v.description, v.publishedAt, v.liveStatus, v.scheduledStart, v.duration])
+      .map(v => [
+        v.id,
+        channelID,
+        v.title,
+        v.description,
+        v.publishedAt,
+        v.liveStatus,
+        v.scheduledStart ?? null,
+        v.actualStart ?? null,
+        v.actualEnd ?? null,
+        v.duration ?? null,
+        v.viewCount ?? null,
+        v.likeCount ?? null,
+        v.commentCount ?? null,
+        v.viewCount !== null && v.viewCount !== undefined ? checkedAt : null
+      ])
     await db.query(format(
-      `INSERT INTO youtube_videos (video_id, channel_id, title, description, published_at, live_status, scheduled_start, duration)
-       VALUES %L
-       ON CONFLICT (video_id) DO UPDATE SET channel_id = EXCLUDED.channel_id, title = EXCLUDED.title,
-         description = EXCLUDED.description, published_at = COALESCE(EXCLUDED.published_at, youtube_videos.published_at),
-         live_status = EXCLUDED.live_status, scheduled_start = EXCLUDED.scheduled_start, duration = EXCLUDED.duration`,
+      `INSERT INTO youtube_videos (
+         video_id, channel_id, title, description, published_at, live_status,
+         scheduled_start, actual_start, actual_end, duration,
+         view_count, like_count, comment_count, stats_updated_at
+       ) VALUES %L
+       ON CONFLICT (video_id) DO UPDATE SET
+         channel_id = EXCLUDED.channel_id,
+         title = EXCLUDED.title,
+         description = EXCLUDED.description,
+         published_at = COALESCE(EXCLUDED.published_at, youtube_videos.published_at),
+         live_status = EXCLUDED.live_status,
+         scheduled_start = EXCLUDED.scheduled_start,
+         actual_start = COALESCE(EXCLUDED.actual_start, youtube_videos.actual_start),
+         actual_end = COALESCE(EXCLUDED.actual_end, youtube_videos.actual_end),
+         duration = COALESCE(EXCLUDED.duration, youtube_videos.duration),
+         view_count = COALESCE(EXCLUDED.view_count, youtube_videos.view_count),
+         like_count = COALESCE(EXCLUDED.like_count, youtube_videos.like_count),
+         comment_count = COALESCE(EXCLUDED.comment_count, youtube_videos.comment_count),
+         stats_updated_at = COALESCE(EXCLUDED.stats_updated_at, youtube_videos.stats_updated_at)`,
       rows))
   }
 }
@@ -95,9 +131,13 @@ async function saveSync ({ channel, videos, backfillToken = null }) {
   try {
     await client.query('BEGIN')
     const updated = await client.query(
-      `UPDATE youtube_channels SET title = $2, description = $3, handle = $4, url = $5, backfill_token = $6, synced_at = now()
+      `UPDATE youtube_channels
+       SET title = $2, description = $3, handle = $4, url = $5, backfill_token = $6,
+           subscriber_count = COALESCE($7, subscriber_count),
+           view_count = COALESCE($8, view_count),
+           synced_at = now()
        WHERE channel_id = $1`,
-      [channel.id, channel.title, channel.description, channel.handle, channel.url, backfillToken])
+      [channel.id, channel.title, channel.description, channel.handle, channel.url, backfillToken, channel.subscriberCount ?? null, channel.viewCount ?? null])
     if (updated.rowCount) await insertVideos(client, channel.id, videos)
     await client.query('COMMIT')
   } catch (e) {
@@ -124,7 +164,7 @@ async function getKnowledge (guildID) {
     `SELECT ${VIDEO_COLUMNS}, s.summary FROM youtube_videos v
      LEFT JOIN youtube_summaries s ON s.video_id = v.video_id
      ORDER BY v.published_at DESC NULLS LAST`)
-  return { channels, channel: channels[0], videos: videos.rows, live_events: await liveEventsOn(guildID) }
+  return { channels, channel: channels[0], videos: videos.rows.map(normalizeVideo), live_events: await liveEventsOn(guildID) }
 }
 
 // The channels and how many videos and summaries are stored, without reading the videos:
@@ -139,8 +179,9 @@ async function getOverview (guildID) {
        (SELECT count(*) FROM youtube_videos v WHERE v.channel_id = bc.channel_id AND v.live_status IN ('live', 'upcoming'))::int AS live_count
      FROM (${BOT_CHANNELS}) bc ORDER BY bc.position, bc.channel_id`)
   if (rows.rows.length === 0) return null
-  const sum = key => rows.rows.reduce((n, c) => n + c[key], 0)
-  return { channels: rows.rows, video_count: sum('video_count'), summary_count: sum('summary_count'), live_count: sum('live_count'), live_events: guildID ? await liveEventsOn(guildID) : false }
+  const channels = rows.rows.map(normalizeChannel)
+  const sum = key => channels.reduce((n, c) => n + c[key], 0)
+  return { channels, video_count: sum('video_count'), summary_count: sum('summary_count'), live_count: sum('live_count'), live_events: guildID ? await liveEventsOn(guildID) : false }
 }
 
 // The servers that turned stream and upload events on: [guild_id].
@@ -249,6 +290,34 @@ async function videoCards (ids) {
   return rows.rows
 }
 
+// One stored video with its channel's name and summary, or null when it is not stored.
+async function getVideo (videoID) {
+  const rows = await pool.query(
+    `SELECT ${VIDEO_COLUMNS}, c.title AS channel_title, s.summary FROM youtube_videos v
+     LEFT JOIN youtube_channels c ON c.channel_id = v.channel_id
+     LEFT JOIN youtube_summaries s ON s.video_id = v.video_id
+     WHERE v.video_id = $1`,
+    [videoID])
+  return rows.rows[0] ? normalizeVideo(rows.rows[0]) : null
+}
+
+// Stored videos whose statistics have never been read yet (e.g. synced before migration 049).
+async function videoIdsMissingStats (channelID = null, limit = 200) {
+  const rows = await pool.query(
+    `SELECT video_id FROM youtube_videos
+     WHERE ($1::text IS NULL OR channel_id = $1) AND stats_updated_at IS NULL
+     ORDER BY published_at DESC NULLS LAST LIMIT $2`,
+    [channelID, limit])
+  return rows.rows.map(r => r.video_id)
+}
+
+async function markStatsChecked (videoIDs) {
+  if (!videoIDs.length) return
+  await pool.query(
+    'UPDATE youtube_videos SET stats_updated_at = COALESCE(stats_updated_at, now()) WHERE video_id = ANY($1)',
+    [videoIDs])
+}
+
 // The stored length of a video (ISO 8601, e.g. PT3H2M1S), or null when it is not stored.
 async function videoDuration (videoID) {
   const rows = await pool.query('SELECT duration FROM youtube_videos WHERE video_id = $1', [videoID])
@@ -297,4 +366,4 @@ async function deleteGuildYouTube (guildID) {
   await collectGarbage()
 }
 
-module.exports = { setBotChannels, getVideoIds, saveSync, getKnowledge, getOverview, listChannels, listLiveEventGuilds, liveEventsOn, setLiveEvents, upsertVideos, recentVideoIds, getLiveVideoIds, getLiveEvents, saveLiveEvent, archivesToSummarize, recordArchiveAttempt, websubDue, saveWebsub, isKnownChannel, videoCards, videoDuration, getSummary, saveSummary, getOtherSummaries, deleteGuildYouTube }
+module.exports = { setBotChannels, getVideoIds, saveSync, getKnowledge, getOverview, listChannels, listLiveEventGuilds, liveEventsOn, setLiveEvents, upsertVideos, recentVideoIds, getLiveVideoIds, getLiveEvents, saveLiveEvent, archivesToSummarize, recordArchiveAttempt, websubDue, saveWebsub, isKnownChannel, videoCards, getVideo, videoIdsMissingStats, markStatsChecked, videoDuration, getSummary, saveSummary, getOtherSummaries, deleteGuildYouTube }

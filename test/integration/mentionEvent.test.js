@@ -660,7 +660,7 @@ describe('mention → event / forum post (integration)', () => {
       [call('search_youtube', { query: '記念' })],
       body => {
         const result = lastToolResponses(body)[0].response.result
-        assert.match(result, /\[配信予定 2026-11-03T11:00:00\.000Z\] 1周年記念配信/)
+        assert.match(result, /\[配信予定 2026-11-03T20:00:00\+09:00\] 1周年記念配信/)
         assert.doesNotMatch(result, /雑談/)
         return [submit({ name: '1周年記念配信', start: '2026-11-03T20:00:00+09:00', location: 'https://www.youtube.com/watch?v=v2' })]
       }
@@ -673,6 +673,52 @@ describe('mention → event / forum post (integration)', () => {
     await done
     const post = discord.find(c => c.method === 'POST')
     assert.equal(post.body.entity_metadata.location, 'https://www.youtube.com/watch?v=v2')
+  })
+
+  test('YouTube: answers deterministic video view count and JST upload date questions with exact stored stats', async () => {
+    installYouTubeStore({
+      100: {
+        channel: {
+          channel_id: 'UCx',
+          channel_ref: '@nobaman',
+          title: 'のばまんch',
+          subscriber_count: 625000,
+          view_count: 245000000,
+          url: 'https://www.youtube.com/channel/UCx',
+          synced_at: new Date('2026-10-29T12:00:00Z')
+        },
+        videos: [
+          {
+            video_id: 'mcBuild0001',
+            title: 'マイクラ巨大城建築',
+            description: 'お城を作ったよ',
+            live_status: 'none',
+            // Late-night JST upload (Oct 28 01:30 JST, Oct 27 UTC)
+            published_at: new Date('2026-10-27T16:30:00Z'),
+            duration: 'PT18M20S',
+            view_count: 152300,
+            like_count: 8420,
+            comment_count: 512,
+            stats_updated_at: new Date(),
+            url: 'https://www.youtube.com/watch?v=mcBuild0001'
+          }
+        ]
+      }
+    })
+    const { channel, replies } = createChannel()
+    const requests = installGemini([
+      [call('search_youtube', { query: 'マイクラ巨大城建築' })],
+      body => {
+        const result = lastToolResponses(body)[0].response.result
+        assert.match(result, /公開 2026-10-28、長さ 18分20秒、再生 152,300回（15万2,300回）、高評価 8,420、コメント 512件/)
+        return [call('submit_chat_reply', {
+          text: '[マイクラ巨大城建築](https://www.youtube.com/watch?v=mcBuild0001) は 2026年10月28日公開で、再生数は 152,300回（15万2,300回）だよ！'
+        })]
+      }
+    ])
+    await mentionEvent.handle(mention(channel, '<@BOT> マイクラ巨大城建築の動画の再生数と公開日は？'))
+    assert.match(requests[0].body.systemInstruction.parts[0].text, /確定した数値や日付を聞かれたときは、記憶や推測/)
+    assert.match(replies[0].state.content, /2026年10月28日公開で、再生数は 152,300回（15万2,300回）/)
   })
 
   test('channel history: "このチャンネルの内容で" reads the stored messages of the request channel', async (t) => {

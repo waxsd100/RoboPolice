@@ -60,11 +60,55 @@ describe('fetchChannelKnowledge', () => {
     assert.ok(calls.every(c => !c.url.includes('yt-key')), 'and never in the URL')
     assert.ok(calls.every(c => c.url.startsWith('https://www.googleapis.com/youtube/v3/')), 'straight to Google by default')
 
-    assert.deepEqual(result.channel, { id: UC, title: 'のばまんチャンネル', description: 'ゲーム配信', handle: '@nobaman', url: `https://www.youtube.com/channel/${UC}` })
+    assert.deepEqual(result.channel, { id: UC, title: 'のばまんチャンネル', description: 'ゲーム配信', handle: '@nobaman', subscriberCount: null, viewCount: null, url: `https://www.youtube.com/channel/${UC}` })
     assert.equal(result.videos[0].description.length, 1000)
     assert.deepEqual(result.videos[1], {
-      id: 'v2', title: '11/3 記念配信', description: '告知', publishedAt: '2026-10-28T10:00:00Z', liveStatus: 'upcoming', scheduledStart: '2026-11-03T11:00:00Z', actualStart: null, actualEnd: null, isStream: true, thumbnail: null, duration: 'P0D', url: 'https://www.youtube.com/watch?v=v2'
+      id: 'v2', channelId: null, channelTitle: null, title: '11/3 記念配信', description: '告知', publishedAt: '2026-10-28T10:00:00Z', liveStatus: 'upcoming', scheduledStart: '2026-11-03T11:00:00Z', actualStart: null, actualEnd: null, isStream: true, thumbnail: null, duration: 'P0D', viewCount: null, likeCount: null, commentCount: null, url: 'https://www.youtube.com/watch?v=v2'
     })
+  })
+
+  test('reads channel and video statistics and respects hiddenSubscriberCount', async () => {
+    fakeApi({
+      channels: {
+        items: [{
+          id: UC,
+          snippet: { title: 'のばまんチャンネル', description: 'ゲーム配信', customUrl: '@nobaman' },
+          contentDetails: { relatedPlaylists: { uploads: 'UU' + 'a'.repeat(22) } },
+          statistics: { subscriberCount: '625000', hiddenSubscriberCount: false, viewCount: '245000000' }
+        }]
+      },
+      videos: {
+        items: [{
+          id: 'v1',
+          snippet: { channelId: UC, channelTitle: 'のばまんチャンネル', title: '神回', description: '', publishedAt: '2026-10-27T16:30:00Z', liveBroadcastContent: 'none' },
+          contentDetails: { duration: 'PT12M34S' },
+          statistics: { viewCount: '152300', likeCount: '8420', commentCount: '512' }
+        }]
+      }
+    })
+    const result = await fetchChannelKnowledge({ handle: 'nobaman' }, 'yt-key')
+    assert.equal(result.channel.subscriberCount, 625000)
+    assert.equal(result.channel.viewCount, 245000000)
+    assert.equal(result.videos[0].channelId, UC)
+    assert.equal(result.videos[0].channelTitle, 'のばまんチャンネル')
+    assert.equal(result.videos[0].viewCount, 152300)
+    assert.equal(result.videos[0].likeCount, 8420)
+    assert.equal(result.videos[0].commentCount, 512)
+
+    fakeApi({
+      channels: {
+        items: [{
+          id: UC,
+          snippet: { title: '非公開ch' },
+          contentDetails: { relatedPlaylists: { uploads: 'UU' + 'a'.repeat(22) } },
+          statistics: { subscriberCount: '625000', hiddenSubscriberCount: true, viewCount: '1000' }
+        }]
+      },
+      playlistItems: { items: [] }
+    })
+    const hidden = await fetchChannelKnowledge({ id: UC }, 'yt-key')
+    assert.equal(hidden.channel.subscriberCount, null)
+    assert.equal(hidden.channel.viewCount, 1000)
   })
 
   test('reads the channel by ID', async () => {
@@ -92,7 +136,7 @@ describe('fetchChannelKnowledge', () => {
 })
 
 describe('parseVideoId', () => {
-  const { parseVideoId } = require('../../src/bot/utils/youtube')
+  const { parseVideoId, parseVideoIds } = require('../../src/bot/utils/youtube')
   for (const [input, id] of [
     ['https://www.youtube.com/watch?v=dQw4w9WgXcQ', 'dQw4w9WgXcQ'],
     ['https://www.youtube.com/watch?feature=share&v=dQw4w9WgXcQ&t=10', 'dQw4w9WgXcQ'],
@@ -107,6 +151,12 @@ describe('parseVideoId', () => {
   for (const input of ['https://www.youtube.com/@nobaman', 'https://example.com/watch?v=dQw4w9WgXcQ', 'https://youtu.be/short', '']) {
     test(`rejects ${JSON.stringify(input)}`, () => assert.equal(parseVideoId(input), null))
   }
+  test('parseVideoIds collects unique video IDs in order', () => {
+    assert.deepEqual(
+      parseVideoIds('比較 https://youtu.be/dQw4w9WgXcQ と https://www.youtube.com/watch?v=abcdefghijk と https://youtu.be/dQw4w9WgXcQ'),
+      ['dQw4w9WgXcQ', 'abcdefghijk']
+    )
+  })
 })
 
 describe('fetchChannelKnowledge paging', () => {
@@ -199,7 +249,7 @@ describe('routing through Cloudflare AI Gateway', () => {
     Object.assign(process.env, { CLOUDFLARE_ACCOUNT_ID: 'acct', CLOUDFLARE_AI_GATEWAY_ID: 'gw', CLOUDFLARE_AI_GATEWAY_TOKEN: 'gw-token', YOUTUBE_GATEWAY_PROVIDER: 'youtube' })
     const calls = recordingApi()
     await fetchChannelKnowledge({ handle: 'nobaman' }, 'yt-key')
-    assert.equal(calls[0].url, 'https://gateway.ai.cloudflare.com/v1/acct/gw/custom-youtube/youtube/v3/channels?part=snippet%2CcontentDetails&forHandle=nobaman')
+    assert.equal(calls[0].url, 'https://gateway.ai.cloudflare.com/v1/acct/gw/custom-youtube/youtube/v3/channels?part=snippet%2CcontentDetails%2Cstatistics&forHandle=nobaman')
     assert.deepEqual(calls[0].headers, { 'x-goog-api-key': 'yt-key', 'cf-aig-authorization': 'Bearer gw-token' })
   })
 
@@ -238,8 +288,8 @@ describe('linkTimestamps', () => {
   })
 })
 
-describe('durationSeconds', () => {
-  const { durationSeconds } = require('../../src/bot/utils/youtube')
+describe('durationSeconds and deterministic formatters', () => {
+  const { durationSeconds, formatDuration, formatCount, formatJstDate, formatJstIso } = require('../../src/bot/utils/youtube')
   test('reads YouTube\'s ISO 8601 durations, null when there is none', () => {
     assert.equal(durationSeconds('PT45S'), 45)
     assert.equal(durationSeconds('PT1H2M3S'), 3723)
@@ -247,5 +297,25 @@ describe('durationSeconds', () => {
     assert.equal(durationSeconds('P1DT1S'), 86401)
     assert.equal(durationSeconds('P0D'), 0)
     for (const none of [null, '', 'P', 'PT', 'abc']) assert.equal(durationSeconds(none), null, String(none))
+  })
+
+  test('formats durations, counts with Japanese units, and dates/timestamps in Asia/Tokyo', () => {
+    assert.equal(formatDuration('PT45S'), '45秒')
+    assert.equal(formatDuration('PT10M'), '10分')
+    assert.equal(formatDuration('PT1H2M3S'), '1時間2分3秒')
+    assert.equal(formatDuration('P0D'), null)
+    assert.equal(formatDuration(null), null)
+
+    assert.equal(formatCount(850, '回'), '850回')
+    assert.equal(formatCount(10000, '回'), '10,000回（1万回）')
+    assert.equal(formatCount('152300', '回'), '152,300回（15万2,300回）')
+    assert.equal(formatCount(245000000, '回'), '245,000,000回（2億4,500万回）')
+    assert.equal(formatCount(null, '回'), null)
+
+    // 2026-10-27T16:30:00Z is 2026-10-28 01:30:00 in Japan (+09:00), not Oct 27.
+    assert.equal(formatJstDate('2026-10-27T16:30:00Z'), '2026-10-28')
+    assert.equal(formatJstIso('2026-10-27T16:30:00Z'), '2026-10-28T01:30:00+09:00')
+    assert.equal(formatJstDate(null), null)
+    assert.equal(formatJstIso('not-a-date'), null)
   })
 })

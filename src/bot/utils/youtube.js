@@ -49,11 +49,19 @@ async function call (path, params, apiKey) {
   return res.json()
 }
 
-// The video ID in a YouTube link: watch?v=, youtu.be/, /shorts/, /live/ and /embed/.
+// The video IDs in text or YouTube links: watch?v=, youtu.be/, /shorts/, /live/ and /embed/.
+const VIDEO_LINK_RE = /(?:youtube\.com\/(?:watch\?(?:[^#\s]*&)?v=|shorts\/|live\/|embed\/)|youtu\.be\/)([\w-]{11})(?![\w-])/g
+
+function parseVideoIds (input) {
+  const ids = []
+  for (const m of String(input || '').matchAll(VIDEO_LINK_RE)) {
+    if (!ids.includes(m[1])) ids.push(m[1])
+  }
+  return ids
+}
+
 function parseVideoId (input) {
-  const text = String(input || '').trim()
-  const match = text.match(/(?:youtube\.com\/(?:watch\?(?:[^#\s]*&)?v=|shorts\/|live\/|embed\/)|youtu\.be\/)([\w-]{11})(?![\w-])/)
-  return match ? match[1] : null
+  return parseVideoIds(input)[0] || null
 }
 
 // Times in a summary ([12:34] or [1:02:03]) as links that open the video there, so they can be
@@ -74,9 +82,68 @@ function durationSeconds (duration) {
   return ((d * 24 + h) * 60 + min) * 60 + sec
 }
 
+function formatDuration (duration) {
+  const total = durationSeconds(duration)
+  if (total === null) {
+    const raw = String(duration || '').trim()
+    return raw && raw !== 'P0D' ? raw : null
+  }
+  if (total === 0) return null
+  const h = Math.floor(total / 3600)
+  const m = Math.floor((total % 3600) / 60)
+  const s = total % 60
+  const parts = []
+  if (h) parts.push(`${h}時間`)
+  if (m) parts.push(`${m}分`)
+  if (s || !parts.length) parts.push(`${s}秒`)
+  return parts.join('')
+}
+
+function parseCount (value) {
+  if (value === null || value === undefined || value === '') return null
+  const n = Number(value)
+  return Number.isFinite(n) && n >= 0 ? Math.trunc(n) : null
+}
+
+function formatJaMyriad (n) {
+  const oku = Math.floor(n / 100000000)
+  const man = Math.floor((n % 100000000) / 10000)
+  const rem = n % 10000
+  const parts = []
+  if (oku) parts.push(`${oku.toLocaleString('en-US')}億`)
+  if (man) parts.push(`${man.toLocaleString('en-US')}万`)
+  if (rem) parts.push(rem.toLocaleString('en-US'))
+  return parts.join('') || '0'
+}
+
+function formatCount (value, unit = '') {
+  const n = parseCount(value)
+  if (n === null) return null
+  const comma = `${n.toLocaleString('en-US')}${unit}`
+  return n >= 10000 ? `${comma}（${formatJaMyriad(n)}${unit}）` : comma
+}
+
+const JST_OFFSET_MS = 9 * 60 * 60 * 1000
+
+function formatJstDate (input) {
+  if (input === null || input === undefined || input === '') return null
+  const d = input instanceof Date ? input : new Date(input)
+  if (Number.isNaN(d.getTime())) return null
+  return new Date(d.getTime() + JST_OFFSET_MS).toISOString().slice(0, 10)
+}
+
+function formatJstIso (input) {
+  if (input === null || input === undefined || input === '') return null
+  const d = input instanceof Date ? input : new Date(input)
+  if (Number.isNaN(d.getTime())) return null
+  return `${new Date(d.getTime() + JST_OFFSET_MS).toISOString().slice(0, 19)}+09:00`
+}
+
 function toVideo (v) {
   return {
     id: v.id,
+    channelId: v.snippet?.channelId || null,
+    channelTitle: v.snippet?.channelTitle || null,
     title: v.snippet.title,
     description: (v.snippet.description || '').slice(0, MAX_DESCRIPTION),
     publishedAt: v.snippet.publishedAt,
@@ -89,6 +156,9 @@ function toVideo (v) {
     isStream: !!v.liveStreamingDetails,
     thumbnail: v.snippet.thumbnails?.maxres?.url || v.snippet.thumbnails?.high?.url || v.snippet.thumbnails?.medium?.url || null,
     duration: v.contentDetails?.duration || null,
+    viewCount: parseCount(v.statistics?.viewCount),
+    likeCount: parseCount(v.statistics?.likeCount),
+    commentCount: parseCount(v.statistics?.commentCount),
     url: `https://www.youtube.com/watch?v=${v.id}`
   }
 }
@@ -109,7 +179,7 @@ async function readUploads (playlistId, apiKey, { startToken = null, knownIds = 
     }, apiKey)
     const ids = (playlist.items || []).map(i => i.contentDetails.videoId)
     if (ids.length !== 0) {
-      const details = await call('videos', { part: 'snippet,contentDetails,liveStreamingDetails', id: ids.join(',') }, apiKey)
+      const details = await call('videos', { part: 'snippet,contentDetails,liveStreamingDetails,statistics', id: ids.join(',') }, apiKey)
       videos.push(...(details.items || []).map(toVideo))
     }
     pageToken = playlist.nextPageToken
@@ -122,7 +192,7 @@ async function readUploads (playlistId, apiKey, { startToken = null, knownIds = 
 // The channel itself (1 quota unit). Throws with a hint when it does not exist.
 async function resolveChannel (ref, apiKey) {
   const channels = await call('channels', {
-    part: 'snippet,contentDetails',
+    part: 'snippet,contentDetails,statistics',
     ...(ref.id ? { id: ref.id } : { forHandle: ref.handle })
   }, apiKey)
   const channel = channels.items?.[0]
@@ -158,6 +228,8 @@ async function fetchChannelKnowledge (ref, apiKey, { knownIds = new Set(), backf
       title: channel.snippet.title,
       description: (channel.snippet.description || '').slice(0, MAX_DESCRIPTION),
       handle: channel.snippet.customUrl || null,
+      subscriberCount: channel.statistics?.hiddenSubscriberCount ? null : parseCount(channel.statistics?.subscriberCount),
+      viewCount: parseCount(channel.statistics?.viewCount),
       url: `https://www.youtube.com/channel/${channel.id}`
     },
     videos,
@@ -170,10 +242,10 @@ async function fetchChannelKnowledge (ref, apiKey, { knownIds = new Set(), backf
 async function fetchVideos (ids, apiKey) {
   const videos = []
   for (let i = 0; i < ids.length; i += PAGE_SIZE) {
-    const details = await call('videos', { part: 'snippet,contentDetails,liveStreamingDetails', id: ids.slice(i, i + PAGE_SIZE).join(',') }, apiKey)
+    const details = await call('videos', { part: 'snippet,contentDetails,liveStreamingDetails,statistics', id: ids.slice(i, i + PAGE_SIZE).join(',') }, apiKey)
     videos.push(...(details.items || []).map(toVideo))
   }
   return videos
 }
 
-module.exports = { parseChannelRef, parseVideoId, resolveChannel, fetchChannelKnowledge, fetchVideos, toVideo, YouTubeError, MAX_PAGES, linkTimestamps, durationSeconds }
+module.exports = { parseChannelRef, parseVideoId, parseVideoIds, resolveChannel, fetchChannelKnowledge, fetchVideos, toVideo, YouTubeError, MAX_PAGES, linkTimestamps, durationSeconds, formatDuration, parseCount, formatCount, formatJstDate, formatJstIso }

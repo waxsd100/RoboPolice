@@ -437,9 +437,9 @@ describe('search_youtube', () => {
       '  概要: ゲーム配信',
       '保存している動画 3 件、うち内容の要約あり 0 件',
       '新しい順の動画:',
-      '- [配信予定 2026-11-03T11:00:00.000Z] 11/3 記念配信（公開 2026-10-28）https://y/v2',
+      '- [配信予定 2026-11-03T20:00:00+09:00] 11/3 記念配信（公開 2026-10-28）https://y/v2',
       '  周年記念',
-      '- マイクラ 建築（公開 2026-10-27、長さ PT1H）https://y/v1',
+      '- マイクラ 建築（公開 2026-10-27、長さ 1時間）https://y/v1',
       '  城を作る',
       '- マイクラ 雑談（公開 2026-10-20）https://y/v0'
     ].join('\n'))
@@ -476,6 +476,121 @@ describe('search_youtube', () => {
     assert.match(fallbackText, /「プリペア神企画」に一致した動画: 0 件/)
     assert.match(fallbackText, /指定の語が直接含まれる動画はありませんでした。以下は保存済みの動画です/)
     assert.ok(fallbackText.indexOf('マイクラ 雑談') < fallbackText.indexOf('マイクラ 建築'), 'summarized videos come first in fallback')
+  })
+
+  test('formats JST dates across UTC midnight, stream start times, exact counts, and sorts by views or oldest', async () => {
+    installYouTubeStore({
+      100: {
+        channel: { ...synced, subscriber_count: 625000, view_count: 245000000 },
+        videos: [
+          {
+            video_id: 'vid_latejst',
+            title: '深夜投稿動画',
+            description: '',
+            live_status: 'none',
+            // 2026-10-27 16:30 UTC == 2026-10-28 01:30 JST
+            published_at: new Date('2026-10-27T16:30:00Z'),
+            duration: 'PT12M34S',
+            view_count: 152300,
+            like_count: 8420,
+            comment_count: 512,
+            stats_updated_at: new Date(),
+            url: 'https://www.youtube.com/watch?v=vid_latejst'
+          },
+          {
+            video_id: 'vid_archive',
+            title: '長時間配信アーカイブ',
+            description: '',
+            live_status: 'none',
+            actual_start: new Date('2026-10-20T11:00:00Z'),
+            // Waiting room created days earlier: stream time must still be shown clearly
+            published_at: new Date('2026-10-18T03:00:00Z'),
+            duration: 'PT3H5M',
+            view_count: 1250000,
+            stats_updated_at: new Date(),
+            url: 'https://www.youtube.com/watch?v=vid_archive'
+          },
+          {
+            video_id: 'vid_oldest1',
+            title: '初投稿テスト',
+            description: '',
+            live_status: 'none',
+            published_at: new Date('2020-04-01T09:00:00Z'),
+            duration: 'PT45S',
+            view_count: 980,
+            stats_updated_at: new Date(),
+            url: 'https://www.youtube.com/watch?v=vid_oldest1'
+          }
+        ]
+      }
+    })
+
+    const byViews = (await tools().call('search_youtube', { query: '一番再生数が多い動画' })).result
+    assert.match(byViews, /登録者 625,000人（62万5,000人）、総再生 245,000,000回（2億4,500万回）/)
+    assert.match(byViews, /再生数の多い順の動画（3 件）:\n- 長時間配信アーカイブ（配信 2026-10-20T20:00:00\+09:00、公開 2026-10-18、長さ 3時間5分、再生 1,250,000回（125万回））/)
+    assert.match(byViews, /- 深夜投稿動画（公開 2026-10-28、長さ 12分34秒、再生 152,300回（15万2,300回）、高評価 8,420、コメント 512件）/)
+
+    const oldest = (await tools().call('search_youtube', { query: '一番古い動画' })).result
+    assert.match(oldest, /古い順の動画:\n- 初投稿テスト（公開 2020-04-01、長さ 45秒、再生 980回）/)
+  })
+
+  test('refreshes live video statistics and resolves direct YouTube URLs in search_youtube and fetch_url', async () => {
+    const prevKey = process.env.YOUTUBE_API_KEY
+    process.env.YOUTUBE_API_KEY = 'yt-test-key'
+    const origFetch = global.fetch
+    try {
+      const store = installYouTubeStore({
+        100: {
+          channel: { ...synced, channel_id: 'UCown0000000000000000000' },
+          videos: [{
+            video_id: 'ownVideo001',
+            title: '既存動画',
+            description: '概要テスト',
+            live_status: 'none',
+            published_at: new Date('2026-10-25T10:00:00Z'),
+            duration: 'PT10M',
+            view_count: 100,
+            stats_updated_at: new Date('2026-10-01T00:00:00Z'),
+            url: 'https://www.youtube.com/watch?v=ownVideo001'
+          }]
+        }
+      })
+      global.fetch = async url => {
+        const ids = new URL(url).searchParams.get('id').split(',')
+        return {
+          ok: true,
+          json: async () => ({
+            items: ids.map(id => id === 'ownVideo001'
+              ? {
+                  id: 'ownVideo001',
+                  snippet: { channelId: 'UCown0000000000000000000', channelTitle: 'のばまんch', title: '既存動画', description: '概要テスト', publishedAt: '2026-10-25T10:00:00Z', liveBroadcastContent: 'none' },
+                  contentDetails: { duration: 'PT10M' },
+                  statistics: { viewCount: '54321', likeCount: '2100', commentCount: '99' }
+                }
+              : {
+                  id,
+                  snippet: { channelId: 'UCext0000000000000000000', channelTitle: '外部チャンネル', title: '外部コラボ動画', description: 'コラボ概要', publishedAt: '2026-11-01T15:30:00Z', liveBroadcastContent: 'none' },
+                  contentDetails: { duration: 'PT25M' },
+                  statistics: { viewCount: '333333', likeCount: '9999', commentCount: '444' }
+                })
+          })
+        }
+      }
+
+      const refreshed = (await tools().call('search_youtube', { query: '既存動画' })).result
+      assert.match(refreshed, /再生 54,321回（5万4,321回）、高評価 2,100、コメント 99件/)
+      assert.equal(store.knowledge[100].videos[0].view_count, 54321, 'updated view count persisted in store')
+
+      const fetched = (await tools().call('fetch_url', { url: 'https://youtu.be/extVideo002' })).result
+      assert.match(fetched, /動画情報（YouTube Data API \/ 保存データ）:/)
+      assert.match(fetched, /題名: 外部コラボ動画/)
+      assert.match(fetched, /チャンネル: 外部チャンネル/)
+      assert.match(fetched, /公開日時（日本時間）: 2026-11-02T00:30:00\+09:00（公開日: 2026-11-02）/)
+      assert.match(fetched, /再生回数: 333,333回（33万3,333回）/)
+    } finally {
+      global.fetch = origFetch
+      process.env.YOUTUBE_API_KEY = prevKey
+    }
   })
 })
 
