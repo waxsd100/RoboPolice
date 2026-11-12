@@ -241,20 +241,23 @@ describe('stores', { skip: !database.available && 'needs PGHOST' }, () => {
     assert.deepEqual(await emojis.descriptions('g1'), { e1: '笑ったとき', e2: '悲しいとき' })
 
     // Cross-server queries (listEmojis, descriptions, nearestEmojis across multiple guild IDs).
-    await emojis.syncEmojis('g2', [{ id: 'e3', name: 'nobaman_wave', animated: false }])
+    await q("INSERT INTO guilds (id, owner_id) VALUES ('g_owner', 'o_owner')")
+    await emojis.syncEmojis('g_owner', [{ id: 'e3', name: 'nobaman_wave', animated: false }])
     await emojis.saveDescription('e3', 'nobaman_wave', '挨拶するとき')
     await emojis.saveEmbedding('e3', axis(2), modelA)
-    assert.deepEqual(await emojis.listEmojis(['g1', 'g2']), [
+    assert.deepEqual(await emojis.listEmojis(['g1', 'g_owner']), [
       { id: 'e1', guild_id: 'g1', name: 'kusa', animated: false },
       { id: 'e2', guild_id: 'g1', name: 'naki', animated: true },
-      { id: 'e3', guild_id: 'g2', name: 'nobaman_wave', animated: false }
+      { id: 'e3', guild_id: 'g_owner', name: 'nobaman_wave', animated: false }
     ])
-    assert.deepEqual(await emojis.descriptions(['g1', 'g2']), {
+    assert.deepEqual(await emojis.descriptions(['g1', 'g_owner']), {
       e1: '笑ったとき',
       e2: '悲しいとき',
       e3: '挨拶するとき'
     })
-    assert.deepEqual(await emojis.nearestEmojis(['g1', 'g2'], axis(2), modelA, 5), ['e3', 'e1', 'e2'])
+    assert.deepEqual(await emojis.nearestEmojis(['g1', 'g_owner'], axis(2), modelA, 5), ['e3', 'e1', 'e2'])
+    await q("DELETE FROM guilds WHERE id = 'g_owner'")
+    assert.deepEqual(await emojis.listEmojis('g_owner'), [])
 
     // Renamed: described again. Gone from Discord: deleted.
     await emojis.syncEmojis('g1', [{ id: 'e1', name: 'www' }])

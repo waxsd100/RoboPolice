@@ -74,7 +74,7 @@ async function nearestEmojis (guildID, query, model, limit) {
   if (!ids.length) return []
   const rows = await pool.query(
     `SELECT emoji_id FROM guild_emojis WHERE guild_id = ANY($1) AND embedding_model = $2 AND embedding IS NOT NULL
-     ORDER BY embedding <=> $3::halfvec LIMIT $4`,
+     ORDER BY embedding <=> $3::halfvec, emoji_id LIMIT $4`,
     [ids, model, toVectorLiteral(query), limit])
   return rows.rows.map(r => r.emoji_id)
 }
