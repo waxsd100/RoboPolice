@@ -7,7 +7,6 @@
 const crypto = require('crypto')
 const pool = require('../../clients/postgres')
 const { toVectorLiteral } = require('../../../bot/utils/embeddings')
-const { modelId } = require('./embeddings')
 
 const hashOf = text => crypto.createHash('sha256').update(text).digest('hex').slice(0, 32)
 
@@ -32,7 +31,7 @@ function createStore (source) {
           `INSERT INTO knowledge_sections (source, url, position, heading, text, text_hash) VALUES ($1, $2, $3, $4, $5, $6)
            ON CONFLICT (source, url, position) DO UPDATE SET heading = $4, text = $5, text_hash = $6,
              embedding = CASE WHEN knowledge_sections.text_hash = $6 THEN knowledge_sections.embedding END,
-             model_id = CASE WHEN knowledge_sections.text_hash = $6 THEN knowledge_sections.model_id END`,
+             embedding_model = CASE WHEN knowledge_sections.text_hash = $6 THEN knowledge_sections.embedding_model END`,
           [source, url, position, s.heading, s.text, hash])
         await client.query('DELETE FROM knowledge_section_images WHERE source = $1 AND url = $2 AND position = $3', [source, url, position])
         await client.query(
@@ -66,16 +65,16 @@ function createStore (source) {
   async function sectionsToEmbed (model, limit) {
     const rows = await pool.query(
       `SELECT s.url, s.position, p.title, s.heading, s.text FROM knowledge_sections s JOIN knowledge_pages p ON p.source = s.source AND p.url = s.url
-       WHERE s.source = $1 AND (s.embedding IS NULL OR s.model_id IS DISTINCT FROM $2)
+       WHERE s.source = $1 AND (s.embedding IS NULL OR s.embedding_model IS DISTINCT FROM $2::embedding_model)
        ORDER BY s.url, s.position LIMIT $3`,
-      [source, await modelId(model), limit])
+      [source, model, limit])
     return rows.rows
   }
 
   async function saveSectionEmbedding (url, position, embedding, model) {
     await pool.query(
-      'UPDATE knowledge_sections SET embedding = $4, model_id = $5 WHERE source = $1 AND url = $2 AND position = $3',
-      [source, url, position, toVectorLiteral(embedding), await modelId(model)])
+      'UPDATE knowledge_sections SET embedding = $4, embedding_model = $5 WHERE source = $1 AND url = $2 AND position = $3',
+      [source, url, position, toVectorLiteral(embedding), model])
   }
 
   // The `limit` parts closest in meaning to the vector `query`: [{ url, title, heading, text, score }].
@@ -83,9 +82,9 @@ function createStore (source) {
     const rows = await pool.query(
       `SELECT s.url, p.title, s.heading, s.text, 1 - (s.embedding <=> $1::halfvec) AS score
        FROM knowledge_sections s JOIN knowledge_pages p ON p.source = s.source AND p.url = s.url
-       WHERE s.source = $4 AND s.model_id = $2 AND s.embedding IS NOT NULL
+       WHERE s.source = $4 AND s.embedding_model = $2 AND s.embedding IS NOT NULL
        ORDER BY s.embedding <=> $1::halfvec LIMIT $3`,
-      [toVectorLiteral(query), await modelId(model), limit, source])
+      [toVectorLiteral(query), model, limit, source])
     return rows.rows.map(r => ({ ...r, score: Number(r.score) }))
   }
 
@@ -134,7 +133,7 @@ function createStore (source) {
     try {
       await client.query('BEGIN')
       const prev = (await client.query(
-        `SELECT f.kind, f.name, ${ALIASES} AS aliases, f.content, f.embedding::text AS embedding, f.model_id
+        `SELECT f.kind, f.name, ${ALIASES} AS aliases, f.content, f.embedding::text AS embedding, f.embedding_model
          FROM knowledge_facts f WHERE f.source = $1 AND f.url = $2 AND f.position = $3`,
         [source, url, position])).rows
       const keyOf = (f, aliases) => `${f.kind}\n${f.name}\n${aliases.join('\n')}\n${f.content}`
@@ -145,12 +144,12 @@ function createStore (source) {
         const kept = byKey.get(keyOf(f, aliases))
         await client.query(
           `WITH fact AS (
-             INSERT INTO knowledge_facts (source, url, position, kind, name, content, embedding, model_id)
+             INSERT INTO knowledge_facts (source, url, position, kind, name, content, embedding, embedding_model)
              VALUES ($1, $2, $3, $4, $5, $6, $8::halfvec, $9) RETURNING id
            )
            INSERT INTO knowledge_fact_aliases (fact_id, alias_position, alias)
            SELECT fact.id, a.n - 1, a.alias FROM fact, unnest($7::text[]) WITH ORDINALITY AS a (alias, n)`,
-          [source, url, position, f.kind, f.name, f.content, aliases, kept?.embedding || null, kept?.model_id || null])
+          [source, url, position, f.kind, f.name, f.content, aliases, kept?.embedding || null, kept?.embedding_model || null])
       }
       await client.query('UPDATE knowledge_sections SET facts_hash = $4 WHERE source = $1 AND url = $2 AND position = $3', [source, url, position, textHash])
       await client.query('COMMIT')
@@ -166,13 +165,13 @@ function createStore (source) {
   async function factsToEmbed (model, limit) {
     const rows = await pool.query(
       `SELECT f.id, f.kind, f.name, ${ALIASES} AS aliases, f.content FROM knowledge_facts f
-       WHERE f.source = $3 AND (f.embedding IS NULL OR f.model_id IS DISTINCT FROM $1) ORDER BY f.id LIMIT $2`,
-      [await modelId(model), limit, source])
+       WHERE f.source = $3 AND (f.embedding IS NULL OR f.embedding_model IS DISTINCT FROM $1::embedding_model) ORDER BY f.id LIMIT $2`,
+      [model, limit, source])
     return rows.rows
   }
 
   async function saveFactEmbedding (id, embedding, model) {
-    await pool.query('UPDATE knowledge_facts SET embedding = $2, model_id = $3 WHERE id = $1', [id, toVectorLiteral(embedding), await modelId(model)])
+    await pool.query('UPDATE knowledge_facts SET embedding = $2, embedding_model = $3 WHERE id = $1', [id, toVectorLiteral(embedding), model])
   }
 
   // The `limit` pieces of knowledge closest in meaning to the vector `query`, with where they come
@@ -183,9 +182,9 @@ function createStore (source) {
        FROM knowledge_facts f
        JOIN knowledge_sections s ON s.source = f.source AND s.url = f.url AND s.position = f.position
        JOIN knowledge_pages p ON p.source = f.source AND p.url = f.url
-       WHERE f.source = $4 AND f.model_id = $2 AND f.embedding IS NOT NULL
+       WHERE f.source = $4 AND f.embedding_model = $2 AND f.embedding IS NOT NULL
        ORDER BY f.embedding <=> $1::halfvec LIMIT $3`,
-      [toVectorLiteral(query), await modelId(model), limit, source])
+      [toVectorLiteral(query), model, limit, source])
     return rows.rows.map(r => ({ ...r, score: Number(r.score) }))
   }
 

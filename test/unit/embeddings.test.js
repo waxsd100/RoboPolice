@@ -44,6 +44,25 @@ describe('embeddings', () => {
       delete process.env.GEMINI_EMBEDDING_MODEL
     }
   })
+
+  test('model() accepts every EMBEDDING_MODELS enum entry and falls back on unknown values', (t) => {
+    const { model } = require('../../src/bot/utils/embeddings')
+    const { EMBEDDING_MODELS } = require('../../src/bot/utils/replyOptions')
+    const warnings = []
+    t.mock.method(global.logger, 'warn', msg => warnings.push(msg))
+    try {
+      for (const name of EMBEDDING_MODELS) {
+        process.env.GEMINI_EMBEDDING_MODEL = name
+        assert.equal(model(), name)
+      }
+      process.env.GEMINI_EMBEDDING_MODEL = 'unknown-embedding-model'
+      assert.equal(model(), 'gemini-embedding-001')
+      assert.equal(warnings.length, 1)
+      assert.match(warnings[0], /Unknown GEMINI_EMBEDDING_MODEL/)
+    } finally {
+      delete process.env.GEMINI_EMBEDDING_MODEL
+    }
+  })
 })
 
 describe('embeddingIndexer', () => {
@@ -69,10 +88,10 @@ describe('embeddingIndexer', () => {
     assert.deepEqual(saved.videos.map(v => [v.videoID, v.model]), [['v2', 'gemini-embedding-001']])
 
     // Another model: every video is embedded again, since vectors of different models don't compare.
-    process.env.GEMINI_EMBEDDING_MODEL = 'gemini-embedding-002'
+    process.env.GEMINI_EMBEDDING_MODEL = 'gemini-embedding-2'
     try {
       assert.equal(await indexer.indexVideos(), 2)
-      assert.deepEqual(saved.videos.slice(1).map(v => [v.videoID, v.model]), [['v1', 'gemini-embedding-002'], ['v2', 'gemini-embedding-002']])
+      assert.deepEqual(saved.videos.slice(1).map(v => [v.videoID, v.model]), [['v1', 'gemini-embedding-2'], ['v2', 'gemini-embedding-2']])
     } finally {
       delete process.env.GEMINI_EMBEDDING_MODEL
     }

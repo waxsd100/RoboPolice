@@ -1,7 +1,6 @@
 // The described custom emojis of each server (migrations/011_guild_emojis.sql).
 const pool = require('../../clients/postgres')
 const { toVectorLiteral } = require('../../../bot/utils/embeddings')
-const { modelId } = require('./embeddings')
 
 // Makes the stored emojis of the server match `emojis` ([{ id, name, animated }]): adds new ones,
 // renames, and deletes those gone.
@@ -30,23 +29,23 @@ async function emojisToDescribe (guildID, limit, contextHash = null) {
 async function emojisToEmbed (guildID, model, limit) {
   const rows = await pool.query(
     `SELECT emoji_id, name, description FROM guild_emojis
-     WHERE guild_id = $1 AND description IS NOT NULL AND (embedding IS NULL OR model_id IS DISTINCT FROM $2)
+     WHERE guild_id = $1 AND description IS NOT NULL AND (embedding IS NULL OR embedding_model IS DISTINCT FROM $2::embedding_model)
      ORDER BY emoji_id LIMIT $3`,
-    [guildID, await modelId(model), limit])
+    [guildID, model, limit])
   return rows.rows
 }
 
 async function saveDescription (emojiID, name, description, contextHash = null) {
   // A new description needs a new embedding.
   await pool.query(
-    'UPDATE guild_emojis SET description = $2, described_name = $3, context_hash = $4, embedding = NULL, model_id = NULL, updated_at = now() WHERE emoji_id = $1',
+    'UPDATE guild_emojis SET description = $2, described_name = $3, context_hash = $4, embedding = NULL, embedding_model = NULL, updated_at = now() WHERE emoji_id = $1',
     [emojiID, description, name, contextHash])
 }
 
 async function saveEmbedding (emojiID, embedding, model) {
   await pool.query(
-    'UPDATE guild_emojis SET embedding = $2, model_id = $3 WHERE emoji_id = $1',
-    [emojiID, toVectorLiteral(embedding), await modelId(model)])
+    'UPDATE guild_emojis SET embedding = $2, embedding_model = $3 WHERE emoji_id = $1',
+    [emojiID, toVectorLiteral(embedding), model])
 }
 
 // { emoji_id: description } for the server's described emojis.
@@ -58,9 +57,9 @@ async function descriptions (guildID) {
 // IDs of the server's emojis closest in meaning to the vector `query`, best first.
 async function nearestEmojis (guildID, query, model, limit) {
   const rows = await pool.query(
-    `SELECT emoji_id FROM guild_emojis WHERE guild_id = $1 AND model_id = $2 AND embedding IS NOT NULL
+    `SELECT emoji_id FROM guild_emojis WHERE guild_id = $1 AND embedding_model = $2 AND embedding IS NOT NULL
      ORDER BY embedding <=> $3::halfvec LIMIT $4`,
-    [guildID, await modelId(model), toVectorLiteral(query), limit])
+    [guildID, model, toVectorLiteral(query), limit])
   return rows.rows.map(r => r.emoji_id)
 }
 

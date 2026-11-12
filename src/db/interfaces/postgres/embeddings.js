@@ -2,25 +2,12 @@
 //
 // A message's embedding is a column of its row (migrations/024_inline_embeddings.sql), so it goes
 // with the message whenever that is deleted (retention, /clearmydata, the bot leaving), and an edit
-// clears it to be made again. embedding_model_id marks what has been handled (with the embedding
-// NULL when there was nothing to embed), so finding new messages uses a small partial index.
+// clears it to be made again. embedding_model marks what has been handled (with the embedding NULL
+// when there was nothing to embed), so finding new messages uses a small partial index.
 // Videos have one vector each, on their row too.
 const pool = require('../../clients/postgres')
 const { toVectorLiteral } = require('../../../bot/utils/embeddings')
 const { ownerGuildIDs } = require('../../../bot/utils/priority')
-
-// Embedding models by name -> ID in embedding_models. A model is added the first time it is used.
-const modelIds = new Map()
-async function modelId (name) {
-  if (!modelIds.has(name)) {
-    const rows = await pool.query(
-      `WITH added AS (INSERT INTO embedding_models (name) VALUES ($1) ON CONFLICT (name) DO NOTHING RETURNING id)
-       SELECT id FROM added UNION ALL SELECT id FROM embedding_models WHERE name = $1`,
-      [name])
-    modelIds.set(name, rows.rows[0].id)
-  }
-  return modelIds.get(name)
-}
 
 // Messages not handled yet and not in a running batch, in servers with message embeddings enabled
 // (OWNER_GUILD_IDS by default, or guilds.embed_messages = true), those of the owner's servers first,
@@ -28,7 +15,7 @@ async function modelId (name) {
 async function pendingMessages (limit, { after = null, before = null } = {}) {
   const rows = await pool.query(
     `SELECT id, guild_id, channel_id, ts, content FROM messages m
-     WHERE embedding_model_id IS NULL
+     WHERE embedding_model IS NULL
        AND ($3::timestamptz IS NULL OR ts >= $3)
        AND ($4::timestamptz IS NULL OR ts < $4 OR ts IS NULL)
        AND NOT EXISTS (SELECT 1 FROM embedding_batch_messages b WHERE b.message_id = m.id)
@@ -38,12 +25,12 @@ async function pendingMessages (limit, { after = null, before = null } = {}) {
   return rows.rows
 }
 
-// Embedding batches (migrations/028_embedding_batches.sql).
+// Embedding batches (migrations/028_embedding_batches.sql, 050_embedding_model_enum.sql).
 async function saveEmbeddingBatch (name, model, messageIDs) {
   const client = await pool.getPostgresClient()
   try {
     await client.query('BEGIN')
-    await client.query('INSERT INTO embedding_batches (name, model_id) VALUES ($1, $2)', [name, await modelId(model)])
+    await client.query('INSERT INTO embedding_batches (name, model) VALUES ($1, $2)', [name, model])
     await client.query('INSERT INTO embedding_batch_messages (message_id, batch_name) SELECT unnest($1::text[]), $2 ON CONFLICT DO NOTHING', [messageIDs, name])
     await client.query('COMMIT')
   } catch (e) {
@@ -57,10 +44,10 @@ async function saveEmbeddingBatch (name, model, messageIDs) {
 // [{ name, model, message_ids }], oldest first.
 async function runningEmbeddingBatches () {
   const rows = await pool.query(
-    `SELECT b.name, em.name AS model, b.created_at, coalesce(array_agg(m.message_id) FILTER (WHERE m.message_id IS NOT NULL), '{}') AS message_ids
-     FROM embedding_batches b JOIN embedding_models em ON em.id = b.model_id
+    `SELECT b.name, b.model, b.created_at, coalesce(array_agg(m.message_id) FILTER (WHERE m.message_id IS NOT NULL), '{}') AS message_ids
+     FROM embedding_batches b
      LEFT JOIN embedding_batch_messages m ON m.batch_name = b.name
-     GROUP BY b.name, em.name, b.created_at ORDER BY b.created_at`)
+     GROUP BY b.name, b.model, b.created_at ORDER BY b.created_at`)
   return rows.rows
 }
 
@@ -82,13 +69,13 @@ async function deleteEmbeddingBatch (name) {
 // channels were recorded). A message deleted meanwhile is simply not there to update.
 async function saveMessageEmbeddings (rows, handledIds, model = rows[0]?.model) {
   for (const r of rows) {
-    await pool.query('UPDATE messages SET embedding = $2, embedding_model_id = $3 WHERE id = $1',
-      [r.id, toVectorLiteral(r.embedding), await modelId(r.model)])
+    await pool.query('UPDATE messages SET embedding = $2, embedding_model = $3 WHERE id = $1',
+      [r.id, toVectorLiteral(r.embedding), r.model])
   }
   const embedded = new Set(rows.map(r => r.id))
   const rest = handledIds.filter(id => !embedded.has(id))
   if (rest.length && model) {
-    await pool.query('UPDATE messages SET embedding = NULL, embedding_model_id = $2 WHERE id = ANY($1)', [rest, await modelId(model)])
+    await pool.query('UPDATE messages SET embedding = NULL, embedding_model = $2 WHERE id = ANY($1)', [rest, model])
   }
 }
 
@@ -112,21 +99,21 @@ async function dropMessageEmbeddings (ids) {
 // embedded again (only in servers where message embeddings are enabled).
 async function resetStaleMessageEmbeddings (model, limit) {
   const result = await pool.query(
-    `UPDATE messages SET embedding = NULL, embedding_model_id = NULL
+    `UPDATE messages SET embedding = NULL, embedding_model = NULL
      WHERE id IN (
        SELECT m.id FROM messages m
        JOIN guilds g ON g.id = m.guild_id
-       WHERE m.embedding_model_id <> $1
+       WHERE m.embedding_model <> $1
          AND coalesce(g.embed_messages, g.id = ANY($3))
        LIMIT $2
      )`,
-    [await modelId(model), limit, ownerGuildIDs()])
+    [model, limit, ownerGuildIDs()])
   return result.rowCount || 0
 }
 
 // An edited message is embedded again.
 async function invalidateMessage (messageID) {
-  await pool.query('UPDATE messages SET embedding = NULL, embedding_model_id = NULL WHERE id = $1', [messageID])
+  await pool.query('UPDATE messages SET embedding = NULL, embedding_model = NULL WHERE id = $1', [messageID])
 }
 
 // Settings for one nearest-neighbour query, run inside its transaction. The HNSW index finds
@@ -157,9 +144,9 @@ async function nearestMessages (guildID, channelIDs, query, { model, limit = 60 
     await prepareSearch(client, limit)
     const rows = (await client.query(
       `SELECT id AS message_id, 1 - (embedding <=> $4::halfvec) AS score FROM messages
-       WHERE guild_id = $1 AND channel_id = ANY($2) AND embedding_model_id = $3 AND embedding IS NOT NULL
+       WHERE guild_id = $1 AND channel_id = ANY($2) AND embedding_model = $3 AND embedding IS NOT NULL
        ORDER BY embedding <=> $4::halfvec LIMIT $5`,
-      [guildID, channelIDs, await modelId(model), toVectorLiteral(query), limit])).rows
+      [guildID, channelIDs, model, toVectorLiteral(query), limit])).rows
     await client.query('COMMIT')
     return rows.map(r => ({ message_id: r.message_id, score: Number(r.score) }))
   } catch (e) {
@@ -190,16 +177,16 @@ async function videosForEmbedding () {
 async function saveVideoEmbedding (videoID, embedding, hash, model) {
   // A video gone meanwhile (its channel was unset) is simply not there to update.
   await pool.query(
-    'UPDATE youtube_videos SET embedding = $2, embedding_hash = $3, embedding_model_id = $4 WHERE video_id = $1',
-    [videoID, toVectorLiteral(embedding), hash, await modelId(model)])
+    'UPDATE youtube_videos SET embedding = $2, embedding_hash = $3, embedding_model = $4 WHERE video_id = $1',
+    [videoID, toVectorLiteral(embedding), hash, model])
 }
 
 // Whether any video of the bot's channels has an embedding made by `model` (the channels are the
 // same for every server; guildID is kept for the callers).
 async function hasVideoEmbeddings (guildID, model) {
   const rows = await pool.query(
-    'SELECT 1 FROM youtube_videos WHERE embedding_model_id = $1 AND embedding IS NOT NULL LIMIT 1',
-    [await modelId(model)])
+    'SELECT 1 FROM youtube_videos WHERE embedding_model = $1 AND embedding IS NOT NULL LIMIT 1',
+    [model])
   return rows.rows.length !== 0
 }
 
@@ -208,9 +195,9 @@ async function hasVideoEmbeddings (guildID, model) {
 // videos each, so all are scored.
 async function videoScores (guildID, query, model) {
   const rows = await pool.query(
-    'SELECT video_id, 1 - (embedding <=> $2::halfvec) AS score FROM youtube_videos WHERE embedding_model_id = $1 AND embedding IS NOT NULL',
-    [await modelId(model), toVectorLiteral(query)])
+    'SELECT video_id, 1 - (embedding <=> $2::halfvec) AS score FROM youtube_videos WHERE embedding_model = $1 AND embedding IS NOT NULL',
+    [model, toVectorLiteral(query)])
   return Object.fromEntries(rows.rows.map(r => [r.video_id, Number(r.score)]))
 }
 
-module.exports = { noteEmbeddingBatch, saveEmbeddingBatch, runningEmbeddingBatches, deleteEmbeddingBatch, pendingMessages, saveMessageEmbeddings, embeddedMessagesAfter, dropMessageEmbeddings, resetStaleMessageEmbeddings, invalidateMessage, nearestMessages, getMessages, videosForEmbedding, saveVideoEmbedding, hasVideoEmbeddings, videoScores, modelId }
+module.exports = { noteEmbeddingBatch, saveEmbeddingBatch, runningEmbeddingBatches, deleteEmbeddingBatch, pendingMessages, saveMessageEmbeddings, embeddedMessagesAfter, dropMessageEmbeddings, resetStaleMessageEmbeddings, invalidateMessage, nearestMessages, getMessages, videosForEmbedding, saveVideoEmbedding, hasVideoEmbeddings, videoScores }
