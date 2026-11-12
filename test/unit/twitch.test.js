@@ -96,14 +96,23 @@ test('a token Twitch no longer takes is replaced once', async () => {
   assert.equal(videoCalls, 2)
 })
 
-test('search_twitch finds archives by their title, newest first', async () => {
+test('search_twitch finds archives by their title, newest first, with JST dates, view counts and sort', async () => {
   installTwitchStore({
     channels: [{ user_id: '1', login: 'nobaman', display_name: 'のばまん', synced_at: new Date('2026-11-05T00:00:00Z') }],
-    archives: { 1: [vod('a', 'マイクラ 建築', 3), vod('b', 'ホラーゲーム', 2), vod('c', 'マイクラ 探検', 1)].map(v => ({ video_id: v.id, title: v.title, url: v.url, published_at: v.published_at, duration: v.duration })) }
+    archives: {
+      1: [
+        { video_id: 'a', title: 'マイクラ 建築', url: 'https://www.twitch.tv/videos/a', published_at: '2026-11-03T16:30:00Z', duration: '3h2m1s', view_count: 18500 },
+        { video_id: 'b', title: 'ホラーゲーム', url: 'https://www.twitch.tv/videos/b', published_at: '2026-11-02T12:00:00Z', duration: '2h', view_count: 42000 },
+        { video_id: 'c', title: 'マイクラ 探検', url: 'https://www.twitch.tv/videos/c', published_at: '2026-11-01T12:00:00Z', duration: '1h', view_count: null }
+      ]
+    }
   })
   const all = await searchTwitch('')
   assert.match(all, /チャンネル: のばまん（https:\/\/www\.twitch\.tv\/nobaman、アーカイブ 3 件/)
-  assert.match(all, /新しい順のアーカイブ:\n- マイクラ 建築（配信 2026-11-03、長さ 3h2m1s）https:\/\/www\.twitch\.tv\/videos\/a/)
+  // 2026-11-03T16:30:00Z is 2026-11-04 in Japan time.
+  assert.match(all, /新しい順のアーカイブ:\n- マイクラ 建築（配信 2026-11-04、長さ 3h2m1s、再生 18,500回（1万8,500回））https:\/\/www\.twitch\.tv\/videos\/a/)
+  const byViews = await searchTwitch('一番再生数が多い配信', 'views')
+  assert.match(byViews, /再生数の多い順のアーカイブ:\n- ホラーゲーム（配信 2026-11-02、長さ 2h、再生 42,000回（4万2,000回））/)
   const found = await searchTwitch('マイクラ')
   assert.match(found, /「マイクラ」に一致したアーカイブ: 2 件/)
   assert.doesNotMatch(found, /ホラー/)

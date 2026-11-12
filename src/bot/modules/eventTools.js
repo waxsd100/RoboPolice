@@ -5,7 +5,7 @@ const twitchDB = require('../../db/interfaces/postgres/twitch')
 const steamDB = require('../../db/interfaces/postgres/steam')
 const messageDB = require('../../db/interfaces/postgres/read')
 const videoSummary = require('./videoSummary')
-const { linkTimestamps } = require('../utils/youtube')
+const { linkTimestamps, parseVideoId, parseVideoIds, fetchVideos, formatDuration, formatCount, formatJstDate, formatJstIso } = require('../utils/youtube')
 const emojiDescriber = require('./emojiDescriber')
 const wikiKnowledge = require('./wikiKnowledge')
 const gameMentions = require('./gameMentions')
@@ -71,7 +71,7 @@ const SEARCH_WIKI = {
 const DECLARATIONS = [
   {
     name: 'fetch_url',
-    description: 'Web ページの本文・タイトル・メタ情報・JSON-LD をテキストで取得する。Discord のメッセージリンクには使わず get_discord_message を使う。',
+    description: 'Web ページの本文・タイトル・メタ情報・JSON-LD をテキストで取得する（YouTube 動画の URL なら正確な題名・公開日時・再生数・概要欄なども取得する）。Discord のメッセージリンクには使わず get_discord_message を使う。',
     parameters: { type: 'OBJECT', properties: { url: { type: 'STRING' } }, required: ['url'] }
   },
   {
@@ -93,7 +93,7 @@ const DECLARATIONS = [
   },
   {
     name: 'summarize_youtube_video',
-    description: '公開されている YouTube 動画の中身（話している内容）を要約する。動画のリンクが貼られたときや、動画の内容が必要なときだけ使う。一度要約した動画は保存済みの要約を返す。',
+    description: '公開されている YouTube 動画の中身（話している内容）を要約する。動画のリンクが貼られたときや、動画の内容が必要なときだけ使う（再生数・公開日・題名だけなら search_youtube や fetch_url で足りる）。一度要約した動画は保存済みの要約を返す。',
     parameters: { type: 'OBJECT', properties: { url: { type: 'STRING', description: 'YouTube 動画の URL' } }, required: ['url'] }
   },
   {
@@ -138,18 +138,24 @@ const DECLARATIONS = [
   },
   {
     name: 'search_youtube',
-    description: 'このサーバーに設定された YouTube チャンネルについて保存している情報（チャンネル概要、最近の動画、保存済みの要約、配信予定・配信中）を探す。動画・配信・チャンネルについての依頼や、おすすめの動画・名作・神回・好きな動画を聞かれたとき、動画や配信をテーマにしたチャンネルでの質問で使う。query を省くと新しい順に返す。',
+    description: 'このサーバーに設定された YouTube チャンネルについて保存している情報（チャンネル登録者数・概要、動画の題名・公開日・配信日時・長さ・再生数・高評価数・コメント数・保存済みの要約、配信予定・配信中）や、指定された YouTube 動画 URL の正確な情報を探す。動画の再生数や投稿日・配信日、一番再生されている動画・一番古い動画・最新の動画、おすすめの動画・名作・神回などを聞かれたときに必ず使う。',
     parameters: {
       type: 'OBJECT',
-      properties: { query: { type: 'STRING', description: '探したい動画の題名・説明・要約・内容を表す語（空白区切り。意味が近い動画も探す。おすすめ全般や名作を知りたいときは省略するか、ジャンル・雰囲気の語を入れる）' } }
+      properties: {
+        query: { type: 'STRING', description: '探したい動画の題名・説明・要約・内容を表す語、または YouTube 動画の URL（空白区切り。意味が近い動画も探す。全動画から再生数順・新しい順・古い順で見たいときは省略可）' },
+        sort: { type: 'STRING', enum: ['relevance', 'newest', 'oldest', 'views'], description: '並び順。再生数が多い順・人気順は views、古い順・最初の動画は oldest、新しい順・最新の動画は newest、関連度順は relevance（省略時は自動判定）' }
+      }
     }
   },
   {
     name: 'search_twitch',
-    description: 'BOT が見ている Twitch チャンネルの過去の配信（アーカイブ）を探す。題名・配信日・長さ・リンクが分かる（中で話した内容は分からない）。Twitch の配信やアーカイブについての依頼で使う。query を省くと新しい順に返す。',
+    description: 'BOT が見ている Twitch チャンネルの過去の配信（アーカイブ）を探す。題名・配信日（日本時間）・長さ・再生数・リンクが分かる（中で話した内容は分からない）。Twitch の配信やアーカイブについての依頼で使う。',
     parameters: {
       type: 'OBJECT',
-      properties: { query: { type: 'STRING', description: '題名・説明に含まれる語（空白区切りで AND）' } }
+      properties: {
+        query: { type: 'STRING', description: '題名・説明に含まれる語（空白区切りで AND）' },
+        sort: { type: 'STRING', enum: ['newest', 'oldest', 'views'], description: '並び順。再生数が多い順は views、古い順は oldest、新しい順は newest（省略時は自動判定）' }
+      }
     }
   },
   {
@@ -293,6 +299,15 @@ function createTools ({ guild, member, ask, progress = () => {} }) {
   const executors = {
     async fetch_url ({ url }) {
       if (MESSAGE_LINK.test(url) || CHANNEL_LINK.test(url)) return executors.get_discord_message({ link: url })
+      const ytVideoID = parseVideoId(url)
+      if (ytVideoID) {
+        const video = await lookupYouTubeVideo(ytVideoID)
+        if (video) {
+          const link = `https://www.youtube.com/watch?v=${ytVideoID}`
+          sources.push(link)
+          return formatYouTubeVideoDetail(video)
+        }
+      }
       const page = await urlFetcher.fetchPageText(url)
       sources.push(page.url)
       return page.text
@@ -399,11 +414,11 @@ function createTools ({ guild, member, ask, progress = () => {} }) {
     async list_scheduled_events () {
       return scheduledEvents(guild)
     },
-    async search_youtube ({ query }) {
-      return searchYouTube(guild.id, query)
+    async search_youtube ({ query, sort }) {
+      return searchYouTube(guild.id, query, sort)
     },
-    async search_twitch ({ query }) {
-      return searchTwitch(query)
+    async search_twitch ({ query, sort }) {
+      return searchTwitch(query, sort)
     },
     async search_steam ({ query, section }) {
       return searchSteam(query, section)
@@ -436,10 +451,10 @@ function createTools ({ guild, member, ask, progress = () => {} }) {
       return [
         `表示名: ${displayName(m)}（@${m.username}、ID: ${m.id}）${m.bot ? '（BOT）' : ''}`,
         `ロール: ${roles.join(', ') || 'なし'}`,
-        m.joinedAt ? `サーバーに参加: ${new Date(m.joinedAt).toISOString().slice(0, 10)}` : '',
+        m.joinedAt ? `サーバーに参加: ${formatJstDate(m.joinedAt)}` : '',
         '',
         messages.length
-          ? [`最近の発言（新しい順、依頼者が読めるチャンネルのもの ${messages.length} 件）:`, ...messages.map(r => `[${new Date(r.ts).toISOString().slice(0, 10)}] #${channelName(r.channel_id)}: ${fromStoredContent(r.content).replace(/\s+/g, ' ').slice(0, MAX_HISTORY_TEXT / 2)}`)].join('\n')
+          ? [`最近の発言（新しい順、依頼者が読めるチャンネルのもの ${messages.length} 件）:`, ...messages.map(r => `[${formatJstDate(r.ts)}] #${channelName(r.channel_id)}: ${fromStoredContent(r.content).replace(/\s+/g, ' ').slice(0, MAX_HISTORY_TEXT / 2)}`)].join('\n')
           : serverLore.enabled()
             ? '保存されている発言はありません（このサーバーではメッセージを保存していないか、読めるチャンネルでの発言がありません）'
             : '（発言は参照しない設定です。分かるのは上の情報だけです）',
@@ -452,7 +467,9 @@ function createTools ({ guild, member, ask, progress = () => {} }) {
       })
       const link = `https://www.youtube.com/watch?v=${videoID}`
       sources.push(link)
-      return `${link} の内容の要約${cached ? '（保存済み）' : ''}:\n${linkTimestamps(summary, videoID)}`
+      const meta = await lookupYouTubeVideo(videoID)
+      const metaLine = meta ? `動画情報: ${formatVideo({ ...meta, description: '', summary: null }).replace(/^- /, '')}\n` : ''
+      return `${metaLine}${link} の内容の要約${cached ? '（保存済み）' : ''}:\n${linkTimestamps(summary, videoID)}`
     }
   }
 
@@ -481,11 +498,116 @@ async function scheduledEvents (guild) {
   return events.map(e => `${e.name}: ${e.scheduled_start_time}〜${e.scheduled_end_time || ''} ${e.entity_metadata?.location || (e.channel_id ? `<#${e.channel_id}>` : '')}`).join('\n')
 }
 
+const LIVE_STATS_TTL_MS = 10 * 60 * 1000
+
+function apiVideoToStored (v, existing = {}) {
+  return {
+    ...existing,
+    video_id: v.id,
+    channel_id: v.channelId || existing.channel_id || null,
+    channel_title: v.channelTitle || existing.channel_title || null,
+    title: v.title,
+    description: v.description,
+    published_at: v.publishedAt || existing.published_at || null,
+    live_status: v.liveStatus || existing.live_status || 'none',
+    scheduled_start: v.scheduledStart ?? existing.scheduled_start ?? null,
+    actual_start: v.actualStart ?? existing.actual_start ?? null,
+    actual_end: v.actualEnd ?? existing.actual_end ?? null,
+    duration: v.duration ?? existing.duration ?? null,
+    view_count: v.viewCount ?? existing.view_count ?? null,
+    like_count: v.likeCount ?? existing.like_count ?? null,
+    comment_count: v.commentCount ?? existing.comment_count ?? null,
+    stats_updated_at: new Date(),
+    url: v.url || `https://www.youtube.com/watch?v=${v.id}`
+  }
+}
+
+async function lookupYouTubeVideo (videoID) {
+  const stored = typeof youtubeDB.getVideo === 'function' ? await youtubeDB.getVideo(videoID).catch(() => null) : null
+  const summary = stored?.summary || await youtubeDB.getSummary(videoID).catch(() => null)
+  if (process.env.YOUTUBE_API_KEY) {
+    const liveList = await fetchVideos([videoID], process.env.YOUTUBE_API_KEY).catch(() => null)
+    if (liveList?.[0]) {
+      const live = liveList[0]
+      if (stored?.channel_id) await youtubeDB.upsertVideos(stored.channel_id, [live]).catch(() => {})
+      return apiVideoToStored(live, { ...(stored || {}), summary })
+    }
+  }
+  return stored ? { ...stored, summary } : null
+}
+
+function formatYouTubeVideoDetail (v) {
+  const link = v.url || `https://www.youtube.com/watch?v=${v.video_id}`
+  const live = LIVE_LABELS[v.live_status]
+  const streamStart = v.actual_start || v.scheduled_start
+  const dur = formatDuration(v.duration)
+  const views = formatCount(v.view_count, '回')
+  const likes = formatCount(v.like_count)
+  const comments = formatCount(v.comment_count, '件')
+  const lines = [
+    '動画情報（YouTube Data API / 保存データ）:',
+    `題名: ${v.title}`,
+    `URL: ${link}`,
+    v.channel_title ? `チャンネル: ${v.channel_title}${v.channel_id ? ` (https://www.youtube.com/channel/${v.channel_id})` : ''}` : '',
+    `公開日時（日本時間）: ${formatJstIso(v.published_at) || '?'}（公開日: ${formatJstDate(v.published_at) || '?'}）`,
+    streamStart ? `配信日時（日本時間）: ${formatJstIso(streamStart)}${v.actual_end ? `〜${formatJstIso(v.actual_end)}` : ''}${live ? `（${live}）` : ''}` : '',
+    dur ? `長さ: ${dur}` : '',
+    views ? `再生回数: ${views}` : '',
+    likes ? `高評価数: ${likes}` : '',
+    comments ? `コメント数: ${comments}` : '',
+    v.description ? `概要欄:\n${v.description}` : '',
+    v.summary ? `保存済みの内容要約:\n${linkTimestamps(v.summary, v.video_id)}` : ''
+  ]
+  return lines.filter(Boolean).join('\n')
+}
+
+async function refreshShownVideos (list) {
+  const apiKey = process.env.YOUTUBE_API_KEY
+  if (!apiKey || !list.length) return list
+  const now = Date.now()
+  const stale = list.filter(v => {
+    if (!v.video_id || !/^[\w-]{11}$/.test(v.video_id)) return false
+    if (v.view_count === null || v.view_count === undefined || !v.stats_updated_at) return true
+    return now - new Date(v.stats_updated_at).getTime() > LIVE_STATS_TTL_MS
+  })
+  if (!stale.length) return list
+  const liveList = await fetchVideos(stale.map(v => v.video_id), apiKey).catch(() => null)
+  if (!liveList?.length) return list
+  const byChannel = new Map()
+  const liveById = new Map()
+  for (const live of liveList) {
+    liveById.set(live.id, live)
+    const existing = stale.find(v => v.video_id === live.id)
+    const chId = existing?.channel_id || live.channelId
+    if (chId) {
+      if (!byChannel.has(chId)) byChannel.set(chId, [])
+      byChannel.get(chId).push(live)
+    }
+  }
+  for (const [chId, vids] of byChannel) {
+    await youtubeDB.upsertVideos(chId, vids).catch(() => {})
+  }
+  return list.map(v => liveById.has(v.video_id) ? apiVideoToStored(liveById.get(v.video_id), v) : v)
+}
+
 function formatVideo (v) {
   const live = LIVE_LABELS[v.live_status]
-  const when = live && v.scheduled_start ? `${live} ${new Date(v.scheduled_start).toISOString()}` : live
-  const published = v.published_at ? new Date(v.published_at).toISOString().slice(0, 10) : '?'
-  const head = `- ${when ? `[${when}] ` : ''}${v.title}（公開 ${published}${v.duration ? `、長さ ${v.duration}` : ''}）${v.url}`
+  const liveStart = v.actual_start || v.scheduled_start
+  const when = live && liveStart ? `${live} ${formatJstIso(liveStart)}` : live
+  const published = formatJstDate(v.published_at) || '?'
+  const streamAt = !live && liveStart ? formatJstIso(liveStart) : null
+  const details = []
+  if (streamAt) details.push(`配信 ${streamAt}`)
+  details.push(`公開 ${published}`)
+  const dur = formatDuration(v.duration)
+  if (dur) details.push(`長さ ${dur}`)
+  const views = formatCount(v.view_count, '回')
+  if (views) details.push(`再生 ${views}`)
+  const likes = formatCount(v.like_count)
+  if (likes) details.push(`高評価 ${likes}`)
+  const comments = formatCount(v.comment_count, '件')
+  if (comments) details.push(`コメント ${comments}`)
+  const head = `- ${when ? `[${when}] ` : ''}${v.title}（${details.join('、')}）${v.url}`
   const description = (v.description || '').replace(/\s+/g, ' ').slice(0, 200)
   const lines = [head]
   if (description) lines.push(`  ${description}`)
@@ -494,47 +616,155 @@ function formatVideo (v) {
 }
 
 const matchesAll = (words, text) => words.every(w => text.toLowerCase().includes(w))
-const YOUTUBE_META_WORDS = /^(?:おすすめ|オススメ|推奨|動画|配信|実況|神回|名作|隠れた名作|隠れた|面白い|おもしろい|好き|好きな|人気|ランキング|最近|直近|過去|アーカイブ|youtube|ユーチューブ|つべ|のばまん|nobaman)$/i
+const VIDEO_PARTICLES = '(?:の|が|は|を|に|で|と|も|や|か|な|だ|です|ます|した|して|いる|てる|ある|順|系|件|本)'
+const YOUTUBE_META_ATOM = '(?:おすすめ|オススメ|推奨|動画|配信|放送|実況|投稿|神回|名作|隠れた|面白い|おもしろい|好き|好きな|人気|ランキング|再生回数|再生数|視聴回数|再生|伸びてる|伸びた|見られてる|見られた|一番|最も|いちばん|トップ|上位|最近|直近|最新|過去|最初|最古|初投稿|古い|新しい|多い|高い|少ない|アーカイブ|youtube|ユーチューブ|つべ|のばまん|nobaman)'
+const TWITCH_META_ATOM = '(?:おすすめ|オススメ|推奨|動画|配信|放送|実況|投稿|アーカイブ|人気|ランキング|再生回数|再生数|視聴回数|再生|伸びてる|伸びた|見られてる|見られた|一番|最も|いちばん|トップ|上位|最近|直近|最新|過去|最初|最古|古い|新しい|多い|高い|少ない|twitch|ツイッチ|のばまん|nobaman)'
+const YOUTUBE_META_TOKEN = new RegExp(`^(?:${YOUTUBE_META_ATOM}|${VIDEO_PARTICLES})+$`, 'i')
+const TWITCH_META_TOKEN = new RegExp(`^(?:${TWITCH_META_ATOM}|${VIDEO_PARTICLES})+$`, 'i')
+const TRAILING_SORT_META = /(?:の|で)?(?:一番|最も|いちばん)?(?:再生(?:回数|数)|視聴回数|人気|古い|新しい)(?:が|の)?(?:多い|高い|少ない|順|ランキング|動画|配信|放送|アーカイブ)+$/i
+const VALID_VIDEO_SORTS = new Set(['relevance', 'newest', 'oldest', 'views'])
 
-async function searchYouTube (guildID, query) {
-  const rawWords = String(query || '').toLowerCase().split(/\s+/).filter(Boolean)
-  const words = rawWords.filter(w => !YOUTUBE_META_WORDS.test(w))
+function filterVideoQueryWords (rawWords, metaToken) {
+  return rawWords
+    .map(w => metaToken.test(w) ? '' : w.replace(TRAILING_SORT_META, ''))
+    .filter(Boolean)
+}
+
+function inferVideoSort (query, explicitSort, allowed = VALID_VIDEO_SORTS) {
+  if (explicitSort && allowed.has(explicitSort)) return explicitSort
+  const q = String(query || '')
+  if (/再生(?:数|回数)?(?:が|の)?(?:多い|高い|トップ|上位|順|ランキング)|一番(?:伸びて|再生|見られて)|最も(?:再生|見られて)|人気順|伸びてる/.test(q)) {
+    return 'views'
+  }
+  if (/一番古い|最も古い|最古|最初(?:の|に投稿|に出した)|初投稿|古い順/.test(q)) {
+    return 'oldest'
+  }
+  if (/一番新しい|最新|新しい順/.test(q)) {
+    return 'newest'
+  }
+  return allowed.has('relevance') ? 'relevance' : 'newest'
+}
+
+async function searchYouTube (guildID, query, sort) {
+  const linkedIds = parseVideoIds(query)
+  const cleanedQuery = linkedIds.length ? String(query || '').replace(/https?:\/\/\S+/gi, ' ') : String(query || '')
+  const rawWords = cleanedQuery.toLowerCase().split(/\s+/).filter(Boolean)
+  const words = filterVideoQueryWords(rawWords, YOUTUBE_META_TOKEN)
+  const sortMode = inferVideoSort(query, sort)
   const knowledge = await youtubeDB.getKnowledge(guildID)
+  const storedIdSet = new Set((knowledge?.videos || []).map(v => v.video_id))
+  const externalIds = linkedIds.filter(id => !storedIdSet.has(id))
+  const externalVideos = externalIds.length && process.env.YOUTUBE_API_KEY
+    ? await fetchVideos(externalIds, process.env.YOUTUBE_API_KEY).then(list => Promise.all(list.map(async v => {
+      const summary = await youtubeDB.getSummary(v.id).catch(() => null)
+      return apiVideoToStored(v, { summary })
+    }))).catch(() => [])
+    : []
+  const externalLines = externalVideos.length
+    ? [
+        '指定された YouTube 動画:',
+        ...externalVideos.map(v => v.channel_title ? formatVideo(v).replace(/^- /, `- 【${v.channel_title}】`) : formatVideo(v))
+      ]
+    : []
+
   // Summaries of linked videos from other channels are knowledge too.
+  const externalFetchedSet = new Set(externalVideos.map(v => v.video_id))
   const others = (await youtubeDB.getOtherSummaries(guildID))
-    .filter(s => matchesAll(words.length ? words : rawWords, s.summary))
+    .filter(s => !externalFetchedSet.has(s.video_id) && (linkedIds.includes(s.video_id) || matchesAll(words.length ? words : rawWords, s.summary)))
     .map(s => `- https://www.youtube.com/watch?v=${s.video_id}\n  内容の要約: ${linkTimestamps(s.summary.replace(/\s+/g, ' ').slice(0, 400), s.video_id)}`)
   const otherLines = others.length ? ['', `その他の要約済み動画（${others.length} 件）:`, ...others.slice(0, MAX_YOUTUBE_RESULTS)] : []
 
-  if (!knowledge) return ['BOT が見ている YouTube チャンネルはありません', ...otherLines].join('\n')
+  if (!knowledge) return [...externalLines, 'BOT が見ている YouTube チャンネルはありません', ...otherLines].filter(Boolean).join('\n')
   const { videos } = knowledge
   const channels = (knowledge.channels || [knowledge.channel]).filter(c => c.synced_at)
-  if (!channels.length) return ['YouTube チャンネルはまだ情報を取得していません（しばらくすると自動で取得されます）', ...otherLines].join('\n')
+  if (!channels.length) return [...externalLines, 'YouTube チャンネルはまだ情報を取得していません（しばらくすると自動で取得されます）', ...otherLines].filter(Boolean).join('\n')
   const channelName = new Map(channels.map(c => [c.channel_id, c.title]))
-  const videoText = v => `${v.title}\n${v.description || ''}\n${v.summary || ''}`
-  const matches = videos.filter(v => matchesAll(words, videoText(v)))
+  const videoText = v => `${v.video_id || ''}\n${v.title}\n${v.description || ''}\n${v.summary || ''}`
+  const linkedOnly = linkedIds.length > 0 && words.length === 0
+  const matches = linkedOnly
+    ? videos.filter(v => linkedIds.includes(v.video_id))
+    : videos.filter(v => (linkedIds.length && linkedIds.includes(v.video_id)) || matchesAll(words, videoText(v)))
   const rawMatches = rawWords.length ? videos.filter(v => matchesAll(rawWords, videoText(v))) : matches
-  // By meaning when embeddings exist, so different wording still finds the video.
-  const ranked = rawWords.length
-    ? await semanticSearch.rankVideos(guildID, videos, query).catch(e => {
+  // By meaning when embeddings exist and relevance order was asked, so different wording still finds the video.
+  const ranked = !linkedOnly && sortMode === 'relevance' && rawWords.length
+    ? await semanticSearch.rankVideos(guildID, videos, cleanedQuery).catch(e => {
       global.logger.warn(`Semantic YouTube search failed, using keywords: ${e.message}`)
       return null
     })
     : null
-  // Otherwise lives first: "the next stream" is the usual question.
-  const ordered = ranked || [...matches.filter(v => LIVE_LABELS[v.live_status]), ...matches.filter(v => !LIVE_LABELS[v.live_status])]
+
+  let ordered
+  if (linkedOnly) {
+    ordered = matches
+  } else if (sortMode === 'views') {
+    const poolVideos = words.length ? matches : videos
+    ordered = [...poolVideos].sort((a, b) => (b.view_count ?? -1) - (a.view_count ?? -1) || new Date(b.published_at || 0) - new Date(a.published_at || 0))
+  } else if (sortMode === 'oldest') {
+    const poolVideos = words.length ? matches : videos
+    ordered = [...poolVideos].sort((a, b) => new Date(a.published_at || 0) - new Date(b.published_at || 0))
+  } else if (sortMode === 'newest') {
+    const poolVideos = words.length ? matches : videos
+    ordered = [...poolVideos].sort((a, b) => new Date(b.published_at || 0) - new Date(a.published_at || 0))
+  } else {
+    // Otherwise lives first: "the next stream" is the usual question.
+    ordered = ranked || [...matches.filter(v => LIVE_LABELS[v.live_status]), ...matches.filter(v => !LIVE_LABELS[v.live_status])]
+  }
+
+  let shown = await refreshShownVideos(ordered.slice(0, MAX_YOUTUBE_RESULTS))
+  if (sortMode === 'views') {
+    shown = [...shown].sort((a, b) => (b.view_count ?? -1) - (a.view_count ?? -1) || new Date(b.published_at || 0) - new Date(a.published_at || 0))
+  }
   const renderVideo = v => channels.length > 1 && channelName.get(v.channel_id) ? formatVideo(v).replace(/^- /, `- 【${channelName.get(v.channel_id)}】`) : formatVideo(v)
-  const fallbackVideos = (!ranked && words.length && !matches.length && !others.length && videos.length)
-    ? [...videos.filter(v => v.summary), ...videos.filter(v => !v.summary)].slice(0, MAX_YOUTUBE_RESULTS)
+  const fallbackCandidates = (!ranked && !linkedOnly && words.length && !matches.length && !others.length && !externalVideos.length && videos.length)
+    ? (sortMode === 'views'
+        ? [...videos].sort((a, b) => (b.view_count ?? -1) - (a.view_count ?? -1) || new Date(b.published_at || 0) - new Date(a.published_at || 0))
+        : sortMode === 'oldest'
+          ? [...videos].sort((a, b) => new Date(a.published_at || 0) - new Date(b.published_at || 0))
+          : [...videos.filter(v => v.summary), ...videos.filter(v => !v.summary)]
+      ).slice(0, MAX_YOUTUBE_RESULTS)
     : []
+  const fallbackVideos = fallbackCandidates.length ? await refreshShownVideos(fallbackCandidates) : []
+
+  const missingStatsCount = sortMode === 'views'
+    ? (words.length ? matches : videos).filter(v => v.view_count === null || v.view_count === undefined).length
+    : 0
+  let heading = ''
+  if (linkedOnly) {
+    heading = matches.length ? `指定されたチャンネル内動画: ${matches.length} 件` : ''
+  } else if (sortMode === 'views') {
+    const missingNote = missingStatsCount > shown.length ? `、うち再生数未取得 ${missingStatsCount - shown.filter(v => v.view_count != null).length} 件` : ''
+    heading = words.length
+      ? `「${query}」に一致した動画（再生数の多い順、${matches.length} 件${missingNote}）:`
+      : `再生数の多い順の動画（${videos.length} 件${missingNote}）:`
+  } else if (sortMode === 'oldest') {
+    heading = words.length ? `「${query}」に一致した動画（古い順、${matches.length} 件）:` : '古い順の動画:'
+  } else if (ranked) {
+    heading = `「${query}」に意味が近い順の動画（語をすべて含むもの ${rawMatches.length} 件を優先）:`
+  } else if (words.length) {
+    heading = `「${query}」に一致した動画: ${matches.length} 件`
+  } else {
+    heading = '新しい順の動画:'
+  }
+
+  const formatChannelHeader = c => {
+    const subs = formatCount(c.subscriber_count, '人')
+    const totalViews = formatCount(c.view_count, '回')
+    const meta = [
+      c.url,
+      subs ? `登録者 ${subs}` : '',
+      totalViews ? `総再生 ${totalViews}` : '',
+      `取得 ${new Date(c.synced_at).toISOString()}`
+    ].filter(Boolean).join('、')
+    return `チャンネル: ${c.title}（${meta}）${c.description ? `\n  概要: ${c.description.replace(/\s+/g, ' ').slice(0, 200)}` : ''}`
+  }
+
   return [
-    ...channels.map(c => `チャンネル: ${c.title}（${c.url}、取得 ${new Date(c.synced_at).toISOString()}）${c.description ? `\n  概要: ${c.description.replace(/\s+/g, ' ').slice(0, 200)}` : ''}`),
+    ...externalLines,
+    ...channels.map(formatChannelHeader),
     `保存している動画 ${videos.length} 件、うち内容の要約あり ${videos.filter(v => v.summary).length} 件`,
-    ranked
-      ? `「${query}」に意味が近い順の動画（語をすべて含むもの ${rawMatches.length} 件を優先）:`
-      : words.length ? `「${query}」に一致した動画: ${matches.length} 件` : '新しい順の動画:',
-    ...ordered.slice(0, MAX_YOUTUBE_RESULTS).map(renderVideo),
-    ...(!ranked && matches.length > MAX_YOUTUBE_RESULTS ? [`…ほか ${matches.length - MAX_YOUTUBE_RESULTS} 件（query で絞り込めます）`] : []),
+    heading,
+    ...shown.map(renderVideo),
+    ...(!ranked && !linkedOnly && ordered.length > MAX_YOUTUBE_RESULTS ? [`…ほか ${ordered.length - MAX_YOUTUBE_RESULTS} 件（query で絞り込めます）`] : []),
     ...(fallbackVideos.length
       ? ['', '（指定の語が直接含まれる動画はありませんでした。以下は保存済みの動画です。内容が合うものがあればここから選んでください）', ...fallbackVideos.map(renderVideo)]
       : []),
@@ -542,22 +772,37 @@ async function searchYouTube (guildID, query) {
   ].filter(Boolean).join('\n')
 }
 
+const TWITCH_SORTS = new Set(['newest', 'oldest', 'views'])
+
 // The Twitch archives (twitchSync.js) that have every word of `query` in their title or
-// description, newest first.
-async function searchTwitch (query) {
-  const words = String(query || '').toLowerCase().split(/\s+/).filter(Boolean)
+// description, ordered by `sort` (newest first by default).
+async function searchTwitch (query, sort) {
+  const rawWords = String(query || '').toLowerCase().split(/\s+/).filter(Boolean)
+  const words = filterVideoQueryWords(rawWords, TWITCH_META_TOKEN)
+  const sortMode = inferVideoSort(query, sort, TWITCH_SORTS)
   const [channels, archives] = await Promise.all([twitchDB.getOverview(), twitchDB.getArchives()])
   if (!channels.length) return 'BOT が見ている Twitch チャンネルはありません'
-  const matches = archives.filter(v => matchesAll(words, `${v.title}\n${v.description || ''}`))
+  const filtered = archives.filter(v => matchesAll(words, `${v.title}\n${v.description || ''}`))
+  const matches = sortMode === 'views'
+    ? [...filtered].sort((a, b) => (Number(b.view_count) || 0) - (Number(a.view_count) || 0) || new Date(b.published_at || 0) - new Date(a.published_at || 0))
+    : sortMode === 'oldest'
+      ? [...filtered].sort((a, b) => new Date(a.published_at || 0) - new Date(b.published_at || 0))
+      : filtered
   const line = v => {
-    const date = v.published_at ? new Date(v.published_at).toISOString().slice(0, 10) : '?'
+    const date = formatJstDate(v.published_at) || '?'
     const who = channels.length > 1 ? `【${v.display_name || v.login}】` : ''
-    return `- ${who}${v.title}（配信 ${date}${v.duration ? `、長さ ${v.duration}` : ''}）${v.url}`
+    const views = formatCount(v.view_count, '回')
+    return `- ${who}${v.title}（配信 ${date}${v.duration ? `、長さ ${v.duration}` : ''}${views ? `、再生 ${views}` : ''}）${v.url}`
   }
+  const heading = sortMode === 'views'
+    ? (words.length ? `「${query}」に一致したアーカイブ（再生数の多い順、${matches.length} 件）:` : '再生数の多い順のアーカイブ:')
+    : sortMode === 'oldest'
+      ? (words.length ? `「${query}」に一致したアーカイブ（古い順、${matches.length} 件）:` : '古い順のアーカイブ:')
+      : (words.length ? `「${query}」に一致したアーカイブ: ${matches.length} 件` : '新しい順のアーカイブ:')
   return [
     ...channels.map(c => `チャンネル: ${c.display_name || c.login}（https://www.twitch.tv/${c.login}、アーカイブ ${c.video_count} 件${c.synced_at ? `、取得 ${new Date(c.synced_at).toISOString()}` : '、まだ取得していない'}）${c.description ? `\n  概要: ${c.description.replace(/\s+/g, ' ').slice(0, 200)}` : ''}`),
     'Twitch はアーカイブを一定期間（7〜60日）で消すため、古い配信は残っていない。',
-    words.length ? `「${query}」に一致したアーカイブ: ${matches.length} 件` : '新しい順のアーカイブ:',
+    heading,
     ...matches.slice(0, MAX_YOUTUBE_RESULTS).map(line),
     ...(matches.length > MAX_YOUTUBE_RESULTS ? [`…ほか ${matches.length - MAX_YOUTUBE_RESULTS} 件（query で絞り込めます）`] : [])
   ].join('\n')
@@ -598,7 +843,7 @@ async function searchSteam (query, section = 'all') {
     const en = g.name_en && g.name_en !== g.name ? ` / ${g.name_en}` : ''
     const hours = Number.isFinite(g.playtime_hours) ? `${g.playtime_hours}時間` : '時間不明'
     const recent = Number.isFinite(g.recent_hours) && g.recent_hours > 0 ? `、直近2週間 ${g.recent_hours}時間` : ''
-    const first = g.first_played_at ? `、初プレイ ${new Date(g.first_played_at).toISOString().slice(0, 10)}` : ''
+    const first = g.first_played_at ? `、初プレイ ${formatJstDate(g.first_played_at)}` : ''
     const rev = reviewByApp.get(`${g.steam_id}:${g.app_id}`)
     const revBadge = rev ? `［レビュー: ${rev.recommended ? 'おすすめ' : 'おすすめしない'}］` : ''
     return `- ${whoPrefix(g)}${g.name}${en}（総プレイ ${hours}${recent}${first}）${revBadge}https://store.steampowered.com/app/${g.app_id}/`
@@ -614,7 +859,7 @@ async function searchSteam (query, section = 'all') {
 
   const formatWish = w => {
     const en = w.name_en && w.name_en !== w.name ? ` / ${w.name_en}` : ''
-    const added = w.added_at ? `（追加 ${new Date(w.added_at).toISOString().slice(0, 10)}）` : ''
+    const added = w.added_at ? `（追加 ${formatJstDate(w.added_at)}）` : ''
     return `- ${whoPrefix(w)}${w.name}${en}${added} https://store.steampowered.com/app/${w.app_id}/`
   }
 
@@ -733,7 +978,7 @@ function withServerChannels (text, guild, member) {
 }
 
 const GENERIC_CHANNEL_NAME = /^(?:general|chat|main|lobby|lounge|random|free|talk|bot|bots|bot[-_]?commands?|commands?|cmd|test|testing|sandbox|雑談|メイン|なんでも|フリー|ロビー|ラウンジ|おしゃべり|会話|チャット|全体|総合|ボット|コマンド|テスト|お試し|砂場|質問|相談)(?:[-_\s・｜|]*\d+)?$/iu
-const SHORT_TOPIC_PROMPT = /[?？]|おすすめ|オススメ|名作|神回|教え|語ろ|好き|感想|評価|魅力|コツ/i
+const SHORT_TOPIC_PROMPT = /[?？]|おすすめ|オススメ|名作|神回|教え|語ろ|好き|感想|評価|魅力|コツ|再生|日付|いつ|最初|最新|人気|ランキング/i
 const MAX_THEME_CACHE = 128
 const CHANNEL_THEME_WEIGHT = 0.45
 const themeVectorCache = new Map()
@@ -885,7 +1130,7 @@ async function relatedMessages (guild, member, vectorOf) {
     .slice(0, MAX_RELATED_MESSAGES)
     .map(m => {
       const who = guild.members.get(m.author_id)
-      return `- ${new Date(m.ts).toISOString().slice(0, 10)} #${guild.channels.get(m.channel_id)?.name || m.channel_id} ${who ? displayName(who) : 'メンバー'}: ${fromStoredContent(m.content).replace(/\s+/g, ' ').slice(0, MAX_RELATED_MESSAGE_CHARS)}`
+      return `- ${formatJstDate(m.ts) || '?'} #${guild.channels.get(m.channel_id)?.name || m.channel_id} ${who ? displayName(who) : 'メンバー'}: ${fromStoredContent(m.content).replace(/\s+/g, ' ').slice(0, MAX_RELATED_MESSAGE_CHARS)}`
     })
 }
 
@@ -967,8 +1212,11 @@ async function describeServer (guild, member, requestChannelID, { query = '', co
   const synced = (youtube?.channels || []).filter(c => c.synced_at)
   lines.push('', '### YouTube', synced.length
     ? [
-        ...synced.map(c => `${c.title}（動画 ${c.video_count} 件を保存、取得 ${new Date(c.synced_at).toISOString()}）`),
-        '詳しくは search_youtube で調べる'
+        ...synced.map(c => {
+          const subs = formatCount(c.subscriber_count, '人')
+          return `${c.title}（${subs ? `登録者 ${subs}、` : ''}動画 ${c.video_count} 件を保存、取得 ${new Date(c.synced_at).toISOString()}）`
+        }),
+        '詳しくは search_youtube で調べる（題名・公開日・再生数・配信日時・要約）'
       ].join('\n')
     : '設定なし')
   const twitch = await twitchDB.getOverview().catch(() => [])
@@ -988,4 +1236,4 @@ async function describeServer (guild, member, requestChannelID, { query = '', co
   return lines.join('\n')
 }
 
-module.exports = { worthSearching, createTools, formatMessage, describeServer, withServerEmojis, withServerChannels, namedChannels, namedMembers, requestChannelInfo, channelTheme, SHORT_TOPIC_PROMPT, searchYouTube, searchTwitch, searchSteam, MESSAGE_LINK, CHANNEL_LINK, StopDrafting }
+module.exports = { worthSearching, createTools, formatMessage, formatVideo, inferVideoSort, describeServer, withServerEmojis, withServerChannels, namedChannels, namedMembers, requestChannelInfo, channelTheme, SHORT_TOPIC_PROMPT, searchYouTube, searchTwitch, searchSteam, MESSAGE_LINK, CHANNEL_LINK, StopDrafting }

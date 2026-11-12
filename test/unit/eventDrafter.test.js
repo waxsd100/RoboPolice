@@ -1423,6 +1423,18 @@ describe('explicit cache and thinking', () => {
     const checked = safeLinks(result.text, result.conversation.contents, result.conversation.toolUrls)
     assert.deepEqual(checked.removed, [], 'URL from raw page is preserved in toolUrls even if omitted from summary')
     assert.match(checked.text, /https:\/\/tickets\.example\.jp\/entry\/999/)
+
+    // Deterministic structured tools (search_youtube, search_steam, etc.) must NOT be compressed via extractModel,
+    // so exact view counts and dates are never dropped, while still recording URLs in toolUrls.
+    const { compressToolResult } = require('../../src/bot/modules/eventDrafter')
+    let extractAttempted = 0
+    global.fetch = async () => { extractAttempted++; throw new Error('must not call extractModel') }
+    const ytListing = wrap('search_youtube', `- 神回動画（公開 2026-10-28、再生 152,300回）https://www.youtube.com/watch?v=vid00000001\n${'説明 '.repeat(1200)}`)
+    const holder = []
+    const keptYt = await compressToolResult('search_youtube', { query: '神回' }, { result: ytListing }, holder)
+    assert.equal(extractAttempted, 0)
+    assert.equal(keptYt.result, ytListing)
+    assert.deepEqual(holder.toolUrls, ['https://www.youtube.com/watch?v=vid00000001'])
   })
 })
 

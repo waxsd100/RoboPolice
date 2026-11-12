@@ -9,6 +9,7 @@ const { knowledgeSetting } = require('../utils/knowledgeDefaults')
 const DEFAULT_AUTO_SYNC_MINUTES = 15
 const FEED_TIMEOUT_MS = 15000
 const MAX_SUMMARIES = 50
+const STATS_BACKFILL_BATCH = 200
 
 // The channels named in YOUTUBE_CHANNELS (comma-separated: @name, a channel URL or its ID).
 function configuredChannels () {
@@ -32,6 +33,18 @@ async function applyConfiguredChannels () {
   return channels
 }
 
+// Fills in view/like/comment counts and actual stream times for videos synced before migration 049,
+// a few pages at a time (200 videos = 4 quota units). Resolves to the number of videos checked.
+async function backfillChannelStats (channelID, limit = STATS_BACKFILL_BATCH) {
+  if (!process.env.YOUTUBE_API_KEY || typeof youtubeDB.videoIdsMissingStats !== 'function') return 0
+  const missing = await youtubeDB.videoIdsMissingStats(channelID, limit)
+  if (!missing.length) return 0
+  const videos = await fetchVideos(missing, process.env.YOUTUBE_API_KEY)
+  if (videos.length) await youtubeDB.upsertVideos(channelID, videos)
+  if (typeof youtubeDB.markStatsChecked === 'function') await youtubeDB.markStatsChecked(missing)
+  return missing.length
+}
+
 // Reads one channel from YouTube and adds to what is stored: the whole channel the first time,
 // afterwards only what is new (plus the newest page again, for streams that changed state).
 // Resolves to { added, more } (more: older videos are left for the next sync).
@@ -39,6 +52,7 @@ async function syncChannel (channel) {
   const knownIds = await youtubeDB.getVideoIds(channel.channel_id)
   const knowledge = await fetchChannelKnowledge({ id: channel.channel_id }, process.env.YOUTUBE_API_KEY, { knownIds, backfillToken: channel.backfill_token })
   await youtubeDB.saveSync(knowledge)
+  await backfillChannelStats(channel.channel_id).catch(e => global.logger?.warn?.(`[YOUTUBE]: Could not backfill video stats for ${channel.channel_id}: ${e.message}`))
   return { added: new Set(knowledge.videos.filter(v => !knownIds.has(v.id)).map(v => v.id)).size, more: !!knowledge.backfillToken }
 }
 
@@ -102,7 +116,13 @@ async function autoSyncAll () {
   running = true
   try {
     for (const channel of await youtubeDB.listChannels()) {
-      await syncIfChanged(channel).catch(e => global.logger.warn(`[YOUTUBE]: Automatic sync of ${channel.channel_id} failed: ${e.message}`))
+      const changed = await syncIfChanged(channel).catch(e => {
+        global.logger.warn(`[YOUTUBE]: Automatic sync of ${channel.channel_id} failed: ${e.message}`)
+        return undefined
+      })
+      if (changed === null) {
+        await backfillChannelStats(channel.channel_id).catch(e => global.logger.warn(`[YOUTUBE]: Could not backfill video stats for ${channel.channel_id}: ${e.message}`))
+      }
     }
   } catch (e) {
     global.logger.warn(`[YOUTUBE]: Automatic sync failed: ${e.message}`)
@@ -204,4 +224,4 @@ async function summarizeLatest (guildID, videos, { onProgress = () => {}, force 
   return results
 }
 
-module.exports = { sync, syncChannel, syncIfChanged, syncOnPush, autoSyncAll, startAutoSync, applyConfiguredChannels, configuredChannels, feedVideoIds, videosToSummarize, summarizeLatest, shortestFirst, summaryConcurrency, MAX_SUMMARIES }
+module.exports = { sync, syncChannel, syncIfChanged, syncOnPush, autoSyncAll, startAutoSync, applyConfiguredChannels, configuredChannels, feedVideoIds, backfillChannelStats, videosToSummarize, summarizeLatest, shortestFirst, summaryConcurrency, MAX_SUMMARIES }

@@ -126,9 +126,10 @@ const SYSTEM_INSTRUCTION = [
   '- Discord のメッセージリンクとチャンネルへのリンクは get_discord_message、それ以外の URL は fetch_url で読む。',
   '- 「このチャンネルについて教えて」のようにチャンネルそのものを聞かれたら、名前と説明だけで済ませず、get_recent_messages（足りなければ search_channel_history）でそのチャンネルの最近のやり取りを読んで、どんな話をしている場所かを答える。「このチャンネル」「ここ」は依頼されたチャンネル。読めなかったときはそう伝える。',
   '- チャンネルの話題（どこで何を話す・告知・募集など）は、list_channels でチャンネル一覧（説明つき）を見て当てはまるチャンネルを探す。サーバーのルール・禁止事項・必読事項について聞かれたときは get_server_rules でルールチャンネルを読む。チャンネルの中身が必要なら get_recent_messages か search_channel_history でそのチャンネルを読む。依頼や会話にチャンネル（<#ID> やチャンネルへのリンク）が出てきて、その中身が話に関係するときも読みに行く。',
-  '- チャンネルや動画・配信の話題（おすすめの動画・名作・神回・好きな動画や、動画・配信をテーマにしたチャンネルでの質問を含む）は search_youtube で保存済みの情報を調べてから答える。summarize_youtube_video は、動画リンクが貼られたときか、動画の中で話している内容が必要なときだけ使う（費用がかかるため、題名と説明で足りるときは使わない）。要約は保存され、次からは search_youtube でも見つかる。Twitch の配信やアーカイブは search_twitch で調べる（題名・配信日・リンクだけで、中身は分からない）。',
+  '- チャンネルや動画・配信の話題（特定の動画の情報・再生数・公開日・配信日時・長さ・一番再生されている動画・一番古い動画・おすすめの動画・名作・神回・好きな動画や、動画・配信をテーマにしたチャンネルでの質問を含む）は、事前知識や記憶で答えず必ず search_youtube（人気順・古い順などは sort を指定、YouTube の URL が貼られているときは URL ごと渡すか fetch_url を使う）で調べてから答える。summarize_youtube_video は、動画リンクが貼られたときか、動画の中で話している内容が必要なときだけ使う（費用がかかるため、題名・説明・再生数・日付で足りるときは使わない）。要約は保存され、次からは search_youtube でも見つかる。Twitch の配信やアーカイブは search_twitch で調べる（題名・配信日・長さ・再生数・リンクだけで、中身は分からない）。',
   '- キャラクター・名言・台詞・ネタ・用語などコミュニティならではの話題は、サーバーの情報の「コミュニティの知識」を見て、足りなければ search_wiki で調べてから答える。',
   '- 配信者の Steam アカウント・持っているゲーム・プレイ時間・最近遊んだゲーム・Steam レビュー・ウィッシュリストは search_steam で調べる。おすすめのゲーム・面白いゲーム・好きなゲーム・よく遊ぶゲーム・最近やっているゲーム・特定のゲームを遊んだことがあるかや感想など、ゲームについての話題やゲームのおすすめを聞かれたとき（返信先の会話や依頼されたチャンネルがゲームの話題のときを含む。動画など別のテーマのチャンネルで対象を言わずに「おすすめ」「名作」などと聞かれたときは、そのチャンネルのテーマを優先する）は、一般論で答えず search_steam（必要なら search_youtube も）で実際のプレイ時間やレビューを調べてから答える。ゲームに触れるときは find_game で Discord のゲームメンションとストアページも調べる。',
+  '- 再生数・高評価数・コメント数・チャンネル登録者数・公開日・配信日時・動画の長さ・プレイ時間・サーバー参加日・イベント日時などの確定した数値や日付を聞かれたときは、記憶や推測（「だいたい〜回くらい」「たぶん〜頃」など）で答えず、必ず対応するツール（search_youtube・search_twitch・search_steam・about_member・list_scheduled_events・fetch_url など）で調べて、ツール結果にある数値・日付（日本時間）を正確に伝える。ツール結果にその項目がない・未取得のときは、数値を勝手に作らず分からないと伝える。',
   '- 調べても分からないことは、話をそらさず分からないと言う。',
   '',
   '## 依頼と資料',
@@ -175,6 +176,7 @@ const SYSTEM_INSTRUCTION = [
   '- 事実の間違いを直すのは、放っておくと相手が困るときだけ。そのときも否定から入らず「ちなみに〜だったりするよ」のように軽く添える。ネタや冗談・設定遊びには、真面目に訂正せず乗る。',
   '- 返事の長さは、依頼に書いてある「返事の長さ」（サーバーの設定）に従う。',
   '- Discord のメッセージとして読みやすく。返事・説明・本文に文字数（「（120文字）」など）は書かない。',
+  '- ツールで調べた再生数・登録者数・高評価数・コメント数・公開日・配信日時・動画の長さ・プレイ時間などの確定した数値や日付を書くときは、桁の読み違え（万・億のずれ）や日付の取り違えがないようツール結果の通りに書く（端数を丸めるときも「約15.2万回（152,300回）」のように桁を変えない）。「公開」と「配信」の両方がある配信アーカイブでは、配信した日時は「配信」の方を使う。',
   '- 動画や配信・ページに触れるときは、長い URL を本文に並べず、[題名](URL) の形のリンクで書く（URL は必ず入れる。動画のサムネイル付きのカードは BOT が返事の下に付ける）。要約の時間が [12:34](…&t=754s) のようなリンクになっていれば、話題に合う場面のリンクをそのまま書く。時間やリンクは自分で作らない。',
   '- チャンネルに触れるとき（「〜は <#ID> でどうぞ」など、案内に役立つとき）は <#チャンネルID> の形で書く（Discord でリンクになる）。ID はサーバーの情報の一覧にあるものだけ使い、作らない。',
   '- ゲームの Discord のゲームメンション（<@$数字> の形）が find_game で分かれば、そのままの書き方で書く（ゲームのプロフィールが表示される）。数字は自分で作らない。',
@@ -1805,7 +1807,7 @@ async function callUncensored (contents, declarations, allowed = null, { timeout
 }
 
 const HIGH_THINKING_PATTERN = /https?:\/\/|イベント|フォーラム|告知|募集|登録|投稿|まとめ|比較|計算|推理|分析|解説|詳しく|なぜ|理由|手順|コード|プログラム|設計|企画|スケジュール|カレンダー|\d+\s*(?:月|日|時|分|時間)|明日|明後日|来週|今週末|毎週|定例/i
-const QUESTION_OR_LOOKUP_PATTERN = /[?？]|何|なに|なんの|いつ|どこ|誰|だれ|どう|なぜ|なんで|どれ|いくら|教え|調べ|探し|おすすめ|オススメ|名作|神回|語ろ|好き|感想|評価|ルール|チャンネル|動画|配信|ゲーム|マイクラ|wiki/i
+const QUESTION_OR_LOOKUP_PATTERN = /[?？]|何|なに|なんの|いつ|どこ|誰|だれ|どう|なぜ|なんで|どれ|いくら|教え|調べ|探し|おすすめ|オススメ|名作|神回|語ろ|好き|感想|評価|ルール|チャンネル|動画|配信|ゲーム|マイクラ|wiki|再生|日付|公開|投稿|登録者|高評価|コメント|時間|長さ|古い|最新|最初|ランキング|人気/i
 
 // Chooses how much Gemini 3 thinks for a mention when neither the server (%replymodel) nor
 // GEMINI_THINKING_LEVEL fixed a level: greetings and short reactions think at minimal, brief
@@ -1894,10 +1896,19 @@ function compactContentsForWire (contents) {
 }
 
 const TOOL_COMPRESS_MIN_CHARS = 3000
+const DETERMINISTIC_STRUCTURED_TOOLS = new Set([
+  'search_youtube',
+  'search_twitch',
+  'search_steam',
+  'list_scheduled_events',
+  'about_member'
+])
 
 // Compresses large read-tool outputs (>= 3,000 chars) using extractModel() on Flex before they are
 // appended to the main conversation, keeping exact URLs in contents.toolUrls so safeLinks never
-// strips a legitimate link from the compressed page.
+// strips a legitimate link from the compressed page. Deterministic structured listings (YouTube,
+// Twitch, Steam, scheduled events, member profiles) are already compact and kept verbatim so counts
+// and dates are never dropped or rounded by an intermediate summary.
 async function compressToolResult (toolName, args, response, contents) {
   if (
     process.env.TOOL_RESULT_COMPRESS === 'false' ||
@@ -1915,13 +1926,19 @@ async function compressToolResult (toolName, args, response, contents) {
     }
   }
   const { source, inner } = unwrapUntrusted(response.result)
-  if (inner.length < TOOL_COMPRESS_MIN_CHARS) return response
+  if (
+    inner.length < TOOL_COMPRESS_MIN_CHARS ||
+    DETERMINISTIC_STRUCTURED_TOOLS.has(toolName) ||
+    (toolName === 'fetch_url' && inner.startsWith('動画情報（'))
+  ) {
+    return response
+  }
   const reqContext = String(contents?.requestText || '').slice(0, 500)
   const argSummary = args && Object.keys(args).length ? JSON.stringify(args).slice(0, 300) : 'なし'
   const extractPrompt = [
     '以下のツールの取得結果から、利用者の依頼に答えるために必要な事実・日時・数値・固有名詞・引用・URL・Discord ID（<#ID>、<@ID>、<a?:name:ID>）・画像URLだけを漏れなく抜き出して、簡潔にまとめてください。',
     '- 推測や補足は一切書かず、資料に書かれている事実だけを残すこと。',
-    '- URL・日時・時刻・金額・ID は1文字も変えず原文のまま残すこと。',
+    '- URL・日時・時刻・再生数・回数・人数・時間・金額・ID は1文字も変えず原文のまま残すこと。',
     '- 広告・ナビゲーション・無関係な話題・重複は省き、1000文字以内に収めること。',
     '',
     `依頼: ${wrap('request', reqContext || '（依頼文なし）')}`,

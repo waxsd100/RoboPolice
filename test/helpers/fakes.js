@@ -5,7 +5,7 @@ const http = require('http')
 process.env.AES_KEY = process.env.AES_KEY || 'test-aes-key'
 // The knowledge features have defaults for the real community (knowledgeDefaults.js); tests turn
 // them off unless they set one.
-for (const name of ['WIKI_URLS', 'TWITTER_ACCOUNTS', 'DISCORD_KNOWLEDGE_USERS', 'KNOWLEDGE_TOPICS', 'KNOWLEDGE_URLS', 'YOUTUBE_CHANNELS', 'TWITCH_CHANNELS', 'STEAM_ACCOUNTS']) process.env[name] ??= ''
+for (const name of ['WIKI_URLS', 'TWITTER_ACCOUNTS', 'DISCORD_KNOWLEDGE_USERS', 'KNOWLEDGE_TOPICS', 'KNOWLEDGE_URLS', 'YOUTUBE_CHANNELS', 'YOUTUBE_API_KEY', 'TWITCH_CHANNELS', 'STEAM_ACCOUNTS']) process.env[name] ??= ''
 global.logger = global.logger || { info () {}, warn () {}, error () {}, debug () {}, startup () {}, fatal () {} }
 global.webhook = global.webhook || { generic () {}, warn () {}, error () {}, fatal () {} }
 
@@ -289,7 +289,16 @@ function installTwitchStore ({ channels = [], archives = {} } = {}) {
   store.saveArchives = async (userID, videos, { complete = false } = {}) => {
     const known = archives[userID] || []
     const added = videos.filter(v => !known.some(k => k.video_id === v.id)).length
-    const rows = videos.map(v => ({ video_id: v.id, user_id: userID, title: v.title, description: v.description, url: v.url, published_at: v.publishedAt, duration: v.duration }))
+    const rows = videos.map(v => ({
+      video_id: v.id,
+      user_id: userID,
+      title: v.title,
+      description: v.description,
+      url: v.url,
+      published_at: v.publishedAt,
+      duration: v.duration,
+      view_count: Number.isInteger(v.viewCount) ? v.viewCount : (Number.isInteger(v.view_count) ? v.view_count : null)
+    }))
     archives[userID] = complete ? rows : [...rows, ...known.filter(k => !rows.some(r => r.video_id === k.video_id))]
     const channel = channels.find(c => c.user_id === userID)
     if (channel) channel.synced_at = new Date()
@@ -509,7 +518,27 @@ function installYouTubeStore (knowledge = {}, summaries = {}) {
     if (!channels().length) return null
     return { channels: channels(), channel: knowledge[guildID]?.channel || channels()[0], videos: allVideos().map(v => ({ ...v, summary: anySummary(v.video_id) || v.summary || null })), live_events: liveOn(guildID) }
   }
+  store.getVideo = async videoID => {
+    const found = allVideos().find(v => v.video_id === videoID)
+    if (!found) return null
+    const ch = channels().find(c => c.channel_id === found.channel_id)
+    return { ...found, channel_title: ch?.title || null, summary: anySummary(videoID) || found.summary || null }
+  }
   store.getVideoIds = async (channelID = null) => new Set(allVideos().filter(v => !channelID || v.channel_id === channelID).map(v => v.video_id))
+  store.videoIdsMissingStats = async (channelID, limit = 200) => allVideos()
+    .filter(v => v.channel_id === channelID && v.stats_updated_at === null)
+    .slice(0, limit)
+    .map(v => v.video_id)
+  store.markStatsChecked = async videoIDs => {
+    if (!videoIDs?.length) return
+    writes.push({ markStatsChecked: videoIDs })
+    const idSet = new Set(videoIDs)
+    for (const g of Object.keys(knowledge)) {
+      for (const v of (knowledge[g].videos || [])) {
+        if (idSet.has(v.video_id) && !v.stats_updated_at) v.stats_updated_at = new Date('2026-10-29T12:00:00Z')
+      }
+    }
+  }
   store.getOverview = async guildID => {
     if (!channels().length) return null
     const list = channels().map(c => {
@@ -534,7 +563,27 @@ function installYouTubeStore (knowledge = {}, summaries = {}) {
     writes.push({ upsertVideos: channelID, videos: videos.map(v => v.id) })
     for (const k of entriesOf(channelID)) {
       const byID = new Map((k.videos || []).map(v => [v.video_id, v]))
-      for (const v of videos) byID.set(v.id, { ...byID.get(v.id), video_id: v.id, title: v.title, live_status: v.liveStatus, scheduled_start: v.scheduledStart, published_at: v.publishedAt, url: v.url })
+      for (const v of videos) {
+        const prev = byID.get(v.id) || {}
+        const hasStats = v.viewCount != null || v.likeCount != null || v.commentCount != null
+        byID.set(v.id, {
+          ...prev,
+          video_id: v.id,
+          title: v.title,
+          description: v.description ?? prev.description,
+          live_status: v.liveStatus,
+          scheduled_start: v.scheduledStart,
+          actual_start: v.actualStart ?? prev.actual_start ?? null,
+          actual_end: v.actualEnd ?? prev.actual_end ?? null,
+          published_at: v.publishedAt,
+          duration: v.duration ?? prev.duration ?? null,
+          view_count: v.viewCount ?? prev.view_count ?? null,
+          like_count: v.likeCount ?? prev.like_count ?? null,
+          comment_count: v.commentCount ?? prev.comment_count ?? null,
+          stats_updated_at: hasStats ? new Date('2026-10-29T12:00:00Z') : prev.stats_updated_at,
+          url: v.url
+        })
+      }
       k.videos = [...byID.values()]
     }
   }
@@ -557,9 +606,37 @@ function installYouTubeStore (knowledge = {}, summaries = {}) {
     for (const k of entriesOf(channel.id)) {
       const byID = new Map((k.videos || []).map(v => [v.video_id, v]))
       for (const v of videos) {
-        byID.set(v.id, { video_id: v.id, title: v.title, description: v.description, published_at: v.publishedAt, live_status: v.liveStatus, scheduled_start: v.scheduledStart, duration: v.duration, url: v.url })
+        const prev = byID.get(v.id) || {}
+        const hasStats = v.viewCount != null || v.likeCount != null || v.commentCount != null
+        byID.set(v.id, {
+          ...prev,
+          video_id: v.id,
+          title: v.title,
+          description: v.description,
+          published_at: v.publishedAt,
+          live_status: v.liveStatus,
+          scheduled_start: v.scheduledStart,
+          actual_start: v.actualStart ?? prev.actual_start ?? null,
+          actual_end: v.actualEnd ?? prev.actual_end ?? null,
+          duration: v.duration,
+          view_count: v.viewCount ?? prev.view_count ?? null,
+          like_count: v.likeCount ?? prev.like_count ?? null,
+          comment_count: v.commentCount ?? prev.comment_count ?? null,
+          stats_updated_at: hasStats ? new Date('2026-10-29T12:00:00Z') : prev.stats_updated_at,
+          url: v.url
+        })
       }
-      Object.assign(k.channel, { channel_id: channel.id, title: channel.title, description: channel.description, handle: channel.handle, url: channel.url, backfill_token: backfillToken, synced_at: new Date('2026-10-29T12:00:00Z') })
+      Object.assign(k.channel, {
+        channel_id: channel.id,
+        title: channel.title,
+        description: channel.description,
+        handle: channel.handle,
+        subscriber_count: channel.subscriberCount ?? k.channel.subscriber_count ?? null,
+        view_count: channel.viewCount ?? k.channel.view_count ?? null,
+        url: channel.url,
+        backfill_token: backfillToken,
+        synced_at: new Date('2026-10-29T12:00:00Z')
+      })
       k.videos = [...byID.values()].sort((a, b) => new Date(b.published_at) - new Date(a.published_at))
     }
   }

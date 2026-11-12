@@ -397,17 +397,34 @@ describe('stores', { skip: !database.available && 'needs PGHOST' }, () => {
     const video = (id, extra = {}) => ({ id, title: `動画 ${id}`, description: '', publishedAt: `2026-10-0${id.slice(1)}T00:00:00Z`, liveStatus: 'none', scheduledStart: null, duration: 'PT1H', ...extra })
     const channel = { id: 'UC1', title: 'チャンネル', description: '説明', handle: '@chan', url: 'https://www.youtube.com/@chan' }
 
-    test('the bot\'s channels are every server\'s: their videos are found from any server', async () => {
+    test('the bot\'s channels are every server\'s: their videos and statistics are found from any server', async () => {
       await store().setBotChannels([{ ref: '@chan', id: 'UC1' }])
-      await store().saveSync({ channel, videos: [video('v1'), video('v2', { liveStatus: 'upcoming' }), video('v1')] })
+      await store().saveSync({
+        channel: { ...channel, subscriberCount: 625000, viewCount: 245000000 },
+        videos: [
+          video('v1', { viewCount: 152300, likeCount: 8420, commentCount: 512, actualStart: '2026-10-01T10:00:00Z' }),
+          video('v2', { liveStatus: 'upcoming' }),
+          video('v1', { viewCount: 152300, likeCount: 8420, commentCount: 512, actualStart: '2026-10-01T10:00:00Z' })
+        ]
+      })
       assert.deepEqual([...await store().getVideoIds()].sort(), ['v1', 'v2'])
       assert.deepEqual([...await store().getVideoIds('UC1')].sort(), ['v1', 'v2'])
       for (const guild of ['g1', 'g2']) {
         const knowledge = await store().getKnowledge(guild)
         assert.equal(knowledge.channel.title, 'チャンネル')
+        assert.equal(knowledge.channel.subscriber_count, 625000)
+        assert.equal(knowledge.channel.view_count, 245000000)
         assert.equal(knowledge.channels[0].channel_ref, '@chan')
         assert.deepEqual(knowledge.videos.map(v => [v.video_id, v.url]), [['v2', 'https://www.youtube.com/watch?v=v2'], ['v1', 'https://www.youtube.com/watch?v=v1']])
       }
+      const v1 = await store().getVideo('v1')
+      assert.equal(v1.view_count, 152300)
+      assert.equal(v1.like_count, 8420)
+      assert.equal(v1.comment_count, 512)
+      assert.equal(v1.channel_title, 'チャンネル')
+      assert.deepEqual(await store().videoIdsMissingStats('UC1'), ['v2'])
+      await store().markStatsChecked(['v2'])
+      assert.deepEqual(await store().videoIdsMissingStats('UC1'), [])
       assert.deepEqual(await store().getLiveVideoIds('UC1'), ['v2'])
       assert.deepEqual(await store().recentVideoIds('UC1', new Date('2026-10-01T12:00:00Z')), ['v2'])
       assert.deepEqual((await q('SELECT count(*)::int AS n FROM youtube_videos'))[0].n, 2)

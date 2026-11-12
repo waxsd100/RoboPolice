@@ -276,4 +276,36 @@ describe('the channels the bot follows', () => {
       process.env.YOUTUBE_CHANNELS = ''
     }
   })
+
+  test('backfillChannelStats fills statistics on older videos and marks deleted videos checked', async () => {
+    process.env.YOUTUBE_API_KEY = 'k'
+    const store = installYouTubeStore({
+      100: {
+        channel: { channel_id: UC },
+        videos: [
+          video(1, { stats_updated_at: null }),
+          video(2, { stats_updated_at: null })
+        ]
+      }
+    })
+    global.fetch = async () => ({
+      ok: true,
+      json: async () => ({
+        items: [{
+          id: id(1),
+          snippet: { title: '動画1', publishedAt: '2026-01-01T00:00:00Z', liveBroadcastContent: 'none' },
+          contentDetails: { duration: 'PT10M' },
+          statistics: { viewCount: '98765', likeCount: '1234', commentCount: '56' }
+        }]
+      })
+    })
+    assert.equal(await youtubeSync.backfillChannelStats(UC), 2)
+    const v1 = store.knowledge[100].videos.find(v => v.video_id === id(1))
+    const v2 = store.knowledge[100].videos.find(v => v.video_id === id(2))
+    assert.equal(v1.view_count, 98765)
+    assert.equal(v1.like_count, 1234)
+    assert.equal(v1.comment_count, 56)
+    assert.ok(v2.stats_updated_at instanceof Date, 'deleted/unreturned video is marked checked so it is not retried forever')
+    assert.equal(await youtubeSync.backfillChannelStats(UC), 0)
+  })
 })
