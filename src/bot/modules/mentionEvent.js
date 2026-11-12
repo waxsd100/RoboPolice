@@ -1,7 +1,7 @@
 const Eris = require('eris')
 const { v4: uuidv4 } = require('uuid')
 const { draft, revise, isConfigured, isUncensoredConfigured, isUncensoredDirective, rememberThreadModel, isR18Text, STORY_REQUEST_PATTERN, ENTITY_TYPES } = require('./eventDrafter')
-const { createTools, describeServer, worthSearching, withServerEmojis, withServerChannels, channelTheme, SHORT_TOPIC_PROMPT, StopDrafting } = require('./eventTools')
+const { createTools, describeServer, worthSearching, withServerEmojis, sharedOwnerEmojis, withServerChannels, channelTheme, SHORT_TOPIC_PROMPT, StopDrafting } = require('./eventTools')
 const { embedQuery } = require('../utils/embeddings')
 const { withLinkCards } = require('../utils/linkCards')
 const { safeLinks } = require('../utils/linkSafety')
@@ -546,10 +546,11 @@ async function handle (message) {
       const slimProfile = Boolean(edit) ||
         (!worthSearching(combinedQuery) && !attached.length && !embedded.length && !(theme && SHORT_TOPIC_PROMPT.test(request))) ||
         (STORY_REQUEST_PATTERN.test(request) && !communityKeyword.test([combinedQuery, theme].filter(Boolean).join('\n')))
+      const extraEmojis = await sharedOwnerEmojis(guild, message.channel).catch(() => [])
       const [server, recent] = await Promise.all([
         directR18
           ? null
-          : describeServer(guild, member, message.channel.id, { query: request, context: referenced?.othersText, queryVector, slim: slimProfile }).catch(e => {
+          : describeServer(guild, member, message.channel.id, { query: request, context: referenced?.othersText, queryVector, slim: slimProfile, extraEmojis }).catch(e => {
             global.logger.warn(`Could not describe server ${guild.id}: ${e.message}`)
             return null
           }),
@@ -565,7 +566,7 @@ async function handle (message) {
       const threadImages = edit ? [] : [...new Set([...attached, ...embedded, ...(referenced?.images || [])])]
       const pictures = directR18
         ? await attachedPictures(threadImages).catch(() => [])
-        : await picturesFor([request, referenced?.text], guild, threadImages).catch(() => [])
+        : await picturesFor([request, referenced?.text], guild, threadImages, { extraEmojis }).catch(() => [])
       // A reply brings its conversation in (`referenced`); otherwise only what was just said in the
       // channel that bears on the request (`recent`), never the bot's own earlier replies.
       let result = await draft({
@@ -605,7 +606,7 @@ async function handle (message) {
             // Rewritten to read less like AI-made Japanese (replyPolish.js), but not what the
             // stronger model or the uncensored fallback wrote.
             if (!result.conversation?.contents?.deep && !result.conversation?.contents?.uncensored) result = { ...result, text: await polish(result.text, { guildID: guild.id }) }
-            const { content, embeds } = await withLinkCards(withServerChannels(withServerEmojis(checkedLinks(result, guild), guild), guild, message.member))
+            const { content, embeds } = await withLinkCards(withServerChannels(withServerEmojis(checkedLinks(result, guild), guild, extraEmojis), guild, message.member))
             outcome = { kind: 'chat', response: content }
             const chunks = splitChatMessages(content, debugFooter ? tokenFooter(usage) : '')
             await reply.edit({ content: chunks[0], embeds: chunks.length === 1 ? embeds : [], components: [], allowedMentions: NO_MENTIONS })
@@ -628,7 +629,7 @@ async function handle (message) {
           }
           // The requester asked something about the draft instead of correcting it: answer, and
           // show the draft again.
-          note = withServerChannels(withServerEmojis(checkedLinks(result, guild), guild), guild, message.member)
+          note = withServerChannels(withServerEmojis(checkedLinks(result, guild), guild, extraEmojis), guild, message.member)
           result = { ...previous, conversation: result.conversation }
           continue
         }

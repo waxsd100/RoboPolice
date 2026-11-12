@@ -21,6 +21,7 @@ const serverRules = require('./serverRules')
 const loreStore = require('../../db/interfaces/postgres/serverLore')
 const embeddingStore = require('../../db/interfaces/postgres/embeddings')
 const { embeddableText } = require('../utils/messageNoise')
+const { ownerGuildIDs } = require('../utils/priority')
 
 const MAX_RECENT_MESSAGES = 50
 const MAX_QUESTIONS = 3
@@ -942,20 +943,82 @@ function emojiCode (e) {
   return `<${e.animated ? 'a' : ''}:${e.name}:${e.id}>`
 }
 
+function canUseExternalEmojis (channelOrID, guild) {
+  const c = typeof channelOrID === 'object' && channelOrID
+    ? channelOrID
+    : (channelOrID ? (global.bot?.getChannel?.(channelOrID) || guild?.channels?.get?.(channelOrID)) : null)
+  if (c?.guild?.id && guild?.id && c.guild.id !== guild.id) return false
+  const target = typeof c?.permissionsOf === 'function'
+    ? c
+    : (c?.parentID ? (guild?.channels?.get?.(c.parentID) || global.bot?.getChannel?.(c.parentID)) : null)
+  const botID = global.bot?.user?.id || (guild?.members?.has?.('BOT') ? 'BOT' : null)
+  if (!target || typeof target.permissionsOf !== 'function' || !botID) return false
+  const perms = target.permissionsOf(botID)
+  if (!perms) return false
+  if (typeof perms.has === 'function') return Boolean(perms.has('externalEmojis'))
+  return Boolean(perms.json?.externalEmojis)
+}
+
+// Usable custom emojis from OWNER_GUILD_IDS that the bot can post in `channelOrID` of `guild`.
+// Empty when `guild` has no other owner servers to draw from, or when external emojis are denied
+// in the target channel.
+async function sharedOwnerEmojis (guild, channelOrID) {
+  if (!guild?.id) return []
+  const ownerIDs = ownerGuildIDs().filter(id => id && id !== guild.id)
+  if (!ownerIDs.length) return []
+  if (!canUseExternalEmojis(channelOrID, guild)) return []
+
+  const seen = new Set(usableEmojis(guild).map(e => e.id))
+  const out = []
+  const missingGuildIDs = []
+
+  for (const ownerID of ownerIDs) {
+    const cachedGuild = global.bot?.guilds?.get?.(ownerID)
+    if (cachedGuild) {
+      for (const e of usableEmojis(cachedGuild)) {
+        if (!seen.has(e.id)) {
+          seen.add(e.id)
+          out.push({ id: e.id, name: e.name, animated: !!e.animated, guildID: ownerID })
+        }
+      }
+    } else {
+      missingGuildIDs.push(ownerID)
+    }
+  }
+
+  if (missingGuildIDs.length && emojiDescriber.enabled()) {
+    const stored = await emojiStore.listEmojis(missingGuildIDs).catch(() => [])
+    for (const e of stored) {
+      if (e?.id && e?.name && !seen.has(e.id)) {
+        seen.add(e.id)
+        out.push({ id: e.id, name: e.name, animated: !!e.animated, guildID: e.guild_id })
+      }
+    }
+  }
+
+  return out
+}
+
 // The model sometimes writes a server emoji as :name: rather than its code, puts codes in ` (code
 // formatting, where Discord shows them as text), or gets the ID or the a: of an animated one
-// wrong. Emojis the server has are written as their exact code, outside code formatting; others
-// are left as written.
+// wrong. Emojis the server has (and usable owner-server `extraEmojis`, with the current server's
+// own emojis winning on :name: collisions) are written as their exact code, outside code
+// formatting; others are left as written.
 const EMOJI = '(?:<a?:\\w{2,32}:\\d+>|:\\w{2,32}:)'
 const CODED_EMOJIS = new RegExp(`(\`{1,3})\\s*(${EMOJI}(?:\\s*${EMOJI})*)\\s*\\1`, 'g')
-function withServerEmojis (text, guild) {
-  const emojis = usableEmojis(guild)
-  const byName = new Map(emojis.map(e => [e.name, e]))
-  const byID = new Map(emojis.map(e => [e.id, e]))
+function withServerEmojis (text, guild, extraEmojis = []) {
+  const own = usableEmojis(guild)
+  const extra = (extraEmojis || []).filter(e => e && e.id && e.name && e.available !== false && !(e.roles || []).length)
+  const byName = new Map()
+  const byID = new Map()
+  for (const e of [...own, ...extra]) {
+    if (!byName.has(e.name)) byName.set(e.name, e)
+    if (!byID.has(e.id)) byID.set(e.id, e)
+  }
   const find = (name, id, bare) => bare ? byName.get(bare) : (byID.get(id) || byName.get(name))
   const ONE = /<(a?):(\w{2,32}):(\d+)>|:(\w{2,32}):/g
   return text
-    // Only when every emoji inside is the server's: anything else in ` may be meant as code.
+    // Only when every emoji inside is usable here: anything else in ` may be meant as code.
     .replace(CODED_EMOJIS, (whole, ticks, inside) => [...inside.matchAll(ONE)].every(m => find(m[2], m[3], m[4])) ? inside : whole)
     .replace(ONE, (whole, animated, name, id, bare) => {
       const emoji = find(name, id, bare)
@@ -1072,28 +1135,69 @@ function namedMembers (texts, guild, requester) {
   return lines
 }
 
-// The server's emojis for the model. With descriptions (emojiDescriber.js), one per line with what
-// it shows and when to use it, those closest in meaning to the request first (`vectorOf()`
-// resolves to its embedding, or null); otherwise just the codes.
+function mentionedEmojiIDs (texts) {
+  const ids = new Set()
+  for (const t of texts) {
+    for (const m of String(t || '').matchAll(/<a?:\w{2,32}:(\d{15,25})>/g)) ids.add(m[1])
+  }
+  return ids
+}
+
+function selectProfileEmojis (own, shared, { rank = null, mentioned = new Set(), limit = MAX_PROFILE_EMOJIS } = {}) {
+  const order = list => [...list].sort((a, b) => {
+    const ma = mentioned.has(a.id) ? 0 : 1
+    const mb = mentioned.has(b.id) ? 0 : 1
+    if (ma !== mb) return ma - mb
+    return (rank?.get(a.id) ?? Infinity) - (rank?.get(b.id) ?? Infinity)
+  })
+  const ownOrdered = order(own)
+  const sharedOrdered = order(shared)
+  if (!sharedOrdered.length) return ownOrdered.slice(0, limit)
+  if (!ownOrdered.length) return sharedOrdered.slice(0, limit)
+  const half = Math.ceil(limit / 2)
+  const ownQuota = Math.min(ownOrdered.length, Math.max(half, limit - sharedOrdered.length))
+  const sharedQuota = Math.min(sharedOrdered.length, limit - ownQuota)
+  const picked = [...ownOrdered.slice(0, ownQuota), ...sharedOrdered.slice(0, sharedQuota)]
+  if (!rank) return picked
+  return picked.sort((a, b) => (rank.get(a.id) ?? Infinity) - (rank.get(b.id) ?? Infinity))
+}
+
 const MAX_EMOJI_NOTE_CHARS = 80
-async function emojiSection (guild, vectorOf) {
-  const emojis = usableEmojis(guild)
-  if (!emojis.length) return []
+function formatEmojiNoteLine (e, notes) {
+  return notes[e.id]
+    ? `- ${emojiCode(e)} ${String(notes[e.id]).replace(/\s+/g, ' ').slice(0, MAX_EMOJI_NOTE_CHARS)}`
+    : `- ${emojiCode(e)}`
+}
+
+// The server's emojis (plus usable owner-server `sharedEmojis` when external emojis are allowed)
+// for the model. With descriptions (emojiDescriber.js), one per line with what it shows and when
+// to use it, those closest in meaning to the request first (`vectorOf()` resolves to its embedding,
+// or null); otherwise just the codes.
+async function emojiSection (guild, vectorOf, { sharedEmojis = [], mentioned = new Set() } = {}) {
+  const ownEmojis = usableEmojis(guild)
+  if (!ownEmojis.length && !sharedEmojis.length) return []
   const head = '### サーバー絵文字（返事で使うときは、この書き方のまま書く）'
-  const notes = emojiDescriber.enabled() ? await emojiStore.descriptions(guild.id).catch(() => ({})) : {}
-  if (!Object.keys(notes).length) return [head, emojis.slice(0, MAX_PROFILE_EMOJIS).map(emojiCode).join(' ')]
+  const guildIDs = [...new Set([guild.id, ...sharedEmojis.map(e => e.guildID)].filter(Boolean))]
+  const storeTarget = guildIDs.length === 1 ? guildIDs[0] : guildIDs
+  const notes = emojiDescriber.enabled() ? await emojiStore.descriptions(storeTarget).catch(() => ({})) : {}
+  if (!Object.keys(notes).length) return [head, selectProfileEmojis(ownEmojis, sharedEmojis, { mentioned }).map(emojiCode).join(' ')]
   const vector = await vectorOf()
-  if (!vector) return [head, emojis.slice(0, MAX_PROFILE_EMOJIS).map(emojiCode).join(' ')]
-  const first = await emojiStore.nearestEmojis(guild.id, vector, embeddingModel(), MAX_PROFILE_EMOJIS)
+  if (!vector) {
+    const picked = selectProfileEmojis(ownEmojis, sharedEmojis, { mentioned })
+    if ([...mentioned].some(id => notes[id])) return [head, ...picked.map(e => formatEmojiNoteLine(e, notes))]
+    return [head, picked.map(emojiCode).join(' ')]
+  }
+  const rankLimit = ownEmojis.length && sharedEmojis.length ? MAX_PROFILE_EMOJIS * 3 : MAX_PROFILE_EMOJIS
+  const first = await emojiStore.nearestEmojis(storeTarget, vector, embeddingModel(), rankLimit)
     .catch(e => {
       global.logger.warn(`Could not rank the emojis of ${guild.id}: ${e.message}`)
       return []
     })
   const rank = new Map(first.map((id, i) => [id, i]))
-  const ordered = [...emojis].sort((a, b) => (rank.get(a.id) ?? Infinity) - (rank.get(b.id) ?? Infinity))
+  const ordered = selectProfileEmojis(ownEmojis, sharedEmojis, { rank, mentioned })
   return [
     `${head}。話に合いそうな順:`,
-    ...ordered.slice(0, MAX_PROFILE_EMOJIS).map(e => notes[e.id] ? `- ${emojiCode(e)} ${String(notes[e.id]).replace(/\s+/g, ' ').slice(0, MAX_EMOJI_NOTE_CHARS)}` : `- ${emojiCode(e)}`)
+    ...ordered.map(e => formatEmojiNoteLine(e, notes))
   ]
 }
 
@@ -1140,22 +1244,31 @@ async function relatedMessages (guild, member, vectorOf) {
 // thread, the channel's theme also steers which knowledge, lore, past talk and emojis come first.
 // slim: for bare greetings, edits, or pure creative stories that do not touch server data, send
 // only the server name, style, and compact emoji codes.
-async function describeServer (guild, member, requestChannelID, { query = '', context = '', queryVector = null, slim = false } = {}) {
+async function describeServer (guild, member, requestChannelID, { query = '', context = '', queryVector = null, slim = false, extraEmojis = null } = {}) {
   // Ensure the channel cache is readable before building the profile.
   guild.channels.values()
   const lines = [`サーバー名: ${guild.name}`]
+  const sharedEmojis = Array.isArray(extraEmojis) ? extraEmojis : await sharedOwnerEmojis(guild, requestChannelID)
+  const mentioned = mentionedEmojiIDs([query, context])
   if (slim) {
     const lore = serverLore.enabled()
       ? await serverLore.relatedLore(guild.id, () => Promise.resolve(null)).catch(() => ({ facts: [], style: null }))
       : { facts: [], style: null }
     if (lore.style) lines.push('', '### このサーバーのノリ（メンバーの会話から）', lore.style)
-    const emojis = usableEmojis(guild)
-    if (emojis.length) {
-      lines.push(
-        '',
-        '### サーバー絵文字（返事で使うときは、この書き方のまま書く）',
-        emojis.slice(0, MAX_PROFILE_EMOJIS).map(emojiCode).join(' ')
-      )
+    const ownEmojis = usableEmojis(guild)
+    const picked = selectProfileEmojis(ownEmojis, sharedEmojis, { mentioned })
+    if (picked.length) {
+      const head = '### サーバー絵文字（返事で使うときは、この書き方のまま書く）'
+      const guildIDs = [...new Set([guild.id, ...sharedEmojis.map(e => e.guildID)].filter(Boolean))]
+      const storeTarget = guildIDs.length === 1 ? guildIDs[0] : guildIDs
+      const notes = mentioned.size && emojiDescriber.enabled()
+        ? await emojiStore.descriptions(storeTarget).catch(() => ({}))
+        : {}
+      if ([...mentioned].some(id => notes[id])) {
+        lines.push('', head, ...picked.map(e => formatEmojiNoteLine(e, notes)))
+      } else {
+        lines.push('', head, picked.map(emojiCode).join(' '))
+      }
     }
     return lines.join('\n')
   }
@@ -1205,7 +1318,7 @@ async function describeServer (guild, member, requestChannelID, { query = '', co
   const said = await relatedMessages(guild, member, vectorOf).catch(() => [])
   if (said.length) lines.push('', '### このサーバーで前に出た、依頼に近い発言', ...said)
 
-  const emojiLines = await emojiSection(guild, vectorOf)
+  const emojiLines = await emojiSection(guild, vectorOf, { sharedEmojis, mentioned })
   if (emojiLines.length) lines.push('', ...emojiLines)
 
   const youtube = await youtubeDB.getOverview(guild.id).catch(() => null)
@@ -1236,4 +1349,4 @@ async function describeServer (guild, member, requestChannelID, { query = '', co
   return lines.join('\n')
 }
 
-module.exports = { worthSearching, createTools, formatMessage, formatVideo, inferVideoSort, describeServer, withServerEmojis, withServerChannels, namedChannels, namedMembers, requestChannelInfo, channelTheme, SHORT_TOPIC_PROMPT, searchYouTube, searchTwitch, searchSteam, MESSAGE_LINK, CHANNEL_LINK, StopDrafting }
+module.exports = { worthSearching, createTools, formatMessage, formatVideo, inferVideoSort, describeServer, withServerEmojis, canUseExternalEmojis, sharedOwnerEmojis, withServerChannels, namedChannels, namedMembers, requestChannelInfo, channelTheme, SHORT_TOPIC_PROMPT, searchYouTube, searchTwitch, searchSteam, MESSAGE_LINK, CHANNEL_LINK, StopDrafting }

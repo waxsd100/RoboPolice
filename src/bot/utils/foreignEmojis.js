@@ -51,15 +51,16 @@ function emojiGroups (texts) {
     .slice(0, MAX_CANDIDATES)
 }
 
-// The emojis in `texts` that are not the server's own (which have descriptions already) and not
-// part of the combined emojis `groups`, each once: [{ id, name, animated }].
-function foreignEmojis (texts, guild, groups = []) {
-  const own = new Set((guild?.emojis || []).map(e => e.id))
+// The emojis in `texts` that are not the server's own (or shared owner emojis usable here, which
+// have descriptions already) and not part of the combined emojis `groups`, each once:
+// [{ id, name, animated }].
+function foreignEmojis (texts, guild, groups = [], extraEmojis = []) {
+  const known = new Set([...(guild?.emojis || []), ...(extraEmojis || [])].map(e => e.id))
   const inGroups = new Set(groups.flatMap(g => g.rows.flat().map(e => e.id)))
   const seen = new Map()
   for (const text of texts) {
     for (const e of parse(text || '')) {
-      if (!own.has(e.id) && !inGroups.has(e.id) && !seen.has(e.id)) seen.set(e.id, e)
+      if (!known.has(e.id) && !inGroups.has(e.id) && !seen.has(e.id)) seen.set(e.id, e)
     }
   }
   return [...seen.values()].slice(0, MAX_EMOJIS)
@@ -202,12 +203,12 @@ async function attachedPictures (urls = []) {
 // Everything to show the model for `texts`: combined emojis first, then other servers' emojis
 // (emojis written next to each other that are not one picture among them, one by one), and any
 // attached or replied-to images.
-async function picturesFor (texts, guild, imageUrls = []) {
+async function picturesFor (texts, guild, imageUrls = [], { extraEmojis = [] } = {}) {
   const [{ combined, pictures }, attached] = await Promise.all([
     combinedPictures(emojiGroups(texts)),
     attachedPictures(imageUrls)
   ])
-  const foreign = await emojiPictures(foreignEmojis(texts, guild, combined))
+  const foreign = await emojiPictures(foreignEmojis(texts, guild, combined, extraEmojis))
   return [...pictures, ...foreign, ...attached]
 }
 

@@ -328,6 +328,26 @@ describe('withServerEmojis', () => {
   test('a server emoji written with a wrong ID or a wrong a: gets its own code', () => {
     assert.equal(withServerEmojis('<:party:12> <a:nobaman_wave:99> <:other:55>', g), '<a:party:12> <:nobaman_wave:11> <:other:55>')
   })
+
+  test('resolves usable owner-server extraEmojis while keeping the current server\'s own emoji on :name: collisions', () => {
+    const localGuild = { emojis: [{ id: '21', name: 'wave' }] }
+    const ownerEmojis = [
+      { id: '91', name: 'wave', animated: true },
+      { id: '92', name: 'yotsuron_happy' },
+      { id: '93', name: 'owner_staff', roles: ['r9'] },
+      { id: '94', name: 'owner_broken', available: false }
+    ]
+    assert.equal(
+      withServerEmojis('こんにちは :wave: `:yotsuron_happy:` <:wave:91> <a:yotsuron_happy:999> :owner_staff: :owner_broken:', localGuild, ownerEmojis),
+      'こんにちは <:wave:21> <:yotsuron_happy:92> <a:wave:91> <:yotsuron_happy:92> :owner_staff: :owner_broken:',
+      'bare :wave: resolves to local server emoji 21, exact ID 91 keeps owner animated emoji, owner-only emoji unwraps and fixes wrong ID/a:'
+    )
+    assert.equal(
+      withServerEmojis('こんにちは :yotsuron_happy:', localGuild, []),
+      'こんにちは :yotsuron_happy:',
+      'when externalEmojis are disallowed (extraEmojis empty), owner emoji names are not converted'
+    )
+  })
 })
 
 describe('describeServer', () => {
@@ -871,5 +891,94 @@ describe('describeServer: what the server is like', () => {
     assert.match(slimText, /### サーバー絵文字（返事で使うときは、この書き方のまま書く）\n<:em0:800>/)
     assert.doesNotMatch(slimText, /<:em8:808>/, 'capped at 8 emojis')
     assert.doesNotMatch(slimText, /### YouTube|説明:|メンバー数:|ルールチャンネル:|内輪ネタA/)
+  })
+
+  test('offers owner-server emojis in other servers when externalEmojis is permitted, without starving local emojis, and falls back to DB across shards', async (t) => {
+    const emojiStore = require('../../src/db/interfaces/postgres/emojis')
+    const { sharedOwnerEmojis } = require('../../src/bot/modules/eventTools')
+    configureGateway()
+    installYouTubeStore()
+    installEmbeddingModel()
+
+    const prevOwner = process.env.OWNER_GUILD_IDS
+    process.env.OWNER_GUILD_IDS = '9001'
+
+    const ownerGuild = createGuild({ id: '9001', channels: [{ id: '910', name: 'general', readers: ['BOT'] }] })
+    ownerGuild.emojis = Array.from({ length: 10 }, (_, i) => ({
+      id: `90000000000000000${i}`,
+      name: i === 7 ? 'yotsuron_horror' : `nobaman_${i}`,
+      animated: i === 7
+    }))
+    ownerGuild.emojis.push({ id: '900000000000000099', name: 'sub_only', roles: ['sub'] })
+
+    const otherGuild = createGuild({
+      id: '200',
+      channels: [
+        { id: '201', name: '雑談', readers: [REQUESTER, 'BOT'] },
+        { id: '202', name: '外部絵文字禁止', readers: [REQUESTER, 'BOT'], externalEmojis: false }
+      ]
+    })
+    // Thread inside the external-emoji-restricted channel inherits parent's denial when lacking permissionsOf
+    otherGuild.channels.set('203', { id: '203', name: '制限スレッド', type: 11, parentID: '202', guild: otherGuild })
+    otherGuild.emojis = [
+      { id: '200000000000000001', name: 'local_one' },
+      { id: '200000000000000002', name: 'local_two' }
+    ]
+
+    t.after(() => {
+      if (prevOwner === undefined) delete process.env.OWNER_GUILD_IDS
+      else process.env.OWNER_GUILD_IDS = prevOwner
+      installBot({ guilds: [guild] })
+    })
+
+    const descCalls = []
+    const nearestCalls = []
+    t.mock.method(emojiStore, 'descriptions', async target => {
+      descCalls.push(target)
+      return Object.fromEntries(ownerGuild.emojis.slice(0, 10).map((e, i) => [
+        e.id,
+        i === 7 ? 'よつろんが怖がっている。ホラー配信の話で使う' : `のばまんスタンプ${i}`
+      ]))
+    })
+    t.mock.method(emojiStore, 'nearestEmojis', async (target, _vec, _model, limit) => {
+      nearestCalls.push({ target, limit })
+      // Put emoji #7 first, followed by the rest of ownerGuild's embedded emojis (localGuild has no embeddings)
+      return ['900000000000000007', ...ownerGuild.emojis.slice(0, 10).filter((_, i) => i !== 7).map(e => e.id)]
+    })
+
+    // 1. Live owner guild in global.bot.guilds + externalEmojis permitted:
+    //    ranks owner emojis by meaning AND keeps both local undescribed emojis within the 8-emoji cap.
+    installBot({ guilds: [ownerGuild, otherGuild] })
+    const profile = await describeServer(otherGuild, member, '201', { query: '怖いホラー配信おすすめ教えて' })
+    assert.deepEqual(descCalls[0], ['200', '9001'])
+    assert.deepEqual(nearestCalls[0].target, ['200', '9001'])
+    assert.match(profile, /- <a:yotsuron_horror:900000000000000007> よつろんが怖がっている。ホラー配信の話で使う/)
+    assert.match(profile, /- <:local_one:200000000000000001>/)
+    assert.match(profile, /- <:local_two:200000000000000002>/)
+    assert.doesNotMatch(profile, /sub_only/, 'role-restricted owner emojis are never shared')
+
+    // 2. Slim mode when local server has 6 own emojis and owner server has 10: shares the 8 slots between both.
+    otherGuild.emojis = Array.from({ length: 6 }, (_, i) => ({ id: `20000000000000001${i}`, name: `local_${i}` }))
+    const slimMixed = await describeServer(otherGuild, member, '201', { slim: true })
+    assert.match(slimMixed, /<:local_0:200000000000000010>/)
+    assert.match(slimMixed, /<:nobaman_0:900000000000000000>/)
+    otherGuild.emojis = [{ id: '200000000000000001', name: 'local_one' }]
+
+    // 3. Channel (and child thread) where externalEmojis is denied for BOT: only local emojis are offered.
+    assert.deepEqual(await sharedOwnerEmojis(otherGuild, '202'), [])
+    assert.deepEqual(await sharedOwnerEmojis(otherGuild, '203'), [])
+    const restrictedProfile = await describeServer(otherGuild, member, '202', { query: '怖いホラー配信おすすめ教えて' })
+    assert.match(restrictedProfile, /<:local_one:200000000000000001>/)
+    assert.doesNotMatch(restrictedProfile, /yotsuron_horror|nobaman_/)
+
+    // 4. Cross-shard fallback: owner guild is NOT in global.bot.guilds, loaded from emojiStore.listEmojis instead.
+    installBot({ guilds: [otherGuild] })
+    const listMock = t.mock.method(emojiStore, 'listEmojis', async ids => {
+      assert.deepEqual(ids, ['9001'])
+      return [{ id: '900000000000000007', guild_id: '9001', name: 'yotsuron_horror', animated: true }]
+    })
+    const fromDbProfile = await describeServer(otherGuild, member, '201', { query: '怖いホラー配信おすすめ教えて' })
+    assert.equal(listMock.mock.callCount(), 1)
+    assert.match(fromDbProfile, /<a:yotsuron_horror:900000000000000007>/)
   })
 })
