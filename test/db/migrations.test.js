@@ -35,9 +35,9 @@ describe('migrations', { skip: !database.available && 'needs PGHOST' }, () => {
       ('m3', 'u1', $1, '', '2026-10-03', 'c7', 'left-server', false),
       ('m4', 'u1', $1, '', '2026-09-01', NULL, NULL, false)`,
     [aes.encrypt('hi'), [piece('https://cdn/a.png'), piece('https://cdn/b.png')].join('|')])
-    await q("INSERT INTO message_embeddings (message_id, guild_id, channel_id, ts, embedding, model) VALUES ('m1', 'g1', 'c1', '2026-10-01', $1, 'model-a')", [aes.encrypt(legacyVector)])
+    await q("INSERT INTO message_embeddings (message_id, guild_id, channel_id, ts, embedding, model) VALUES ('m1', 'g1', 'c1', '2026-10-01', $1, 'gemini-embedding-001')", [aes.encrypt(legacyVector)])
     // Not 512 components: dropped, and the message embedded again.
-    await q("INSERT INTO message_embeddings (message_id, guild_id, channel_id, ts, embedding, model) VALUES ('m2', 'g1', 'c1', '2026-10-02', $1, 'model-a')", [aes.encrypt('AAAA')])
+    await q("INSERT INTO message_embeddings (message_id, guild_id, channel_id, ts, embedding, model) VALUES ('m2', 'g1', 'c1', '2026-10-02', $1, 'gemini-embedding-001')", [aes.encrypt('AAAA')])
     // Two servers with the same channel, so every video is stored twice; one legacy row without an ID.
     await q(`INSERT INTO youtube_channels (guild_id, channel_ref, channel_id, title, synced_at, backfill_token, live_events) VALUES
       ('g1', '@chan', 'UC1', 'チャンネル', '2026-10-01', NULL, true),
@@ -45,7 +45,7 @@ describe('migrations', { skip: !database.available && 'needs PGHOST' }, () => {
       ('g3', '@legacy', NULL, NULL, NULL, NULL, false)`)
     for (const guild of ['g1', 'g2']) {
       await q(`INSERT INTO youtube_videos (guild_id, video_id, title, published_at, live_status, url, embedding, embedding_hash, embedding_model) VALUES
-        ($1, 'v1', '動画1', '2026-09-01', 'none', 'https://www.youtube.com/watch?v=v1', $2, 'h1', 'model-a'),
+        ($1, 'v1', '動画1', '2026-09-01', 'none', 'https://www.youtube.com/watch?v=v1', $2, 'h1', 'gemini-embedding-001'),
         ($1, 'v2', '配信', '2026-09-02', 'upcoming', 'https://www.youtube.com/watch?v=v2', NULL, NULL, NULL)`, [guild, legacyVector])
     }
     await q(`INSERT INTO youtube_summaries (guild_id, video_id, summary, created_at) VALUES
@@ -81,7 +81,7 @@ describe('migrations', { skip: !database.available && 'needs PGHOST' }, () => {
       ('d1', 'g1', 'c1', '雑談（旧）', 'u1', 'のばまん（旧）', 'やあ', '2026-10-01'),
       ('d2', 'g1', 'c1', '雑談', 'u1', 'のばまん', 'どうも', '2026-10-02')`)
     await q("INSERT INTO youtube_summary_batches (name, guild_id, channel_id, requester_id, video_ids, model) VALUES ('batches/s1', 'g1', 'c1', 'u1', '{v2,v1}', 'gemini-x')")
-    await q("INSERT INTO embedding_batches (name, model) VALUES ('batches/e1', 'model-a')")
+    await q("INSERT INTO embedding_batches (name, model) VALUES ('batches/e1', 'gemini-embedding-001'), ('batches/stale', 'deprecated-model')")
     await q("INSERT INTO embedding_batch_messages (message_id, batch_name) VALUES ('m1', 'batches/e1'), ('gone', 'batches/e1')")
 
     await migrate()
@@ -115,7 +115,7 @@ describe('migrations', { skip: !database.available && 'needs PGHOST' }, () => {
       { source: 'x', kind: 'term', name: '告知', content: 'お知らせ' }
     ])
     assert.deepEqual((await q('SELECT id, account FROM x_posts')), [{ id: '1', account: 'nobamangames' }])
-    for (const old of ['social_posts', 'wiki_pages', 'wiki_sections', 'wiki_facts', 'x_pages', 'x_sections', 'x_facts', 'discord_pages', 'discord_sections', 'discord_facts', 'web_pages', 'web_sections', 'web_facts']) {
+    for (const old of ['social_posts', 'wiki_pages', 'wiki_sections', 'wiki_facts', 'x_pages', 'x_sections', 'x_facts', 'discord_pages', 'discord_sections', 'discord_facts', 'web_pages', 'web_sections', 'web_facts', 'embedding_models']) {
       assert.equal((await q('SELECT to_regclass($1) AS t', [old]))[0].t, null, old)
     }
   })
@@ -134,29 +134,40 @@ describe('migrations', { skip: !database.available && 'needs PGHOST' }, () => {
       { id: 'd1', channel_id: 'c1', author_id: 'u1', content: 'やあ' }, { id: 'd2', channel_id: 'c1', author_id: 'u1', content: 'どうも' }
     ])
     assert.deepEqual(await q('SELECT position, video_id FROM youtube_summary_batch_videos ORDER BY position'), [{ position: 0, video_id: 'v2' }, { position: 1, video_id: 'v1' }])
-    assert.deepEqual(await q('SELECT b.name, m.name AS model FROM embedding_batches b JOIN embedding_models m ON m.id = b.model_id'), [{ name: 'batches/e1', model: 'model-a' }])
+    assert.deepEqual(await q('SELECT name, model FROM embedding_batches'), [{ name: 'batches/e1', model: 'gemini-embedding-001' }])
     assert.deepEqual(await q('SELECT message_id FROM embedding_batch_messages'), [{ message_id: 'm1' }], 'a message that is gone leaves the batch')
     await assert.rejects(q("INSERT INTO embedding_batch_messages (message_id, batch_name) VALUES ('nowhere', 'batches/e1')"), /foreign key/)
     await assert.rejects(q("INSERT INTO discord_posts (id, channel_id, author_id, content, created_at) VALUES ('d9', 'nowhere', 'u1', 'x', now())"), /foreign key/)
-    // Every foreign key has an index that starts with its columns (messages.embedding_model_id aside).
+    // Every foreign key has an index that starts with its columns.
     const unindexed = await q(`
       SELECT c.conrelid::regclass::text AS tbl, c.conname FROM pg_constraint c
       WHERE c.contype = 'f' AND NOT EXISTS (
         SELECT 1 FROM pg_index i WHERE i.indrelid = c.conrelid AND (i.indkey::int2[])[0:cardinality(c.conkey) - 1] @> c.conkey AND (i.indkey::int2[])[0:cardinality(c.conkey) - 1] <@ c.conkey)
       ORDER BY 1, 2`)
-    assert.deepEqual(unindexed, [{ tbl: 'messages', conname: 'messages_embedding_model_id_fkey' }])
+    assert.deepEqual(unindexed, [])
   })
 
-  test('the reply options are enum types with the same values as replyOptions.js', async () => {
-    const { REPLY_MODELS, THINKING_LEVELS, REPLY_LENGTH_CHOICES, SERVICE_TIERS, AI_TASKS } = require('../../src/bot/utils/replyOptions')
+  test('the reply options and embedding models are enum types with the same values as replyOptions.js', async () => {
+    const { REPLY_MODELS, EMBEDDING_MODELS, THINKING_LEVELS, REPLY_LENGTH_CHOICES, SERVICE_TIERS, AI_TASKS } = require('../../src/bot/utils/replyOptions')
     const values = async type => (await q(`SELECT unnest(enum_range(NULL::${type}))::text AS v`)).map(r => r.v)
     assert.deepEqual(await values('reply_model'), REPLY_MODELS)
+    assert.deepEqual(await values('embedding_model'), EMBEDDING_MODELS)
     assert.deepEqual(await values('thinking_level'), THINKING_LEVELS)
     assert.deepEqual(await values('reply_length'), REPLY_LENGTH_CHOICES)
     assert.deepEqual(await values('service_tier'), SERVICE_TIERS)
     assert.deepEqual(await values('ai_task'), AI_TASKS)
     const types = await q("SELECT column_name, udt_name FROM information_schema.columns WHERE table_name = 'guilds' AND column_name IN ('reply_model', 'reply_thinking', 'reply_length') ORDER BY column_name")
     assert.deepEqual(types.map(r => [r.column_name, r.udt_name]), [['reply_length', 'reply_length'], ['reply_model', 'reply_model'], ['reply_thinking', 'thinking_level']])
+    const embTypes = await q("SELECT table_name, column_name, udt_name FROM information_schema.columns WHERE udt_name = 'embedding_model' ORDER BY table_name, column_name")
+    assert.deepEqual(embTypes.map(r => [r.table_name, r.column_name]), [
+      ['embedding_batches', 'model'],
+      ['guild_emojis', 'embedding_model'],
+      ['guild_lore_facts', 'embedding_model'],
+      ['knowledge_facts', 'embedding_model'],
+      ['knowledge_sections', 'embedding_model'],
+      ['messages', 'embedding_model'],
+      ['youtube_videos', 'embedding_model']
+    ])
   })
 
   test('server settings become rows', async () => {
@@ -193,11 +204,11 @@ describe('migrations', { skip: !database.available && 'needs PGHOST' }, () => {
     const tables = (await q("SELECT tablename FROM pg_tables WHERE schemaname = 'public'")).map(r => r.tablename)
     assert.ok(!tables.includes('message_embeddings') && !tables.includes('youtube_video_embeddings'))
     const columns = (await q("SELECT column_name FROM information_schema.columns WHERE table_name = 'messages' AND column_name LIKE 'embed%' ORDER BY column_name")).map(r => r.column_name)
-    assert.deepEqual(columns, ['embedding', 'embedding_model_id'])
-    assert.deepEqual(await q("SELECT m.id, m.embedding IS NOT NULL AS embedded, e.name AS model FROM messages m LEFT JOIN embedding_models e ON e.id = m.embedding_model_id WHERE m.id IN ('m1', 'm2', 'm4') ORDER BY m.id"), [
-      { id: 'm1', embedded: true, model: 'model-a' },
+    assert.deepEqual(columns, ['embedding', 'embedding_model'])
+    assert.deepEqual(await q("SELECT id, embedding IS NOT NULL AS embedded, embedding_model AS model FROM messages WHERE id IN ('m1', 'm2', 'm4') ORDER BY id"), [
+      { id: 'm1', embedded: true, model: 'gemini-embedding-001' },
       { id: 'm2', embedded: false, model: null },
-      { id: 'm4', embedded: false, model: 'model-a' }
+      { id: 'm4', embedded: false, model: 'gemini-embedding-001' }
     ])
   })
 
@@ -221,7 +232,7 @@ describe('migrations', { skip: !database.available && 'needs PGHOST' }, () => {
     assert.deepEqual(await q('SELECT video_id, channel_id FROM youtube_videos ORDER BY video_id'), [
       { video_id: 'v1', channel_id: 'UC1' }, { video_id: 'v2', channel_id: 'UC1' }
     ])
-    assert.deepEqual(await q('SELECT v.video_id, v.embedding_hash, m.name AS model FROM youtube_videos v JOIN embedding_models m ON m.id = v.embedding_model_id'), [{ video_id: 'v1', embedding_hash: 'h1', model: 'model-a' }])
+    assert.deepEqual(await q('SELECT video_id, embedding_hash, embedding_model AS model FROM youtube_videos WHERE embedding_model IS NOT NULL'), [{ video_id: 'v1', embedding_hash: 'h1', model: 'gemini-embedding-001' }])
   })
 
   test('summaries are kept once (the newest), and who asked is kept per server', async () => {
@@ -250,7 +261,7 @@ describe('migrations', { skip: !database.available && 'needs PGHOST' }, () => {
     assert.equal(row.type, 'halfvec(512)')
     const [m1] = await q("SELECT 1 - (embedding <=> $1::halfvec) AS score FROM messages WHERE id = 'm1'", [`[${['1', ...Array(511).fill('0')].join(',')}]`])
     assert.ok(Math.abs(Number(m1.score) - 1) < 0.001, 'the vector survived the conversion')
-    assert.deepEqual((await q("SELECT embedding_model_id FROM messages WHERE id = 'm2'")), [{ embedding_model_id: null }])
+    assert.deepEqual((await q("SELECT embedding_model FROM messages WHERE id = 'm2'")), [{ embedding_model: null }])
     assert.deepEqual((await q('SELECT video_id FROM youtube_videos WHERE embedding IS NOT NULL')), [{ video_id: 'v1' }])
     const indexes = (await q("SELECT indexname FROM pg_indexes WHERE indexdef LIKE '%hnsw%' ORDER BY indexname")).map(r => r.indexname)
     assert.deepEqual(indexes, ['messages_embedding_hnsw'])
@@ -275,7 +286,6 @@ describe('migrations', { skip: !database.available && 'needs PGHOST' }, () => {
 
   test('what a server stores refers to it; rows of servers the bot left are dropped', async () => {
     assert.deepEqual((await q('SELECT id FROM messages ORDER BY id')).map(r => r.id), ['m1', 'm2', 'm4'], 'm3 was of a server with no settings; m4 has no server recorded')
-    assert.deepEqual(await q('SELECT name FROM embedding_models'), [{ name: 'model-a' }])
     await q("DELETE FROM guilds WHERE id = 'g1'")
     assert.deepEqual((await q("SELECT id FROM messages WHERE guild_id = 'g1'")), [])
     assert.deepEqual((await q("SELECT guild_id FROM youtube_live_events WHERE guild_id = 'g1'")), [])

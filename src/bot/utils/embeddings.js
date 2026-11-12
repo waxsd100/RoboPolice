@@ -5,16 +5,26 @@
 // embedding), normalized, and handled in the app as signed bytes (each component times 127).
 const { geminiRequest, geminiStream, geminiSend } = require('../modules/eventDrafter')
 const { forEachArrayItem, textChunks } = require('./jsonItems')
+const { EMBEDDING_MODELS } = require('./replyOptions')
 
 const DEFAULT_EMBEDDING_MODEL = 'gemini-embedding-001'
 const DIMENSIONS = 512
 const BATCH_SIZE = 100 // the most batchEmbedContents takes
 const MAX_TEXT = 2000
 
+let warnedEmbeddingModel = ''
+
 // Vectors from different models can't be compared, so each stored one records the model that made
 // it; changing GEMINI_EMBEDDING_MODEL makes everything again (see embeddingIndexer.js).
 function model () {
-  return process.env.GEMINI_EMBEDDING_MODEL || DEFAULT_EMBEDDING_MODEL
+  const configured = (process.env.GEMINI_EMBEDDING_MODEL || '').trim()
+  if (!configured) return DEFAULT_EMBEDDING_MODEL
+  if (EMBEDDING_MODELS.includes(configured)) return configured
+  if (warnedEmbeddingModel !== configured) {
+    warnedEmbeddingModel = configured
+    global.logger?.warn?.(`Unknown GEMINI_EMBEDDING_MODEL "${configured}"; falling back to ${DEFAULT_EMBEDDING_MODEL}`)
+  }
+  return DEFAULT_EMBEDDING_MODEL
 }
 
 // Unit length, then each component as an integer in -127..127.

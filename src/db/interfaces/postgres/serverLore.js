@@ -2,7 +2,6 @@
 // out of its stored messages, one chunk per channel and week, and how its members talk.
 const pool = require('../../clients/postgres')
 const { toVectorLiteral } = require('../../../bot/utils/embeddings')
-const { modelId } = require('./embeddings')
 
 // The stored messages of a channel since `since`, oldest first: [{ author_id, ts, content }].
 async function channelMessages (guildID, channelID, since) {
@@ -31,7 +30,7 @@ async function saveChunk (guildID, channelID, week, textHash, facts) {
        ON CONFLICT (guild_id, channel_id, week) DO UPDATE SET text_hash = $4, extracted_at = now()`,
       [guildID, channelID, week, textHash])
     const prev = (await client.query(
-      'SELECT kind, name, content, embedding::text AS embedding, model_id FROM guild_lore_facts WHERE guild_id = $1 AND channel_id = $2 AND week = $3',
+      'SELECT kind, name, content, embedding::text AS embedding, embedding_model FROM guild_lore_facts WHERE guild_id = $1 AND channel_id = $2 AND week = $3',
       [guildID, channelID, week])).rows
     const keyOf = f => `${f.kind}\n${f.name}\n${f.content}`
     const byKey = new Map(prev.filter(r => r.embedding).map(r => [keyOf(r), r]))
@@ -39,8 +38,8 @@ async function saveChunk (guildID, channelID, week, textHash, facts) {
     for (const f of facts) {
       const kept = byKey.get(keyOf(f))
       await client.query(
-        'INSERT INTO guild_lore_facts (guild_id, channel_id, week, kind, name, content, embedding, model_id) VALUES ($1, $2, $3, $4, $5, $6, $7::halfvec, $8)',
-        [guildID, channelID, week, f.kind, f.name, f.content, kept?.embedding || null, kept?.model_id || null])
+        'INSERT INTO guild_lore_facts (guild_id, channel_id, week, kind, name, content, embedding, embedding_model) VALUES ($1, $2, $3, $4, $5, $6, $7::halfvec, $8)',
+        [guildID, channelID, week, f.kind, f.name, f.content, kept?.embedding || null, kept?.embedding_model || null])
     }
     await client.query('COMMIT')
   } catch (e) {
@@ -64,13 +63,13 @@ async function deleteChunksExcept (guildID, keys) {
 async function factsToEmbed (model, limit) {
   const rows = await pool.query(
     `SELECT id, kind, name, content FROM guild_lore_facts
-     WHERE embedding IS NULL OR model_id IS DISTINCT FROM $1 ORDER BY id LIMIT $2`,
-    [await modelId(model), limit])
+     WHERE embedding IS NULL OR embedding_model IS DISTINCT FROM $1::embedding_model ORDER BY id LIMIT $2`,
+    [model, limit])
   return rows.rows
 }
 
 async function saveFactEmbedding (id, embedding, model) {
-  await pool.query('UPDATE guild_lore_facts SET embedding = $2, model_id = $3 WHERE id = $1', [id, toVectorLiteral(embedding), await modelId(model)])
+  await pool.query('UPDATE guild_lore_facts SET embedding = $2, embedding_model = $3 WHERE id = $1', [id, toVectorLiteral(embedding), model])
 }
 
 // The server's `limit` pieces of knowledge closest in meaning to the vector `query`:
@@ -78,9 +77,9 @@ async function saveFactEmbedding (id, embedding, model) {
 async function nearestFacts (guildID, query, model, limit) {
   const rows = await pool.query(
     `SELECT kind, name, content, to_char(week, 'YYYY-MM-DD') AS week, 1 - (embedding <=> $2::halfvec) AS score
-     FROM guild_lore_facts WHERE guild_id = $1 AND model_id = $3 AND embedding IS NOT NULL
+     FROM guild_lore_facts WHERE guild_id = $1 AND embedding_model = $3 AND embedding IS NOT NULL
      ORDER BY embedding <=> $2::halfvec LIMIT $4`,
-    [guildID, toVectorLiteral(query), await modelId(model), limit])
+    [guildID, toVectorLiteral(query), model, limit])
   return rows.rows.map(r => ({ ...r, score: Number(r.score) }))
 }
 
