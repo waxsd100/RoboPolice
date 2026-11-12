@@ -1,7 +1,7 @@
 const Eris = require('eris')
 const { v4: uuidv4 } = require('uuid')
 const { draft, revise, isConfigured, isUncensoredConfigured, isUncensoredDirective, rememberThreadModel, isR18Text, STORY_REQUEST_PATTERN, ENTITY_TYPES } = require('./eventDrafter')
-const { createTools, describeServer, worthSearching, withServerEmojis, withServerChannels, StopDrafting } = require('./eventTools')
+const { createTools, describeServer, worthSearching, withServerEmojis, withServerChannels, channelTheme, SHORT_TOPIC_PROMPT, StopDrafting } = require('./eventTools')
 const { embedQuery } = require('../utils/embeddings')
 const { withLinkCards } = require('../utils/linkCards')
 const { safeLinks } = require('../utils/linkSafety')
@@ -541,10 +541,11 @@ async function handle (message) {
         return queryVecPromise
       }
       const combinedQuery = [request, referenced?.othersText].filter(Boolean).join('\n')
+      const theme = channelTheme(message.channel.id, guild, message.channel.name)
       const communityKeyword = /サーバー|チャンネル|配信|動画|youtube|twitch|steam|ゲーム|イベント|フォーラム|ルール|wiki|メンバー|キャラ|名言|<#\d+>|<@!?\d+>/i
       const slimProfile = Boolean(edit) ||
-        (!worthSearching(combinedQuery) && !attached.length && !embedded.length) ||
-        (STORY_REQUEST_PATTERN.test(request) && !communityKeyword.test(combinedQuery))
+        (!worthSearching(combinedQuery) && !attached.length && !embedded.length && !(theme && SHORT_TOPIC_PROMPT.test(request))) ||
+        (STORY_REQUEST_PATTERN.test(request) && !communityKeyword.test([combinedQuery, theme].filter(Boolean).join('\n')))
       const [server, recent] = await Promise.all([
         directR18
           ? null

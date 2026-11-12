@@ -189,13 +189,18 @@ function scoreToThinkingLevel (score, intent) {
 // - needsDeep (whether the request asks for a story/novel, long explanation, or complex reasoning)
 // - isR18 (whether the request asks for adult / R18 / erotic content, including euphemistic wording)
 // - complexityScore (0..2) and thinkingLevel ('minimal' | 'low' | 'medium' | 'high')
-async function classifyMentionRequest (request, referencedText = '') {
+async function classifyMentionRequest (request, referencedText = '', channelContext = '') {
   if (!isUsable()) return null
   const reqClean = cleanState(request, 900)
   if (!reqClean) return null
   const refClean = cleanState(referencedText, MAX_REFERENCE_CONTEXT_CHARS)
-  const state = refClean
-    ? `返信先の会話:\n${refClean}\n\n依頼メッセージ:\n${reqClean}`
+  const chanClean = cleanState(channelContext, 120)
+  const sections = [
+    chanClean ? `チャンネル: ${chanClean}` : '',
+    refClean ? `返信先の会話:\n${refClean}` : ''
+  ].filter(Boolean)
+  const state = sections.length
+    ? `${sections.join('\n\n')}\n\n依頼メッセージ:\n${reqClean}`
     : reqClean
 
   // Note on `choice` criteria:

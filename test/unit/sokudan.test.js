@@ -628,3 +628,62 @@ test('Fault tolerance: timeout or unreachable Sokudan falls back cleanly without
     await slowSrv.close()
   }
 })
+
+test('classifyMentionRequest and draft() include themed channel context while omitting generic channels', async () => {
+  configureGateway()
+  resetSokudanEnv()
+  const guild = createGuild({
+    channels: [
+      { id: '1', name: 'general', type: 0 },
+      { id: '2', name: '📺｜のばまんの動画について語る', type: 0 }
+    ]
+  })
+  Object.assign(guild.channels.get('2'), { topic: '過去動画の感想を語る場所' })
+  const member = createMember()
+  installBot({ guilds: [guild] })
+
+  const states = []
+  const sokudanSrv = await startServer((req, res) => {
+    let body = ''
+    req.on('data', c => { body += c })
+    req.on('end', () => {
+      states.push(JSON.parse(body).state)
+      res.writeHead(200, { 'Content-Type': 'application/json' })
+      res.end(JSON.stringify({
+        answers: {
+          intent: { type: 'choice', choice: 'chat', confidence: 0.92 },
+          needs_deep: { type: 'bool', noul: 0.1 },
+          is_r18: { type: 'bool', noul: 0.01 },
+          complexity: { type: 'score', score: 0.8 }
+        }
+      }))
+    })
+  })
+
+  const origFetch = global.fetch
+  try {
+    process.env.SOKUDAN_URL = sokudanSrv.url
+    process.env.GEMINI_STREAM = 'false'
+    global.fetch = async (url, init) => {
+      if (String(url).startsWith(sokudanSrv.url)) return origFetch(url, init)
+      return {
+        ok: true,
+        json: async () => ({
+          candidates: [{ content: { role: 'model', parts: [call('submit_chat_reply', { text: '動画のおすすめだよ！' })] } }]
+        })
+      }
+    }
+
+    const tools = createTools({ guild, member, ask: async () => '' })
+    await draft({ request: '隠れた名作教えて', channelName: 'general', channelID: '1', guild, member, tools })
+    assert.equal(states[0], '隠れた名作教えて')
+
+    await draft({ request: '隠れた名作教えて', channelName: '📺｜のばまんの動画について語る', channelID: '2', guild, member, tools })
+    assert.equal(states[1], 'チャンネル: のばまんの動画について語る — 過去動画の感想を語る場所\n\n依頼メッセージ:\n隠れた名作教えて')
+  } finally {
+    global.fetch = origFetch
+    delete process.env.GEMINI_STREAM
+    resetSokudanEnv()
+    await sokudanSrv.close()
+  }
+})
