@@ -438,10 +438,14 @@ describe('stores', { skip: !database.available && 'needs PGHOST' }, () => {
     })
 
     test('a summary is made once and found by every server; other channels\' summaries are per server', async () => {
-      await store().saveSummary('g1', 'v1', '要約1')
+      await store().saveSummary('g1', 'v1', '要約1', 1)
       assert.equal(await store().getSummary('v1'), '要約1')
       await store().saveSummary('g2', 'v1')
       await store().saveSummary('g1', 'x9', '他の動画')
+      assert.deepEqual(await store().legacySummaries(2, 10), [{ video_id: 'v1', summary: '要約1' }])
+      assert.equal(await store().updateRewrittenSummary('v1', '要約1', 2, '別の要約'), false)
+      assert.equal(await store().updateRewrittenSummary('v1', '要約1', 2, '要約1'), true)
+      assert.deepEqual(await store().legacySummaries(2, 10), [])
       assert.deepEqual(await store().getOtherSummaries('g1'), [{ video_id: 'x9', summary: '他の動画' }])
       assert.deepEqual(await store().getOtherSummaries('g2'), [])
       const overview = await store().getOverview('g2')

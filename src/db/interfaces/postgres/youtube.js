@@ -332,17 +332,40 @@ async function getSummary (videoID) {
 
 // Records that the server asked for the video's summary (made now, or stored already when `summary`
 // is omitted).
-async function saveSummary (guildID, videoID, summary = null) {
+async function saveSummary (guildID, videoID, summary = null, formatVersion = 2) {
   if (summary !== null) {
     await pool.query(
-      `INSERT INTO youtube_summaries (video_id, summary) VALUES ($1, $2)
-       ON CONFLICT (video_id) DO UPDATE SET summary = $2, created_at = now()`,
-      [videoID, summary])
+      `INSERT INTO youtube_summaries (video_id, summary, format_version) VALUES ($1, $2, $3)
+       ON CONFLICT (video_id) DO UPDATE SET summary = $2, format_version = $3, created_at = now()`,
+      [videoID, summary, formatVersion])
   }
   await ensureGuild(guildID)
   await pool.query(
     'INSERT INTO guild_youtube_summaries (guild_id, video_id) VALUES ($1, $2) ON CONFLICT DO NOTHING',
     [guildID, videoID])
+}
+
+// Stored summaries created under an older prompt/template (`format_version < targetVersion`),
+// newest videos first so recent uploads are rewritten first.
+async function legacySummaries (targetVersion, limit = 10) {
+  const rows = await pool.query(
+    `SELECT s.video_id, s.summary FROM youtube_summaries s
+     LEFT JOIN youtube_videos v ON v.video_id = s.video_id
+     WHERE s.format_version < $1
+     ORDER BY v.published_at DESC NULLS LAST, s.created_at DESC, s.video_id
+     LIMIT $2`,
+    [targetVersion, limit])
+  return rows.rows
+}
+
+// Replaces a legacy summary only if nothing newer (`force:True`) replaced it meanwhile.
+async function updateRewrittenSummary (videoID, summary, formatVersion, expectedOldSummary) {
+  const res = await pool.query(
+    `UPDATE youtube_summaries
+     SET summary = $2, format_version = $3
+     WHERE video_id = $1 AND summary = $4 AND format_version < $3`,
+    [videoID, summary, formatVersion, expectedOldSummary])
+  return res.rowCount > 0
 }
 
 // Summaries the server asked for of videos that are not in the bot's channels (someone linked
@@ -366,4 +389,4 @@ async function deleteGuildYouTube (guildID) {
   await collectGarbage()
 }
 
-module.exports = { setBotChannels, getVideoIds, saveSync, getKnowledge, getOverview, listChannels, listLiveEventGuilds, liveEventsOn, setLiveEvents, upsertVideos, recentVideoIds, getLiveVideoIds, getLiveEvents, saveLiveEvent, archivesToSummarize, recordArchiveAttempt, websubDue, saveWebsub, isKnownChannel, videoCards, getVideo, videoIdsMissingStats, markStatsChecked, videoDuration, getSummary, saveSummary, getOtherSummaries, deleteGuildYouTube }
+module.exports = { setBotChannels, getVideoIds, saveSync, getKnowledge, getOverview, listChannels, listLiveEventGuilds, liveEventsOn, setLiveEvents, upsertVideos, recentVideoIds, getLiveVideoIds, getLiveEvents, saveLiveEvent, archivesToSummarize, recordArchiveAttempt, websubDue, saveWebsub, isKnownChannel, videoCards, getVideo, videoIdsMissingStats, markStatsChecked, videoDuration, getSummary, saveSummary, legacySummaries, updateRewrittenSummary, getOtherSummaries, deleteGuildYouTube }
