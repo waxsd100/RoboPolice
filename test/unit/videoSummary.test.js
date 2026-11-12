@@ -33,10 +33,34 @@ describe('summarizeVideo', () => {
     const [{ url, body }] = requests
     assert.match(url, /models\/gemini-3.8-flash:generateContent$/)
     assert.deepEqual(body.contents[0].parts[0], { fileData: { fileUri: 'https://www.youtube.com/watch?v=dQw4w9WgXcQ' }, videoMetadata: { fps: 0.2 } })
-    assert.match(body.contents[0].parts[1].text, /要約してください/)
+    assert.match(body.contents[0].parts[1].text, /出力テンプレート/)
     assert.equal(body.generationConfig.mediaResolution, 'MEDIA_RESOLUTION_LOW')
     assert.deepEqual(store.writes, [{ saveSummary: ['100', 'dQw4w9WgXcQ'] }])
     assert.equal(store.summaries[100].dQw4w9WgXcQ, '・11/3 に記念配信\n・場所は渋谷')
+  })
+
+  test('strips "要約しました！" chatter, headings, and bold, normalizing every video to "- [時間] 内容・結果"', async () => {
+    installGemini([[{
+      text: [
+        'はい、この YouTube 動画の内容を日本語で要約しました！',
+        'この配信では月面清掃ゲームをプレイしています。',
+        '',
+        '### 主な内容とタイムライン',
+        '* **[00:00]** **オープニング**: マイク調整完了、ステージ1開始',
+        '・[05:12] — ステージ1清掃完了、自動回収ドローン解放',
+        '1. 【1:02:05】 ボス戦に3回目で勝利、クリア報酬獲得',
+        '  - 告知: 11/15 20:00からコラボ配信（ https://example.com/live ）',
+        '',
+        '最後まで盛り上がりのある配信でした。',
+        '以上が動画の要約になります！参考になれば幸いです。（240文字）'
+      ].join('\n')
+    }]])
+    const { summary } = await summarizeVideo('100', 'https://youtu.be/fmtCheck001')
+    assert.equal(summary, [
+      '- [0:00] オープニング: マイク調整完了、ステージ1開始',
+      '- [5:12] ステージ1清掃完了、自動回収ドローン解放',
+      '- [1:02:05] ボス戦に3回目で勝利、クリア報酬獲得 / 告知: 11/15 20:00からコラボ配信（ https://example.com/live ）'
+    ].join('\n'))
   })
 
   test('caps very long summaries', async () => {
@@ -48,8 +72,9 @@ describe('summarizeVideo', () => {
     await assert.rejects(summarizeVideo('100', 'https://www.youtube.com/@nobaman'), /動画リンクではありません/)
   })
 
-  test('fails with a hint when Gemini returns no text, and stores nothing', async () => {
-    installGemini([[{ text: '   ' }]])
+  test('fails with a hint when Gemini returns no text or only chatter, and stores nothing', async () => {
+    installGemini([[{ text: '   ' }], [{ text: 'はい、動画の内容を要約しました！' }]])
+    await assert.rejects(summarizeVideo('100', 'https://youtu.be/dQw4w9WgXcQ'), { hint: 'AI が動画を要約できませんでした' })
     await assert.rejects(summarizeVideo('100', 'https://youtu.be/dQw4w9WgXcQ'), { hint: 'AI が動画を要約できませんでした' })
     assert.deepEqual(store.writes, [])
   })
@@ -82,11 +107,11 @@ describe('videos too long for one request', () => {
       { fps: 0.2, startOffset: '14400s', endOffset: '21600s' },
       { fps: 0.2, startOffset: '21600s', endOffset: '22500s' }
     ])
-    assert.match(requests[2].body.contents[0].parts[1].text, /4:00:00〜6:00:00 の部分だけ/)
+    assert.match(requests[2].body.contents[0].parts[1].text, /4:00:00〜6:00:00 の区間だけ/)
     assert.match(requests[0].url, /gemini-3\.8-flash:generateContent/)
     assert.match(requests.at(-1).url, /gemini-3\.5-flash-lite:generateContent/, 'putting the parts together needs no video model')
     assert.equal(requests.at(-1).body.serviceTier, 'flex')
-    assert.equal(summary, '[0:00] 挨拶\n[1:05:00] 序盤の自動化\n[2:10:00] 中盤の掃除\n[4:45:00] 終盤の設備拡張\n[6:00:30] エンディング告知')
+    assert.equal(summary, '- [0:00] 挨拶\n- [1:05:00] 序盤の自動化\n- [2:10:00] 中盤の掃除\n- [4:45:00] 終盤の設備拡張\n- [6:00:30] エンディング告知')
     assert.equal(store.summaries[100].sZMjbROyaSs, summary)
   })
 
@@ -119,7 +144,7 @@ describe('videos too long for one request', () => {
     }
     try {
       const { summary } = await summarizeVideo('100', 'https://youtu.be/d6BAt1Kb7c0')
-      assert.equal(summary, '[0:00] 前半\n[2:15:00] 中盤\n[4:30:00] 後半')
+      assert.equal(summary, '- [0:00] 前半\n- [2:15:00] 中盤\n- [4:30:00] 後半')
       assert.equal(store.summaries[100].d6BAt1Kb7c0, summary)
       assert.equal(requests.length, 6, '1 unclipped + 3 clips (clip 2 retried once) + 1 merge')
     } finally {
@@ -144,7 +169,7 @@ describe('videos too long for one request', () => {
       { fps: 0.2, startOffset: '0s', endOffset: '3600s' },
       { fps: 0.2, startOffset: '3600s', endOffset: '7200s' }
     ])
-    assert.equal(summary, '[0:00] 1時間目\n[1:05:00] 2時間目')
+    assert.equal(summary, '- [0:00] 1時間目\n- [1:05:00] 2時間目')
     assert.equal(store.summaries[100].twoHourVid1, summary)
   })
 

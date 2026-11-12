@@ -20,11 +20,26 @@ function summaryTimeoutMs () {
 }
 
 const PROMPT = [
-  'この YouTube 動画の内容を、日本語で要約してください（長くても1500文字程度まで）。要約の中に文字数は書かないでください。',
-  '話している主な話題を順に箇条書きにし、各項目の先頭にその話題が始まる動画内の時間を [分:秒]（1時間以上なら [時:分:秒]）で書いてください。',
-  '告知・イベント・日時・場所・出演者・URL など、',
-  'イベント登録や告知文作りに使える具体的な情報は漏らさず含めてください。',
-  '分からないことは推測で書かないでください。'
+  'この YouTube 動画の内容を、以下の固定テンプレートに従って日本語で記録してください（全体で最大1500文字程度まで）。',
+  '',
+  '【出力テンプレート（1行1項目・時系列順）】',
+  '- [0:00] 行ったこと・起きたことと、その結果',
+  '- [12:34] 次の出来事・話題と、その結果・結論',
+  '- [1:05:00] 告知や決定事項があれば具体的内容（日時・場所・出演者・URLなど）',
+  '',
+  '【厳守事項】',
+  '- 上の `- [時間] 内容` の箇条書き行だけを出力し、前置き（「要約しました！」「以下が要約です」など）・後書き（「以上です」など）・見出し・空行・感想・挨拶・文字数は一切書かないでください。',
+  '- 時間は1時間未満なら `[分:秒]`（例: `[0:00]`, `[5:30]`）、1時間以上なら `[時:分:秒]`（例: `[1:05:00]`）で統一してください。',
+  '- 太字（`**`）や番号付きリスト・入れ子の箇条書きは使わず、すべての行を `- [時間] ` で始めてください。',
+  '- 「〜について話しています」のような冗長な表現は避け、何をしてどうなったか（結果・勝敗・達成状況・結論・告知の具体情報）だけを体言止めまたは簡潔な常体で淡々と書いてください。',
+  '- 分からないことは推測で書かないでください。'
+].join('\n')
+
+const MERGE_PROMPT = [
+  '次は1本の長い動画を時間帯ごとに分けて記録したものです。重複を整理し、動画全体で1つの時系列リストにまとめてください（全体で最大1500文字程度まで）。',
+  '- 出力は `- [時間] 行ったこと・結果` の箇条書き行だけにし、前置き（「要約しました！」など）・後書き（「以上です」など）・見出し（`###` など）・空行・感想・文字数は一切書かないでください。',
+  '- 各項目の先頭の `[時間]` は書き換えずにそのまま残し、太字（`**`）や番号付きリスト・入れ子の箇条書きは使わず、すべての行を `- [時間] ` で始めてください。',
+  '- 出来事の結果・結論や、告知・日時・場所・出演者・URL などの具体的な情報は漏らさず残し、体言止めまたは簡潔な常体で淡々と書いてください。'
 ].join('\n')
 
 // A video longer than Gemini can take in at once (about 3 hours at low resolution: its input is at
@@ -49,6 +64,52 @@ const fmt = seconds => {
   return h ? `${h}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}` : `${m}:${String(s).padStart(2, '0')}`
 }
 
+const TIMESTAMP_LINE_RE = /^(?:(?:[-*+・•]|\d+[.)])\s*)?\*{0,2}(?:\[|［|【)(?:(\d{1,2}):)?(\d{1,3}):(\d{2})(?:\]|］|】)\*{0,2}(?:\s*[-—―–:：]\s*|\s*)(.+)$/
+const HEADING_OR_RULE_RE = /^(?:#{1,6}\s+.*|[-*_]{3,}|【(?:要約|まとめ|概要|タイムライン|主な(?:話題|内容|流れ)|動画の(?:内容|要約|概要))】\s*)$/
+const CHATTER_LINE_RE = /^(?:(?:はい|ええ|わかりました|承知(?:いた)?しました|かしこまりました)[、。！!\s]*)+(?:[^。\n]*(?:要約|まとめ)[^。\n]*)?$|^(?:(?:この|本|以下の?|ご指定の)?\s*(?:YouTube\s*)?(?:動画|配信|アーカイブ)?(?:の(?:内容|様子|流れ))?(?:を|について|の)?\s*)?(?:日本語で\s*)?(?:要約|まとめ)(?:しました|いたします|します|ました|は以下の通り|は次の通り|はこちら|になります|となります)[^。\n]*[。！!：:\s]*$|^(?:以下(?:が|は|に)?[^。\n]{0,30}(?:要約|まとめ|タイムライン|一覧)(?:です|になります|となります)?[。！!：:\s]*)$|^(?:以上(?:が|で)?[^。\n]{0,35}(?:です|ます|でした|となります|になります)[。！!\s]*(?:参考になれば[^。\n]*)?)$|^(?:ご?参考になれば幸いです|何かあればお気軽にお聞きください)[。！!\s]*$/i
+const CLOSING_PROSE_RE = /^(?:全体を通して|総じて|まとめると|最後にまとめると|総括すると)/
+
+function cleanItemBody (text) {
+  return String(text || '')
+    .replace(/\*\*([^*\n]+)\*\*/g, '$1')
+    .replace(/^[-—―–:：\s]+/, '')
+    .replace(/\s+/g, ' ')
+    .trim()
+}
+
+// Normalizes Gemini's output to `- [m:ss] 内容・結果` lines, stripping preambles ("要約しました！"),
+// outros ("以上です"), headings, bold markup, and mixed bullet styles.
+function cleanSummary (text) {
+  let raw = withoutCharCount(String(text || ''))
+  if (!raw) return ''
+  raw = raw.replace(/^```[^\n]*\n([\s\S]*?)\n?```$/g, '$1').trim()
+  const lines = raw.split(/\r?\n/).map(l => l.trim()).filter(Boolean)
+  const hasTimestamps = lines.some(l => TIMESTAMP_LINE_RE.test(l))
+  if (!hasTimestamps) {
+    return lines
+      .filter(l => !HEADING_OR_RULE_RE.test(l) && !CHATTER_LINE_RE.test(l))
+      .join('\n')
+      .trim()
+  }
+  const items = []
+  for (const line of lines) {
+    const m = TIMESTAMP_LINE_RE.exec(line)
+    if (m) {
+      const seconds = Number(m[1] || 0) * 3600 + Number(m[2]) * 60 + Number(m[3])
+      const body = cleanItemBody(m[4])
+      if (body) items.push(`- [${fmt(seconds)}] ${body}`)
+      continue
+    }
+    if (items.length === 0) continue
+    if (HEADING_OR_RULE_RE.test(line) || CHATTER_LINE_RE.test(line) || CLOSING_PROSE_RE.test(line)) continue
+    if (/^(?:[-*+・•※]|(?:日時|場所|出演|ゲスト|URL|詳細)\s*[:：])/i.test(line)) {
+      const sub = cleanItemBody(line.replace(/^[-*+・•]\s*/, ''))
+      if (sub) items[items.length - 1] += ` / ${sub}`
+    }
+  }
+  return items.join('\n')
+}
+
 // [分:秒] / [時:分:秒] written from the start of a part, moved to be from the start of the video.
 function shiftTimestamps (text, offset) {
   if (!offset) return text
@@ -64,11 +125,11 @@ function partClips (seconds, partSeconds = MAX_SINGLE_SECONDS) {
 }
 
 function partPrompt (start, end) {
-  return `${PROMPT}\n\nこれは長い動画の ${fmt(start)}〜${fmt(end)} の部分だけです。この部分だけを要約し、時間はこの部分の最初を [0:00] として書いてください。`
+  return `${PROMPT}\n\n※これは長い動画の ${fmt(start)}〜${fmt(end)} の区間だけです。この区間内の出来事と結果だけを同じ \`- [時間] 内容\` 形式のみで出力し、時間はこの区間の先頭を \`[0:00]\` として書いてください。`
 }
 
 function formatPartSummary (start, end, text) {
-  return `### ${fmt(start)}〜${fmt(end)}\n${shiftTimestamps(text, start)}`
+  return `### ${fmt(start)}〜${fmt(end)}\n${shiftTimestamps(cleanSummary(text), start)}`
 }
 
 // Frames a second Gemini looks at (VIDEO_SUMMARY_FPS, default 0.2: one every 5 seconds; Gemini's
@@ -127,7 +188,7 @@ async function askVideo (videoID, prompt, clip = null, { flex = false, guildID =
 
 // Stores `text` as the video's summary, asked for by the server. Resolves to the summary.
 async function storeSummary (guildID, videoID, text) {
-  const summary = withoutCharCount(text).slice(0, MAX_SUMMARY)
+  const summary = cleanSummary(text).slice(0, MAX_SUMMARY)
   if (!summary) throw new GeminiError(`Gemini returned no summary for ${videoID}`, 'AI が動画を要約できませんでした')
   await youtubeDB.saveSummary(guildID, videoID, summary)
   return summary
@@ -148,7 +209,7 @@ async function summarizeClip (guildID, videoID, clip, { flex = false, onFirstPar
     if (onFirstPart) await onFirstPart()
     return askVideo(videoID, prompt, clip, { flex, guildID })
   })
-  const raw = textOf(content)
+  const raw = cleanSummary(textOf(content))
   if (!raw) throw new GeminiError(`Gemini returned no summary for ${videoID} (${fmt(clip.start)}-${fmt(clip.end)})`, 'AI が動画を要約できませんでした')
   return formatPartSummary(clip.start, clip.end, raw)
 }
@@ -157,10 +218,10 @@ async function mergePartSummaries (guildID, parts, { flex = false } = {}) {
   if (parts.length === 1) return parts[0].replace(/^### [^\n]+\n/, '')
   // Putting text together needs no video model: the lighter one does.
   const merged = await backgroundQueue.run(guildID, () => callGemini(lightModel(), {
-    contents: [{ role: 'user', parts: [{ text: `次は1本の長い動画を時間で分けて要約したものです。これを1つの要約にまとめてください（長くても1500文字程度まで。文字数は書かない）。話題の順に箇条書きにし、各項目の先頭の [時間] は書き換えずにそのまま残してください。告知・日時・出演者・URL など具体的な情報は残してください。\n\n${parts.join('\n\n')}` }] }],
+    contents: [{ role: 'user', parts: [{ text: `${MERGE_PROMPT}\n\n${parts.join('\n\n')}` }] }],
     generationConfig: { temperature: 0.2 }
   }, { timeoutMs: 2 * 60 * 1000 + (flex ? FLEX_EXTRA_MS : 0), purpose: flex ? 'videoSummary-flex' : 'videoSummary', flex, defaultSafety: true }))
-  return textOf(merged)
+  return cleanSummary(textOf(merged))
 }
 
 async function summarizeParts (guildID, videoID, seconds, partSeconds, { flex = false, onFirstPart = null } = {}) {
@@ -249,4 +310,4 @@ async function summarizeVideo (guildID, url, { onStart = () => {}, force = false
   return { videoID, summary, cached: false }
 }
 
-module.exports = { summarizeVideo, summarizeClip, mergePartSummaries, lengthOf, summaryRequest, storeSummary, textOf, shiftTimestamps, partClips, partPrompt, formatPartSummary, canSplitError, MAX_SINGLE_SECONDS, PART_SECONDS, TOO_LONG, INVALID_VIDEO_ARG, PROMPT }
+module.exports = { summarizeVideo, summarizeClip, mergePartSummaries, lengthOf, summaryRequest, storeSummary, cleanSummary, textOf, shiftTimestamps, partClips, partPrompt, formatPartSummary, canSplitError, MAX_SINGLE_SECONDS, PART_SECONDS, TOO_LONG, INVALID_VIDEO_ARG, PROMPT, MERGE_PROMPT }

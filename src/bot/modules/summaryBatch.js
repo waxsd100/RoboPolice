@@ -114,7 +114,7 @@ async function collectParts (batch, videoID, partItems) {
   const parts = []
   for (const { r, clip } of partItems) {
     const content = !r.error ? r.response?.candidates?.[0]?.content : null
-    const raw = content ? videoSummary.textOf(content) : ''
+    const raw = content ? videoSummary.cleanSummary(videoSummary.textOf(content)) : ''
     if (raw) {
       parts.push(videoSummary.formatPartSummary(clip.start, clip.end, raw))
       continue
