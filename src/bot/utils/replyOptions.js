@@ -1,6 +1,7 @@
-// What a server can choose for its AI tasks, the same lists as the database's enum types
-// (migrations/038_reply_enums.sql, 040_guild_ai_models.sql): adding a value here needs
-// `ALTER TYPE … ADD VALUE` in a migration too (test/db/migrations.test.js checks they agree).
+// What a server or deployment can choose for AI tasks and embeddings, the same lists as the
+// database's enum types (migrations/038_reply_enums.sql, 040_guild_ai_models.sql,
+// 050_embedding_model_enum.sql): adding a value here needs `ALTER TYPE … ADD VALUE` in a
+// migration too (test/db/migrations.test.js checks they agree).
 
 // The models a task can be run with (%replymodel): text models with a price in geminiPrices.js.
 const REPLY_MODELS = Object.freeze([
@@ -12,6 +13,14 @@ const REPLY_MODELS = Object.freeze([
   'gemini-3.1-pro-preview',
   'gemini-3-flash-preview',
   'gemini-2.5-flash-lite' // no thinking levels: it thinks as it is set (thinkingConfig is left out)
+])
+
+// Embedding models supported by GEMINI_EMBEDDING_MODEL (embedding_model enum).
+const EMBEDDING_MODELS = Object.freeze([
+  'gemini-embedding-001',
+  'gemini-embedding-2-preview',
+  'gemini-embedding-2',
+  'text-embedding-004'
 ])
 
 // How much Gemini 3 thinks before answering (%replymodel thinking, GEMINI_*_THINKING_LEVEL).
@@ -35,4 +44,4 @@ const AI_TASK_LABELS = Object.freeze({
 // How long replies are (/replylength).
 const REPLY_LENGTH_CHOICES = Object.freeze(['long', 'normal', 'short'])
 
-module.exports = { REPLY_MODELS, THINKING_LEVELS, SERVICE_TIERS, AI_TASKS, AI_TASK_LABELS, REPLY_LENGTH_CHOICES }
+module.exports = { REPLY_MODELS, EMBEDDING_MODELS, THINKING_LEVELS, SERVICE_TIERS, AI_TASKS, AI_TASK_LABELS, REPLY_LENGTH_CHOICES }

@@ -314,7 +314,7 @@ rm robopolice-key.json
 | `MENTION_TOKEN_LIMIT_5H`, `MENTION_TOKEN_LIMIT_WEEK`, `MENTION_FLEX_AT_PERCENT`, `MENTION_GUILD_DAILY_LIMIT_OTHER`, `MENTION_TOKEN_PRICES`, `GEMINI_HOURLY_BUDGET` | 任意。メンションのトークン制限（既定: 5時間15万・週間75万）、Flex切り替え閾値（既定95%）、他サーバーの1日回数上限（既定30回）、全体の時間あたり予算と負荷制御の設定。 |
 | `HISTORY_BACKFILL`, `HISTORY_BACKFILL_DAYS`, `HISTORY_BACKFILL_SINCE`, `HISTORY_BACKFILL_MAX_MESSAGES`, `HISTORY_BACKFILL_DELAY_MS` | 任意。チャンネルの過去メッセージ履歴バックフィルの有効/無効と取得範囲・間隔の設定。 |
 | `SERVER_LORE`, `SERVER_LORE_WEEKS` | 任意。サーバーごとの定番ネタ・用語・話し方の学習（既定オフ、直近8週間分）。 |
-| `MESSAGE_EMBEDDINGS`, `EMOJI_DESCRIPTIONS`, `MESSAGE_EMBEDDING_MIN_CHARS`, `EMBEDDING_BATCH_AFTER_HOURS`, `EMBEDDING_INTERVAL_MINUTES`, `GEMINI_EMBEDDING_MODEL` | 任意。メッセージおよびカスタム絵文字のベクトル化設定、最小文字数（既定5文字）、Batch APIへの切り替え時間（既定24時間より前のメッセージ）、実行間隔（既定5分）、Embeddingモデル（既定`gemini-embedding-001`）。 |
+| `MESSAGE_EMBEDDINGS`, `EMOJI_DESCRIPTIONS`, `MESSAGE_EMBEDDING_MIN_CHARS`, `EMBEDDING_BATCH_AFTER_HOURS`, `EMBEDDING_INTERVAL_MINUTES`, `GEMINI_EMBEDDING_MODEL` | 任意。メッセージおよびカスタム絵文字のベクトル化設定、最小文字数（既定5文字）、Batch APIへの切り替え時間（既定24時間より前のメッセージ）、実行間隔（既定5分）、Embeddingモデル（`embedding_model` ENUM、既定`gemini-embedding-001` / `gemini-embedding-2-preview` / `gemini-embedding-2` / `text-embedding-004`）。 |
 | `GEMINI_IMAGE_MODEL` | 任意（既定: `gemini-3.1-flash-image`）。イベントやフォーラム投稿のカバー画像生成・編集に使用する画像モデル。 |
 | `CHAT_PERSONA` | 任意。チャット返信に追加するキャラクター設定・口調メモ。 |
 | `GCP_SECRETS`, `GCP_SERVICE_ACCOUNT_KEY`, `GCP_PROJECT_ID` | 任意。起動時にGoogle Cloud Secret Managerからシークレットを読み込む設定。 |

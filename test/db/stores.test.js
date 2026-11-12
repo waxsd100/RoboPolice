@@ -160,9 +160,10 @@ describe('stores', { skip: !database.available && 'needs PGHOST' }, () => {
 
     test('an embedding batch keeps where it stands: its state, when last looked at, and the last error', async () => {
       const store = require('../../src/db/interfaces/postgres/embeddings')
-      await store.saveEmbeddingBatch('batches/s1', 'A', [])
+      await store.saveEmbeddingBatch('batches/s1', 'gemini-embedding-001', [])
       let [batch] = (await store.runningEmbeddingBatches()).filter(b => b.name === 'batches/s1')
       assert.ok(batch.created_at instanceof Date)
+      assert.equal(batch.model, 'gemini-embedding-001')
       await store.noteEmbeddingBatch('batches/s1', { state: 'BATCH_STATE_RUNNING' })
       await store.noteEmbeddingBatch('batches/s1', { error: 'HTTP 500' })
       const [row] = await q("SELECT state, last_error, checked_at IS NOT NULL AS checked FROM embedding_batches WHERE name = 'batches/s1'")
@@ -184,28 +185,30 @@ describe('stores', { skip: !database.available && 'needs PGHOST' }, () => {
       assert.deepEqual(pending.map(m => [m.id, m.content]), [['m8', 'text 8'], ['m7', 'text 7'], ['m6', 'text 6']])
       // Unit vectors along different axes: m8 matches the query exactly, m6 is orthogonal to it.
       const axis = (i, sign = 1) => { const v = new Int8Array(512); v[i] = 127 * sign; return v }
+      const modelA = 'gemini-embedding-001'
+      const modelB = 'gemini-embedding-2'
       await store.saveMessageEmbeddings([
-        { id: 'm8', embedding: axis(0), model: 'A' },
-        { id: 'm6', embedding: axis(1), model: 'A' },
-        { id: 'm7', embedding: axis(0), model: 'B' },
-        { id: 'deleted', embedding: axis(0), model: 'A' }
+        { id: 'm8', embedding: axis(0), model: modelA },
+        { id: 'm6', embedding: axis(1), model: modelA },
+        { id: 'm7', embedding: axis(0), model: modelB },
+        { id: 'deleted', embedding: axis(0), model: modelA }
       ], ['m8', 'm7', 'm6'])
-      const nearest = await store.nearestMessages('g1', ['c1'], axis(0), { model: 'A', limit: 5 })
+      const nearest = await store.nearestMessages('g1', ['c1'], axis(0), { model: modelA, limit: 5 })
       assert.deepEqual(nearest.map(r => [r.message_id, Math.round(r.score * 100) / 100]), [['m8', 1], ['m6', 0]], 'nearest first, only model A, only stored messages')
-      assert.deepEqual(await store.nearestMessages('g1', ['c2'], axis(0), { model: 'A' }), [], 'only the asked channels')
-      assert.deepEqual((await store.nearestMessages('g1', ['c1'], axis(0), { model: 'A', limit: 1 })).map(r => r.message_id), ['m8'])
-      assert.deepEqual((await q('SELECT name FROM embedding_models ORDER BY name')).map(r => r.name), ['A', 'B'], 'one row per model')
+      assert.deepEqual(await store.nearestMessages('g1', ['c2'], axis(0), { model: modelA }), [], 'only the asked channels')
+      assert.deepEqual((await store.nearestMessages('g1', ['c1'], axis(0), { model: modelA, limit: 1 })).map(r => r.message_id), ['m8'])
+      await assert.rejects(store.saveEmbeddingBatch('batches/bad', 'unknown-model', []), /invalid input value for enum embedding_model/)
       const indexes = (await q("SELECT indexname FROM pg_indexes WHERE indexdef LIKE '%hnsw%' ORDER BY indexname")).map(r => r.indexname)
       assert.deepEqual(indexes, ['messages_embedding_hnsw'])
       // Handled with nothing to embed: not pending, not found.
-      await store.saveMessageEmbeddings([], ['m5'], 'A')
+      await store.saveMessageEmbeddings([], ['m5'], modelA)
       assert.ok(!(await store.pendingMessages(10)).some(m => m.id === 'm5'))
       assert.deepEqual(await q("SELECT embedding FROM messages WHERE id = 'm5'"), [{ embedding: null }])
       // An edit sends it back.
       await store.invalidateMessage('m8')
       assert.ok((await store.pendingMessages(10)).some(m => m.id === 'm8'))
-      await store.saveMessageEmbeddings([{ id: 'm8', embedding: axis(0), model: 'A' }], ['m8'])
-      assert.equal(await store.resetStaleMessageEmbeddings('A', 10), 1)
+      await store.saveMessageEmbeddings([{ id: 'm8', embedding: axis(0), model: modelA }], ['m8'])
+      assert.equal(await store.resetStaleMessageEmbeddings(modelA, 10), 1)
       assert.deepEqual((await store.pendingMessages(10)).map(m => m.id).slice(0, 1), ['m7'])
     })
   })
@@ -221,17 +224,19 @@ describe('stores', { skip: !database.available && 'needs PGHOST' }, () => {
   test('server emojis: kept in step, described once per name, embedded and searched by meaning', async () => {
     const emojis = require('../../src/db/interfaces/postgres/emojis')
     const axis = i => { const v = new Int8Array(512); v[i] = 127; return v }
+    const modelA = 'gemini-embedding-001'
+    const modelB = 'gemini-embedding-2'
     await emojis.syncEmojis('g1', [{ id: 'e1', name: 'kusa' }, { id: 'e2', name: 'naki', animated: true }])
     assert.deepEqual((await emojis.emojisToDescribe('g1', 10)).map(e => e.emoji_id), ['e1', 'e2'])
     await emojis.saveDescription('e1', 'kusa', '笑ったとき')
     await emojis.saveDescription('e2', 'naki', '悲しいとき')
     assert.deepEqual(await emojis.emojisToDescribe('g1', 10), [])
-    assert.deepEqual((await emojis.emojisToEmbed('g1', 'A', 10)).map(e => e.emoji_id), ['e1', 'e2'])
-    await emojis.saveEmbedding('e1', axis(0), 'A')
-    await emojis.saveEmbedding('e2', axis(1), 'A')
-    assert.deepEqual(await emojis.emojisToEmbed('g1', 'A', 10), [])
-    assert.deepEqual((await emojis.emojisToEmbed('g1', 'B', 10)).length, 2, 'another model embeds them again')
-    assert.deepEqual(await emojis.nearestEmojis('g1', axis(1), 'A', 5), ['e2', 'e1'])
+    assert.deepEqual((await emojis.emojisToEmbed('g1', modelA, 10)).map(e => e.emoji_id), ['e1', 'e2'])
+    await emojis.saveEmbedding('e1', axis(0), modelA)
+    await emojis.saveEmbedding('e2', axis(1), modelA)
+    assert.deepEqual(await emojis.emojisToEmbed('g1', modelA, 10), [])
+    assert.deepEqual((await emojis.emojisToEmbed('g1', modelB, 10)).length, 2, 'another model embeds them again')
+    assert.deepEqual(await emojis.nearestEmojis('g1', axis(1), modelA, 5), ['e2', 'e1'])
     assert.deepEqual(await emojis.descriptions('g1'), { e1: '笑ったとき', e2: '悲しいとき' })
 
     // Renamed: described again. Gone from Discord: deleted.
@@ -243,6 +248,7 @@ describe('stores', { skip: !database.available && 'needs PGHOST' }, () => {
   test('the wiki: pages split in parts, unchanged parts keep their embedding, searched by meaning', async () => {
     const wiki = require('../../src/db/interfaces/postgres/wiki')
     const axis = i => { const v = new Int8Array(512); v[i] = 127; return v }
+    const modelA = 'gemini-embedding-001'
     const root = 'https://w.example'
     await wiki.savePage(`${root}/d/chars`, 'のばまんのキャラクター', [
       { heading: 'のばまんのキャラクター', text: 'はじめに', images: [] },
@@ -250,10 +256,10 @@ describe('stores', { skip: !database.available && 'needs PGHOST' }, () => {
       { heading: 'クリーム', text: '謎の生物', images: [] }
     ])
     await wiki.savePage(`${root}/d/quotes`, '名言集', [{ heading: '名言', text: '有名な台詞', images: [] }])
-    assert.equal((await wiki.sectionsToEmbed('A', 10)).length, 4)
-    for (const [i, s] of (await wiki.sectionsToEmbed('A', 10)).entries()) await wiki.saveSectionEmbedding(s.url, s.position, axis(i), 'A')
-    assert.deepEqual(await wiki.sectionsToEmbed('A', 10), [])
-    assert.deepEqual((await wiki.nearestSections(axis(3), 'A', 2)).map(s => [s.title, s.heading]), [['名言集', '名言'], ['のばまんのキャラクター', 'のばまんのキャラクター']])
+    assert.equal((await wiki.sectionsToEmbed(modelA, 10)).length, 4)
+    for (const [i, s] of (await wiki.sectionsToEmbed(modelA, 10)).entries()) await wiki.saveSectionEmbedding(s.url, s.position, axis(i), modelA)
+    assert.deepEqual(await wiki.sectionsToEmbed(modelA, 10), [])
+    assert.deepEqual((await wiki.nearestSections(axis(3), modelA, 2)).map(s => [s.title, s.heading]), [['名言集', '名言'], ['のばまんのキャラクター', 'のばまんのキャラクター']])
     assert.deepEqual(await wiki.characters(), [{ heading: 'よつろん', text: '四葉の笑顔' }, { heading: 'クリーム', text: '謎の生物' }])
     assert.deepEqual(await wiki.characterImages(), [{ heading: 'よつろん', image: 'https://image01.seesaawiki.jp/a.png' }])
 
@@ -264,9 +270,9 @@ describe('stores', { skip: !database.available && 'needs PGHOST' }, () => {
     await wiki.saveFacts(yotsu.url, yotsu.position, yotsu.text_hash, [{ kind: 'character', name: 'よつろん', aliases: ['yotsuron'], content: '四葉の笑顔' }])
     for (const p of pending.filter(p => p !== yotsu)) await wiki.saveFacts(p.url, p.position, p.text_hash, [])
     assert.deepEqual(await wiki.sectionsToExtract(10), [])
-    const [fact] = await wiki.factsToEmbed('A', 10)
-    await wiki.saveFactEmbedding(fact.id, axis(7), 'A')
-    assert.deepEqual((await wiki.nearestFacts(axis(7), 'A', 1)).map(f => [f.kind, f.name, f.aliases, f.heading]), [['character', 'よつろん', ['yotsuron'], 'よつろん']])
+    const [fact] = await wiki.factsToEmbed(modelA, 10)
+    await wiki.saveFactEmbedding(fact.id, axis(7), modelA)
+    assert.deepEqual((await wiki.nearestFacts(axis(7), modelA, 1)).map(f => [f.kind, f.name, f.aliases, f.heading]), [['character', 'よつろん', ['yotsuron'], 'よつろん']])
     assert.deepEqual(await wiki.characterFacts(), [{ name: 'よつろん', aliases: ['yotsuron'], content: '四葉の笑顔' }])
     // The X posts have tables of their own, of the same shape: their characters are not the wiki's.
     const xKnowledge = require('../../src/db/interfaces/postgres/xKnowledge')
@@ -287,7 +293,7 @@ describe('stores', { skip: !database.available && 'needs PGHOST' }, () => {
       { heading: 'のばまんのキャラクター', text: 'はじめに', images: [] },
       { heading: 'よつろん', text: '四葉の笑顔（更新）', images: [] }
     ])
-    assert.deepEqual((await wiki.sectionsToEmbed('A', 10)).map(s => s.heading), ['よつろん'])
+    assert.deepEqual((await wiki.sectionsToEmbed(modelA, 10)).map(s => s.heading), ['よつろん'])
     assert.deepEqual((await wiki.sectionsToExtract(10)).map(s => s.heading), ['よつろん'], 'a changed part is read again')
     assert.equal((await q("SELECT count(*)::int AS n FROM knowledge_sections WHERE source = 'wiki' AND url = $1", [`${root}/d/chars`]))[0].n, 2)
     assert.ok(await wiki.lastRead(root))
@@ -343,9 +349,9 @@ describe('stores', { skip: !database.available && 'needs PGHOST' }, () => {
     await q("INSERT INTO messages (id, author_id, content, ts, channel_id, guild_id) VALUES ('hb1', 'u1', '編集後', '2026-10-01T00:00:00Z', 'hc1', 'g1')")
     const row = (id, extra = {}) => ({ id, authorID: 'u1', content: `古い ${id}`, imageUrls: [], ts: '2026-09-01T00:00:00.000Z', channelID: 'hc1', guildID: 'g1', ...extra })
     assert.equal(await history.saveHistory([row('hb1'), row('hb2', { imageUrls: ['https://cdn/a.png', 'https://cdn/b.png'] }), row('hb3', { guildID: 'gone' })]), 1)
-    assert.deepEqual(await q("SELECT id, content, ts, embedding_model_id FROM messages WHERE id LIKE 'hb%' ORDER BY id"), [
-      { id: 'hb1', content: '編集後', ts: new Date('2026-10-01T00:00:00Z'), embedding_model_id: null },
-      { id: 'hb2', content: '古い hb2', ts: new Date('2026-09-01T00:00:00Z'), embedding_model_id: null }
+    assert.deepEqual(await q("SELECT id, content, ts, embedding_model FROM messages WHERE id LIKE 'hb%' ORDER BY id"), [
+      { id: 'hb1', content: '編集後', ts: new Date('2026-10-01T00:00:00Z'), embedding_model: null },
+      { id: 'hb2', content: '古い hb2', ts: new Date('2026-09-01T00:00:00Z'), embedding_model: null }
     ])
     assert.deepEqual((await q("SELECT url FROM message_attachments WHERE message_id = 'hb2' ORDER BY position")).map(r => r.url), ['https://cdn/a.png', 'https://cdn/b.png'])
     assert.equal(await history.saveHistory([]), 0)
@@ -370,12 +376,13 @@ describe('stores', { skip: !database.available && 'needs PGHOST' }, () => {
     assert.deepEqual((await q('SELECT name FROM guild_lore_facts')).map(r => r.name), ['寝坊ネタ'], 'the old week\'s knowledge went with it')
 
     const axis = i => { const v = new Int8Array(512); v[i] = 127; return v }
+    const modelA = 'gemini-embedding-001'
     assert.equal(await lore.hasFacts('g1'), false)
-    const [pending] = await lore.factsToEmbed('A', 10)
-    await lore.saveFactEmbedding(pending.id, axis(0), 'A')
+    const [pending] = await lore.factsToEmbed(modelA, 10)
+    await lore.saveFactEmbedding(pending.id, axis(0), modelA)
     assert.equal(await lore.hasFacts('g1'), true)
-    assert.deepEqual((await lore.nearestFacts('g1', axis(0), 'A', 3)).map(f => [f.name, f.week, Math.round(f.score)]), [['寝坊ネタ', '2026-11-02', 1]])
-    assert.deepEqual(await lore.nearestFacts('g2', axis(0), 'A', 3), [])
+    assert.deepEqual((await lore.nearestFacts('g1', axis(0), modelA, 3)).map(f => [f.name, f.week, Math.round(f.score)]), [['寝坊ネタ', '2026-11-02', 1]])
+    assert.deepEqual(await lore.nearestFacts('g2', axis(0), modelA, 3), [])
 
     await lore.saveStyle('g1', 'ゆるい', 's1')
     assert.equal((await lore.getStyle('g1')).style, 'ゆるい')
@@ -497,14 +504,16 @@ describe('stores', { skip: !database.available && 'needs PGHOST' }, () => {
       const embeddings = require('../../src/db/interfaces/postgres/embeddings')
       assert.deepEqual((await embeddings.videosForEmbedding()).map(v => [v.video_id, v.summary, v.text_hash]).sort(), [['v1', '要約1', null], ['v2', null, null]])
       const axis = i => { const v = new Int8Array(512); v[i] = 127; return v }
-      assert.equal(await embeddings.hasVideoEmbeddings('g2', 'A'), false)
-      await embeddings.saveVideoEmbedding('v1', axis(0), 'h1', 'A')
-      await embeddings.saveVideoEmbedding('v2', axis(1), 'h2', 'A')
-      await embeddings.saveVideoEmbedding('nope', axis(0), 'h', 'A')
-      assert.equal(await embeddings.hasVideoEmbeddings('g2', 'A'), true)
-      const scores = await embeddings.videoScores('g2', axis(0), 'A')
+      const modelA = 'gemini-embedding-001'
+      const modelB = 'gemini-embedding-2'
+      assert.equal(await embeddings.hasVideoEmbeddings('g2', modelA), false)
+      await embeddings.saveVideoEmbedding('v1', axis(0), 'h1', modelA)
+      await embeddings.saveVideoEmbedding('v2', axis(1), 'h2', modelA)
+      await embeddings.saveVideoEmbedding('nope', axis(0), 'h', modelA)
+      assert.equal(await embeddings.hasVideoEmbeddings('g2', modelA), true)
+      const scores = await embeddings.videoScores('g2', axis(0), modelA)
       assert.deepEqual(Object.fromEntries(Object.entries(scores).map(([id, s]) => [id, Math.round(s * 100) / 100])), { v1: 1, v2: 0 })
-      assert.deepEqual(await embeddings.videoScores('g2', axis(0), 'B'), {})
+      assert.deepEqual(await embeddings.videoScores('g2', axis(0), modelB), {})
     })
 
     test('a channel the bot stops following goes with its videos; summaries when no server asked for them', async () => {
