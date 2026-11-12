@@ -377,5 +377,73 @@ describe('/youtube', () => {
       assert.match(posted[0].content, /できませんでした: Gemini の処理が expired で終わりました/)
       assert.equal(batches.length, 0)
     })
+
+    test('6-hour stream archives go into the batch as 2-hour clips and are merged into one summary when done', async (t) => {
+      t.mock.method(global.logger, 'info', () => {})
+      store.knowledge[100] = {
+        channel: { channel_id: UC, title: 'のばまんch' },
+        videos: [
+          { video_id: 'newestvideo', title: '最新', url: 'https://youtu.be/newestvideo', duration: 'PT30M' },
+          { video_id: 'sZMjbROyaSs', title: '月を掃除したり自動化したりするやつ【Moon Sweepers】', url: 'https://youtu.be/sZMjbROyaSs', duration: 'PT6H10M' },
+          { video_id: 'E_5NcN14ZXw', title: '通常配信', url: 'https://youtu.be/E_5NcN14ZXw', duration: 'PT1H' }
+        ]
+      }
+      const requests = fakeBatchApi([
+        answer('sZMjbROyaSs:0-7200', '- [0:00] 開始\n- [30:00] 月面清掃'),
+        answer('sZMjbROyaSs:7200-14400', '- [15:00] 自動化ライン構築'),
+        answer('sZMjbROyaSs:14400-21600', '- [40:00] 大規模拡張'),
+        answer('sZMjbROyaSs:21600-22200', '- [05:00] エンディング'),
+        answer('E_5NcN14ZXw', '・通常配信の要約')
+      ])
+      const posted = []
+      global.bot.createMessage = async (channelID, message) => { posted.push({ channelID, ...message }) }
+      const it = interaction('summarize', [{ name: 'count', value: 3 }])
+      it.channel = { id: '201' }
+      it.member = { id: '1', user: { id: '1' } }
+      await command.func(it)
+
+      const sent = requests.find(r => r.url.endsWith(':batchGenerateContent'))
+      const inline = sent.body.batch.input_config.requests.requests
+      assert.deepEqual(inline.map(r => r.metadata.key), [
+        'sZMjbROyaSs:0-7200',
+        'sZMjbROyaSs:7200-14400',
+        'sZMjbROyaSs:14400-21600',
+        'sZMjbROyaSs:21600-22200',
+        'E_5NcN14ZXw'
+      ])
+      assert.deepEqual(inline[2].request.contents[0].parts[0].videoMetadata, { fps: 0.2, startOffset: '14400s', endOffset: '21600s' })
+      assert.match(it.replies.at(-1).content, /^2 本の動画の要約を、AI にまとめて依頼しました/)
+      assert.deepEqual(batches[0].video_ids, ['sZMjbROyaSs', 'E_5NcN14ZXw'])
+
+      await summaryBatch.checkAll()
+      await summaryBatch.checkAll()
+      const mergeCall = requests.find(r => r.url.includes('gemini-3.5-flash-lite:generateContent'))
+      assert.ok(mergeCall, 'merged shifted clip summaries with light model')
+      assert.match(mergeCall.body.contents[0].parts[0].text, /\[2:15:00\] 自動化ライン構築/)
+      assert.match(mergeCall.body.contents[0].parts[0].text, /\[6:05:00\] エンディング/)
+      assert.ok(store.summaries[100].sZMjbROyaSs)
+      assert.equal(store.summaries[100].E_5NcN14ZXw, '・通常配信の要約')
+      assert.match(posted[0].content, /^<@1> 2\/2 本の動画を要約しました。[\s\S]*✅ <https:\/\/youtu\.be\/sZMjbROyaSs>[\s\S]*✅ <https:\/\/youtu\.be\/E_5NcN14ZXw>/)
+    })
+
+    test('an unclipped batch entry that fails with "Request contains an invalid argument." falls back to chunked summarization', async (t) => {
+      t.mock.method(global.logger, 'info', () => {})
+      store.knowledge[100] = {
+        channel: { channel_id: UC, title: 'のばまんch' },
+        videos: [{ video_id: 'd6BAt1Kb7c0', title: 'ギルド探求団', url: 'https://youtu.be/d6BAt1Kb7c0', duration: 'PT6H' }]
+      }
+      batches.push({ name: 'batches/b1', guild_id: '100', channel_id: '201', requester_id: '1', video_ids: ['d6BAt1Kb7c0'], model: 'gemini-3.8-flash' })
+      const requests = fakeBatchApi([
+        { metadata: { key: 'd6BAt1Kb7c0' }, error: { message: 'Request contains an invalid argument.' } }
+      ])
+      const posted = []
+      global.bot.createMessage = async (channelID, message) => { posted.push({ channelID, ...message }) }
+      await summaryBatch.checkAll()
+      await summaryBatch.checkAll()
+      const clipCalls = requests.filter(r => r.url.includes('gemini-3.8-flash:generateContent'))
+      assert.equal(clipCalls.length, 3, 'three 2-hour clips on Flex')
+      assert.ok(store.summaries[100].d6BAt1Kb7c0)
+      assert.match(posted[0].content, /動画を要約しました。[\s\S]*https:\/\/www\.youtube\.com\/watch\?v=d6BAt1Kb7c0/)
+    })
   })
 })

@@ -4,7 +4,7 @@
 // by one worker; when it is done the summaries are stored and the channel the command was used in
 // is told. A video too long for one request is then summarized the usual way, in parts.
 // VIDEO_SUMMARY_BATCH=false summarizes right away instead, as before.
-const { geminiRequest, geminiSend, GeminiError } = require('./eventDrafter')
+const { geminiRequest, geminiSend, GeminiError, resolveTaskConfig } = require('./eventDrafter')
 const videoSummary = require('./videoSummary')
 const youtubeDB = require('../../db/interfaces/postgres/youtube')
 const store = require('../../db/interfaces/postgres/summaryBatches')
@@ -49,14 +49,31 @@ async function quickVideoIDs (guildID, videoIDs) {
   return quick
 }
 
-// Sends the videos as one batch. Resolves to the batch's name.
+// Sends the videos as one batch. Videos longer than MAX_SINGLE_SECONDS are submitted as 2-hour
+// clips (`videoID:start-end`) so multi-hour stream archives succeed inside the Batch API too.
+// Resolves to the batch's name.
 async function submit (guildID, videoIDs, { channelID = null, requesterID = null } = {}) {
-  const requests = videoIDs.map(id => ({ id, ...videoSummary.summaryRequest(id) }))
-  const model = requests[0].model
+  const custom = guildID ? await resolveTaskConfig('summary', guildID) : null
+  const requests = []
+  let model = null
+  for (const id of videoIDs) {
+    const seconds = await videoSummary.lengthOf(id).catch(() => null)
+    if (seconds && seconds > videoSummary.MAX_SINGLE_SECONDS) {
+      for (const clip of videoSummary.partClips(seconds, videoSummary.MAX_SINGLE_SECONDS)) {
+        const req = videoSummary.summaryRequest(id, videoSummary.partPrompt(clip.start, clip.end), clip, custom)
+        model = model || req.model
+        requests.push({ key: `${id}:${clip.start}-${clip.end}`, body: req.body })
+      }
+    } else {
+      const req = videoSummary.summaryRequest(id, undefined, null, custom)
+      model = model || req.model
+      requests.push({ key: id, body: req.body })
+    }
+  }
   const data = await geminiRequest(model, 'batchGenerateContent', {
     batch: {
       display_name: `robopolice-summaries-${guildID}-${Date.now()}`,
-      input_config: { requests: { requests: requests.map(r => ({ request: r.body, metadata: { key: r.id } })) } }
+      input_config: { requests: { requests: requests.map(r => ({ request: r.body, metadata: { key: r.key } })) } }
     }
   }, { purpose: 'videoSummary-batch', timeoutMs: 60 * 1000 })
   const name = data.name || data.metadata?.name
@@ -77,17 +94,72 @@ function resultsOf (data) {
     []
 }
 
+function partKeyOf (key, videoID) {
+  if (!key || !key.startsWith(`${videoID}:`)) return null
+  const m = /^(\d+)-(\d+)$/.exec(key.slice(videoID.length + 1))
+  return m ? { start: Number(m[1]), end: Number(m[2]) } : null
+}
+
+async function collectParts (batch, videoID, partItems) {
+  for (const { r } of partItems) {
+    if (!r.error && r.response?.usageMetadata) {
+      recordTokens('videoSummary-batch', batch.model, r.response.usageMetadata)
+    }
+  }
+  const hasGap = partItems[0].clip.start !== 0 || partItems.some((p, i) => i > 0 && p.clip.start !== partItems[i - 1].clip.end)
+  if (hasGap) {
+    const { summary } = await videoSummary.summarizeVideo(batch.guild_id, `https://www.youtube.com/watch?v=${videoID}`, { force: true, flex: true })
+    return summary
+  }
+  const parts = []
+  for (const { r, clip } of partItems) {
+    const content = !r.error ? r.response?.candidates?.[0]?.content : null
+    const raw = content ? videoSummary.textOf(content) : ''
+    if (raw) {
+      parts.push(videoSummary.formatPartSummary(clip.start, clip.end, raw))
+      continue
+    }
+    const failure = r.error?.message || 'empty part response'
+    if (r.error && !videoSummary.canSplitError(failure)) {
+      throw new GeminiError(`Batch summary of ${videoID} (${clip.start}-${clip.end}) failed: ${failure}`, `AI が要約できませんでした（${failure.slice(0, 100)}）`)
+    }
+    try {
+      parts.push(await videoSummary.summarizeClip(batch.guild_id, videoID, clip, { flex: true }))
+    } catch (e) {
+      if (!videoSummary.canSplitError(e.message)) throw e
+      const { summary } = await videoSummary.summarizeVideo(batch.guild_id, `https://www.youtube.com/watch?v=${videoID}`, {
+        force: true,
+        flex: true,
+        maxPartSeconds: clip.end - clip.start - 1
+      })
+      return summary
+    }
+  }
+  const merged = await videoSummary.mergePartSummaries(batch.guild_id, parts, { flex: true })
+  return videoSummary.storeSummary(batch.guild_id, videoID, merged)
+}
+
 // Stores what a finished batch made. Resolves to [{ videoID, summary, error }] in the batch's order.
 async function collect (batch, data) {
-  const byKey = new Map(resultsOf(data).map(r => [r.metadata?.key, r]))
+  const items = resultsOf(data)
+  const byKey = new Map(items.map(r => [r.metadata?.key, r]))
   const results = []
   for (const videoID of batch.video_ids) {
-    const r = byKey.get(videoID)
+    const partItems = items
+      .map(r => ({ r, clip: partKeyOf(r.metadata?.key, videoID) }))
+      .filter(x => x.clip)
+      .sort((a, b) => a.clip.start - b.clip.start)
     try {
+      if (partItems.length > 0) {
+        const summary = await collectParts(batch, videoID, partItems)
+        results.push({ videoID, summary, error: null })
+        continue
+      }
+      const r = byKey.get(videoID)
       const failure = r?.error?.message || (r ? null : 'no result')
       if (failure) {
-        // Too long for one request: in parts, the usual way.
-        if (!videoSummary.TOO_LONG.test(failure)) throw new GeminiError(`Batch summary of ${videoID} failed: ${failure}`, `AI が要約できませんでした（${failure.slice(0, 100)}）`)
+        // Too long for one request (or rejected unclipped by YouTube media ingestion): in parts, the usual way.
+        if (!videoSummary.canSplitError(failure)) throw new GeminiError(`Batch summary of ${videoID} failed: ${failure}`, `AI が要約できませんでした（${failure.slice(0, 100)}）`)
         const { summary } = await videoSummary.summarizeVideo(batch.guild_id, `https://www.youtube.com/watch?v=${videoID}`, { force: true, flex: true })
         results.push({ videoID, summary, error: null })
         continue

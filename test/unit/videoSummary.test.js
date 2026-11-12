@@ -57,27 +57,95 @@ describe('summarizeVideo', () => {
 
 describe('videos too long for one request', () => {
   const TOO_LONG = new Error('{"error":{"code":400,"message":"The input token count exceeds the maximum number of tokens allowed 1048576."}}')
+  const INVALID_ARG = new Error('{"error":{"code":400,"message":"Request contains an invalid argument.","status":"INVALID_ARGUMENT"}}')
+  const { retryTimer } = require('../../src/bot/modules/eventDrafter')
 
-  test('are summarized two hours at a time, times moved to the whole video, then put together', async (t) => {
+  test('stored multi-hour archives (6h+) skip the whole-video request, summarize two hours at a time, shift timestamps, and merge', async (t) => {
     configureGateway()
-    const store = installYouTubeStore({ 100: { channel: {}, videos: [{ video_id: 'longStream1', duration: 'PT4H30M' }] } })
+    const store = installYouTubeStore({ 100: { channel: {}, videos: [{ video_id: 'sZMjbROyaSs', duration: 'PT6H15M' }] } })
     t.mock.method(global.logger, 'info', () => {})
+    let started = 0
     const requests = installGemini([
-      TOO_LONG,
-      [{ text: '- [0:00] 挨拶\n- [1:05:00] 告知' }],
-      [{ text: '- [10:00] ゲーム開始' }],
-      [{ text: '- [0:30] 締め' }],
+      [{ text: '- [0:00] 挨拶\n- [1:05:00] 序盤の自動化' }],
+      [{ text: '- [10:00] 中盤の掃除' }],
+      [{ text: '- [45:00] 終盤の設備拡張' }],
+      [{ text: '- [0:30] エンディング告知' }],
       body => [{ text: body.contents[0].parts[0].text.match(/\[\d[^\]]*\] [^\n]+/g).join('\n') }]
     ])
-    const { summary } = await summarizeVideo('100', 'https://youtu.be/longStream1')
-    const clips = requests.slice(1, 4).map(r => r.body.contents[0].parts[0].videoMetadata)
-    assert.deepEqual(clips, [{ fps: 0.2, startOffset: '0s', endOffset: '7200s' }, { fps: 0.2, startOffset: '7200s', endOffset: '14400s' }, { fps: 0.2, startOffset: '14400s', endOffset: '16200s' }])
-    assert.match(requests[2].body.contents[0].parts[1].text, /2:00:00〜4:00:00 の部分だけ/)
-    assert.match(requests[1].url, /gemini-3.8-flash:generateContent/)
-    assert.match(requests.at(-1).url, /gemini-3.5-flash-lite:generateContent/, 'putting the parts together needs no video model')
-    assert.equal(requests.at(-1).body.serviceTier, undefined)
-    assert.equal(summary, '[0:00] 挨拶\n[1:05:00] 告知\n[2:10:00] ゲーム開始\n[4:00:30] 締め')
-    assert.equal(store.summaries[100].longStream1, summary)
+    const { summary } = await summarizeVideo('100', 'https://youtu.be/sZMjbROyaSs', { flex: true, onStart: () => { started++ } })
+    assert.equal(started, 1)
+    assert.equal(requests.length, 5, '4 two-hour clips + 1 light-model merge, with no wasted unclipped call')
+    const clips = requests.slice(0, 4).map(r => r.body.contents[0].parts[0].videoMetadata)
+    assert.deepEqual(clips, [
+      { fps: 0.2, startOffset: '0s', endOffset: '7200s' },
+      { fps: 0.2, startOffset: '7200s', endOffset: '14400s' },
+      { fps: 0.2, startOffset: '14400s', endOffset: '21600s' },
+      { fps: 0.2, startOffset: '21600s', endOffset: '22500s' }
+    ])
+    assert.match(requests[2].body.contents[0].parts[1].text, /4:00:00〜6:00:00 の部分だけ/)
+    assert.match(requests[0].url, /gemini-3\.8-flash:generateContent/)
+    assert.match(requests.at(-1).url, /gemini-3\.5-flash-lite:generateContent/, 'putting the parts together needs no video model')
+    assert.equal(requests.at(-1).body.serviceTier, 'flex')
+    assert.equal(summary, '[0:00] 挨拶\n[1:05:00] 序盤の自動化\n[2:10:00] 中盤の掃除\n[4:45:00] 終盤の設備拡張\n[6:00:30] エンディング告知')
+    assert.equal(store.summaries[100].sZMjbROyaSs, summary)
+  })
+
+  test('falls back to parts when an unstored 6-hour video fails with "Request contains an invalid argument."', async (t) => {
+    configureGateway()
+    process.env.YOUTUBE_API_KEY = 'yt-key'
+    const store = installYouTubeStore()
+    t.mock.method(global.logger, 'info', () => {})
+    t.mock.method(retryTimer, 'sleep', async () => {})
+    const geminiTurns = [
+      INVALID_ARG,
+      [{ text: '- [0:00] 前半' }],
+      INVALID_ARG, // transient glitch on clip 2, retried once and succeeds
+      [{ text: '- [15:00] 中盤' }],
+      [{ text: '- [30:00] 後半' }],
+      body => [{ text: body.contents[0].parts[0].text.match(/\[\d[^\]]*\] [^\n]+/g).join('\n') }]
+    ]
+    let turn = 0
+    const requests = []
+    global.fetch = async (url, init = {}) => {
+      if (url.includes('googleapis.com/youtube')) {
+        return { ok: true, json: async () => ({ items: [{ id: 'd6BAt1Kb7c0', snippet: { title: 'ギルド', publishedAt: '2026-01-01T00:00:00Z' }, contentDetails: { duration: 'PT6H' } }] }) }
+      }
+      const body = JSON.parse(init.body)
+      requests.push({ url, body })
+      const next = geminiTurns[turn++]
+      if (next instanceof Error) return { ok: false, status: 400, text: async () => next.message }
+      const parts = typeof next === 'function' ? next(body) : next
+      return { ok: true, json: async () => ({ candidates: [{ content: { role: 'model', parts } }] }) }
+    }
+    try {
+      const { summary } = await summarizeVideo('100', 'https://youtu.be/d6BAt1Kb7c0')
+      assert.equal(summary, '[0:00] 前半\n[2:15:00] 中盤\n[4:30:00] 後半')
+      assert.equal(store.summaries[100].d6BAt1Kb7c0, summary)
+      assert.equal(requests.length, 6, '1 unclipped + 3 clips (clip 2 retried once) + 1 merge')
+    } finally {
+      process.env.YOUTUBE_API_KEY = ''
+    }
+  })
+
+  test('steps down to 1-hour parts when a 2-hour video or clip still exceeds limits', async (t) => {
+    configureGateway()
+    const store = installYouTubeStore({ 100: { channel: {}, videos: [{ video_id: 'twoHourVid1', duration: 'PT2H' }] } })
+    t.mock.method(global.logger, 'info', () => {})
+    t.mock.method(retryTimer, 'sleep', async () => {})
+    const requests = installGemini([
+      INVALID_ARG,
+      [{ text: '- [0:00] 1時間目' }],
+      [{ text: '- [05:00] 2時間目' }],
+      body => [{ text: body.contents[0].parts[0].text.match(/\[\d[^\]]*\] [^\n]+/g).join('\n') }]
+    ])
+    const { summary } = await summarizeVideo('100', 'https://youtu.be/twoHourVid1')
+    const clips = requests.slice(1, 3).map(r => r.body.contents[0].parts[0].videoMetadata)
+    assert.deepEqual(clips, [
+      { fps: 0.2, startOffset: '0s', endOffset: '3600s' },
+      { fps: 0.2, startOffset: '3600s', endOffset: '7200s' }
+    ])
+    assert.equal(summary, '[0:00] 1時間目\n[1:05:00] 2時間目')
+    assert.equal(store.summaries[100].twoHourVid1, summary)
   })
 
   test('VIDEO_SUMMARY_FPS sets the frames a second; the parts are put together by the lighter model', async () => {
