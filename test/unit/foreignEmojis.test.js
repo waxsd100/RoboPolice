@@ -87,6 +87,32 @@ describe('combined emojis', () => {
     assert.deepEqual(pictures.map(p => [p.name, !!p.combined]), [[':big1::big2:', true], ['kusa', false], ['naki', false]])
   })
 
+  test('usable owner-server extraEmojis are not treated as prohibited foreign emojis, while combined emojis made of them still stitch', async (t) => {
+    const fetched = serve(t, { [id(1)]: () => full(RED), [id(2)]: () => full(GREEN), [id(3)]: () => dot(RED), [id(4)]: () => dot(BLUE) })
+    const guild = { emojis: [] }
+    const extraEmojis = [
+      { id: id(1), name: 'nobaman_1' },
+      { id: id(2), name: 'nobaman_2' },
+      { id: id(3), name: 'nobaman_wave' }
+    ]
+    assert.deepEqual(
+      foreignEmojis([`${code('nobaman_wave', 3)} ${code('stranger', 4)}`], guild, [], extraEmojis),
+      [{ id: id(4), name: 'stranger', animated: false }]
+    )
+    const pictures = await picturesFor(
+      [`${code('nobaman_1', 1)}${code('nobaman_2', 2)} と ${code('nobaman_wave', 3)} と ${code('stranger', 4)}`],
+      guild,
+      [],
+      { extraEmojis }
+    )
+    assert.deepEqual(
+      pictures.map(p => [p.name, !!p.combined]),
+      [[':nobaman_1::nobaman_2:', true], ['stranger', false]],
+      'combined owner emoji is stitched, single usable owner emoji is not flagged foreign, unknown third-server emoji still is'
+    )
+    assert.ok(!fetched.mock.calls.some(c => c.arguments[0].includes(id(3))), 'usable single owner emoji image is not fetched unnecessarily')
+  })
+
   test('attachedPictures fetches up to 4 unique image URLs and marks them with attachment: true', async (t) => {
     t.mock.method(urlFetcher, 'fetchImage', async url => {
       if (url.includes('fail')) throw new Error('404')

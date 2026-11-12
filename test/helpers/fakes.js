@@ -15,7 +15,7 @@ function perms (names) {
   return { has: name => names.includes(name), json: Object.fromEntries(names.map(n => [n, true])) }
 }
 
-// channels: [{ id, name, type, readers: [userID], posters: [userID], moderators: [userID] }]
+// channels: [{ id, name, type, readers: [userID], posters: [userID], moderators: [userID], externalEmojis: boolean }]
 function createGuild ({ id = '100', ownerID = '900', channels = [], botPerms = ['manageEvents'] } = {}) {
   const guild = { id, name: 'テストサーバー', memberCount: 42, ownerID, roles: new Map(), members: new Map(), channels: new Map() }
   guild.members.set('BOT', { id: 'BOT', permissions: perms(botPerms) })
@@ -28,7 +28,8 @@ function createGuild ({ id = '100', ownerID = '900', channels = [], botPerms = [
       permissionsOf: userID => perms([
         ...((c.readers || []).includes(userID) ? READ : []),
         ...((c.posters || []).includes(userID) ? ['viewChannel', 'sendMessages'] : []),
-        ...((c.moderators || []).includes(userID) ? ['manageThreads'] : [])
+        ...((c.moderators || []).includes(userID) ? ['manageThreads'] : []),
+        ...(c.externalEmojis !== false ? ['externalEmojis'] : [])
       ])
     })
   }
@@ -45,6 +46,7 @@ function installBot ({ guilds = [], messages = {}, scheduledEvents = [], forums 
   const calls = []
   global.bot = {
     user: { id: 'BOT' },
+    guilds: new Map(guilds.map(g => [g.id, g])),
     getChannel (id) {
       for (const g of guilds) if (g.channels.has(id)) return g.channels.get(id)
       return undefined
@@ -184,6 +186,46 @@ function installLoreStore ({ facts = {}, styles = {}, messages = [] } = {}) {
   return saved
 }
 installLoreStore()
+
+// Replaces the server emoji store (emojis.js) with an in-memory one, so no test reaches a real
+// database unless restoreEmojiStore() is called (stores.test.js).
+const realEmojiStore = { ...require('../../src/db/interfaces/postgres/emojis') }
+function restoreEmojiStore () {
+  Object.assign(require('../../src/db/interfaces/postgres/emojis'), realEmojiStore)
+}
+function installEmojiStore ({ emojis = {}, descriptions = {} } = {}) {
+  const store = require('../../src/db/interfaces/postgres/emojis')
+  const { similarity, fromBase64 } = require('../../src/bot/utils/embeddings')
+  const guildList = g => (Array.isArray(g) ? g : [g]).filter(Boolean)
+  store.listEmojis = async guildID => guildList(guildID).flatMap(id => (emojis[id] || []).map(e => ({
+    id: e.id,
+    guild_id: id,
+    name: e.name,
+    animated: !!e.animated
+  })))
+  store.descriptions = async guildID => {
+    const allowed = new Set(guildList(guildID).flatMap(id => (emojis[id] || []).map(e => e.id)))
+    const out = {}
+    for (const [id, desc] of Object.entries(descriptions)) {
+      if ((!allowed.size || allowed.has(id)) && desc) out[id] = desc
+    }
+    return out
+  }
+  store.nearestEmojis = async (guildID, q, _model, limit) => guildList(guildID)
+    .flatMap(id => emojis[id] || [])
+    .filter(e => e.embedding)
+    .map(e => ({ id: e.id, score: similarity(q, fromBase64(e.embedding)) }))
+    .sort((a, b) => b.score - a.score)
+    .slice(0, limit)
+    .map(e => e.id)
+  store.syncEmojis = async () => {}
+  store.emojisToDescribe = async () => []
+  store.emojisToEmbed = async () => []
+  store.saveDescription = async () => {}
+  store.saveEmbedding = async () => {}
+  return { emojis, descriptions }
+}
+installEmojiStore()
 
 // The reply settings (/replylength, /persona), in memory: lengths { guildID: 'long' | 'normal' |
 // 'short' }, personas { guildID: false } for servers that turned the streamer off, debugFooters
@@ -755,7 +797,7 @@ async function startServer (handler) {
 }
 
 module.exports = {
-  perms, createGuild, createMember, installBot, installYouTubeStore, installQuotaStore, installEmbeddingStore, configureGateway, installGemini, call, submit, lastToolResponses, startServer, installLoreStore, restoreLoreStore, stripUntrusted, unwrapTools, installLoadStore, installAiCacheStore, installTwitchStore, installSteamStore
+  perms, createGuild, createMember, installBot, installYouTubeStore, installQuotaStore, installEmbeddingStore, configureGateway, installGemini, call, submit, lastToolResponses, startServer, installLoreStore, restoreLoreStore, installEmojiStore, restoreEmojiStore, stripUntrusted, unwrapTools, installLoadStore, installAiCacheStore, installTwitchStore, installSteamStore
 }
 
 // A fake embedding model: each text points along the axis of the first topic it mentions, so

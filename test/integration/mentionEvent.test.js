@@ -1248,6 +1248,81 @@ describe('mention → event / forum post (integration)', () => {
     }
   })
 
+  test('chat: owner-server emojis work in other servers when externalEmojis is allowed, and are withheld when denied in the channel', async (t) => {
+    const prevOwner = process.env.OWNER_GUILD_IDS
+    process.env.OWNER_GUILD_IDS = '100'
+    guild.emojis = [
+      { id: '950000000000000001', name: 'nobaman_wave' },
+      { id: '950000000000000002', name: 'yotsu_party', animated: true }
+    ]
+    const otherGuild = createGuild({
+      id: '200',
+      channels: [
+        { id: '301', name: 'general', type: 0, readers: [REQUESTER, 'BOT'] },
+        { id: '302', name: 'no-external', type: 0, readers: [REQUESTER, 'BOT'], externalEmojis: false }
+      ]
+    })
+    otherGuild.emojis = [{ id: '200000000000000001', name: 'local_hi' }]
+
+    const attachReplies = ch => {
+      const replies = []
+      ch.createMessage = async payload => {
+        const reply = { id: `reply${repliesByID.size + 1}`, channel: ch, state: { content: '', embeds: [], components: [], files: [] }, history: [] }
+        repliesByID.set(reply.id, reply)
+        reply.apply = update => {
+          reply.state = { ...reply.state, ...update }
+          reply.history.push(reply.state)
+        }
+        reply.apply(payload)
+        reply.edit = async update => reply.apply(update)
+        replies.push(reply)
+        return reply
+      }
+      return replies
+    }
+
+    t.after(() => {
+      delete guild.emojis
+      if (prevOwner === undefined) delete process.env.OWNER_GUILD_IDS
+      else process.env.OWNER_GUILD_IDS = prevOwner
+    })
+
+    const fetchImg = t.mock.method(urlFetcher, 'fetchImage', async url => ({ buffer: Buffer.from(url), contentType: 'image/png' }))
+    installBot({ guilds: [guild, otherGuild], messages: MESSAGES, forums: FORUMS })
+
+    // 1. Channel where externalEmojis is allowed: owner emojis are offered in the profile,
+    //    not flagged as prohibited foreign emojis, and converted from :name: / backticks in the reply.
+    const openChannel = otherGuild.channels.get('301')
+    const openReplies = attachReplies(openChannel)
+    installGemini([body => {
+      const parts = body.contents[0].parts
+      assert.match(parts[0].text, /### サーバー絵文字（返事で使うときは、この書き方のまま書く）\n<:local_hi:200000000000000001> <:nobaman_wave:950000000000000001> <a:yotsu_party:950000000000000002>/)
+      assert.equal(parts.length, 1, 'usable owner emoji in the user message is not sent as a prohibited foreign emoji image')
+      return [call('submit_chat_reply', { text: 'こんばんは :local_hi: :yotsu_party: `:nobaman_wave:`' })]
+    }])
+    await mentionEvent.handle(mention(openChannel, '<@BOT> こんばんは <:nobaman_wave:950000000000000001>'))
+    assert.equal(
+      openReplies[0].state.content,
+      'こんばんは <:local_hi:200000000000000001> <a:yotsu_party:950000000000000002> <:nobaman_wave:950000000000000001>'
+    )
+    assert.equal(fetchImg.mock.callCount(), 0)
+
+    // 2. Channel where externalEmojis is denied for BOT: owner emojis are omitted from the profile,
+    //    treated as foreign emojis (image shown + prohibition note), and :yotsu_party: is not converted.
+    const lockedChannel = otherGuild.channels.get('302')
+    const lockedReplies = attachReplies(lockedChannel)
+    installGemini([body => {
+      const parts = body.contents[0].parts
+      assert.match(parts[0].text, /### サーバー絵文字（返事で使うときは、この書き方のまま書く）\n<:local_hi:200000000000000001>\n/)
+      assert.doesNotMatch(parts[0].text, /yotsu_party/)
+      assert.match(parts[1].text, /ほかのサーバーの絵文字（:nobaman_wave:）[\s\S]*返事には使わないで/)
+      return [call('submit_chat_reply', { text: 'こんばんは :local_hi: :yotsu_party:' })]
+    }])
+    await mentionEvent.handle(mention(lockedChannel, '<@BOT> こんばんは <:nobaman_wave:950000000000000001>'))
+    assert.equal(lockedReplies[0].state.content, 'こんばんは <:local_hi:200000000000000001> :yotsu_party:')
+    assert.equal(fetchImg.mock.callCount(), 1)
+  })
+
   test('chat: another server\'s emoji in the request is shown to the model as an image, for that request only', async (t) => {
     t.mock.method(urlFetcher, 'fetchImage', async url => ({ buffer: Buffer.from(url), contentType: 'image/png' }))
     const { channel, replies } = createChannel()

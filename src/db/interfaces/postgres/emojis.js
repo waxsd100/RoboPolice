@@ -48,19 +48,35 @@ async function saveEmbedding (emojiID, embedding, model) {
     [emojiID, toVectorLiteral(embedding), model])
 }
 
-// { emoji_id: description } for the server's described emojis.
+const guildIDList = guildID => (Array.isArray(guildID) ? guildID : [guildID]).filter(Boolean)
+
+// Stored usable emojis of the server(s): [{ id, guild_id, name, animated }].
+async function listEmojis (guildID) {
+  const ids = guildIDList(guildID)
+  if (!ids.length) return []
+  const rows = await pool.query(
+    'SELECT emoji_id AS id, guild_id, name, animated FROM guild_emojis WHERE guild_id = ANY($1) ORDER BY emoji_id',
+    [ids])
+  return rows.rows
+}
+
+// { emoji_id: description } for the server(s)' described emojis.
 async function descriptions (guildID) {
-  const rows = await pool.query('SELECT emoji_id, description FROM guild_emojis WHERE guild_id = $1 AND description IS NOT NULL', [guildID])
+  const ids = guildIDList(guildID)
+  if (!ids.length) return {}
+  const rows = await pool.query('SELECT emoji_id, description FROM guild_emojis WHERE guild_id = ANY($1) AND description IS NOT NULL', [ids])
   return Object.fromEntries(rows.rows.map(r => [r.emoji_id, r.description]))
 }
 
-// IDs of the server's emojis closest in meaning to the vector `query`, best first.
+// IDs of the server(s)' emojis closest in meaning to the vector `query`, best first.
 async function nearestEmojis (guildID, query, model, limit) {
+  const ids = guildIDList(guildID)
+  if (!ids.length) return []
   const rows = await pool.query(
-    `SELECT emoji_id FROM guild_emojis WHERE guild_id = $1 AND embedding_model = $2 AND embedding IS NOT NULL
-     ORDER BY embedding <=> $3::halfvec LIMIT $4`,
-    [guildID, model, toVectorLiteral(query), limit])
+    `SELECT emoji_id FROM guild_emojis WHERE guild_id = ANY($1) AND embedding_model = $2 AND embedding IS NOT NULL
+     ORDER BY embedding <=> $3::halfvec, emoji_id LIMIT $4`,
+    [ids, model, toVectorLiteral(query), limit])
   return rows.rows.map(r => r.emoji_id)
 }
 
-module.exports = { syncEmojis, emojisToDescribe, emojisToEmbed, saveDescription, saveEmbedding, descriptions, nearestEmojis }
+module.exports = { syncEmojis, emojisToDescribe, emojisToEmbed, saveDescription, saveEmbedding, listEmojis, descriptions, nearestEmojis }
