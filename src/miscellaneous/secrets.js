@@ -32,13 +32,23 @@ function parseKey (raw) {
   return key
 }
 
+const PROJECT_ID_RE = /^[a-z][a-z0-9-]{4,29}$/i
+
 // [{ name, resource }] from "NAME=secret-id,…".
 function parseMapping (text, projectID) {
   return text.split(/[,\n]/).map(s => s.trim()).filter(Boolean).map(entry => {
     const match = entry.match(/^([A-Za-z_][A-Za-z0-9_]*)=(\S+)$/)
     if (!match) throw new Error(`GCP_SECRETS entry "${entry}" is not NAME=secret-id`)
     const [, name, ref] = match
-    let resource = ref.startsWith('projects/') ? ref : `projects/${projectID}/secrets/${ref}`
+    let resource
+    if (ref.startsWith('projects/')) {
+      resource = ref
+    } else {
+      if (!projectID || !PROJECT_ID_RE.test(projectID)) {
+        throw new Error(`Invalid GCP project ID: "${projectID || ''}"`)
+      }
+      resource = `projects/${projectID}/secrets/${ref}`
+    }
     if (!/\/versions\/[^/]+$/.test(resource)) resource += '/versions/latest'
     return { name, resource }
   })
@@ -73,7 +83,9 @@ async function accessSecret (resource, token, fetchImpl) {
     signal: AbortSignal.timeout(TIMEOUT_MS)
   })
   if (!res.ok) throw new Error(`Could not read ${resource}: HTTP ${res.status} ${(await res.text()).slice(0, 300)}`)
-  return Buffer.from((await res.json()).payload.data, 'base64').toString('utf8')
+  const data = await res.json()
+  if (!data?.payload?.data) return ''
+  return Buffer.from(data.payload.data, 'base64').toString('utf8')
 }
 
 // Resolves to the names loaded. Throws if any secret can't be read: starting without one would fail

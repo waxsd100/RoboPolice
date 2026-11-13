@@ -12,7 +12,8 @@ async function savePosts (posts) {
     // The channel's name is kept once, as last seen.
     await pool.query(
       `INSERT INTO discord_channels (id, guild_id, name) VALUES ($1, $2, $3)
-       ON CONFLICT (id) DO UPDATE SET name = $3 WHERE discord_channels.name IS DISTINCT FROM $3`,
+       ON CONFLICT (id) DO UPDATE SET name = $3
+       WHERE discord_channels.guild_id = EXCLUDED.guild_id AND discord_channels.name IS DISTINCT FROM $3`,
       [p.channelID, p.guildID, p.channelName])
     const result = await pool.query(
       `INSERT INTO discord_posts (id, channel_id, author_id, content, created_at) VALUES ($1, $2, $3, $4, $5)
@@ -30,6 +31,15 @@ async function deletePost (id) {
     `DELETE FROM discord_posts p USING discord_channels c WHERE p.id = $1 AND c.id = p.channel_id
      RETURNING c.guild_id, p.author_id, p.created_at`, [id])
   return rows.rows[0] || null
+}
+
+// Deletes multiple messages. Resolves to the deleted rows.
+async function deletePosts (ids) {
+  if (!ids?.length) return []
+  const rows = await pool.query(
+    `DELETE FROM discord_posts p USING discord_channels c WHERE p.id = ANY($1::text[]) AND c.id = p.channel_id
+     RETURNING c.guild_id, p.author_id, p.created_at`, [ids])
+  return rows.rows
 }
 
 // The account's messages in the server made in `month` (YYYY-MM, in Japan time), oldest first. A
@@ -60,8 +70,9 @@ async function saveBackfill (guildID, channelID, beforeID, done) {
     `INSERT INTO discord_channels (id, guild_id, post_before_id, post_done, post_backfill_at)
      SELECT $1, $2, $3, $4, now()
      WHERE EXISTS (SELECT 1 FROM guilds WHERE id = $2)
-     ON CONFLICT (id) DO UPDATE SET post_before_id = $3, post_done = $4, post_backfill_at = now()`,
+     ON CONFLICT (id) DO UPDATE SET post_before_id = $3, post_done = $4, post_backfill_at = now()
+     WHERE discord_channels.guild_id = EXCLUDED.guild_id`,
     [channelID, guildID, beforeID, done])
 }
 
-module.exports = { savePosts, deletePost, postsOfMonth, backfillState, saveBackfill }
+module.exports = { savePosts, deletePost, deletePosts, postsOfMonth, backfillState, saveBackfill }

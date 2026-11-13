@@ -4,20 +4,28 @@ const setEventLogs = require('../../db/interfaces/postgres/update').setEventsLog
 const eventList = require('../utils/constants').ALL_EVENTS
 
 module.exports = {
-  func: async (message, suffix) => {
-    if (!message.channel.guild.members.get(global.bot.user.id)?.permissions?.json?.sendMessages) {
+  func: async (message, suffix = '') => {
+    if (!message?.channel?.guild) return
+    const canSend = typeof message.channel.permissionsOf === 'function'
+      ? message.channel.permissionsOf(global.bot.user.id)?.json?.sendMessages
+      : message.channel.guild.members?.get?.(global.bot.user.id)?.permissions?.json?.sendMessages
+    if (!canSend) {
       return
     }
+    if (!global.bot.guildSettingsCache?.[message.channel.guild.id]) {
+      await cacheGuild(message.channel.guild.id)
+    }
 
-    let events = suffix.split(', ')
+    const trimmedSuffix = (suffix || '').trim()
+    let events = trimmedSuffix ? trimmedSuffix.split(',').map(s => s.trim()).filter(Boolean) : []
     events = cleanArray(events)
-    if (events.length === 0 && suffix) {
-      message.channel.createMessage(`<@${message.author.id}>, none of the provided events are valid to be unset. Look at ${process.env.GLOBAL_BOT_PREFIX}help to see what is valid.`)
-    } else if (suffix && events.length !== 0) {
+    if (events.length === 0 && trimmedSuffix) {
+      await message.channel.createMessage(`<@${message.author.id}>, none of the provided events are valid to be unset. Look at ${process.env.GLOBAL_BOT_PREFIX}help to see what is valid.`)
+    } else if (trimmedSuffix && events.length !== 0) {
       await setEventLogs(message.channel.guild.id, '', events)
       await cacheGuild(message.channel.guild.id)
-      message.channel.createMessage(`<@${message.author.id}>, your selected events will not be logged here anymore.`)
-    } else if (!suffix) {
+      await message.channel.createMessage(`<@${message.author.id}>, your selected events will not be logged here anymore.`)
+    } else if (!trimmedSuffix) {
       await clearEventByID(message.channel.guild.id, message.channel.id) // any event logging to this channel id will be wiped
       await cacheGuild(message.channel.guild.id)
 
@@ -52,15 +60,12 @@ module.exports = {
 function cleanArray (events) {
   const tempEvents = []
   events.forEach(event => {
-    if (eventList.includes(event)) {
-      eventList.forEach(validEvent => {
-        const lowerEvent = validEvent.toLowerCase()
-        const upperEvent = validEvent.toUpperCase()
-        if (event === lowerEvent || event === upperEvent || event === validEvent) {
-          tempEvents.push(validEvent)
-        }
-      })
-    }
+    const lowerInput = event.toLowerCase()
+    eventList.forEach(validEvent => {
+      if (validEvent.toLowerCase() === lowerInput && !tempEvents.includes(validEvent)) {
+        tempEvents.push(validEvent)
+      }
+    })
   })
   return tempEvents
 }

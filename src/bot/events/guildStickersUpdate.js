@@ -9,12 +9,14 @@ const STICKER_FORMAT_TYPES = {
   1: 'PNG',
   2: 'APNG',
   3: 'LOTTIE',
+  4: 'GIF'
 }
 
 module.exports = {
   name: 'guildStickersUpdate',
   type: 'on',
   handle: async (guild, stickers, oldStickers) => {
+    if (!guild || !Array.isArray(stickers) || !Array.isArray(oldStickers)) return
     let type
     const guildStickersUpdateEvent = {
       guildID: guild.id,
@@ -33,7 +35,7 @@ module.exports = {
     }
     let sticker
     if (stickers.length > oldStickers.length) {
-      const newStickers = stickers.filter(e => !oldStickers.find(o => o.id === e.id))
+      const newStickers = stickers.filter(e => e && !oldStickers.find(o => o?.id === e.id))
       sticker = newStickers[0]
       if (!sticker) {
         return
@@ -43,39 +45,45 @@ module.exports = {
         url: `https://cdn.discordapp.com/stickers/${sticker.id}.png?v=1`
       }
       guildStickersUpdateEvent.embeds[0].fields[0].name = 'Added sticker'
-      guildStickersUpdateEvent.embeds[0].fields[0].value = `名前 = ${sticker.name}\nDescription = ${sticker.description}\nFormat = ${STICKER_FORMAT_TYPES[sticker.format_type]}`
+      guildStickersUpdateEvent.embeds[0].fields[0].value = `名前 = ${sticker.name}\nDescription = ${sticker.description || 'なし'}\nFormat = ${STICKER_FORMAT_TYPES[sticker.format_type] || '不明'}`
     } else if (oldStickers.length > stickers.length) {
-      const removedStickers = oldStickers.filter(e => !stickers.find(o => o.id === e.id))
+      const removedStickers = oldStickers.filter(e => e && !stickers.find(o => o?.id === e.id))
       sticker = removedStickers[0]
       if (!sticker) return
       type = 'removed'
       guildStickersUpdateEvent.embeds[0].fields[0].name = 'Removed sticker'
-      guildStickersUpdateEvent.embeds[0].fields[0].value = `名前 = ${sticker.name}\nDescription = ${sticker.description}\nFormat = ${STICKER_FORMAT_TYPES[sticker.format_type]}`
+      guildStickersUpdateEvent.embeds[0].fields[0].value = `名前 = ${sticker.name}\nDescription = ${sticker.description || 'なし'}\nFormat = ${STICKER_FORMAT_TYPES[sticker.format_type] || '不明'}`
     } else {
       type = 'updated'
       sticker = stickers.find(e => {
-        const old = oldStickers.find(o => o.id === e.id)
+        const old = e && oldStickers.find(o => o?.id === e.id)
         return old && (old.name !== e.name || old.description !== e.description)
       })
       if (!sticker) return
       guildStickersUpdateEvent.embeds[0].fields[0].name = 'Updated sticker'
-      guildStickersUpdateEvent.embeds[0].fields[0].value = `名前 = ${sticker.name}\nDescription = ${sticker.description}\nFormat = ${STICKER_FORMAT_TYPES[sticker.format_type]}`
+      guildStickersUpdateEvent.embeds[0].fields[0].value = `名前 = ${sticker.name}\nDescription = ${sticker.description || 'なし'}\nFormat = ${STICKER_FORMAT_TYPES[sticker.format_type] || '不明'}`
       guildStickersUpdateEvent.embeds[0].thumbnail = {
         url: `https://cdn.discordapp.com/stickers/${sticker.id}.png?v=1`
       }
-      const oldSticker = oldStickers.find(o => o.id === sticker.id)
-      if (sticker.name !== oldSticker.name) {
-        guildStickersUpdateEvent.embeds[0].fields[0].value += `\nName was = ${oldSticker.name}`
-      }
-      if (sticker.description !== oldSticker.description) {
-        guildStickersUpdateEvent.embeds[0].fields[0].value += `\nDescription was = ${oldSticker.description}`
+      const oldSticker = oldStickers.find(o => o?.id === sticker.id)
+      if (oldSticker) {
+        if (sticker.name !== oldSticker.name) {
+          guildStickersUpdateEvent.embeds[0].fields[0].value += `\nName was = ${oldSticker.name}`
+        }
+        if (sticker.description !== oldSticker.description) {
+          guildStickersUpdateEvent.embeds[0].fields[0].value += `\nDescription was = ${oldSticker.description}`
+        }
       }
     }
-    await setTimeout(async () => {
+    guildStickersUpdateEvent.embeds[0].fields[1].value = `\`\`\`ini\nユーザー = 不明\nスタンプ = ${sticker.id}\`\`\``
+    const timer = setTimeout(async () => {
       const num = AUDIT_ID[type]
-      const logs = await guild.getAuditLog({ limit: 5, actionType: num }).catch(() => {})
-      if (!logs) return
-      const log = logs.entries.find(e => e?.targetID === sticker.id && Date.now() - ((e.id / 4194304) + 1420070400000) < 3000)
+      const canViewAudit = guild.members?.get?.(global.bot.user.id)?.permissions?.has?.('viewAuditLog') !== false
+      const logs = canViewAudit && typeof guild.getAuditLog === 'function'
+        ? await guild.getAuditLog({ limit: 5, actionType: num }).catch(() => ({ entries: [], users: [] }))
+        : { entries: [], users: [] }
+      const entries = Array.isArray(logs?.entries) ? logs.entries : []
+      const log = entries.find(e => e?.targetID === sticker.id && Date.now() - ((e.id / 4194304) + 1420070400000) < 3000)
       if (log && log.user) { // if the audit log is less than 3 seconds off
         const user = log.user
         guildStickersUpdateEvent.embeds[0].author = {
@@ -86,5 +94,6 @@ module.exports = {
       }
       await send(guildStickersUpdateEvent)
     }, 1000)
+    timer.unref?.()
   }
 }

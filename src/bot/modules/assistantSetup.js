@@ -75,10 +75,25 @@ const youtubeOn = () => !!process.env.YOUTUBE_API_KEY
 
 function mayChange (interaction) {
   const member = interaction.member
+  if (!member?.user) return false
   if (isCreator(member.user.id)) return true
-  const guild = global.bot.guilds.get(interaction.guildID)
+  const guild = global.bot.guilds?.get?.(interaction.guildID)
   if (hasStaffAccess(member.roles, guild)) return true
-  return !!interaction.channel.permissionsOf(member.user.id)?.json?.manageGuild
+  const { safePermissionsOf } = require('../events/interactionCreate')
+  const perms = safePermissionsOf(interaction.channel, member)?.json ||
+    safePermissionsOf(global.bot?.getChannel?.(interaction.channel?.id), member)?.json ||
+    member.permissions?.json ||
+    {}
+  return !!perms.manageGuild
+}
+
+function clampStr (str, max) {
+  const s = String(str ?? '')
+  if (s.length <= max) return s
+  let cut = s.slice(0, max - 1)
+  const last = cut.charCodeAt(cut.length - 1)
+  if (last >= 0xD800 && last <= 0xDBFF) cut = cut.slice(0, -1)
+  return `${cut}…`
 }
 
 function truncate (str, max = 140) {
@@ -138,16 +153,17 @@ function embed (text, settings, note) {
   const rulesText = settings.assistantRules
     ? text.rulesSet(truncate(settings.assistantRules))
     : text.rulesNone
+  const rawDesc = note ? `${text.description}\n\n${note}` : text.description
   return {
     title: text.title,
-    description: note ? `${text.description}\n\n${note}` : text.description,
+    description: clampStr(rawDesc, 4096),
     color: embedColorForNote(note),
     fields: [
-      { name: text.fields.persona, value: label('persona'), inline: true },
-      { name: text.fields.length, value: label('length'), inline: true },
-      ...(youtubeOn() ? [{ name: text.fields.live, value: label('live'), inline: true }] : []),
-      { name: text.fields.eventPerm, value: settings.hasManageEvents ? text.eventPermOk : text.eventPermMissing, inline: false },
-      { name: text.fields.rules, value: `${rulesText}\n${text.rulesChannelsInfo(settings.detectedRules || [])}`, inline: false }
+      { name: text.fields.persona, value: clampStr(label('persona'), 1024), inline: true },
+      { name: text.fields.length, value: clampStr(label('length'), 1024), inline: true },
+      ...(youtubeOn() ? [{ name: text.fields.live, value: clampStr(label('live'), 1024), inline: true }] : []),
+      { name: text.fields.eventPerm, value: clampStr(settings.hasManageEvents ? text.eventPermOk : text.eventPermMissing, 1024), inline: false },
+      { name: text.fields.rules, value: clampStr(`${rulesText}\n${text.rulesChannelsInfo(settings.detectedRules || [])}`, 1024), inline: false }
     ]
   }
 }
@@ -180,6 +196,10 @@ async function handleAssistantSetup (interaction, { asEdit = false } = {}) {
   }
   let note = null
   for (let first = true; ; first = false) {
+    if (first && !asEdit && typeof interaction.defer === 'function') {
+      await interaction.defer(Eris.Constants.MessageFlags.EPHEMERAL)
+      asEdit = true
+    }
     const settings = await current(interaction.guildID)
     const id = uuidv4()
     const ids = { persona: `${id}:persona`, length: `${id}:length`, live: `${id}:live` }

@@ -8,18 +8,26 @@ const SECRET_ENV_NAME = /TOKEN|KEY|SECRET|PASSWORD|PASS$|WEBHOOK|DSN|_URI$|CREDE
 const MIN_SECRET_LENGTH = 6
 
 const PATTERNS = [
+  // JSON private_key fields (e.g. GCP service account keys) before multi-line PEM replacement
+  [/("private_key"\s*:\s*)"(?:\\.|[^"\\])+"/gi, '$1"[REDACTED]"'],
+  // PEM private key blocks
+  [/-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z0-9 ]*PRIVATE KEY-----/g, '[REDACTED_PRIVATE_KEY]'],
   // Discord webhook URLs carry their own token.
   [/https?:\/\/(?:(?:ptb|canary)\.)?discord(?:app)?\.com\/api\/(?:v\d+\/)?webhooks\/\d+\/[\w-]+/gi, '[REDACTED:webhook]'],
   // Discord bot tokens: base64 user ID . timestamp . HMAC
   [/[\w-]{23,28}\.[\w-]{6,7}\.[\w-]{27,}/g, '[REDACTED:discord-token]'],
   // Google API keys
   [/AIza[\w-]{35}/g, '[REDACTED:google-api-key]'],
+  // Slack tokens
+  [/\bxox[baprs]-[A-Za-z0-9-]{10,}\b/g, '[REDACTED:slack-token]'],
+  // GitHub, Hugging Face, and OpenAI / Anthropic API keys
+  [/\b(?:gh[pousr]_[A-Za-z0-9]{36,}|github_pat_[A-Za-z0-9_]{80,}|hf_[A-Za-z0-9]{32,}|sk-(?:proj-|ant-|live-)?[A-Za-z0-9_-]{32,})\b/g, '[REDACTED:api-key]'],
   // Bearer and basic credentials in headers
   [/\b(Bearer|Basic)\s+[\w.~+/=-]+/gi, '$1 [REDACTED]'],
   // Credentials in URLs: scheme://user:pass@host
   [/(\b[a-z][a-z\d+.-]*:\/\/)[^\s/:@]+:[^\s/@]+@/gi, '$1[REDACTED]@'],
   // key=value pairs and JSON fields whose name says they are secret
-  [/((?:api[_-]?key|token|secret|password|passwd|authorization|x-goog-api-key|cf-aig-authorization)["']?\s*[:=]\s*["']?)[^\s"'&,}]+/gi, '$1[REDACTED]']
+  [/((?:api[_-]?key|private[_-]?key|token|secret|password|passwd|authorization|x-goog-api-key|cf-aig-authorization)["']?\s*[:=]\s*["']?)[^\s"'&,}]+/gi, '$1[REDACTED]']
 ]
 
 function secretEnvValues (env) {

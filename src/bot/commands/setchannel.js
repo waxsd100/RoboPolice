@@ -4,27 +4,37 @@ const cacheGuild = require('../utils/cacheGuild')
 const eventList = require('../utils/constants').ALL_EVENTS
 
 module.exports = {
-  func: async (message, suffix) => {
-    const botPerms = message.channel.permissionsOf(global.bot.user.id).json
-    if (!botPerms.manageWebhooks || !botPerms.viewAuditLog) {
-      message.channel.createMessage('setchannel の実行には「ウェブフックの管理」と「監査ログを表示」の権限が必要です。設定したログチャンネルへメッセージを送るために必須です。').catch(_ => {})
-      message.addReaction('❌').catch(_ => {})
+  func: async (message, suffix = '') => {
+    if (!message?.channel?.guild) return
+    if (message.channel.guild.channels && typeof message.channel.guild.channels.has === 'function' && !message.channel.guild.channels.has(message.channel.id)) {
       return
     }
-    let events = suffix.split(', ')
+    if (!global.bot.guildSettingsCache?.[message.channel.guild.id]) {
+      await cacheGuild(message.channel.guild.id)
+    }
+    const botPerms = (typeof message.channel.permissionsOf === 'function'
+      ? message.channel.permissionsOf(global.bot.user.id)?.json
+      : null) || {}
+    if (!botPerms.manageWebhooks || !botPerms.viewAuditLog) {
+      await message.channel.createMessage('setchannel の実行には「ウェブフックの管理」と「監査ログを表示」の権限が必要です。設定したログチャンネルへメッセージを送るために必須です。').catch(_ => {})
+      await message.addReaction('❌').catch(_ => {})
+      return
+    }
+    const trimmedSuffix = (suffix || '').trim()
+    let events = trimmedSuffix ? trimmedSuffix.split(',').map(s => s.trim()).filter(Boolean) : []
     events = cleanArray(events)
-    if (events.length === 0 && suffix) {
-      message.channel.createMessage(`<@${message.author.id}>, none of the provided events are valid. Look at ${process.env.GLOBAL_BOT_PREFIX}help to see what is valid.`)
-    } else if (events.length === 0 && !suffix) {
+    if (events.length === 0 && trimmedSuffix) {
+      await message.channel.createMessage(`<@${message.author.id}>, none of the provided events are valid. Look at ${process.env.GLOBAL_BOT_PREFIX}help to see what is valid.`)
+    } else if (events.length === 0 && !trimmedSuffix) {
       await setEventsLogId(message.channel.guild.id, message.channel.id, eventList)
       await cacheGuild(message.channel.guild.id)
       await guildWebhookCacher(message.channel.guild.id, message.channel.id)
-      message.channel.createMessage(`<@${message.author.id}>, I set all events to log here! ${!botPerms.manageChannels || !botPerms.manageGuild ? 'Invite tracking will not work until I\'m granted manage channels & manage server (I cannot get invite information without both!)' : ''}`)
+      await message.channel.createMessage(`<@${message.author.id}>, I set all events to log here! ${!botPerms.manageChannels || !botPerms.manageGuild ? 'Invite tracking will not work until I\'m granted manage channels & manage server (I cannot get invite information without both!)' : ''}`)
     } else {
       await setEventsLogId(message.channel.guild.id, message.channel.id, events)
       await cacheGuild(message.channel.guild.id)
       await guildWebhookCacher(message.channel.guild.id, message.channel.id)
-      message.channel.createMessage(`<@${message.author.id}>, it has been done. ${events.includes('guildMemberAdd') && (!botPerms.manageChannels || !botPerms.manageGuild) ? 'Invite tracking will not work until I\'m granted manage channels & manage server (I cannot get invite information without both!)' : ''}`)
+      await message.channel.createMessage(`<@${message.author.id}>, it has been done. ${events.includes('guildMemberAdd') && (!botPerms.manageChannels || !botPerms.manageGuild) ? 'Invite tracking will not work until I\'m granted manage channels & manage server (I cannot get invite information without both!)' : ''}`)
     }
   },
   name: 'setchannel',
@@ -42,15 +52,12 @@ module.exports = {
 function cleanArray (events) {
   const tempEvents = []
   events.forEach(event => {
-    if (eventList.includes(event)) {
-      eventList.forEach(validEvent => {
-        const lowerEvent = validEvent.toLowerCase()
-        const upperEvent = validEvent.toUpperCase()
-        if (event === lowerEvent || event === upperEvent || event === validEvent) {
-          tempEvents.push(validEvent)
-        }
-      })
-    }
+    const lowerInput = event.toLowerCase()
+    eventList.forEach(validEvent => {
+      if (validEvent.toLowerCase() === lowerInput && !tempEvents.includes(validEvent)) {
+        tempEvents.push(validEvent)
+      }
+    })
   })
   return tempEvents
 }

@@ -5,13 +5,14 @@ module.exports = {
   name: 'guildMemberRemove',
   type: 'on',
   handle: async (guild, member) => {
+    if (!guild || !member) return
     if (!member.roles) {
       member = new User({ id: member.id, ...member.user }, global.bot)
     }
     const roles = []
-    if (member.roles) {
+    if (Array.isArray(member.roles)) {
       member.roles.forEach(roleID => {
-        const role = guild.roles.find(r => r.id === roleID)
+        const role = guild.roles?.get?.(roleID)
         if (role) roles.push(role)
       })
     }
@@ -24,14 +25,16 @@ module.exports = {
       guildID: guild.id,
       eventName: 'guildMemberRemove'
     }
-    const logs = await guild.getAuditLog({ limit: 5, actionType: 20 }).catch(() => {})
+    const canViewAuditLog = guild.members?.get?.(global.bot.user.id)?.permissions?.has?.('viewAuditLog') !== false
+    const logs = canViewAuditLog
+      ? await guild.getAuditLog({ limit: 5, actionType: 20 }).catch(() => ({ entries: [], users: [] }))
+      : { entries: [], users: [] }
     let log
-    if (logs && logs.entries && logs.entries.length !== 0) {
-      log = logs.entries.find(e => e.targetID === member.id && (Date.now() - ((e.id / 4194304) + 1420070400000)) < 3000)
+    if (logs && Array.isArray(logs.entries) && logs.entries.length !== 0) {
+      log = logs.entries.find(e => e?.targetID === member.id && (Date.now() - ((e.id / 4194304) + 1420070400000)) < 3000)
     }
     if (log && log.user) {
       const user = log.user
-      if (!user) return // !!!! not good
       event.eventName = 'guildMemberKick'
       event.embeds = [{
         author: {

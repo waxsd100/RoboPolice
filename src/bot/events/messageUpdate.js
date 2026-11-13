@@ -4,21 +4,38 @@ const getMessageFromDB = require('../../db/interfaces/postgres/read').getMessage
 const getMessageFromBatch = require('../../db/messageBatcher').getMessage
 const toStoredContent = require('../../db/interfaces/postgres/create').toStoredContent
 const escape = require('markdown-escape')
+const cacheGuild = require('../utils/cacheGuild')
 const { getRetentionDays, isBeyondRetention } = require('../utils/retention')
 const discordKnowledge = require('../modules/discordKnowledge')
 
 // markdown-escape is a single exported function, I probably don't need it as a node module lol
 
+function clampStr (str, maxLen) {
+  if (typeof str !== 'string') str = String(str ?? '')
+  if (str.length <= maxLen) return str
+  let cut = str.slice(0, maxLen - 1)
+  const lastCode = cut.charCodeAt(cut.length - 1)
+  if (lastCode >= 0xD800 && lastCode <= 0xDBFF) {
+    cut = cut.slice(0, -1)
+  }
+  return cut + '…'
+}
+
 module.exports = {
   name: 'messageUpdate',
   type: 'on',
   handle: async (newMessage, oldMessage) => {
-    if (!newMessage.channel.guild || !newMessage.author) return
+    if (!newMessage?.channel?.guild || !newMessage.author) return
     if (newMessage.author.id === global.bot.user.id) return
     discordKnowledge.onMessage(newMessage).catch(e => global.logger.warn(`[DISCORD]: ${e.message}`))
     if (!isFreshEdit(newMessage)) return
-    if (global.bot.guildSettingsCache[newMessage.channel.guild.id]?.isChannelIgnored(newMessage.channel.id)) return
-    const member = newMessage.channel.guild.members.get(newMessage.author.id) // this member "should" be in cache at all times
+    let guildSettings = global.bot.guildSettingsCache?.[newMessage.channel.guild.id]
+    if (!guildSettings) {
+      await cacheGuild(newMessage.channel.guild.id)
+      guildSettings = global.bot.guildSettingsCache?.[newMessage.channel.guild.id]
+    }
+    if (!guildSettings || guildSettings.isChannelIgnored(newMessage.channel.id)) return
+    const member = newMessage.channel.guild.members?.get?.(newMessage.author.id) // this member "should" be in cache at all times
     oldMessage = await getMessageFromBatch(newMessage.id)
     if (!oldMessage) {
       oldMessage = await getMessageFromDB(newMessage.id)
@@ -30,10 +47,15 @@ module.exports = {
       }
       return
     }
-    if (newMessage.author.bot && !global.bot.guildSettingsCache[newMessage.channel.guild.id].isLogBots()) return
+    if (newMessage.author.bot && !guildSettings.isLogBots()) return
     await processMessage(newMessage, oldMessage)
 
     async function processMessage (newMessage, oldMessage) {
+      const rawNewContent = newMessage.content ?? ''
+      const rawOldContent = oldMessage.content ?? ''
+      const escapedNewContents = escape(rawNewContent.replace(/~/g, '\\~'), ['angle brackets']).replace(/`/g, '') || 'なし'
+      const cleanedOldContents = rawOldContent.replace(/`/g, '') || '<本文なし>'
+
       const messageUpdateEvent = {
         guildID: newMessage.channel.guild.id,
         eventName: 'messageUpdate',
@@ -47,93 +69,91 @@ module.exports = {
             {
               name: `${newMessage.channel.type === 10 || newMessage.channel.type === 11 || newMessage.channel.type === 12 ? 'スレッド' : 'チャンネル'}`,
               value: `<#${newMessage.channel.id}> (${newMessage.channel.name})\n[メッセージへ移動](https://discord.com/channels/${newMessage.channel.guild.id}/${newMessage.channel.id}/${newMessage.id})`
-            },
+            }
           ],
           color: 15084269
         }]
       }
       let secondMessageUpdatePayload
-      if (newMessage.content.length + oldMessage.content.length > 4000) {
+      if (escapedNewContents.length + cleanedOldContents.length > 3500) {
         // handles large message nitro editing and helps make huge message edits look nicer.
         messageUpdateEvent.embeds[0].fields.splice(1) // nuke all fields but essential message info
         secondMessageUpdatePayload = JSON.parse(JSON.stringify(messageUpdateEvent)) // deep copy initial payload
-        messageUpdateEvent.embeds[0].description += `\n\n**__Now__**:\n${escape(newMessage.content.replace(/~/g, '\\~'), ['angle brackets']).replace(/\"/g, '"').replace(/`/g, '') || "なし"}`
+        messageUpdateEvent.embeds[0].description = clampStr(
+          `${messageUpdateEvent.embeds[0].description}\n\n**__Now__**:\n${escapedNewContents}`,
+          4096
+        )
         messageUpdateEvent.embeds[0].fields = []
         delete secondMessageUpdatePayload.embeds[0].author
-        secondMessageUpdatePayload.embeds[0].description = `**__Previously__**:\n${oldMessage.content}`
+        secondMessageUpdatePayload.embeds[0].description = clampStr(
+          `**__Previously__**:\n${rawOldContent || '<本文なし>'}`,
+          4096
+        )
         secondMessageUpdatePayload.embeds[0].fields.push({
           name: 'ID',
-          value: `\`\`\`ini\nユーザー = ${newMessage.author.id}\nメッセージ = ${newMessage.id}\`\`\``
+          value: clampStr(`\`\`\`ini\nユーザー = ${newMessage.author.id}\nメッセージ = ${newMessage.id}\`\`\``, 1024)
         })
         messageUpdateEvent.noFooter = true
       } else {
-        let nowChunks, beforeChunks
-        const escapedNewContents = escape(newMessage.content.replace(/~/g, '\\~'), ['angle brackets']).replace(/\"/g, '"').replace(/`/g, '') || "なし"
-        if (escapedNewContents.length > 1000) {
-          nowChunks = chunkify(escapedNewContents)
-        } else {
-          nowChunks = [escapedNewContents]
-        }
+        const nowChunks = escapedNewContents.length > 1000
+          ? chunkify(escapedNewContents).slice(0, 10)
+          : [escapedNewContents]
+        const beforeChunks = cleanedOldContents.length > 1000 // already escaped in db
+          ? chunkify(cleanedOldContents).slice(0, 10)
+          : [rawOldContent || '<本文なし>']
 
-        if (oldMessage.content.length > 1000) { // already escaped in db
-          beforeChunks = chunkify(oldMessage.content.replace(/\"/g, '"').replace(/`/g, ''))
-        } else {
-          beforeChunks = [oldMessage.content]
-        }
-        if (nowChunks.length === 0) {
-          nowChunks.push('<本文なし>')
-        }
-        if (beforeChunks.length === 0) {
-          beforeChunks.push('<本文なし>')
-        }
         nowChunks.forEach((chunk, i) => {
           messageUpdateEvent.embeds[0].fields.push({
             name: i === 0 ? '変更後' : '変更後（続き）',
-            value: chunk
+            value: clampStr(chunk || '<本文なし>', 1024)
           })
         })
         beforeChunks.forEach((chunk, i) => {
           messageUpdateEvent.embeds[0].fields.push({
             name: i === 0 ? '変更前' : '変更前（続き）',
-            value: chunk // previous is already escaped, don't escape again
+            value: clampStr(chunk || '<本文なし>', 1024) // previous is already escaped, don't escape again
           })
         })
         messageUpdateEvent.embeds[0].fields.push({
           name: 'ID',
-          value: `\`\`\`ini\nユーザー = ${newMessage.author.id}\nメッセージ = ${newMessage.id}\`\`\``
+          value: clampStr(`\`\`\`ini\nユーザー = ${newMessage.author.id}\nメッセージ = ${newMessage.id}\`\`\``, 1024)
         })
       }
 
-      let newUrls = [];
+      let newUrls = []
       let imagesRemoved = false
-      if (oldMessage.attachment_urls.length) {
-        const oldImageUrls = oldMessage.attachment_urls
+      const oldImageUrls = Array.isArray(oldMessage.attachment_urls) ? oldMessage.attachment_urls : []
+      if (oldImageUrls.length) {
         const newAttachmentImages = (newMessage.attachments || []).filter(attachment => attachment.content_type?.startsWith('image'))
         if (oldImageUrls.length > newAttachmentImages.length) {
           // Removed at least one image from the message
           imagesRemoved = true
           newUrls = newAttachmentImages.map(img => img.url)
-          const removedImageUrls = oldImageUrls.filter(url => !newUrls.includes(url))
-          removedImageUrls.forEach( (url, indx) => messageUpdateEvent.embeds[indx] = {
-            ...messageUpdateEvent.embeds[indx],
-            image: { url },
-            url: "https://example.com"
+          const removedImageUrls = oldImageUrls.filter(url => !newUrls.includes(url)).slice(0, 10)
+          removedImageUrls.forEach((url, indx) => {
+            messageUpdateEvent.embeds[indx] = {
+              ...messageUpdateEvent.embeds[indx],
+              image: { url },
+              url: 'https://example.com'
+            }
           })
           messageUpdateEvent.embeds[0].fields.push({
-            name: `Deleted Image${(removedImageUrls.length > 1) ? 's' : ''}`,
-            value: "See below"
+            name: `Deleted Image${removedImageUrls.length > 1 ? 's' : ''}`,
+            value: 'See below'
           })
         }
       }
 
       // Compare in the stored (escaped) form: comparing raw text against it flagged any message
       // containing ~ or < > as changed even when the text was identical.
-      const storedNewContent = toStoredContent(newMessage.content)
-      let changedAttrs = {}
-      if (storedNewContent !== oldMessage.content)
+      const storedNewContent = toStoredContent(rawNewContent)
+      const changedAttrs = {}
+      if (storedNewContent !== rawOldContent) {
         changedAttrs.content = storedNewContent
-      if (imagesRemoved)
+      }
+      if (imagesRemoved) {
         changedAttrs.imageUrls = newUrls
+      }
       // Same text and no image removed: a pin, a new thread or a late embed unfurl that landed
       // within isFreshEdit's window after a real edit. Nothing was edited, so log nothing.
       if (Object.keys(changedAttrs).length === 0) return
@@ -167,10 +187,10 @@ function expiredUpdateEvent (newMessage, member) {
         name: `${newMessage.author.username}#${newMessage.author.discriminator} ${member && member.nick ? `(${member.nick})` : ''}`,
         icon_url: newMessage.author.avatarURL
       },
-      description: `**${newMessage.author.username}#${newMessage.author.discriminator}** がメッセージを編集しました（${newMessage.channel.name}）`,
+      description: clampStr(`**${newMessage.author.username}#${newMessage.author.discriminator}** がメッセージを編集しました（${newMessage.channel.name}）`, 4096),
       fields: [{
         name: 'チャンネル',
-        value: `<#${newMessage.channel.id}> (${newMessage.channel.name})\n[メッセージへ移動](https://discord.com/channels/${newMessage.channel.guild.id}/${newMessage.channel.id}/${newMessage.id})`
+        value: clampStr(`<#${newMessage.channel.id}> (${newMessage.channel.name})\n[メッセージへ移動](https://discord.com/channels/${newMessage.channel.guild.id}/${newMessage.channel.id}/${newMessage.id})`, 1024)
       }, {
         name: '変更前',
         value: `取得できません。保持期間（${getRetentionDays()}日）を過ぎているため、変更前の内容は保存されていません。`
@@ -187,7 +207,7 @@ function chunkify (toChunk) {
   const lenChunks = Math.ceil(toChunk.length / 1000)
   const chunksToReturn = []
   for (let i = 0; i < lenChunks; i++) {
-    const chunkedStr = toChunk.substring((1000 * i), i === 0 ? 1000 : 1000 * (i + 1))
+    const chunkedStr = toChunk.substring((1000 * i), (i + 1) * 1000)
     chunksToReturn.push(chunkedStr)
   }
   return chunksToReturn

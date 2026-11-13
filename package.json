@@ -14,7 +14,7 @@
     "migrate": "node src/db/migrate.js",
     "db:compact": "node src/miscellaneous/compactDb.js",
     "backfill-channels": "node src/miscellaneous/backfillChannels.js",
-    "lint": "node_modules/.bin/eslint . --ext .js"
+    "lint": "standard"
   },
   "keywords": [
     "logging",

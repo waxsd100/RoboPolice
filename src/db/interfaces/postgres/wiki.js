@@ -57,6 +57,12 @@ function createStore (source) {
     return rows.rows[0]?.at || null
   }
 
+  // When the exact page `url` was last read (null if never).
+  async function pageLastRead (url) {
+    const rows = await pool.query('SELECT max(fetched_at) AS at FROM knowledge_pages WHERE source = $1 AND url = $2', [source, url])
+    return rows.rows[0]?.at || null
+  }
+
   // Parts with no embedding by `model`: [{ url, position, title, heading, text }].
   async function sectionsToEmbed (model, limit) {
     const rows = await pool.query(
@@ -198,7 +204,7 @@ function createStore (source) {
     return rows.rows.length !== 0
   }
 
-  return { savePage, deletePagesExcept, lastRead, sectionsToEmbed, saveSectionEmbedding, nearestSections, characters, characterImages, sectionsToExtract, saveFacts, factsToEmbed, saveFactEmbedding, nearestFacts, characterFacts, hasSections }
+  return { savePage, deletePagesExcept, lastRead, pageLastRead, sectionsToEmbed, saveSectionEmbedding, nearestSections, characters, characterImages, sectionsToExtract, saveFacts, factsToEmbed, saveFactEmbedding, nearestFacts, characterFacts, hasSections }
 }
 
 // The wiki's tables.

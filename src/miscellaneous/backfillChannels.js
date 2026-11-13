@@ -137,9 +137,12 @@ if (require.main === module) {
   require('dotenv').config()
   require('./secrets').loadSecrets().then(async () => {
     const pool = require('../db/clients/postgres')
-    const { filled, remaining } = await backfill({ pool, get: discordClient({ token: process.env.BOT_TOKEN }), log: m => console.log(`[BACKFILL]: ${m}`) })
-    console.log(`[BACKFILL]: Filled the channel of ${filled.toLocaleString()} message(s); ${remaining.toLocaleString()} are no longer on Discord and stay unknown.`)
-    pool.end()
+    try {
+      const { filled, remaining } = await backfill({ pool, get: discordClient({ token: process.env.BOT_TOKEN }), log: m => console.log(`[BACKFILL]: ${m}`) })
+      console.log(`[BACKFILL]: Filled the channel of ${filled.toLocaleString()} message(s); ${remaining.toLocaleString()} are no longer on Discord and stay unknown.`)
+    } finally {
+      await pool.end()
+    }
     process.exit(0)
   }).catch(e => {
     console.error(`[BACKFILL]: ${e.message}`)

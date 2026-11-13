@@ -3,6 +3,44 @@ const cacheGuild = require('../utils/cacheGuild')
 // I generally hate middleware associated with events, but this could potentially save
 // a whole lot on resources and audit log fetching if pulled off correctly.
 
+const SIBLING_EVENTS = {
+  guildMemberUpdate: ['guildMemberBoostUpdate', 'guildMemberNickUpdate', 'guildMemberVerify'],
+  guildMemberRemove: ['guildMemberKick'],
+  voiceStateUpdate: ['voiceChannelSwitch']
+}
+
+function getValidLogChannel (guildSettings, eventName, requiredPerms) {
+  const isDisabled = typeof guildSettings.eventIsDisabled === 'function'
+    ? guildSettings.eventIsDisabled(eventName)
+    : !guildSettings.event_logs?.[eventName]
+  if (isDisabled) return null
+
+  const channelId = typeof guildSettings.getEventByName === 'function'
+    ? guildSettings.getEventByName(eventName)
+    : guildSettings.event_logs?.[eventName]
+  if (!channelId) return null
+
+  const logChannel = global.bot.getChannel(channelId)
+  if (!logChannel) return null
+
+  let botPerms
+  try {
+    botPerms = logChannel.permissionsOf(global.bot.user.id)?.json
+  } catch (_) {
+    return null
+  }
+  if (!botPerms) return null
+  if (!botPerms.viewChannel || (!botPerms.manageWebhooks && !botPerms.sendMessages)) return null
+
+  // so far, this perm check is only needed for guild member add (fetch invites)
+  if (requiredPerms && requiredPerms.length !== 0) {
+    for (let i = 0; i < requiredPerms.length; i++) {
+      if (!botPerms[requiredPerms[i]]) return null
+    }
+  }
+  return logChannel
+}
+
 module.exports = async (event, type) => {
   if (type === 'on') {
     global.bot.on(event.name, async (...args) => {
@@ -17,25 +55,13 @@ module.exports = async (event, type) => {
           await cacheGuild(guildId)
         }
 
-        const eventLogs = global.bot.guildSettingsCache[guildId].event_logs
-        const logChannelId = eventLogs[event.name] ||
-          (event.name === 'guildMemberUpdate' && (eventLogs.guildMemberNickUpdate || eventLogs.guildMemberVerify || eventLogs.guildMemberBoostUpdate)) ||
-          (event.name === 'guildMemberRemove' && eventLogs.guildMemberKick)
-        const logChannel = logChannelId && global.bot.getChannel(logChannelId)
-        if (!logChannel) return
+        const guildSettings = global.bot.guildSettingsCache[guildId]
+        if (!guildSettings) return
 
-        const botPerms = logChannel.permissionsOf(global.bot.user.id).json
+        const candidates = [event.name, ...(SIBLING_EVENTS[event.name] || [])]
+        const validChannel = candidates.some(evName => getValidLogChannel(guildSettings, evName, event.requiredPerms))
+        if (!validChannel) return
 
-        if (!botPerms.manageWebhooks || !botPerms.viewAuditLog) return
-
-        // so far, this perm check is only needed for guild member add (fetch invites)
-        if (event.requiredPerms && event.requiredPerms?.length !== 0) {
-          for (let i = 0; i < event.requiredPerms.length; i++) {
-            if (!botPerms[event.requiredPerms[i]]) return
-          }
-        }
-
-        if (guildId !== true && !global.bot.guildSettingsCache[guildId]) return // true means skip guildsettings fetch
         await event.handle.apply(this, args)
       }
     })

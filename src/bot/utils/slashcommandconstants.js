@@ -62,6 +62,7 @@ exports.commands = [
   },
   {
     name: 'setup',
+    dm_permission: false,
     ...describe('Set the bot up: check status, choose log events, and configure the AI assistant', 'BOT の初期設定・確認（ステータス診断、記録するログ、AI の返事の設定）'),
     options: [
       {
@@ -93,6 +94,7 @@ exports.commands = [
   },
   {
     name: 'stoplogging',
+    dm_permission: false,
     ...describe('Stop logging to a channel (or everywhere)', 'チャンネルへのログ出力を止める（またはすべて止める）'),
     options: [
       {
@@ -111,6 +113,7 @@ exports.commands = [
   },
   {
     name: 'ignorechannel',
+    dm_permission: false,
     ...describe('Leave a channel out of the logs, or bring it back', 'チャンネルをログの対象から外す（もう一度で戻す）'),
     options: [
       {
@@ -132,10 +135,12 @@ exports.commands = [
   },
   {
     name: 'logbots',
+    dm_permission: false,
     ...describe('Whether edits and deletions of other bots\' messages are logged (default: no)', '他の BOT のメッセージの編集・削除もログに出すかを切り替える（初期値: 出さない）')
   },
   {
     name: 'persona',
+    dm_permission: false,
     ...describe('Whether the assistant speaks as the streamer here (shows the setting if left out)', 'AI が配信者として話すかを切り替える（省略すると今の設定を表示）'),
     options: [{
       type: BOOLEAN,
@@ -146,6 +151,7 @@ exports.commands = [
   },
   {
     name: 'replylength',
+    dm_permission: false,
     ...describe('How long the assistant\'s replies are here (shows the setting if left out)', 'AI の返事の長さを変える（省略すると今の設定を表示）'),
     options: [{
       type: STRING,
@@ -161,6 +167,7 @@ exports.commands = [
   },
   {
     name: 'assistantrules',
+    dm_permission: false,
     ...describe('What the assistant keeps to here, besides the rules channel (shows it if left out)', 'AI に守ってほしいこと（ルールチャンネル以外に。省略すると今の内容を表示）'),
     options: [{
       type: STRING,
@@ -177,6 +184,7 @@ exports.commands = [
   },
   {
     name: 'youtube',
+    dm_permission: false,
     ...describe('The YouTube channels the assistant knows about (shared by every server)', 'AI が知っている YouTube チャンネル（全サーバー共通）'),
     options: [
       {
@@ -231,6 +239,7 @@ exports.commands = [
   },
   {
     name: 'clearmydata',
+    dm_permission: false,
     ...describe('How to have your stored data deleted', '保存されている自分のデータを削除してもらう方法')
   }
 ]

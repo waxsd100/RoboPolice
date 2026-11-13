@@ -1,7 +1,13 @@
 require('dotenv').config()
 
-const pool = require('../db/clients/postgres')
 const { getRetentionDays } = require('../bot/utils/retention')
+const { loadSecrets } = require('./secrets')
+
+let _pool = null
+function getPool () {
+  if (!_pool) _pool = require('../db/clients/postgres')
+  return _pool
+}
 
 // Deletes message rows past the retention window promised in the Privacy Policy and in /clearmydata.
 //
@@ -27,7 +33,8 @@ async function prune () {
   // deployment can deliberately keep messages forever. Prune nothing rather than failing, so a
   // Railway Cron job (or a direct `node prune.js`) run without it set is a clean no-op, not a
   // recurring failure.
-  if (!days) return { deleted: 0, days: null }
+  if (!days) return { deleted: 0, mentionLogsDeleted: 0, days: null }
+  const pool = getPool()
   let deleted = 0
   for (let i = 0; i < MAX_BATCHES_PER_RUN; i++) {
     const res = await pool.query(
@@ -37,16 +44,25 @@ async function prune () {
     deleted += res.rowCount
     if (res.rowCount < BATCH_SIZE) break
   }
-  return { deleted, days }
+  let mentionLogsDeleted = 0
+  for (let i = 0; i < MAX_BATCHES_PER_RUN; i++) {
+    const res = await pool.query(
+      'DELETE FROM mention_logs WHERE id IN (SELECT id FROM mention_logs WHERE created_at < NOW() - ($1::int * INTERVAL \'1 day\') LIMIT $2)',
+      [days, BATCH_SIZE]
+    )
+    mentionLogsDeleted += res.rowCount
+    if (res.rowCount < BATCH_SIZE) break
+  }
+  return { deleted, mentionLogsDeleted, days }
 }
 
 async function sweep () {
   if (sweeping) return
   sweeping = true
   try {
-    const { deleted, days } = await prune()
-    if (deleted > 0) {
-      const msg = `[PRUNE]: Deleted ${deleted.toLocaleString()} message rows older than ${days} days.`
+    const { deleted, mentionLogsDeleted, days } = await prune()
+    if (deleted > 0 || mentionLogsDeleted > 0) {
+      const msg = `[PRUNE]: Deleted ${deleted.toLocaleString()} message rows and ${mentionLogsDeleted.toLocaleString()} mention_logs rows older than ${days} days.`
       global.logger.info(msg)
       global.webhook.generic(msg)
     }
@@ -73,25 +89,27 @@ function startScheduler () {
 }
 
 async function main () {
+  await loadSecrets()
+  const pool = getPool()
+  let exitCode = 0
   try {
-    const { deleted, days } = await prune()
+    const { deleted, mentionLogsDeleted, days } = await prune()
     if (days === null) {
       console.log('[PRUNE]: MESSAGE_HISTORY_DAYS is not set. Message retention is unlimited: nothing to prune.')
     } else {
-      console.log(`[PRUNE]: Deleted ${deleted.toLocaleString()} message rows older than ${days} days.`)
+      console.log(`[PRUNE]: Deleted ${deleted.toLocaleString()} message rows and ${mentionLogsDeleted.toLocaleString()} mention_logs rows older than ${days} days.`)
     }
-    pool.end()
-    process.exit(0)
   } catch (e) {
     console.error(`[PRUNE]: ${e.message}`)
-    process.exit(1)
+    exitCode = 1
+  } finally {
+    await pool.end().catch(() => {})
   }
+  process.exit(exitCode)
 }
 
 if (require.main === module) {
-  // Run as its own cron service, it reads Secret Manager itself. The pool reads PG* when it first
-  // connects, so loading them after it was created is in time.
-  require('./secrets').loadSecrets().then(main).catch(e => {
+  main().catch(e => {
     console.error(`[PRUNE]: ${e.message}`)
     process.exit(1)
   })

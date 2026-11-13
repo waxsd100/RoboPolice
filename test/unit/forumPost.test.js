@@ -4,13 +4,15 @@ const { toForumPost, describeForums, postableForums, imageUrlsOf, REQUIRE_TAG } 
 const { createGuild, createMember, installBot } = require('../helpers/fakes')
 
 const REQUESTER = '1'
+const MODERATOR = '2'
 const member = createMember({ id: REQUESTER })
+const modMember = createMember({ id: MODERATOR })
 const guild = createGuild({
   channels: [
-    { id: '301', name: '募集', type: 15, posters: [REQUESTER, 'BOT'] },
+    { id: '301', name: '募集', type: 15, posters: [REQUESTER, MODERATOR, 'BOT'], moderators: [MODERATOR] },
     { id: '302', name: 'スタッフ用', type: 15, posters: ['BOT'] },
     { id: '303', name: 'BOT不可', type: 15, posters: [REQUESTER] },
-    { id: '304', name: 'メディア', type: 16, posters: [REQUESTER, 'BOT'], moderators: ['BOT'] },
+    { id: '304', name: 'メディア', type: 16, posters: [REQUESTER, MODERATOR, 'BOT'], moderators: [MODERATOR, 'BOT'] },
     { id: '305', name: 'general', type: 0, posters: [REQUESTER, 'BOT'] }
   ]
 })
@@ -61,8 +63,15 @@ describe('postableForums', () => {
 })
 
 describe('describeForums', () => {
-  test('lists tags the bot may apply, required-tag notes and guidelines', async () => {
+  test('lists tags both the bot and requester may apply, required-tag notes and guidelines', async () => {
     assert.equal(await describeForums(guild, member), [
+      '- 301: 募集',
+      '  タグ: 募集中, 締切',
+      '  投稿ガイドライン: 題名に日付を入れてください',
+      '- 304: メディア',
+      '  タグ: 写真（1つ以上必須）'
+    ].join('\n'))
+    assert.equal(await describeForums(guild, modMember), [
       '- 301: 募集',
       '  タグ: 募集中, 締切',
       '  投稿ガイドライン: 題名に日付を入れてください',
@@ -100,11 +109,13 @@ describe('toForumPost', () => {
     assert.deepEqual(post.applied_tags, ['a', 'b', 'c', 'd', 'e'])
   })
 
-  test('drops moderated tags unless the bot can manage threads', async () => {
-    const { post } = await toForumPost({ ...base, tags: ['運営のみ', '締切'] }, guild, member)
+  test('drops moderated tags unless both the bot and requester can manage threads', async () => {
+    const { post } = await toForumPost({ ...base, tags: ['運営のみ', '締切'] }, guild, modMember)
     assert.deepEqual(post.applied_tags, ['t2'])
-    const media = await toForumPost({ ...base, channel_id: '304', tags: ['公式'] }, guild, member)
-    assert.deepEqual(media.post.applied_tags, ['m1'])
+    const regularMedia = await toForumPost({ ...base, channel_id: '304', tags: ['公式', '写真'] }, guild, member)
+    assert.deepEqual(regularMedia.post.applied_tags, ['m2'])
+    const modMedia = await toForumPost({ ...base, channel_id: '304', tags: ['公式'] }, guild, modMember)
+    assert.deepEqual(modMedia.post.applied_tags, ['m1'])
   })
 
   test('requires a tag where the forum does', async () => {

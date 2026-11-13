@@ -1,28 +1,16 @@
+const cluster = require('cluster')
 const { Pool } = require('pg') // PREREQUISITE: Have postgres installed and your user can connect
 
-require('dotenv').config()
+if (!cluster.isWorker && !process.env.PGHOST && !process.env.BOT_TOKEN) {
+  require('dotenv').config()
+}
 
-const CONNECT_TIMEOUT_MS = Number(process.env.PG_CONNECT_TIMEOUT_MS) || 15000
-const RETRY_BASE_DELAY_MS = Number(process.env.PG_CONNECT_RETRY_DELAY_MS) || 500
 const TRANSIENT_CONNECT_ERROR = /ETIMEDOUT|ECONNREFUSED|ECONNRESET|EHOSTUNREACH|ENETUNREACH|EAI_AGAIN|Connection terminated|timeout exceeded|starting up|recovery mode|57P03/i
 
 function maxConnectRetries () {
   if (process.env.PG_CONNECT_RETRIES !== undefined) return Number(process.env.PG_CONNECT_RETRIES) || 0
   return process.env.PGHOST ? 2 : 0
 }
-
-const pool = new Pool({
-  user: process.env.PGUSER,
-  host: process.env.PGHOST,
-  database: process.env.PGDATABASE,
-  password: process.env.PGPASSWORD,
-  port: process.env.PGPORT || 5432,
-  max: 5, // 5 clients each, god help us all if this isn't sufficient
-  keepAlive: true,
-  keepAliveInitialDelayMillis: 10000,
-  connectionTimeoutMillis: CONNECT_TIMEOUT_MS,
-  idleTimeoutMillis: 30000
-})
 
 function attachClientErrorHandler (client) {
   if (!client || typeof client.on !== 'function' || client._hasRoboPoliceErrorHandler) return client
@@ -35,11 +23,31 @@ function attachClientErrorHandler (client) {
   return client
 }
 
-pool.on('connect', attachClientErrorHandler)
+let pool = null
+let endPromise = null
 
-pool.on('error', (e) => {
-  console.error('Postgres error', e)
-})
+function getPool () {
+  if (!pool) {
+    endPromise = null
+    pool = new Pool({
+      user: process.env.PGUSER,
+      host: process.env.PGHOST,
+      database: process.env.PGDATABASE,
+      password: process.env.PGPASSWORD,
+      port: Number(process.env.PGPORT) || 5432,
+      max: 5, // 5 clients each, god help us all if this isn't sufficient
+      keepAlive: true,
+      keepAliveInitialDelayMillis: 10000,
+      connectionTimeoutMillis: Number(process.env.PG_CONNECT_TIMEOUT_MS) || 15000,
+      idleTimeoutMillis: 30000
+    })
+    pool.on('connect', attachClientErrorHandler)
+    pool.on('error', (e) => {
+      console.error('Postgres error', e)
+    })
+  }
+  return pool
+}
 
 function isTransientConnectError (e) {
   const msg = `${e?.code || ''} ${e?.message || e || ''}`
@@ -48,15 +56,17 @@ function isTransientConnectError (e) {
 
 async function connectWithRetry () {
   const maxRetries = maxConnectRetries()
+  const retryBaseDelayMs = Number(process.env.PG_CONNECT_RETRY_DELAY_MS) || 500
+  const activePool = getPool()
   for (let attempt = 0; ; attempt++) {
     try {
-      const client = await pool.connect()
+      const client = await activePool.connect()
       return attachClientErrorHandler(client)
     } catch (e) {
       if (attempt >= maxRetries || !isTransientConnectError(e)) {
         throw e instanceof Error ? e : new Error(String(e))
       }
-      const delay = RETRY_BASE_DELAY_MS * (attempt + 1)
+      const delay = retryBaseDelayMs * (attempt + 1)
       console.warn(`[DB]: Postgres connection failed (${e.message || e}); retrying in ${delay}ms (${attempt + 1}/${maxRetries})`)
       await new Promise(resolve => setTimeout(resolve, delay))
     }
@@ -83,6 +93,19 @@ module.exports = {
     return connectWithRetry()
   },
   end: cb => {
-    return pool.end(cb)
+    if (!pool) {
+      if (typeof cb === 'function') cb()
+      return Promise.resolve()
+    }
+    if (!endPromise) {
+      const closingPool = pool
+      pool = null
+      endPromise = closingPool.end()
+    }
+    if (typeof cb === 'function') {
+      endPromise.then(() => cb(), cb)
+      return
+    }
+    return endPromise
   }
 }

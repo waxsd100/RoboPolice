@@ -33,14 +33,24 @@ module.exports = {
      * The 1 second wait makes sure the bot gets the new entry on time.
      * Thanks Discord.
     */
-    const actionStartedTime = new Date()
-    setTimeout(async () => {
-      const logs = await guild.getAuditLog({ limit: 10, actionType: 22 }).catch(() => {})
-      if (!logs) {
+    const canViewAudit = guild.members?.get?.(global.bot?.user?.id)?.permissions?.has?.('viewAuditLog') !== false
+    const timer = setTimeout(async () => {
+      const logs = canViewAudit
+        ? await guild.getAuditLog({ limit: 10, actionType: 22 }).catch(() => null)
+        : null
+      if (!logs || !Array.isArray(logs.entries)) {
         global.logger.warn(`Guild Ban Add was unable to fetch audit logs in guild ${guild.name} (${guild.id})`)
+        await send(guildBanAddEvent)
         return
       }
-      const log = logs.entries.find(e => e.targetID === user.id && Date.now() - ((e.id / 4194304) + 1420070400000) < 60000)
+      const log = logs.entries.find(e => {
+        if (e.targetID !== user.id) return false
+        try {
+          return Date.now() - (Number(BigInt(e.id) >> 22n) + 1420070400000) < 60000
+        } catch (_) {
+          return false
+        }
+      })
       if (!log) {
         global.logger.warn(`Guild Ban Add on ${guild.name} (${guild.id}) was not able to match a log.`)
         await send(guildBanAddEvent)
@@ -57,5 +67,6 @@ module.exports = {
       }
       await send(guildBanAddEvent)
     }, 5000)
+    timer.unref?.()
   }
 }

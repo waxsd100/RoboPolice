@@ -45,7 +45,16 @@ function parseNotification (xml) {
 }
 
 function broadcast (message) {
-  for (const worker of Object.values(cluster.workers || {})) worker.send(message)
+  for (const worker of Object.values(cluster.workers || {})) {
+    if (!worker?.isConnected?.()) continue
+    try {
+      worker.send(message, err => {
+        if (err) global.logger?.warn?.(`[WEBSUB]: Worker ${worker.id} IPC send failed: ${err.message}`)
+      })
+    } catch (err) {
+      global.logger?.warn?.(`[WEBSUB]: Worker ${worker.id} IPC send failed: ${err.message}`)
+    }
+  }
 }
 
 // Handles one request. store: { isKnownChannel, saveWebsub }; relay(notification) passes it on.
@@ -56,11 +65,17 @@ async function handle (req, res, { store, relay = n => broadcast({ type: 'youtub
     return
   }
   if (req.method === 'GET') {
-    // The hub confirming a (un)subscription: echo the challenge only for channels we follow.
+    // The hub confirming a (un)subscription: echo the challenge only for channels we follow (subscribe)
+    // or channels we no longer follow (unsubscribe).
     const mode = url.searchParams.get('hub.mode')
     const channelID = channelOfTopic(url.searchParams.get('hub.topic'))
     const challenge = url.searchParams.get('hub.challenge')
-    const wanted = mode === 'subscribe' ? channelID && await store.isKnownChannel(channelID) : mode === 'unsubscribe'
+    let wanted = false
+    if (channelID && mode === 'subscribe') {
+      wanted = await store.isKnownChannel(channelID)
+    } else if (channelID && mode === 'unsubscribe') {
+      wanted = !(await store.isKnownChannel(channelID))
+    }
     if (!challenge || !wanted) {
       res.writeHead(404).end()
       return
@@ -121,6 +136,10 @@ async function subscribe (channelID, fetchImpl = fetch) {
 
 // Subscribes channels that have no subscription or whose subscription runs out within a day.
 async function renew (store, fetchImpl) {
+  if (!store) {
+    if (!enabled()) return
+    store = require('../db/interfaces/postgres/youtube')
+  }
   for (const channelID of await store.websubDue(new Date(Date.now() + RENEW_BEFORE_MS))) {
     await subscribe(channelID, fetchImpl).catch(e => global.logger.warn(`[WEBSUB]: ${e.message}`))
   }
@@ -138,8 +157,8 @@ function start () {
   const port = Number(process.env.PORT) || 8080
   server.listen(port, () => global.logger.startup(`[WEBSUB]: Listening for YouTube pushes on port ${port} at ${callbackURL()}`))
   renew(store).catch(e => global.logger.warn(`[WEBSUB]: ${e.message}`))
-  setInterval(() => renew(store).catch(e => global.logger.warn(`[WEBSUB]: ${e.message}`)), RENEW_EVERY_MS)
+  setInterval(() => renew(store).catch(e => global.logger.warn(`[WEBSUB]: ${e.message}`)), RENEW_EVERY_MS).unref?.()
   return server
 }
 
-module.exports = { start, enabled, handle, subscribe, renew, validSignature, parseNotification, topicOf, PATH }
+module.exports = { start, enabled, handle, subscribe, renew, broadcast, validSignature, parseNotification, topicOf, PATH }

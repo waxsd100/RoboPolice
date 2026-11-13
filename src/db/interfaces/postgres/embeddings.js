@@ -115,7 +115,7 @@ async function dropMessageEmbeddings (ids) {
 // embedded again (only in servers where message embeddings are enabled).
 async function resetStaleMessageEmbeddings (model, limit) {
   const result = await pool.query(
-    `UPDATE messages SET embedding = NULL, embedding_model = NULL
+    `UPDATE messages SET embedding = NULL, embedding_model = NULL, embedding_batch = NULL
      WHERE id IN (
        SELECT m.id FROM messages m
        JOIN guilds g ON g.id = m.guild_id
@@ -129,7 +129,7 @@ async function resetStaleMessageEmbeddings (model, limit) {
 
 // An edited message is embedded again.
 async function invalidateMessage (messageID) {
-  await pool.query('UPDATE messages SET embedding = NULL, embedding_model = NULL WHERE id = $1', [messageID])
+  await pool.query('UPDATE messages SET embedding = NULL, embedding_model = NULL, embedding_batch = NULL WHERE id = $1', [messageID])
 }
 
 // Settings for one nearest-neighbour query, run inside its transaction. The HNSW index finds

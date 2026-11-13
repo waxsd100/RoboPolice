@@ -24,8 +24,27 @@ function urlsIn (...sources) {
 // A YouTube video's ID in a URL, so a watch link with another form (youtu.be, &t=…) of a video that
 // came up still counts.
 function videoIdOf (url) {
-  const m = String(url).match(/(?:youtube\.com\/(?:watch\?(?:[^#\s]*&)?v=|live\/|shorts\/)|youtu\.be\/)([\w-]{11})/)
-  return m ? m[1] : null
+  let parsed
+  try {
+    parsed = new URL(String(url))
+  } catch (_) {
+    return null
+  }
+  if (!/^https?:$/i.test(parsed.protocol)) return null
+  const host = parsed.hostname.toLowerCase()
+  if (host === 'youtu.be') {
+    const m = parsed.pathname.match(/^\/([\w-]{11})(?:\/|$)/)
+    return m ? m[1] : null
+  }
+  if (host === 'youtube.com' || host.endsWith('.youtube.com') || host === 'youtube-nocookie.com' || host.endsWith('.youtube-nocookie.com')) {
+    if (parsed.pathname === '/watch') {
+      const v = parsed.searchParams.get('v')
+      return v && /^[\w-]{11}$/.test(v) ? v : null
+    }
+    const m = parsed.pathname.match(/^\/(?:live|shorts|embed|v)\/([\w-]{11})(?:\/|$)/)
+    return m ? m[1] : null
+  }
+  return null
 }
 
 function isKnown (url, known, knownVideos) {

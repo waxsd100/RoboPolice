@@ -2,40 +2,53 @@ const escape = require('markdown-escape')
 
 module.exports = {
   func: async message => {
-    const fields = []
-    const owner = global.bot.users.get(message.channel.guild.ownerID)
+    if (!message?.channel?.guild) return
+    const guild = message.channel.guild
+    const owner = global.bot.users.get(guild.ownerID)
+    const channels = [...(guild.channels?.values?.() || [])]
+    const createdMs = guild.createdAt || Number((BigInt(guild.id) >> 22n) + 1420070400000n)
+    const createdSec = Math.floor(createdMs / 1000)
+    const features = Array.isArray(guild.features) && guild.features.length !== 0
+      ? guild.features.join(', ').slice(0, 1024)
+      : 'なし'
     const embed = {
-      description: `${message.channel.guild.name} の情報`,
+      description: `${guild.name} の情報`,
       color: 319403,
       fields: [{
         name: 'サーバー名',
-        value: `**${message.channel.guild.name}** (${message.channel.guild.id})`
+        value: `**${guild.name}** (${guild.id})`
+      }, {
+        name: '作成日時',
+        value: `<t:${createdSec}:F> (<t:${createdSec}:R>)`
+      }, {
+        name: 'メンバー数',
+        value: `${guild.memberCount ?? guild.members?.size ?? 0}`
       }, {
         name: '認証レベル',
-        value: `${message.channel.guild.verificationLevel}`
+        value: `${guild.verificationLevel}`
       }, {
         name: 'オーナー',
-        value: `${owner ? `**${owner.username}#${owner.discriminator}** ` : ''}(${message.channel.guild.ownerID})`
+        value: `${owner ? `**${owner.username}#${owner.discriminator}** ` : ''}(${guild.ownerID})`
       }, {
         name: 'サーバー機能',
-        value: message.channel.guild.features.length !== 0 ? message.channel.guild.features.join(', ') : 'なし'
+        value: features
       }, {
         name: 'チャンネル数',
-        value: `合計 **${message.channel.guild.channels.size}**\nテキスト **${message.channel.guild.channels.filter(c => c.type === 0).length}**\nボイス **${message.channel.guild.channels.filter(c => c.type === 2).length}**\nカテゴリ **${message.channel.guild.channels.filter(c => c.type === 4).length}**`
+        value: `合計 **${channels.length}**\nテキスト **${channels.filter(c => c.type === 0).length}**\nボイス **${channels.filter(c => c.type === 2).length}**\nカテゴリ **${channels.filter(c => c.type === 4).length}**`
       }, {
         name: 'リージョン',
-        value: `**${message.channel.guild.region}**`
+        value: `**${guild.region || '自動'}**`
       }, {
         name: 'ロール数',
-        value: `${message.channel.guild.roles.size}`
+        value: `${guild.roles?.size ?? 0}`
       }]
     }
-    if (message.channel.guild.iconURL) {
+    if (guild.iconURL) {
       embed.thumbnail = {
-        url: message.channel.guild.iconURL
+        url: guild.iconURL
       }
     }
-    const availableEmojis = message.channel.guild.emojis.filter(e => e.available)
+    const availableEmojis = (guild.emojis || []).filter(e => e && e.available)
     if (availableEmojis.length === 0) {
       embed.fields.push({
         name: 'Emojis',
@@ -48,18 +61,18 @@ module.exports = {
       }
       let counter = 0 // Dynamically create embed fields based on character count
       availableEmojis.forEach(emoji => {
-        if (emojiObj[counter].join('\n').length < 950) {
-          emojiObj[counter].push(`<${emoji.animated ? 'a' : ''}:${emoji.name}:${emoji.id}> ${escape(emoji.name)} ${emoji.roles.length !== 0 ? '<- 🔒 role restricted' : ''}`)
+        const line = `<${emoji.animated ? 'a' : ''}:${emoji.name}:${emoji.id}> ${escape(emoji.name)} ${(emoji.roles || []).length !== 0 ? '<- 🔒 role restricted' : ''}`
+        if ((emojiObj[counter].join('\n').length + line.length + 1) <= 1024) {
+          emojiObj[counter].push(line)
         } else {
           counter++
-          emojiObj[counter] = []
-          emojiObj[counter].push(`<${emoji.animated ? 'a' : ''}:${emoji.name}:${emoji.id}>`)
+          emojiObj[counter] = [line.slice(0, 1024)]
         }
       })
       const emojiFields = Object.keys(emojiObj).map(key => {
         return {
           name: 'Emojis',
-          value: emojiObj[key].join('\n'),
+          value: emojiObj[key].join('\n') || 'なし',
           inline: true
         }
       })
@@ -71,7 +84,7 @@ module.exports = {
         if (emojiFields[i + 2]) emojiFieldsToUse.push(emojiFields[i + 2])
         if (emojiFields[i + 3]) emojiFieldsToUse.push(emojiFields[i + 3])
         if (i === 0) {
-          embed.fields = embed.fields.concat(emojiFieldsToUse)
+          embed.fields = embed.fields.concat(emojiFieldsToUse).slice(0, 25)
           await message.channel.createMessage({ embeds: [embed] })
         } else {
           await message.channel.createMessage({ embeds: [{ description: '絵文字（続き）', fields: emojiFieldsToUse }] })

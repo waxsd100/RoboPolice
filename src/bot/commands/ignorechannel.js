@@ -1,17 +1,30 @@
 const ignoreChannel = require('../../db/interfaces/postgres/update').ignoreChannel
+const cacheGuild = require('../utils/cacheGuild')
 
 module.exports = {
-  func: async (message, suffix) => {
+  func: async (message, suffix = '') => {
+    if (!message?.channel?.guild) return
+    if (!global.bot.guildSettingsCache?.[message.channel.guild.id]) {
+      await cacheGuild(message.channel.guild.id)
+    }
     let toIgnore = message.channel.id
-    if (suffix && !isNaN(parseInt(suffix))) {
-      const channelToIgnore = message.channel.guild.channels.get(suffix)
-      if (!channelToIgnore || !(channelToIgnore.type === 2 || channelToIgnore.type === 0)) return message.channel.createMessage(`Usage: ${process.env.GLOBAL_BOT_PREFIX}ignorechannel OR ${process.env.GLOBAL_BOT_PREFIX}ignorechannel channelID`)
-      toIgnore = suffix
+    const trimmedSuffix = (suffix || '').trim()
+    if (trimmedSuffix) {
+      const cleanedId = trimmedSuffix.replace(/^<#(\d+)>$/, '$1').trim()
+      if (!/^\d+$/.test(cleanedId)) {
+        return message.channel.createMessage(`Usage: ${process.env.GLOBAL_BOT_PREFIX}ignorechannel OR ${process.env.GLOBAL_BOT_PREFIX}ignorechannel channelID`)
+      }
+      const channelToIgnore = message.channel.guild.channels?.get?.(cleanedId)
+      if (!channelToIgnore || (channelToIgnore.guild && channelToIgnore.guild.id !== message.channel.guild.id) || !(channelToIgnore.type === 2 || channelToIgnore.type === 0)) {
+        return message.channel.createMessage(`Usage: ${process.env.GLOBAL_BOT_PREFIX}ignorechannel OR ${process.env.GLOBAL_BOT_PREFIX}ignorechannel channelID`)
+      }
+      toIgnore = cleanedId
     }
     const disabled = await ignoreChannel(message.channel.guild.id, toIgnore) // return a boolean representing whether a channel is ignored or not
-    const channelName = message.channel.guild.channels.get(toIgnore)?.name || message.channel.name || toIgnore
+    await cacheGuild(message.channel.guild.id)
+    const channelName = message.channel.guild.channels?.get?.(toIgnore)?.name || message.channel.name || toIgnore
     const respStr = `<#${toIgnore}> (${channelName}) の設定を切り替えました。このチャンネルのイベントを${disabled ? '記録しません' : '記録します'}`
-    message.channel.createMessage({
+    await message.channel.createMessage({
       embeds: [{
         description: respStr,
         color: 3553599,

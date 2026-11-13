@@ -4,6 +4,10 @@ const createGuild = require('../../db/interfaces/postgres/create').createGuild
 
 module.exports = {
   func: async message => {
+    if (!message?.channel?.guild) return
+    if (!global.bot.guildSettingsCache?.[message.channel.guild.id]) {
+      await cacheGuild(message.channel.guild.id)
+    }
     const msg = await message.channel.createMessage({
       embeds: [{
         description: `本当によろしいですか、${message.author.username}#${message.author.discriminator} (${message.author.id}) さん。よろしければ *yes* と返信してください。`,
@@ -25,7 +29,7 @@ module.exports = {
         complete = true
         clearTimeout(timeout)
         global.bot.removeListener('messageCreate', temp)
-        message.channel.createMessage({
+        await message.channel.createMessage({
           embeds: [{
             description: 'サーバーの設定をリセットします。',
             color: 3553599,
@@ -39,7 +43,7 @@ module.exports = {
               icon_url: message.author.avatarURL
             }
           }]
-        })
+        }).catch(() => {})
         await createGuild(message.channel.guild)
         await resetGuild(message.channel.guild.id)
         await cacheGuild(message.channel.guild.id)
@@ -62,10 +66,11 @@ module.exports = {
               icon_url: message.author.avatarURL
             }
           }]
-        })
-        msg.delete()
+        }).catch(() => {})
+        msg?.delete?.().catch(() => {})
       }
     }, 10000)
+    timeout.unref?.()
     global.bot.on('messageCreate', temp)
   },
   name: 'reset',

@@ -1,17 +1,25 @@
 class GuildSettings {
   constructor (data) {
-    if (data.disabled) return
+    if (!data || data.disabled) return
     if (!data.ownerID && !data.owner_id) {
-      global.logger.info(JSON.stringify(data))
-      global.logger.fatal('A guild settings doc is missing an ownerID!', data)
+      const guild = global.bot?.guilds?.get?.(data.id)
+      if (guild?.ownerID) {
+        data.ownerID = guild.ownerID
+      } else {
+        global.logger.warn('A guild settings doc is missing an ownerID!', data)
+      }
     }
     this.id = data.id
-    this.ignoredChannels = data.ignoredChannels || data.ignored_channels
-    this.logBots = data.logBots || data.log_bots
-    this.event_logs = data.event_logs
+    this.ignoredChannels = data.ignoredChannels || data.ignored_channels || []
+    this.logBots = Boolean(data.logBots || data.log_bots)
+    this.event_logs = data.event_logs || {}
     this.ownerID = data.ownerID || data.owner_id
 
     global.bot.guildSettingsCache[data.id] = this // someday, this will be replaced because it's dumb
+  }
+
+  eventIsDisabled (eventName) {
+    return !this.event_logs?.[eventName]
   }
 
   getEventLogID (eventName) {

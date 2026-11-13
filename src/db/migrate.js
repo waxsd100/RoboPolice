@@ -94,9 +94,16 @@ module.exports = { migrate, migrationFiles }
 
 if (require.main === module) {
   require('dotenv').config()
-  migrate({ log: console.log })
-    .then(done => {
-      console.log(done.length ? `Applied ${done.length} migration(s).` : 'The database is up to date.')
+  const { loadSecrets } = require('../miscellaneous/secrets')
+  loadSecrets()
+    .then(async () => {
+      const pool = require('./clients/postgres')
+      try {
+        const done = await migrate({ pool, log: console.log })
+        console.log(done.length ? `Applied ${done.length} migration(s).` : 'The database is up to date.')
+      } finally {
+        await pool.end()
+      }
       process.exit(0)
     })
     .catch(e => {

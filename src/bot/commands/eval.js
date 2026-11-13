@@ -10,18 +10,19 @@ function formatEval (val) {
 module.exports = {
   func: async (message, suffix) => {
     try { // This eval command is from https://github.com/TheSharks/WildBeast/ because I really like their method
+      // eslint-disable-next-line no-eval
       const returned = eval(suffix)
       message.channel.createMessage(formatEval(returned)).then(ms => {
         if (returned !== undefined && returned !== null && typeof returned.then === 'function') {
-          returned.then(() => {
-            ms.edit(formatEval(returned))
+          returned.then(val => {
+            ms.edit(formatEval(val)).catch(() => {})
           }, e => {
-            ms.edit(formatEval(e))
+            ms.edit(formatEval(e)).catch(() => {})
           })
         }
-      }).catch(() => { })
+      }).catch(() => {})
     } catch (e) {
-      message.channel.createMessage(formatEval(e)).catch(() => { })
+      message.channel.createMessage(formatEval(e)).catch(() => {})
     }
   },
   name: 'eval',

@@ -6,6 +6,7 @@ const youtubeDB = require('../../db/interfaces/postgres/youtube')
 const emojiDescriber = require('../modules/emojiDescriber')
 const { DEFAULT_REPLY_LENGTH } = require('../modules/eventDrafter')
 const { rulesChannels } = require('../modules/serverRules')
+const cacheGuild = require('../utils/cacheGuild')
 const { EMBED_COLORS, PRESET_EVENT_MAP, ALL_EVENTS } = require('../utils/constants')
 const { getEmbedFooter, getAuthorField } = require('../utils/embeds')
 const { formatPermissions, formatEventName } = require('../utils/displayLabels')
@@ -16,6 +17,41 @@ const { langOf, pick } = require('../utils/i18n')
 const { handleAssistantSetup } = require('../modules/assistantSetup')
 
 const MENU_TIMEOUT_MS = 5 * 60 * 1000
+
+function clampStr (str, max) {
+  const s = String(str ?? '')
+  if (s.length <= max) return s
+  let cut = s.slice(0, max - 1)
+  const last = cut.charCodeAt(cut.length - 1)
+  if (last >= 0xD800 && last <= 0xDBFF) cut = cut.slice(0, -1)
+  return `${cut}…`
+}
+
+function clampEmbed (embed) {
+  if (!embed) return embed
+  if (embed.description != null) embed.description = clampStr(embed.description, 4096)
+  if (embed.title != null) embed.title = clampStr(embed.title, 256)
+  if (Array.isArray(embed.fields)) {
+    embed.fields = embed.fields.slice(0, 25).map(f => ({
+      ...f,
+      name: clampStr(f.name || '-', 256),
+      value: clampStr(f.value || '-', 1024)
+    }))
+  }
+  return embed
+}
+
+async function ensureGuildSettings (guildID) {
+  if (!guildID) return null
+  if (!global.bot.guildSettingsCache?.[guildID]) {
+    try {
+      await cacheGuild(guildID)
+    } catch (e) {
+      global.logger?.warn?.(`Failed to cache guild ${guildID}:`, e)
+    }
+  }
+  return global.bot.guildSettingsCache?.[guildID] || null
+}
 
 // The Japanese text, or its English for an English client.
 const EN = {
@@ -60,6 +96,10 @@ const EN = {
   サーバー設定が変更されたとき: 'The server\'s settings change',
   サーバー絵文字変更: 'Server Emojis Change',
   絵文字が追加・削除されたとき: 'Emojis are added or removed',
+  サーバースタンプ変更: 'Server Stickers Change',
+  スタンプが追加・更新・削除されたとき: 'Stickers are added, updated or removed',
+  サーバーブースト: 'Server Boost',
+  メンバーがサーバーブーストを開始・終了したとき: 'A member starts or stops boosting the server',
   メッセージ削除: 'Message Delete',
   メッセージが1件削除されたとき: 'A message is deleted',
   メッセージ一括削除: 'Bulk Message Delete',
@@ -107,14 +147,10 @@ function missingPermissionsText (interaction, missing) {
 
 async function returnMissingPerms (channelID, userID) {
   const requiredPerms = ['manageWebhooks', 'viewAuditLog', 'viewChannel', 'sendMessages', 'embedLinks', 'readMessageHistory', 'useExternalEmojis']
-  let logChannelPerms
-  try {
-    const logChannel = global.bot.getChannel(channelID)
-    logChannelPerms = logChannel.permissionsOf(userID)?.json
-  } catch (_) {
-    // missing channel
-    return
-  }
+  const { safePermissionsOf } = require('../events/interactionCreate')
+  const logChannel = global.bot.getChannel(channelID)
+  if (!logChannel) return
+  const logChannelPerms = safePermissionsOf(logChannel, userID)?.json
   if (!logChannelPerms) return
   return requiredPerms.filter(rp => !logChannelPerms[rp])
 }
@@ -205,12 +241,27 @@ function saveHint (interaction) {
 // Waits for a choice in the menu, the save button, or one of the mode-switch buttons.
 async function awaitSetupAction (uuid, userID, components) {
   const { awaitCustomID, cancelCustomID } = require('../events/interactionCreate')
-  const chosen = components[0].components[0].options.filter(o => o.default).map(o => o.value)
-  const ids = [uuid, `${uuid}:save`, `${uuid}:switch`, `${uuid}:assistant`, `${uuid}:status`]
+  const mainMenu = components[0]?.components?.[0]
+  const extraMenu = components.find(r => r.components?.[0]?.custom_id === `${uuid}:extra`)?.components?.[0]
+  const mainDefaults = mainMenu ? mainMenu.options.filter(o => o.default).map(o => o.value) : []
+  const extraDefaults = extraMenu ? extraMenu.options.filter(o => o.default).map(o => o.value) : []
+  const ids = [uuid, ...(extraMenu ? [`${uuid}:extra`] : []), `${uuid}:save`, `${uuid}:switch`, `${uuid}:assistant`, `${uuid}:status`]
   try {
     return await Promise.any([
-      awaitCustomID(uuid, userID, MENU_TIMEOUT_MS).then(res => ({ action: 'select', values: res?.data?.values || [] })),
-      awaitCustomID(`${uuid}:save`, userID, MENU_TIMEOUT_MS).then(() => ({ action: 'select', values: chosen })),
+      awaitCustomID(uuid, userID, MENU_TIMEOUT_MS).then(res => ({
+        action: 'select',
+        values: [...(res?.data?.values || []), ...extraDefaults]
+      })),
+      ...(extraMenu
+        ? [awaitCustomID(`${uuid}:extra`, userID, MENU_TIMEOUT_MS).then(res => ({
+            action: 'select',
+            values: [...mainDefaults.filter(v => v !== 'all'), ...(res?.data?.values || [])]
+          }))]
+        : []),
+      awaitCustomID(`${uuid}:save`, userID, MENU_TIMEOUT_MS).then(() => ({
+        action: 'select',
+        values: [...mainDefaults, ...extraDefaults]
+      })),
       awaitCustomID(`${uuid}:switch`, userID, MENU_TIMEOUT_MS).then(() => ({ action: 'switch' })),
       awaitCustomID(`${uuid}:assistant`, userID, MENU_TIMEOUT_MS).then(() => ({ action: 'assistant' })),
       awaitCustomID(`${uuid}:status`, userID, MENU_TIMEOUT_MS).then(() => ({ action: 'status' }))
@@ -220,18 +271,29 @@ async function awaitSetupAction (uuid, userID, components) {
   }
 }
 
+function getMemberChannelPerms (interaction) {
+  const member = interaction.member
+  if (!member) return {}
+  const { safePermissionsOf } = require('../events/interactionCreate')
+  return safePermissionsOf(interaction.channel, member)?.json ||
+    safePermissionsOf(global.bot?.getChannel?.(interaction.channel?.id), member)?.json ||
+    member.permissions?.json ||
+    {}
+}
+
 function mayCheckOrChangeLogs (interaction) {
   const member = interaction.member
+  if (!member?.user) return false
   if (isCreator(member.user.id)) return true
   const guild = global.bot.guilds?.get?.(interaction.guildID)
   if (guild && (guild.ownerID === member.user.id || hasStaffAccess(member.roles, guild))) return true
-  const perms = interaction.channel.permissionsOf(member.user.id)?.json || {}
+  const perms = getMemberChannelPerms(interaction)
   return Boolean(perms.manageWebhooks && perms.manageChannels && perms.viewAuditLog)
 }
 
 function mayViewStatus (interaction) {
   if (mayCheckOrChangeLogs(interaction)) return true
-  const perms = interaction.channel.permissionsOf(interaction.member.user.id)?.json || {}
+  const perms = getMemberChannelPerms(interaction)
   return Boolean(perms.manageGuild || perms.manageChannels || perms.manageWebhooks || perms.viewAuditLog || perms.administrator)
 }
 
@@ -268,9 +330,22 @@ async function handlePresetSetup (interaction, recursionOrOpts) {
   const opts = typeof recursionOrOpts === 'string'
     ? { recursionUUID: recursionOrOpts }
     : (recursionOrOpts || {})
-  const guildEvents = global.bot.guildSettingsCache[interaction.guildID].getEventLogRaw()
   const followupUUID = opts.recursionUUID || uuidv4()
   const asEdit = Boolean(opts.recursionUUID || opts.asEdit)
+  const guildSettings = await ensureGuildSettings(interaction.guildID)
+  if (!guildSettings) {
+    const msg = pick(interaction, {
+      ja: 'サーバー設定を読み込めませんでした。もう一度お試しください。',
+      en: 'Could not load server settings. Please try again.'
+    })
+    if (asEdit && typeof interaction.editOriginalMessage === 'function') {
+      await interaction.editOriginalMessage({ content: msg, embeds: [], components: [] }).catch(() => {})
+    } else {
+      await interaction.createMessage({ content: msg, flags: Eris.Constants.MessageFlags.EPHEMERAL }).catch(() => {})
+    }
+    return
+  }
+  const guildEvents = guildSettings.getEventLogRaw() || {}
   let components
   try {
     components = [{
@@ -284,52 +359,52 @@ async function handlePresetSetup (interaction, recursionOrOpts) {
           label: say(interaction, 'すべて'),
           description: say(interaction, 'すべてのイベントを記録します'),
           value: 'all',
-          default: !Object.keys(guildEvents).find(geKey => guildEvents[geKey] !== interaction.channel.id) || nothingLogsHere(guildEvents, interaction.channel.id)
+          default: ALL_EVENTS.every(ev => guildEvents[ev] === interaction.channel.id) || nothingLogsHere(guildEvents, interaction.channel.id)
         }, {
           label: say(interaction, 'チャンネル関連'),
           description: say(interaction, 'チャンネルの作成・削除・更新（名前、権限の上書き）'),
           value: 'channel',
-          default: interaction.channel.id === guildEvents.channelCreate && interaction.channel.id === guildEvents.channelUpdate && interaction.channel.id === guildEvents.channelDelete
+          default: PRESET_EVENT_MAP.channel.every(ev => guildEvents[ev] === interaction.channel.id)
         }, {
           label: say(interaction, 'メッセージ関連'),
           description: say(interaction, 'メッセージの編集・削除・一括削除（BAN、purge）'),
           value: 'message',
-          default: interaction.channel.id === guildEvents.messageUpdate && interaction.channel.id === guildEvents.messageDelete && interaction.channel.id === guildEvents.messageDeleteBulk
+          default: PRESET_EVENT_MAP.message.every(ev => guildEvents[ev] === interaction.channel.id)
         }, {
           label: say(interaction, 'メンバー更新関連'),
           description: say(interaction, 'ロールの付与・剥奪、ニックネーム変更、サーバーブースト、タイムアウト'),
           value: 'member',
-          default: interaction.channel.id === guildEvents.guildMemberUpdate && interaction.channel.id === guildEvents.guildMemberBoostUpdate && interaction.channel.id === guildEvents.guildMemberNickUpdate
+          default: PRESET_EVENT_MAP.member.every(ev => guildEvents[ev] === interaction.channel.id)
         }, {
           label: say(interaction, 'モデレーション関連'),
           description: say(interaction, 'メンバーのBAN・BAN解除・キック'),
           value: 'moderation',
-          default: interaction.channel.id === guildEvents.guildBanAdd && interaction.channel.id === guildEvents.guildBanRemove && interaction.channel.id === guildEvents.guildMemberKick
+          default: PRESET_EVENT_MAP.moderation.every(ev => guildEvents[ev] === interaction.channel.id)
         }, {
           label: say(interaction, '参加ログ関連'),
           description: say(interaction, 'メンバーの参加・退出（正確な記録にはサーバー管理とチャンネルの管理が必要）'),
           value: 'joinlog',
-          default: interaction.channel.id === guildEvents.guildMemberAdd && interaction.channel.id === guildEvents.guildMemberRemove
+          default: PRESET_EVENT_MAP.joinlog.every(ev => guildEvents[ev] === interaction.channel.id)
         }, {
           label: say(interaction, 'サーバー関連'),
           description: say(interaction, 'サーバー設定の変更（名前、認証レベルなど）、イベント開始'),
           value: 'server',
-          default: interaction.channel.id === guildEvents.guildUpdate
+          default: PRESET_EVENT_MAP.server.every(ev => guildEvents[ev] === interaction.channel.id)
         }, {
           label: say(interaction, 'ロール関連'),
           description: say(interaction, 'ロールの作成・削除・更新（名前、権限）'),
           value: 'role',
-          default: interaction.channel.id === guildEvents.guildRoleCreate && interaction.channel.id === guildEvents.guildRoleDelete && interaction.channel.id === guildEvents.guildRoleUpdate
+          default: PRESET_EVENT_MAP.role.every(ev => guildEvents[ev] === interaction.channel.id)
         }, {
           label: say(interaction, 'ボイス関連'),
           description: say(interaction, 'ボイスチャンネルの参加・退出・移動、サーバーミュート／スピーカーミュート'),
           value: 'voice',
-          default: interaction.channel.id === guildEvents.voiceChannelLeave && interaction.channel.id === guildEvents.voiceChannelSwitch && interaction.channel.id === guildEvents.voiceStateUpdate && interaction.channel.id === guildEvents.voiceChannelJoin
+          default: PRESET_EVENT_MAP.voice.every(ev => guildEvents[ev] === interaction.channel.id)
         }]
       }]
     }, saveRow(interaction, followupUUID, 'preset')]
     const intro = `${say(interaction, '下の選択メニューから、**このチャンネル**へ出力するイベントのプリセットを選んでください。詳しい使い方は `/help guide: Usage` と `/help` をご覧ください。')}\n\n${saveHint(interaction)}`
-    const setupEmbed = {
+    const setupEmbed = clampEmbed({
       title: say(interaction, 'ログ設定ユーティリティ'),
       description: opts.savedNote ? `${opts.savedNote}\n\n${intro}` : intro,
       color: opts.savedNote ? EMBED_COLORS.GREEN : EMBED_COLORS.PURPLED_BLUE,
@@ -337,7 +412,7 @@ async function handlePresetSetup (interaction, recursionOrOpts) {
       thumbnail: {
         url: interaction.member.user.dynamicAvatarURL(null, 64)
       }
-    }
+    })
     if (asEdit) {
       await interaction.editOriginalMessage({ content: '', embeds: [setupEmbed], flags: Eris.Constants.MessageFlags.EPHEMERAL, components })
     } else {
@@ -362,18 +437,15 @@ async function handlePresetSetup (interaction, recursionOrOpts) {
   let eventsToLog = []
   let eventsToRemove = []
 
-  for (const presetName in PRESET_EVENT_MAP) {
-    for (const eventName of PRESET_EVENT_MAP[presetName]) {
-      if (result.values.includes(presetName)) {
-        if (presetName === 'all') {
-          eventsToLog = ALL_EVENTS
-          eventsToRemove = []
-          break
-        } else {
-          eventsToLog.push(eventName)
-        }
-      } else if (guildEvents[eventName] === interaction.channel.id && presetName !== 'all') {
-        eventsToRemove.push(eventName)
+  if (result.values.includes('all')) {
+    eventsToLog = [...ALL_EVENTS]
+    eventsToRemove = []
+  } else {
+    for (const presetName in PRESET_EVENT_MAP) {
+      if (presetName === 'all') continue
+      for (const eventName of PRESET_EVENT_MAP[presetName]) {
+        if (result.values.includes(presetName)) eventsToLog.push(eventName)
+        else if (guildEvents[eventName] === interaction.channel.id) eventsToRemove.push(eventName)
       }
     }
   }
@@ -382,7 +454,7 @@ async function handlePresetSetup (interaction, recursionOrOpts) {
   if (!missingPermissions) return // null is returned if the log channel cannot be found
   else if (missingPermissions.length !== 0) {
     await interaction.editOriginalMessage({
-      embeds: [{
+      embeds: [clampEmbed({
         thumbnail: {
           url: global.bot.user.dynamicAvatarURL(null, 64)
         },
@@ -390,7 +462,7 @@ async function handlePresetSetup (interaction, recursionOrOpts) {
         color: EMBED_COLORS.YELLOW_ORANGE,
         footer: getEmbedFooter(global.bot.user),
         author: getAuthorField(interaction.member.user)
-      }],
+      })],
       components: [],
       flags: Eris.Constants.MessageFlags.EPHEMERAL
     })
@@ -406,7 +478,7 @@ async function handlePresetSetup (interaction, recursionOrOpts) {
   }
   const uniqueLogged = [...new Set(eventsToLog)].length
   return handlePresetSetup(interaction, {
-    recursionUUID: followupUUID,
+    asEdit: true,
     savedNote: savedBanner(interaction, interaction.channel.id, uniqueLogged)
   })
 }
@@ -415,9 +487,22 @@ async function handleIndividualSetup (interaction, recursionOrOpts) {
   const opts = typeof recursionOrOpts === 'string'
     ? { recursionUUID: recursionOrOpts }
     : (recursionOrOpts || {})
-  const guildEvents = global.bot.guildSettingsCache[interaction.guildID].getEventLogRaw()
   const followupUUID = opts.recursionUUID || uuidv4()
   const asEdit = Boolean(opts.recursionUUID || opts.asEdit)
+  const guildSettings = await ensureGuildSettings(interaction.guildID)
+  if (!guildSettings) {
+    const msg = pick(interaction, {
+      ja: 'サーバー設定を読み込めませんでした。もう一度お試しください。',
+      en: 'Could not load server settings. Please try again.'
+    })
+    if (asEdit && typeof interaction.editOriginalMessage === 'function') {
+      await interaction.editOriginalMessage({ content: msg, embeds: [], components: [] }).catch(() => {})
+    } else {
+      await interaction.createMessage({ content: msg, flags: Eris.Constants.MessageFlags.EPHEMERAL }).catch(() => {})
+    }
+    return
+  }
+  const guildEvents = guildSettings.getEventLogRaw() || {}
   let components
   try {
     components = [{
@@ -431,7 +516,7 @@ async function handleIndividualSetup (interaction, recursionOrOpts) {
           label: say(interaction, 'すべて'),
           description: say(interaction, 'すべてのイベントを記録します'),
           value: 'all',
-          default: !Object.keys(guildEvents).find(geKey => guildEvents[geKey] !== interaction.channel.id) || nothingLogsHere(guildEvents, interaction.channel.id)
+          default: ALL_EVENTS.every(ev => guildEvents[ev] === interaction.channel.id) || nothingLogsHere(guildEvents, interaction.channel.id)
         },
         {
           label: say(interaction, 'チャンネル作成'),
@@ -578,9 +663,32 @@ async function handleIndividualSetup (interaction, recursionOrOpts) {
           default: guildEvents.presenceUpdate === interaction.channel.id
         }]
       }]
+    }, {
+      type: Eris.Constants.ComponentTypes.ACTION_ROW,
+      components: [{
+        type: Eris.Constants.ComponentTypes.SELECT_MENU,
+        custom_id: `${followupUUID}:extra`,
+        placeholder: pick(interaction, {
+          ja: '追加のイベント（スタンプ・サーバーブースト）',
+          en: 'More events (stickers, server boosts)'
+        }),
+        max_values: 2,
+        min_values: 0,
+        options: [{
+          label: say(interaction, 'サーバースタンプ変更'),
+          description: say(interaction, 'スタンプが追加・更新・削除されたとき'),
+          value: 'guildStickersUpdate',
+          default: guildEvents.guildStickersUpdate === interaction.channel.id
+        }, {
+          label: say(interaction, 'サーバーブースト'),
+          description: say(interaction, 'メンバーがサーバーブーストを開始・終了したとき'),
+          value: 'guildMemberBoostUpdate',
+          default: guildEvents.guildMemberBoostUpdate === interaction.channel.id
+        }]
+      }]
     }, saveRow(interaction, followupUUID, 'individual')]
     const intro = `${say(interaction, '下の選択メニューから、**このチャンネル**へ出力するイベントを個別に選んでください。詳しい使い方は `/help guide: Usage` と `/help` をご覧ください。')}\n\n${saveHint(interaction)}`
-    const setupEmbed = {
+    const setupEmbed = clampEmbed({
       title: say(interaction, 'ログ設定ユーティリティ'),
       description: opts.savedNote ? `${opts.savedNote}\n\n${intro}` : intro,
       color: opts.savedNote ? EMBED_COLORS.GREEN : EMBED_COLORS.PURPLED_BLUE,
@@ -588,7 +696,7 @@ async function handleIndividualSetup (interaction, recursionOrOpts) {
       thumbnail: {
         url: interaction.member.user.dynamicAvatarURL(null, 64)
       }
-    }
+    })
     if (asEdit) {
       await interaction.editOriginalMessage({ content: '', embeds: [setupEmbed], flags: Eris.Constants.MessageFlags.EPHEMERAL, components })
     } else {
@@ -614,7 +722,7 @@ async function handleIndividualSetup (interaction, recursionOrOpts) {
   let eventsToRemove = []
 
   if (result.values.includes('all')) {
-    eventsToLog = ALL_EVENTS
+    eventsToLog = [...ALL_EVENTS]
     eventsToRemove = []
   } else {
     for (const eventName of ALL_EVENTS) {
@@ -630,7 +738,7 @@ async function handleIndividualSetup (interaction, recursionOrOpts) {
   if (!missingPermissions) return // null is returned if the log channel cannot be found
   else if (missingPermissions.length !== 0) {
     await interaction.editOriginalMessage({
-      embeds: [{
+      embeds: [clampEmbed({
         thumbnail: {
           url: global.bot.user.dynamicAvatarURL(null, 64)
         },
@@ -638,7 +746,7 @@ async function handleIndividualSetup (interaction, recursionOrOpts) {
         color: EMBED_COLORS.YELLOW_ORANGE,
         footer: getEmbedFooter(global.bot.user),
         author: getAuthorField(interaction.member.user)
-      }],
+      })],
       components: [],
       flags: Eris.Constants.MessageFlags.EPHEMERAL
     })
@@ -653,14 +761,14 @@ async function handleIndividualSetup (interaction, recursionOrOpts) {
     return
   }
   return handleIndividualSetup(interaction, {
-    recursionUUID: followupUUID,
+    asEdit: true,
     savedNote: savedBanner(interaction, interaction.channel.id, eventsToLog.length)
   })
 }
 
 async function handleListLogSetup (interaction) {
   const lang = langOf(interaction)
-  const guildSettings = global.bot.guildSettingsCache[interaction.guildID]
+  const guildSettings = await ensureGuildSettings(interaction.guildID)
   const grouped = groupLogsByChannel(guildSettings, lang)
   const ignored = guildSettings?.ignoredChannels || []
   const logBots = Boolean(guildSettings?.isLogBots?.())
@@ -679,7 +787,7 @@ async function handleListLogSetup (interaction) {
     }
   ]
   interaction.createMessage({
-    embeds: [{
+    embeds: [clampEmbed({
       title: say(interaction, 'ログ出力チャンネル一覧'),
       author: getAuthorField(interaction.member.user),
       description: grouped.length !== 0
@@ -688,7 +796,7 @@ async function handleListLogSetup (interaction) {
       fields,
       color: EMBED_COLORS.PURPLED_BLUE,
       footer: getEmbedFooter(global.bot.user)
-    }],
+    })],
     flags: Eris.Constants.MessageFlags.EPHEMERAL
   }).catch(() => {})
 }
@@ -811,14 +919,21 @@ async function handleStatusSetup (interaction, { asEdit = false, initialNote = n
       ja: '設定状況を確認・変更するには「サーバーの管理」「チャンネルの管理」「ウェブフックの管理」いずれかの権限が必要です。',
       en: 'Viewing or changing setup status requires Manage Server, Manage Channels, or Manage Webhooks.'
     })
+    if (asEdit && typeof interaction.editOriginalMessage === 'function') {
+      return interaction.editOriginalMessage({ content: msg, embeds: [], components: [] }).catch(() => {})
+    }
     return interaction.createMessage({ content: msg, flags: Eris.Constants.MessageFlags.EPHEMERAL }).catch(() => {})
   }
 
   let note = initialNote
   for (let first = true; ; first = false) {
+    if (first && !asEdit && typeof interaction.defer === 'function') {
+      await interaction.defer(Eris.Constants.MessageFlags.EPHEMERAL)
+      asEdit = true
+    }
     const guildID = interaction.guildID
     const guild = global.bot.guilds?.get?.(guildID)
-    const guildSettings = global.bot.guildSettingsCache?.[guildID]
+    const guildSettings = await ensureGuildSettings(guildID)
     const groupedLogs = groupLogsByChannel(guildSettings, lang)
     const ignored = guildSettings?.ignoredChannels || []
     const logBots = Boolean(guildSettings?.isLogBots?.())
@@ -874,7 +989,7 @@ async function handleStatusSetup (interaction, { asEdit = false, initialNote = n
     const fields = [
       {
         name: pick(interaction, { ja: '📋 監査ログの設定状況', en: '📋 Audit Logging' }),
-        value: `${logSummary}\n${logExtras}`
+        value: `${clampStr(logSummary, 850)}\n${clampStr(logExtras, 170)}`
       },
       {
         name: pick(interaction, { ja: '🤖 AI（@メンション）の設定状況', en: '🤖 AI Assistant (@mention)' }),
@@ -951,14 +1066,14 @@ async function handleStatusSetup (interaction, { asEdit = false, initialNote = n
       ja: 'このサーバーの現在の設定と必要な権限の診断です。下のボタンからそのまま各設定画面へ移動できます。',
       en: 'Current settings and permission check for this server. Use the buttons below to configure logging or the AI assistant.'
     })
-    const statusEmbed = {
+    const statusEmbed = clampEmbed({
       title: pick(interaction, { ja: '🛠️ ロボポリス 設定ステータス・初期設定ガイド', en: '🛠️ RoboPolice Setup Status & Guide' }),
       description: note ? `${note}\n\n${baseDesc}` : baseDesc,
       color: note?.startsWith('✅') ? EMBED_COLORS.GREEN : EMBED_COLORS.PURPLED_BLUE,
       fields,
       author: getAuthorField(interaction.member.user),
       footer: getEmbedFooter(global.bot.user)
-    }
+    })
 
     try {
       if (first && !asEdit) {

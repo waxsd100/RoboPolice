@@ -1,6 +1,6 @@
 const send = require('../modules/webhooksender')
 const getMessageFromDB = require('../../db/interfaces/postgres/read').getMessageById
-const getMessageFromBatch = require('../../db/messageBatcher').getMessage
+const messageBatcher = require('../../db/messageBatcher')
 const deleteMessage = require('../../db/interfaces/postgres/delete').deleteMessage
 const cacheGuild = require('../utils/cacheGuild')
 const { getRetentionDays, isBeyondRetention, messageTimestamp } = require('../utils/retention')
@@ -10,22 +10,45 @@ module.exports = {
   name: 'messageDelete',
   type: 'on',
   handle: async message => {
+    if (!message?.id) return
     discordKnowledge.onDelete(message.id).catch(e => global.logger.warn(`[DISCORD]: ${e.message}`))
-    if (!message.channel.guild) return
-    const guildSettings = global.bot.guildSettingsCache[message.channel.guild.id]
-    if (!guildSettings) await cacheGuild(message.channel.guild.id)
-    if (global.bot.guildSettingsCache[message.channel.guild.id].isChannelIgnored(message.channel.id)) return
-    let cachedMessage = await getMessageFromBatch(message.id)
-    if (!cachedMessage) {
-      cachedMessage = await getMessageFromDB(message.id)
+
+    const hasFullGuild = Boolean(message.channel?.guild?.members)
+    let guildSettings = hasFullGuild ? global.bot.guildSettingsCache?.[message.channel.guild.id] : null
+    if (hasFullGuild && !guildSettings) {
+      try {
+        await cacheGuild(message.channel.guild.id)
+        guildSettings = global.bot.guildSettingsCache?.[message.channel.guild.id]
+      } catch (_) {}
     }
+    const shouldLog = Boolean(hasFullGuild && guildSettings && !guildSettings.isChannelIgnored(message.channel.id))
+
+    let cachedMessage = null
+    if (shouldLog) {
+      cachedMessage = await messageBatcher.getMessage(message.id)
+      if (!cachedMessage) {
+        cachedMessage = await getMessageFromDB(message.id)
+      }
+    }
+
+    const evict = messageBatcher.evictMessage || messageBatcher.removeMessage
+    if (typeof evict === 'function') {
+      evict(message.id)
+    }
+    try {
+      await deleteMessage(message.id)
+    } catch (e) {
+      global.logger?.warn?.(`[DB] Failed to delete message ${message.id}: ${e.message}`)
+    }
+
+    if (!hasFullGuild || !guildSettings || !shouldLog) return
     if (!cachedMessage) {
       // The row aged out of the retention window. We cannot show the content, but staying silent
       // would mean an old message can be deleted without leaving any trace at all.
       if (isBeyondRetention(message.id)) await send(expiredMessageEvent(message))
       return
     }
-    await deleteMessage(message.id)
+
     let cachedUser = global.bot.users.get(cachedMessage.author_id)
     if (!cachedUser) {
       try {
@@ -36,12 +59,13 @@ module.exports = {
       }
     }
     const member = message.channel.guild.members.get(cachedMessage.author_id)
+    const nick = member?.nick || cachedUser?.nick
     const messageDeleteEvent = {
       guildID: message.channel.guild.id,
       eventName: 'messageDelete',
       embeds: [{
         author: {
-          name: cachedUser ? `${cachedUser.username}#${cachedUser.discriminator} ${cachedUser && cachedUser.nick ? `(${member.nick})` : ''}` : `不明なユーザー <@${cachedMessage.author_id}>`,
+          name: cachedUser ? `${cachedUser.username}#${cachedUser.discriminator} ${nick ? `(${nick})` : ''}` : `不明なユーザー <@${cachedMessage.author_id}>`,
           icon_url: cachedUser ? cachedUser.avatarURL : 'https://logger.bot/staticfiles/red-x.png'
         },
         description: `<#${message.channel.id}> でメッセージが削除されました`,
@@ -52,7 +76,7 @@ module.exports = {
     let messageChunks = []
     if (cachedMessage.content) {
       if (cachedMessage.content.length > 1000) {
-        messageChunks = chunkify(cachedMessage.content.replace(/\"/g, '"').replace(/`/g, ''))
+        messageChunks = chunkify(cachedMessage.content.replace(/`/g, '')).slice(0, 20)
       } else {
         messageChunks.push(cachedMessage.content)
       }
@@ -72,8 +96,8 @@ module.exports = {
       name: 'ID',
       value: `\`\`\`ini\nユーザー = ${cachedMessage.author_id}\nメッセージ = ${cachedMessage.id}\`\`\`\n <@${cachedMessage.author_id}>`
     })
-    
-    cachedMessage.attachment_urls.forEach((url, indx) => {
+
+    ;(cachedMessage.attachment_urls || []).slice(0, 10).forEach((url, indx) => {
       messageDeleteEvent.embeds[indx] = {
         ...messageDeleteEvent.embeds[indx],
         image: { url },

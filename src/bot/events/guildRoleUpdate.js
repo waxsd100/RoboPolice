@@ -4,6 +4,7 @@ module.exports = {
   name: 'guildRoleUpdate',
   type: 'on',
   handle: async (guild, role, oldRole) => {
+    if (!guild || !role || !oldRole) return
     const guildRoleUpdateEvent = {
       guildID: guild.id,
       eventName: 'guildRoleUpdate',
@@ -30,36 +31,44 @@ module.exports = {
         }
       }
     })
-    if (role.permissions.allow !== oldRole.permissions.allow || role.permissions.deny !== oldRole.permissions.deny) {
+    if (role.permissions && oldRole.permissions && (role.permissions.allow !== oldRole.permissions.allow || role.permissions.deny !== oldRole.permissions.deny)) {
       const field = {
         name: '権限の変更',
         value: ''
       }
-      const newPerms = Object.keys(role.permissions.json)
-      const oldPerms = Object.keys(oldRole.permissions.json)
-      const differentPerms = getDifference(newPerms, oldPerms).concat(getDifference(oldPerms, newPerms))
+      const newJson = role.permissions.json || {}
+      const oldJson = oldRole.permissions.json || {}
+      const newPerms = Object.keys(newJson)
+      const oldPerms = Object.keys(oldJson)
+      const differentPerms = [...new Set([...newPerms, ...oldPerms])]
       differentPerms.forEach(perm => {
-        if (role.permissions.json.hasOwnProperty(perm) && oldRole.permissions.json.hasOwnProperty(perm)) {
-          if (role.permissions.json[perm] === true && oldRole.permissions.json[perm] === false) {
+        const hasNew = Object.prototype.hasOwnProperty.call(newJson, perm)
+        const hasOld = Object.prototype.hasOwnProperty.call(oldJson, perm)
+        if (hasNew && hasOld) {
+          if (newJson[perm] === true && oldJson[perm] === false) {
             field.value += `\n+ ${perm}`
-          } else if (role.permissions.json[perm] === false && oldRole.permissions.json[perm] === true) {
+          } else if (newJson[perm] === false && oldJson[perm] === true) {
             field.value += `\n− ${perm}`
           }
-        } else if (role.permissions.json.hasOwnProperty(perm) && !oldRole.permissions.json.hasOwnProperty(perm)) {
-          if (role.permissions.json[perm]) {
+        } else if (hasNew && !hasOld) {
+          if (newJson[perm]) {
             field.value += `\n+ ${perm}`
           } else {
             field.value += `\n− ${perm}`
           }
-        } else if (!role.permissions.json.hasOwnProperty(perm) && oldRole.permissions.json.hasOwnProperty(perm)) {
+        } else if (!hasNew && hasOld) {
           field.value += `\n− ${perm}`
         }
       })
       if (field.value) guildRoleUpdateEvent.embeds[0].fields.push(field)
     }
-    await setTimeout(async () => {
-      const logs = await guild.getAuditLog({ limit: 5, actionType: 31 }).catch(() => ({ entries: [] }))
-      const log = logs?.entries?.find(e => Date.now() - ((e.id / 4194304) + 1420070400000) < 3000)
+    const timer = setTimeout(async () => {
+      const canViewAudit = guild.members?.get?.(global.bot.user.id)?.permissions?.has?.('viewAuditLog') !== false
+      const logs = canViewAudit && typeof guild.getAuditLog === 'function'
+        ? await guild.getAuditLog({ limit: 5, actionType: 31 }).catch(() => ({ entries: [], users: [] }))
+        : { entries: [], users: [] }
+      const entries = Array.isArray(logs?.entries) ? logs.entries : []
+      const log = entries.find(e => Date.now() - ((e.id / 4194304) + 1420070400000) < 3000)
       if (log && log.user) {
         guildRoleUpdateEvent.embeds[0].fields.push({
           name: 'ID',
@@ -80,6 +89,7 @@ module.exports = {
         await send(guildRoleUpdateEvent)
       }
     }, 1000)
+    timer.unref?.()
   }
 }
 
@@ -97,10 +107,4 @@ function toTitleCase (str) {
 
 function rgbToHex (r, g, b) { // bitwise math is black magic
   return '#' + ((1 << 24) + (r << 16) + (g << 8) + b).toString(16).slice(1)
-}
-
-function getDifference (array1, array2) {
-  return array1.filter(i => {
-    return array2.indexOf(i) < 0
-  })
 }

@@ -66,8 +66,8 @@ Pod の作成時に拡張のファイルを写して `extension_control_path` �
 | `REDIS_PASSWORD`                          | アドオンで付けたときだけ                                             | 同じ                                                                                                                      |
 | `AES_KEY`                                 | 何でもよい                                                           | **今の Railway と同じ値**（変えると Redis の招待コードが読めない。移した DB に暗号化の残りがあれば migration も通らない） |
 | `OWNER_GUILD_IDS`                         | テスト用サーバー                                                     | 今と同じ                                                                                                                  |
-| `GCP_SECRETS` / `GCP_SERVICE_ACCOUNT_KEY` | 設定しない                                                           | 設定しない（GKE では External Secrets が Secret Manager から入れる）                                                      |
-| `YOUTUBE_WEBSUB_URL`                      | 設定しない（dev は外から届かない）                                   | 使うなら `https://robopolice.wax100.io`                                                                                   |
+| `GCP_SECRETS` / `GCP_SERVICE_ACCOUNT_KEY` / `GCP_PROJECT_ID` | 設定しない                                            | 設定しない（GKE では External Secrets が Secret Manager から入れる）                                                      |
+| `YOUTUBE_WEBSUB_URL` / `YOUTUBE_WEBSUB_SECRET` | 設定しない（dev は外から届かない）                              | 使うなら `https://robopolice.wax100.io` と任意の長いランダム秘密文字列（あわせて `YOUTUBE_API_KEY` も必要）               |
 | `PORT`                                    | 設定しない（既定 8080）                                              | 同じ                                                                                                                      |
 | `HISTORY_BACKFILL` / `MESSAGE_EMBEDDINGS` | `false` を勧める（テストで Gemini と Discord の API を使い過ぎない） | 今と同じ                                                                                                                  |
 
@@ -177,6 +177,7 @@ kubectl --context wax100-prod -n prod-robopolice get pods   # postgres と redis
    grep -E '^[A-Za-z_][A-Za-z0-9_]*=' .env.prod |
      jq -Rn '[inputs | capture("^(?<key>[^=]+)=(?<value>.*)$")] | from_entries' |
      gcloud secrets versions add <PR 本文の ID> --project "$PROJECT" --data-file=-
+   rm .env.prod
    ```
 
    今の値は Railway の Variables タブと、Secret Manager の `robopolice-*`
@@ -205,5 +206,5 @@ Railway の BOT を戻します。Railway の DB は手を付けていないの�
 --iam-account robopolice-runtime@…`）。GKE では使わない。Secret Manager の `robopolice-*` も、値を本番の ID に移したら
   `terraform destroy` で消してよい
 - Privacy Policy（Wiki）に保存先（Railway）が書いてあれば、Google Cloud（東京リージョン）に直す。README の
-  「Legal」のとおり、保存先が変わったら同じ変更で直す
+  「法務ドキュメント」のとおり、保存先が変わったら同じ変更で直す
 - dev の Namespace は残しておく（以降の変更は dev を更新すると、追従 PR が自動で立つ）

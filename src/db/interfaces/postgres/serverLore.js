@@ -60,7 +60,17 @@ async function deleteChunksExcept (guildID, keys) {
 }
 
 // Knowledge with no embedding by `model`: [{ id, kind, name, content }].
-async function factsToEmbed (model, limit) {
+async function factsToEmbed (model, limit, guildIDs = null) {
+  if (Array.isArray(guildIDs)) {
+    if (!guildIDs.length) return []
+    const rows = await pool.query(
+      `SELECT id, kind, name, content FROM guild_lore_facts
+       WHERE (embedding IS NULL OR embedding_model IS DISTINCT FROM $1::embedding_model)
+         AND guild_id = ANY($3::text[])
+       ORDER BY id LIMIT $2`,
+      [model, limit, guildIDs])
+    return rows.rows
+  }
   const rows = await pool.query(
     `SELECT id, kind, name, content FROM guild_lore_facts
      WHERE embedding IS NULL OR embedding_model IS DISTINCT FROM $1::embedding_model ORDER BY id LIMIT $2`,

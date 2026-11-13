@@ -686,6 +686,17 @@ function installYouTubeStore (knowledge = {}, summaries = {}) {
   store.getSummary = async videoID => anySummary(videoID)
   store.videoCards = async ids => Object.values(knowledge).flatMap(k => (k.videos || []).map(v => ({ video_id: v.video_id, title: v.title, channel_title: k.channel?.title || null })))
     .filter(v => ids.includes(v.video_id))
+  store.getVideo = async videoID => {
+    for (const k of Object.values(knowledge)) {
+      const hit = (k.videos || []).find(v => v.video_id === videoID)
+      if (hit) return { ...hit, channel_id: k.channel?.channel_id || null, channel_title: k.channel?.title || null, summary: anySummary(videoID) }
+    }
+    return null
+  }
+  store.videosInSummaryBatch = async videoIDs => {
+    const wanted = new Set(videoIDs || [])
+    return new Set(allVideos().filter(v => wanted.has(v.video_id) && v.summary_batch).map(v => v.video_id))
+  }
   store.videoDuration = async videoID => allVideos().find(v => v.video_id === videoID)?.duration || null
   store.saveSummary = async (guildID, videoID, summary = null) => {
     writes.push({ saveSummary: [guildID, videoID] })
@@ -835,6 +846,12 @@ function installMentionLogStore (logs = []) {
     .slice()
     .reverse()
     .slice(0, limit)
+  store.findPostCreator = async (guildID, threadID) => {
+    if (!guildID || !threadID) return null
+    const needle = `/channels/${guildID}/${threadID}`
+    const hit = logs.find(r => r.guild_id === guildID && r.kind === 'forum' && String(r.response || '').includes(needle))
+    return hit?.user_id || null
+  }
   return logs
 }
 installMentionLogStore()

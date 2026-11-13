@@ -4,6 +4,7 @@ module.exports = {
   name: 'guildRoleDelete',
   type: 'on',
   handle: async (guild, role) => {
+    if (!guild || !role) return
     const guildRoleDeleteEvent = {
       guildID: guild.id,
       eventName: 'guildRoleDelete',
@@ -12,7 +13,7 @@ module.exports = {
         fields: [
           {
             name: '名前',
-            value: role.name
+            value: role.name || '不明'
           }, {
             name: '理由',
             value: 'なし'
@@ -23,9 +24,12 @@ module.exports = {
         color: role.color ? role.color : 3553599
       }]
     }
-    const logs = await guild.getAuditLog({ limit: 5, actionType: 32 }).catch(() => {})
-    if (!logs) return
-    const log = logs.entries.find(e => e.targetID === role.id && (new Date().getTime() - new Date((e.id / 4194304) + 1420070400000).getTime()) < 3000)
+    const canViewAudit = guild.members?.get?.(global.bot.user.id)?.permissions?.has?.('viewAuditLog') !== false
+    const logs = canViewAudit && typeof guild.getAuditLog === 'function'
+      ? await guild.getAuditLog({ limit: 5, actionType: 32 }).catch(() => ({ entries: [], users: [] }))
+      : { entries: [], users: [] }
+    const entries = Array.isArray(logs?.entries) ? logs.entries : []
+    const log = entries.find(e => e.targetID === role.id && (new Date().getTime() - new Date((e.id / 4194304) + 1420070400000).getTime()) < 3000)
     if (log && log.user) {
       const perp = log.user
       if (log.reason) guildRoleDeleteEvent.embeds[0].fields[1].value = log.reason
