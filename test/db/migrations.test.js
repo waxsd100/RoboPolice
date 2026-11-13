@@ -377,6 +377,48 @@ describe('migrations', { skip: !database.available && 'needs PGHOST' }, () => {
     ])
   })
 
+  test('indexes match query patterns without dead view_count index, and high-churn tables tune autovacuum', async () => {
+    const indexes = new Set((await q("SELECT indexname FROM pg_indexes WHERE schemaname = 'public'")).map(r => r.indexname))
+    assert.ok(!indexes.has('youtube_videos_channel_views'), 'unused view_count index is dropped so stats syncs use HOT updates')
+    assert.ok(!indexes.has('mention_logs_user_created'), 'standalone user_id index replaced by composite guild+user index')
+    for (const expected of [
+      'youtube_videos_channel_published',
+      'youtube_videos_live',
+      'youtube_videos_pending_archives',
+      'youtube_videos_orphan_external',
+      'messages_unembedded',
+      'mention_logs_guild_created',
+      'mention_logs_guild_user_created',
+      'guild_emojis_guild',
+      'knowledge_facts_kind',
+      'knowledge_sections_unextracted',
+      'knowledge_sections_with_image',
+      'x_posts_account_created',
+      'twitch_videos_user_published',
+      'steam_games_playtime',
+      'steam_games_reviews',
+      'steam_games_wishlist'
+    ]) {
+      assert.ok(indexes.has(expected), `expected index ${expected}`)
+    }
+    const [unembeddedDef] = await q("SELECT indexdef FROM pg_indexes WHERE schemaname = 'public' AND indexname = 'messages_unembedded'")
+    assert.match(unembeddedDef.indexdef, /\(guild_id,\s*ts DESC\)/)
+    assert.match(unembeddedDef.indexdef, /embedding_model IS NULL/)
+    assert.match(unembeddedDef.indexdef, /embedding_batch IS NULL/)
+
+    const tuned = (await q(`
+      SELECT c.relname FROM pg_class c
+      JOIN pg_namespace n ON n.oid = c.relnamespace
+      WHERE n.nspname = 'public' AND c.relkind = 'r'
+        AND EXISTS (SELECT 1 FROM unnest(c.reloptions) opt WHERE opt LIKE 'autovacuum_vacuum_scale_factor=%')
+      ORDER BY c.relname`)).map(r => r.relname)
+    assert.deepEqual(tuned, [
+      'discord_channels', 'guild_emojis', 'guild_lore_facts',
+      'knowledge_facts', 'knowledge_sections', 'messages',
+      'steam_games', 'twitch_videos', 'youtube_videos'
+    ])
+  })
+
   test('what a server stores refers to it; rows of servers the bot left are dropped', async () => {
     assert.deepEqual((await q('SELECT id FROM messages ORDER BY id')).map(r => r.id), ['m1', 'm2', 'm4'], 'm3 was of a server with no settings; m4 has no server recorded')
     await q("DELETE FROM guilds WHERE id = 'g1'")

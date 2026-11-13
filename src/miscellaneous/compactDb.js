@@ -78,7 +78,7 @@ async function compactDatabase ({ log = console.log } = {}) {
     await client.query('CREATE INDEX IF NOT EXISTS messages_channel_ts ON messages (channel_id, ts DESC)')
     await client.query('CREATE INDEX IF NOT EXISTS messages_guild ON messages (guild_id)')
     await client.query('CREATE INDEX IF NOT EXISTS messages_ts ON messages (ts)')
-    await client.query('CREATE INDEX IF NOT EXISTS messages_unembedded ON messages (ts DESC) WHERE embedding_model IS NULL')
+    await client.query('CREATE INDEX IF NOT EXISTS messages_unembedded ON messages (guild_id, ts DESC) WHERE embedding_model IS NULL AND embedding_batch IS NULL')
     await client.query('CREATE INDEX IF NOT EXISTS messages_embedding_batch ON messages (embedding_batch) WHERE embedding_batch IS NOT NULL')
     await client.query(`
       CREATE INDEX IF NOT EXISTS messages_embedding_hnsw ON messages

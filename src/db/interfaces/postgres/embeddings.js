@@ -14,13 +14,22 @@ const { ownerGuildIDs } = require('../../../bot/utils/priority')
 // then newest first: [{ id, guild_id, channel_id, ts, content }].
 async function pendingMessages (limit, { after = null, before = null } = {}) {
   const rows = await pool.query(
-    `SELECT id, guild_id, channel_id, ts, content FROM messages m
-     WHERE embedding_model IS NULL
-       AND m.embedding_batch IS NULL
-       AND ($3::timestamptz IS NULL OR ts >= $3)
-       AND ($4::timestamptz IS NULL OR ts < $4 OR ts IS NULL)
-       AND EXISTS (SELECT 1 FROM guilds g WHERE g.id = m.guild_id AND coalesce(g.embed_messages, g.id = ANY($2)))
-     ORDER BY (guild_id = ANY($2)) DESC NULLS LAST, ts DESC LIMIT $1`,
+    `SELECT m.id, m.guild_id, m.channel_id, m.ts, m.content
+     FROM guilds g
+     CROSS JOIN LATERAL (
+       SELECT id, guild_id, channel_id, ts, content
+       FROM messages m
+       WHERE m.guild_id = g.id
+         AND m.embedding_model IS NULL
+         AND m.embedding_batch IS NULL
+         AND ($3::timestamptz IS NULL OR m.ts >= $3)
+         AND ($4::timestamptz IS NULL OR m.ts < $4 OR m.ts IS NULL)
+       ORDER BY m.ts DESC
+       LIMIT $1
+     ) m
+     WHERE coalesce(g.embed_messages, g.id = ANY($2))
+     ORDER BY (m.guild_id = ANY($2)) DESC NULLS LAST, m.ts DESC
+     LIMIT $1`,
     [limit, ownerGuildIDs(), after, before])
   return rows.rows
 }
