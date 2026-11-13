@@ -330,39 +330,16 @@ async function getSummary (videoID) {
 }
 
 // Stores or updates a video's summary (shared across all servers; `guildID` is kept for callers).
-async function saveSummary (guildID, videoID, summary = null, formatVersion = 2) {
+async function saveSummary (guildID, videoID, summary = null) {
   if (summary !== null) {
     await pool.query(
-      `INSERT INTO youtube_videos (video_id, summary, summary_created_at, summary_format_version)
-       VALUES ($1, $2, now(), $3)
+      `INSERT INTO youtube_videos (video_id, summary, summary_created_at)
+       VALUES ($1, $2, now())
        ON CONFLICT (video_id) DO UPDATE SET
          summary = EXCLUDED.summary,
-         summary_created_at = now(),
-         summary_format_version = EXCLUDED.summary_format_version`,
-      [videoID, summary, formatVersion])
+         summary_created_at = now()`,
+      [videoID, summary])
   }
-}
-
-// Stored summaries created under an older prompt/template (`summary_format_version < targetVersion`),
-// newest videos first so recent uploads are rewritten first.
-async function legacySummaries (targetVersion, limit = 10) {
-  const rows = await pool.query(
-    `SELECT video_id, summary FROM youtube_videos
-     WHERE summary IS NOT NULL AND summary_format_version < $1
-     ORDER BY published_at DESC NULLS LAST, summary_created_at DESC, video_id
-     LIMIT $2`,
-    [targetVersion, limit])
-  return rows.rows
-}
-
-// Replaces a legacy summary only if nothing newer (`force:True`) replaced it meanwhile.
-async function updateRewrittenSummary (videoID, summary, formatVersion, expectedOldSummary) {
-  const res = await pool.query(
-    `UPDATE youtube_videos
-     SET summary = $2, summary_format_version = $3
-     WHERE video_id = $1 AND summary = $4 AND summary_format_version < $3`,
-    [videoID, summary, formatVersion, expectedOldSummary])
-  return res.rowCount > 0
 }
 
 // Summaries of public videos outside the bot's followed channels (shared across all servers).
@@ -381,4 +358,4 @@ async function deleteGuildYouTube (guildID) {
   await collectGarbage()
 }
 
-module.exports = { setBotChannels, getVideoIds, saveSync, getKnowledge, getOverview, listChannels, listLiveEventGuilds, liveEventsOn, setLiveEvents, upsertVideos, recentVideoIds, getLiveVideoIds, getLiveEvents, saveLiveEvent, archivesToSummarize, recordArchiveAttempt, websubDue, saveWebsub, isKnownChannel, videoCards, getVideo, videoIdsMissingStats, markStatsChecked, videoDuration, getSummary, saveSummary, legacySummaries, updateRewrittenSummary, getOtherSummaries, deleteGuildYouTube }
+module.exports = { setBotChannels, getVideoIds, saveSync, getKnowledge, getOverview, listChannels, listLiveEventGuilds, liveEventsOn, setLiveEvents, upsertVideos, recentVideoIds, getLiveVideoIds, getLiveEvents, saveLiveEvent, archivesToSummarize, recordArchiveAttempt, websubDue, saveWebsub, isKnownChannel, videoCards, getVideo, videoIdsMissingStats, markStatsChecked, videoDuration, getSummary, saveSummary, getOtherSummaries, deleteGuildYouTube }

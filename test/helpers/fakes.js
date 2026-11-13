@@ -682,37 +682,14 @@ function installYouTubeStore (knowledge = {}, summaries = {}) {
       k.videos = [...byID.values()].sort((a, b) => new Date(b.published_at) - new Date(a.published_at))
     }
   }
-  const summaryVersions = {}
   // Summaries are shared: one made for any server is found for all.
   store.getSummary = async videoID => anySummary(videoID)
   store.videoCards = async ids => Object.values(knowledge).flatMap(k => (k.videos || []).map(v => ({ video_id: v.video_id, title: v.title, channel_title: k.channel?.title || null })))
     .filter(v => ids.includes(v.video_id))
   store.videoDuration = async videoID => allVideos().find(v => v.video_id === videoID)?.duration || null
-  store.saveSummary = async (guildID, videoID, summary = null, formatVersion = 2) => {
+  store.saveSummary = async (guildID, videoID, summary = null) => {
     writes.push({ saveSummary: [guildID, videoID] })
-    if (summary !== null) summaryVersions[videoID] = formatVersion
     summaries[guildID] = { ...summaries[guildID], [videoID]: summary ?? await store.getSummary(videoID) }
-  }
-  store.legacySummaries = async (targetVersion = 2, limit = 10) => {
-    const knownOrder = allVideos().map(v => v.video_id)
-    const extraIds = [...new Set(Object.values(summaries).flatMap(s => Object.keys(s)))].filter(id => !knownOrder.includes(id)).sort()
-    const out = []
-    for (const id of [...knownOrder, ...extraIds]) {
-      const text = anySummary(id)
-      if (!text || (summaryVersions[id] ?? 1) >= targetVersion) continue
-      out.push({ video_id: id, summary: text })
-      if (out.length >= limit) break
-    }
-    return out
-  }
-  store.updateRewrittenSummary = async (videoID, nextSummary, formatVersion, expectedOldSummary) => {
-    const cur = anySummary(videoID)
-    if (!cur || cur !== expectedOldSummary || (summaryVersions[videoID] ?? 1) >= formatVersion) return false
-    for (const g of Object.keys(summaries)) {
-      if (summaries[g]?.[videoID] !== undefined) summaries[g][videoID] = nextSummary
-    }
-    summaryVersions[videoID] = formatVersion
-    return true
   }
   store.getOtherSummaries = async () => {
     const own = new Set(allVideos().map(v => v.video_id))
@@ -723,7 +700,7 @@ function installYouTubeStore (knowledge = {}, summaries = {}) {
     delete liveSettings[guildID]
     if (knowledge[guildID]?.channel) knowledge[guildID].channel.live_events = false
   }
-  return { knowledge, summaries, summaryVersions, writes, liveEvents, archiveAttempts }
+  return { knowledge, summaries, writes, liveEvents, archiveAttempts }
 }
 
 function configureGateway () {

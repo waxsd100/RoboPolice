@@ -21,7 +21,6 @@ module.exports = {
       prune.startScheduler() // one worker owns the sweep so shards don't duplicate the delete
       embeddingIndexer.startIndexer() // the same worker embeds videos and messages for every server
       require('../modules/summaryBatch').startBatchWatcher() // ...and watches the video summary batches (/youtube summarize)
-      require('../modules/videoSummary').startSummaryRewriter() // ...and rewrites legacy video summaries to the fixed template
       require('../modules/wikiKnowledge').startWiki() // ...and reads the community wiki (WIKI_URLS)
       require('../modules/twitterKnowledge').startTwitter() // ...and the streamer's X posts (TWITTER_ACCOUNTS)
       require('../modules/twitchSync').startTwitch() // ...and the archives of the Twitch channels (TWITCH_CHANNELS)
