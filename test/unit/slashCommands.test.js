@@ -206,8 +206,7 @@ test('eventmiddleware handles raw messageDeleteBulk payloads and voiceChannelSwi
     user: { id: 'bot' },
     guildSettingsCache: {
       g1: {
-        event_logs: {},
-        eventIsDisabled: () => true
+        event_logs: {}
       }
     },
     getChannel: () => null,

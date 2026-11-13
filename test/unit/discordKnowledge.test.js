@@ -57,14 +57,14 @@ describe('which channels', () => {
 describe('reading a channel\'s history', () => {
   test('back to its start, keeping only the accounts\' messages, from where the last read stopped', async (t) => {
     const ch = channel('10', { name: '雑談' })
-    const g = guild([ch])
+    const g = { ...guild([ch]), members: new Map([[NOBAMAN, { nick: 'のばまん', user: { username: 'nobaman' } }]]) }
     let state = { before_id: '900', done: false }
     t.mock.method(store, 'backfillState', async () => state)
     const saved = []
     t.mock.method(store, 'saveBackfill', async (guildID, channelID, before, done) => { state = { before_id: before, done }; saved.push([before, done]) })
     const stored = []
     t.mock.method(store, 'savePosts', async posts => { stored.push(...posts); return posts })
-    t.mock.method(store, 'postsOfMonth', async () => stored.map(p => ({ id: p.id, channel_id: p.channelID, channel_name: p.channelName, author_name: p.authorName, content: p.content, created_at: p.createdAt })))
+    t.mock.method(store, 'postsOfMonth', async () => stored.map(p => ({ id: p.id, channel_id: p.channelID, channel_name: p.channelName, author_id: p.authorID, content: p.content, created_at: p.createdAt })))
     const pages = []
     t.mock.method(knowledgeStore, 'savePage', async (url, title, sections) => pages.push([url, title, sections[0].text]))
     const asked = []
@@ -76,7 +76,7 @@ describe('reading a channel\'s history', () => {
     assert.deepEqual(saved, [['701', false], ['599', true]])
     assert.deepEqual(stored.map(p => [p.id, p.content, p.channelName]), [['795', '今日は配信するよ', '雑談'], ['599', 'おやすみ', '雑談']])
     assert.equal(pages[0][0], `https://discord.com/channels/${OWNER}#${NOBAMAN}-2026-10`)
-    assert.match(pages[0][1], /の Discord の発言（2026年10月）/)
+    assert.equal(pages[0][1], 'のばまん の Discord の発言（2026年10月）')
     assert.match(pages[0][2], new RegExp(`^\\[2026-10-15\\] #雑談: 今日は配信するよ https://discord\\.com/channels/${OWNER}/10/795$`, 'm'))
 
     // Read to its start: not read again.
@@ -93,8 +93,8 @@ describe('following messages', () => {
     const g = guild([ch, priv])
     const saved = t.mock.method(store, 'savePosts', async posts => posts)
     t.mock.method(store, 'postsOfMonth', async () => [
-      { id: '1', channel_id: '10', channel_name: 'ch10', author_name: 'のばまん', content: '告知', created_at: new Date('2026-10-15T03:00:00Z') },
-      { id: '3', channel_id: '11', channel_name: 'ch11', author_name: 'のばまん', content: '非公開チャンネル', created_at: new Date('2026-10-15T04:00:00Z') }
+      { id: '1', channel_id: '10', channel_name: 'ch10', author_id: NOBAMAN, content: '告知', created_at: new Date('2026-10-15T03:00:00Z') },
+      { id: '3', channel_id: '11', channel_name: 'ch11', author_id: NOBAMAN, content: '非公開チャンネル', created_at: new Date('2026-10-15T04:00:00Z') }
     ])
     const pages = []
     t.mock.method(knowledgeStore, 'savePage', async (url, title, sections) => pages.push(sections[0].text))

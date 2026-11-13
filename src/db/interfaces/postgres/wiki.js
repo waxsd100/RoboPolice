@@ -1,7 +1,7 @@
 // The knowledge tables: pages split in parts, each part embedded, and the knowledge taken out of
-// each part (migrations/030_normalize.sql): knowledge_pages / knowledge_sections (with
-// knowledge_section_images) / knowledge_facts (with knowledge_fact_aliases), one set for every
-// source, which is part of each key: the wiki (wikiKnowledge.js), the X posts (twitterKnowledge.js),
+// each part (migrations/030_normalize.sql, 052_consolidate_tables.sql): knowledge_pages /
+// knowledge_sections / knowledge_facts (with knowledge_fact_aliases), one set for every source,
+// which is part of each key: the wiki (wikiKnowledge.js), the X posts (twitterKnowledge.js),
 // the streamer's Discord messages (discordKnowledge.js) and topics on the web (webKnowledge.js).
 // createStore(source) works on one source.
 const crypto = require('crypto')
@@ -27,17 +27,13 @@ function createStore (source) {
         [source, url, title])
       for (const [position, s] of sections.entries()) {
         const hash = hashOf(`${s.heading}\n${s.text}`)
+        const imageUrl = (s.images || []).find(Boolean) || null
         await client.query(
-          `INSERT INTO knowledge_sections (source, url, position, heading, text, text_hash) VALUES ($1, $2, $3, $4, $5, $6)
-           ON CONFLICT (source, url, position) DO UPDATE SET heading = $4, text = $5, text_hash = $6,
+          `INSERT INTO knowledge_sections (source, url, position, heading, text, text_hash, image_url) VALUES ($1, $2, $3, $4, $5, $6, $7)
+           ON CONFLICT (source, url, position) DO UPDATE SET heading = $4, text = $5, text_hash = $6, image_url = $7,
              embedding = CASE WHEN knowledge_sections.text_hash = $6 THEN knowledge_sections.embedding END,
              embedding_model = CASE WHEN knowledge_sections.text_hash = $6 THEN knowledge_sections.embedding_model END`,
-          [source, url, position, s.heading, s.text, hash])
-        await client.query('DELETE FROM knowledge_section_images WHERE source = $1 AND url = $2 AND position = $3', [source, url, position])
-        await client.query(
-          `INSERT INTO knowledge_section_images (source, url, position, image_position, image_url)
-           SELECT $1, $2, $3, i.n - 1, i.image FROM unnest($4::text[]) WITH ORDINALITY AS i (image, n)`,
-          [source, url, position, (s.images || []).filter(Boolean)])
+          [source, url, position, s.heading, s.text, hash, imageUrl])
       }
       await client.query('DELETE FROM knowledge_sections WHERE source = $1 AND url = $2 AND position >= $3', [source, url, sections.length])
       await client.query('COMMIT')
@@ -105,10 +101,9 @@ function createStore (source) {
   // title has キャラクター, in the order of the pages. [{ heading, image }]
   async function characterImages (limit = 6) {
     const rows = await pool.query(
-      `SELECT s.heading, i.image_url AS image
+      `SELECT s.heading, s.image_url AS image
        FROM knowledge_sections s JOIN knowledge_pages p ON p.source = s.source AND p.url = s.url
-       JOIN knowledge_section_images i ON i.source = s.source AND i.url = s.url AND i.position = s.position AND i.image_position = 0
-       WHERE s.source = $2 AND p.title LIKE '%キャラクター%' AND s.heading <> p.title
+       WHERE s.source = $2 AND s.image_url IS NOT NULL AND p.title LIKE '%キャラクター%' AND s.heading <> p.title
        ORDER BY p.url, s.position LIMIT $1`,
       [limit * 3, source])
     const seen = new Set()

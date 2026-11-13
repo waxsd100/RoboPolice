@@ -41,18 +41,32 @@ async function setAllEventsOneId (guildID, channelID) {
   await setEventsLogId(guildID, channelID, ALL_EVENTS)
 }
 
+async function cleanUnusedDiscordChannels (guildID) {
+  await pool.query(
+    `DELETE FROM discord_channels c
+     WHERE c.guild_id = $1 AND NOT c.ignored AND c.name IS NULL
+       AND c.msg_backfill_at IS NULL AND c.post_backfill_at IS NULL
+       AND NOT EXISTS (SELECT 1 FROM discord_posts p WHERE p.channel_id = c.id)`,
+    [guildID])
+}
+
 // Ignores the channel, or stops ignoring it if it was. Resolves to whether it is now ignored.
 async function ignoreChannel (guildID, channelID) {
   await ensureGuild(guildID)
-  const removed = await pool.query('DELETE FROM guild_ignored_channels WHERE guild_id = $1 AND channel_id = $2', [guildID, channelID])
-  const disabled = removed.rowCount === 0
-  if (disabled) await pool.query('INSERT INTO guild_ignored_channels (guild_id, channel_id) VALUES ($1, $2) ON CONFLICT DO NOTHING', [guildID, channelID])
+  const res = await pool.query(
+    `INSERT INTO discord_channels (id, guild_id, ignored) VALUES ($1, $2, true)
+     ON CONFLICT (id) DO UPDATE SET ignored = NOT discord_channels.ignored
+     RETURNING ignored`,
+    [channelID, guildID])
+  const disabled = !!res.rows[0]?.ignored
+  if (!disabled) await cleanUnusedDiscordChannels(guildID)
   await cacheGuild(guildID)
   return disabled
 }
 
 async function clearIgnoredChannels (guildID) {
-  await pool.query('DELETE FROM guild_ignored_channels WHERE guild_id = $1', [guildID])
+  await pool.query('UPDATE discord_channels SET ignored = false WHERE guild_id = $1 AND ignored', [guildID])
+  await cleanUnusedDiscordChannels(guildID)
   await cacheGuild(guildID)
 }
 

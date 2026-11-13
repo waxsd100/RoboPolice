@@ -32,11 +32,10 @@ async function ensureGuild (guildID) {
   await require('./read').getGuild(guildID)
 }
 
-// Deletes summaries that are of none of the bot's videos and that no server asked for.
+// Deletes orphan external placeholder rows that have neither a summary nor an active summary batch.
 async function collectGarbage (db = pool) {
   await db.query(
-    `DELETE FROM youtube_summaries s WHERE NOT EXISTS (SELECT 1 FROM guild_youtube_summaries g WHERE g.video_id = s.video_id)
-       AND NOT EXISTS (SELECT 1 FROM youtube_videos v WHERE v.video_id = s.video_id)`)
+    'DELETE FROM youtube_videos WHERE channel_id IS NULL AND summary IS NULL AND summary_batch IS NULL')
 }
 
 // The channels the bot follows: [{ channel_id, channel_ref, title, … }], in the order set.
@@ -72,7 +71,7 @@ async function setBotChannels (channels) {
 // IDs of the stored videos of the channel, or of every channel the bot follows.
 async function getVideoIds (channelID = null) {
   const rows = await pool.query(
-    'SELECT video_id FROM youtube_videos WHERE $1::text IS NULL OR channel_id = $1',
+    'SELECT video_id FROM youtube_videos WHERE channel_id IS NOT NULL AND ($1::text IS NULL OR channel_id = $1)',
     [channelID])
   return new Set(rows.rows.map(r => r.video_id))
 }
@@ -161,8 +160,8 @@ async function getKnowledge (guildID) {
   const channels = await listChannels()
   if (channels.length === 0) return null
   const videos = await pool.query(
-    `SELECT ${VIDEO_COLUMNS}, s.summary FROM youtube_videos v
-     LEFT JOIN youtube_summaries s ON s.video_id = v.video_id
+    `SELECT ${VIDEO_COLUMNS}, v.summary FROM youtube_videos v
+     WHERE v.channel_id IS NOT NULL
      ORDER BY v.published_at DESC NULLS LAST`)
   return { channels, channel: channels[0], videos: videos.rows.map(normalizeVideo), live_events: await liveEventsOn(guildID) }
 }
@@ -175,7 +174,7 @@ async function getOverview (guildID) {
   const rows = await pool.query(
     `SELECT bc.*,
        (SELECT count(*) FROM youtube_videos v WHERE v.channel_id = bc.channel_id)::int AS video_count,
-       (SELECT count(*) FROM youtube_videos v JOIN youtube_summaries s ON s.video_id = v.video_id WHERE v.channel_id = bc.channel_id)::int AS summary_count,
+       (SELECT count(*) FROM youtube_videos v WHERE v.channel_id = bc.channel_id AND v.summary IS NOT NULL)::int AS summary_count,
        (SELECT count(*) FROM youtube_videos v WHERE v.channel_id = bc.channel_id AND v.live_status IN ('live', 'upcoming'))::int AS live_count
      FROM (${BOT_CHANNELS}) bc ORDER BY bc.position, bc.channel_id`)
   if (rows.rows.length === 0) return null
@@ -252,7 +251,7 @@ async function archivesToSummarize (guildID, { waitMinutes = 30, retryMinutes = 
      WHERE v.stream_ended_at < now() - make_interval(mins => $2)
        AND v.archive_attempts < $4 AND (v.archive_tried_at IS NULL OR v.archive_tried_at < now() - make_interval(mins => $3))
        AND EXISTS (SELECT 1 FROM youtube_live_events e WHERE e.guild_id = $1 AND e.video_id = v.video_id AND e.kind = 'stream')
-       AND NOT EXISTS (SELECT 1 FROM youtube_summaries s WHERE s.video_id = v.video_id)
+       AND v.summary IS NULL
      ORDER BY v.stream_ended_at LIMIT $5`,
     [guildID, waitMinutes, retryMinutes, maxAttempts, limit])
   return rows.rows
@@ -285,7 +284,8 @@ async function isKnownChannel (channelID) {
 async function videoCards (ids) {
   const rows = await pool.query(
     `SELECT v.video_id, v.title, c.title AS channel_title FROM youtube_videos v
-     LEFT JOIN youtube_channels c ON c.channel_id = v.channel_id WHERE v.video_id = ANY($1)`,
+     LEFT JOIN youtube_channels c ON c.channel_id = v.channel_id
+     WHERE v.video_id = ANY($1) AND v.title IS NOT NULL`,
     [ids])
   return rows.rows
 }
@@ -293,10 +293,9 @@ async function videoCards (ids) {
 // One stored video with its channel's name and summary, or null when it is not stored.
 async function getVideo (videoID) {
   const rows = await pool.query(
-    `SELECT ${VIDEO_COLUMNS}, c.title AS channel_title, s.summary FROM youtube_videos v
+    `SELECT ${VIDEO_COLUMNS}, c.title AS channel_title, v.summary FROM youtube_videos v
      LEFT JOIN youtube_channels c ON c.channel_id = v.channel_id
-     LEFT JOIN youtube_summaries s ON s.video_id = v.video_id
-     WHERE v.video_id = $1`,
+     WHERE v.video_id = $1 AND v.channel_id IS NOT NULL`,
     [videoID])
   return rows.rows[0] ? normalizeVideo(rows.rows[0]) : null
 }
@@ -305,7 +304,7 @@ async function getVideo (videoID) {
 async function videoIdsMissingStats (channelID = null, limit = 200) {
   const rows = await pool.query(
     `SELECT video_id FROM youtube_videos
-     WHERE ($1::text IS NULL OR channel_id = $1) AND stats_updated_at IS NULL
+     WHERE channel_id IS NOT NULL AND ($1::text IS NULL OR channel_id = $1) AND stats_updated_at IS NULL
      ORDER BY published_at DESC NULLS LAST LIMIT $2`,
     [channelID, limit])
   return rows.rows.map(r => r.video_id)
@@ -324,35 +323,33 @@ async function videoDuration (videoID) {
   return rows.rows[0]?.duration || null
 }
 
-// The stored summary of a video, whichever server asked for it first.
+// The stored summary of a video, shared across all servers.
 async function getSummary (videoID) {
-  const rows = await pool.query('SELECT summary FROM youtube_summaries WHERE video_id = $1', [videoID])
+  const rows = await pool.query('SELECT summary FROM youtube_videos WHERE video_id = $1', [videoID])
   return rows.rows[0]?.summary || null
 }
 
-// Records that the server asked for the video's summary (made now, or stored already when `summary`
-// is omitted).
+// Stores or updates a video's summary (shared across all servers; `guildID` is kept for callers).
 async function saveSummary (guildID, videoID, summary = null, formatVersion = 2) {
   if (summary !== null) {
     await pool.query(
-      `INSERT INTO youtube_summaries (video_id, summary, format_version) VALUES ($1, $2, $3)
-       ON CONFLICT (video_id) DO UPDATE SET summary = $2, format_version = $3, created_at = now()`,
+      `INSERT INTO youtube_videos (video_id, summary, summary_created_at, summary_format_version)
+       VALUES ($1, $2, now(), $3)
+       ON CONFLICT (video_id) DO UPDATE SET
+         summary = EXCLUDED.summary,
+         summary_created_at = now(),
+         summary_format_version = EXCLUDED.summary_format_version`,
       [videoID, summary, formatVersion])
   }
-  await ensureGuild(guildID)
-  await pool.query(
-    'INSERT INTO guild_youtube_summaries (guild_id, video_id) VALUES ($1, $2) ON CONFLICT DO NOTHING',
-    [guildID, videoID])
 }
 
-// Stored summaries created under an older prompt/template (`format_version < targetVersion`),
+// Stored summaries created under an older prompt/template (`summary_format_version < targetVersion`),
 // newest videos first so recent uploads are rewritten first.
 async function legacySummaries (targetVersion, limit = 10) {
   const rows = await pool.query(
-    `SELECT s.video_id, s.summary FROM youtube_summaries s
-     LEFT JOIN youtube_videos v ON v.video_id = s.video_id
-     WHERE s.format_version < $1
-     ORDER BY v.published_at DESC NULLS LAST, s.created_at DESC, s.video_id
+    `SELECT video_id, summary FROM youtube_videos
+     WHERE summary IS NOT NULL AND summary_format_version < $1
+     ORDER BY published_at DESC NULLS LAST, summary_created_at DESC, video_id
      LIMIT $2`,
     [targetVersion, limit])
   return rows.rows
@@ -361,29 +358,24 @@ async function legacySummaries (targetVersion, limit = 10) {
 // Replaces a legacy summary only if nothing newer (`force:True`) replaced it meanwhile.
 async function updateRewrittenSummary (videoID, summary, formatVersion, expectedOldSummary) {
   const res = await pool.query(
-    `UPDATE youtube_summaries
-     SET summary = $2, format_version = $3
-     WHERE video_id = $1 AND summary = $4 AND format_version < $3`,
+    `UPDATE youtube_videos
+     SET summary = $2, summary_format_version = $3
+     WHERE video_id = $1 AND summary = $4 AND summary_format_version < $3`,
     [videoID, summary, formatVersion, expectedOldSummary])
   return res.rowCount > 0
 }
 
-// Summaries the server asked for of videos that are not in the bot's channels (someone linked
-// another channel's video).
-async function getOtherSummaries (guildID) {
+// Summaries of public videos outside the bot's followed channels (shared across all servers).
+async function getOtherSummaries () {
   const rows = await pool.query(
-    `SELECT s.video_id, s.summary FROM guild_youtube_summaries gs
-     JOIN youtube_summaries s ON s.video_id = gs.video_id
-     WHERE gs.guild_id = $1 AND NOT EXISTS (
-       SELECT 1 FROM youtube_videos v WHERE v.video_id = gs.video_id)
-     ORDER BY gs.created_at DESC`,
-    [guildID])
+    `SELECT video_id, summary FROM youtube_videos
+     WHERE channel_id IS NULL AND summary IS NOT NULL
+     ORDER BY summary_created_at DESC`)
   return rows.rows
 }
 
-// Deleting the server's guilds row deletes all of this too; this also deletes what only it used.
+// Clears the server's stream events and live-event toggle.
 async function deleteGuildYouTube (guildID) {
-  await pool.query('DELETE FROM guild_youtube_summaries WHERE guild_id = $1', [guildID])
   await pool.query('DELETE FROM youtube_live_events WHERE guild_id = $1', [guildID])
   await pool.query('UPDATE guilds SET youtube_live_events = false WHERE id = $1', [guildID])
   await collectGarbage()

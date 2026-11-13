@@ -78,34 +78,48 @@ async function saveApps (apps) {
 
 // Stores an account's games, reviews and wishlist. Games accumulate across syncs (so a game seen in
 // recent play or a past year's replay stays); reviews and wishlist are replaced when a non-empty list
-// is read. Resolves to { newGames, newReviews }.
+// is read. App titles are kept once in steam_apps. Resolves to { newGames, newReviews }.
 async function saveAccountData (steamId, { profile = {}, games = [], reviews = null, wishlist = null } = {}) {
   const client = await pool.getPostgresClient()
   try {
     await client.query('BEGIN')
-    const knownGames = new Set((await client.query('SELECT app_id FROM steam_games WHERE steam_id = $1', [steamId])).rows.map(r => r.app_id))
-    const knownReviews = new Set((await client.query('SELECT app_id FROM steam_reviews WHERE steam_id = $1', [steamId])).rows.map(r => r.app_id))
+    const knownGames = new Set((await client.query('SELECT app_id FROM steam_games WHERE steam_id = $1 AND owned', [steamId])).rows.map(r => r.app_id))
+    const knownReviews = new Set((await client.query('SELECT app_id FROM steam_games WHERE steam_id = $1 AND review_content IS NOT NULL', [steamId])).rows.map(r => r.app_id))
+
+    const appsById = new Map()
+    for (const item of [...games, ...(Array.isArray(wishlist) ? wishlist : []), ...(Array.isArray(reviews) ? reviews : [])]) {
+      if (!item?.appId) continue
+      const prev = appsById.get(item.appId)
+      const name = item.name || prev?.name || `App ${item.appId}`
+      const nameEn = item.nameEn || prev?.nameEn || null
+      appsById.set(item.appId, { appId: item.appId, name, nameEn })
+    }
+    for (const a of appsById.values()) {
+      await client.query(
+        `INSERT INTO steam_apps (app_id, name, name_en) VALUES ($1, $2, $3)
+         ON CONFLICT (app_id) DO UPDATE SET
+           name = CASE WHEN $2 LIKE 'App %' AND steam_apps.name NOT LIKE 'App %' THEN steam_apps.name ELSE $2 END,
+           name_en = COALESCE($3, steam_apps.name_en)`,
+        [a.appId, a.name, a.nameEn])
+    }
 
     for (const g of games) {
       await client.query(
-        `INSERT INTO steam_games (steam_id, app_id, name, name_en, playtime_hours, recent_hours, first_played_at, last_played_at)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+        `INSERT INTO steam_games (steam_id, app_id, owned, playtime_hours, recent_hours, first_played_at, last_played_at)
+         VALUES ($1, $2, true, $3, $4, $5, $6)
          ON CONFLICT (steam_id, app_id) DO UPDATE SET
-           name = $3,
-           name_en = COALESCE($4, steam_games.name_en),
+           owned = true,
            playtime_hours = CASE
-             WHEN $5::real IS NULL THEN steam_games.playtime_hours
-             WHEN steam_games.playtime_hours IS NULL THEN $5::real
-             ELSE GREATEST(steam_games.playtime_hours, $5::real)
+             WHEN $3::real IS NULL THEN steam_games.playtime_hours
+             WHEN steam_games.playtime_hours IS NULL THEN $3::real
+             ELSE GREATEST(steam_games.playtime_hours, $3::real)
            END,
-           recent_hours = $6,
-           first_played_at = COALESCE($7, steam_games.first_played_at),
-           last_played_at = COALESCE($8, steam_games.last_played_at)`,
+           recent_hours = $4,
+           first_played_at = COALESCE($5, steam_games.first_played_at),
+           last_played_at = COALESCE($6, steam_games.last_played_at)`,
         [
           steamId,
           g.appId,
-          g.name,
-          g.nameEn || null,
           Number.isFinite(g.playtimeHours) ? g.playtimeHours : null,
           Number.isFinite(g.recentHours) ? g.recentHours : null,
           g.firstPlayedAt || null,
@@ -116,20 +130,21 @@ async function saveAccountData (steamId, { profile = {}, games = [], reviews = n
     if (Array.isArray(reviews)) {
       for (const [position, r] of reviews.entries()) {
         await client.query(
-          `INSERT INTO steam_reviews (steam_id, app_id, name, recommended, hours_on_record, posted, content, url, position)
-           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+          `INSERT INTO steam_games (
+             steam_id, app_id, owned,
+             review_recommended, review_hours, review_posted, review_content, review_url, review_position
+           )
+           VALUES ($1, $2, false, $3, $4, $5, $6, $7, $8)
            ON CONFLICT (steam_id, app_id) DO UPDATE SET
-             name = COALESCE($3, steam_reviews.name),
-             recommended = $4,
-             hours_on_record = COALESCE($5, steam_reviews.hours_on_record),
-             posted = COALESCE($6, steam_reviews.posted),
-             content = $7,
-             url = $8,
-             position = $9`,
+             review_recommended = $3,
+             review_hours = COALESCE($4, steam_games.review_hours),
+             review_posted = COALESCE($5, steam_games.review_posted),
+             review_content = $6,
+             review_url = $7,
+             review_position = $8`,
           [
             steamId,
             r.appId,
-            r.name || null,
             Boolean(r.recommended),
             Number.isFinite(r.hoursOnRecord) ? r.hoursOnRecord : null,
             r.posted || null,
@@ -139,31 +154,51 @@ async function saveAccountData (steamId, { profile = {}, games = [], reviews = n
           ])
       }
       if (reviews.length) {
-        await client.query('DELETE FROM steam_reviews WHERE steam_id = $1 AND NOT (app_id = ANY($2::int[]))', [steamId, reviews.map(r => r.appId)])
+        const keepIds = reviews.map(r => r.appId)
+        await client.query(
+          'DELETE FROM steam_games WHERE steam_id = $1 AND NOT owned AND NOT wishlisted AND NOT (app_id = ANY($2::int[]))',
+          [steamId, keepIds])
+        await client.query(
+          `UPDATE steam_games SET
+             review_recommended = NULL,
+             review_hours = NULL,
+             review_posted = NULL,
+             review_content = NULL,
+             review_url = NULL,
+             review_position = NULL
+           WHERE steam_id = $1 AND review_content IS NOT NULL AND NOT (app_id = ANY($2::int[]))`,
+          [steamId, keepIds])
       }
     }
 
     if (Array.isArray(wishlist)) {
       for (const w of wishlist) {
         await client.query(
-          `INSERT INTO steam_wishlist (steam_id, app_id, name, name_en, priority, added_at)
-           VALUES ($1, $2, $3, $4, $5, $6)
+          `INSERT INTO steam_games (steam_id, app_id, owned, wishlisted, wishlist_priority, wishlisted_at)
+           VALUES ($1, $2, false, true, $3, $4)
            ON CONFLICT (steam_id, app_id) DO UPDATE SET
-             name = $3,
-             name_en = COALESCE($4, steam_wishlist.name_en),
-             priority = $5,
-             added_at = COALESCE($6, steam_wishlist.added_at)`,
+             wishlisted = true,
+             wishlist_priority = $3,
+             wishlisted_at = COALESCE($4, steam_games.wishlisted_at)`,
           [
             steamId,
             w.appId,
-            w.name,
-            w.nameEn || null,
             Number.isInteger(w.priority) ? w.priority : null,
             w.addedAt || null
           ])
       }
       if (wishlist.length) {
-        await client.query('DELETE FROM steam_wishlist WHERE steam_id = $1 AND NOT (app_id = ANY($2::int[]))', [steamId, wishlist.map(w => w.appId)])
+        const keepIds = wishlist.map(w => w.appId)
+        await client.query(
+          'DELETE FROM steam_games WHERE steam_id = $1 AND NOT owned AND review_content IS NULL AND NOT (app_id = ANY($2::int[]))',
+          [steamId, keepIds])
+        await client.query(
+          `UPDATE steam_games SET
+             wishlisted = false,
+             wishlist_priority = NULL,
+             wishlisted_at = NULL
+           WHERE steam_id = $1 AND wishlisted AND NOT (app_id = ANY($2::int[]))`,
+          [steamId, keepIds])
       }
     }
 
@@ -206,9 +241,9 @@ async function getOverview () {
   const rows = await pool.query(
     `SELECT p.steam_id, p.account_ref, p.persona_name, p.custom_url, p.summary, p.member_since, p.level,
             p.game_count, p.wishlist_count, p.synced_at,
-            (SELECT count(*)::int FROM steam_games g WHERE g.steam_id = p.steam_id) AS stored_game_count,
-            (SELECT count(*)::int FROM steam_reviews r WHERE r.steam_id = p.steam_id) AS review_count,
-            (SELECT count(*)::int FROM steam_wishlist w WHERE w.steam_id = p.steam_id) AS stored_wishlist_count
+            (SELECT count(*)::int FROM steam_games g WHERE g.steam_id = p.steam_id AND g.owned) AS stored_game_count,
+            (SELECT count(*)::int FROM steam_games g WHERE g.steam_id = p.steam_id AND g.review_content IS NOT NULL) AS review_count,
+            (SELECT count(*)::int FROM steam_games g WHERE g.steam_id = p.steam_id AND g.wishlisted) AS stored_wishlist_count
      FROM steam_profiles p
      ORDER BY p.account_ref`)
   return rows.rows
@@ -217,29 +252,44 @@ async function getOverview () {
 async function getGames (limit = 1000) {
   const rows = await pool.query(
     `SELECT g.steam_id, p.account_ref, p.persona_name, p.custom_url,
-            g.app_id, g.name, g.name_en, g.playtime_hours, g.recent_hours, g.first_played_at, g.last_played_at
-     FROM steam_games g JOIN steam_profiles p ON p.steam_id = g.steam_id
+            g.app_id, a.name, a.name_en, g.playtime_hours, g.recent_hours, g.first_played_at, g.last_played_at
+     FROM steam_games g
+     JOIN steam_profiles p ON p.steam_id = g.steam_id
+     JOIN steam_apps a ON a.app_id = g.app_id
+     WHERE g.owned
      ORDER BY g.playtime_hours DESC NULLS LAST, g.app_id ASC LIMIT $1`, [limit])
   return rows.rows
 }
 
 async function getReviews (limit = 500) {
   const rows = await pool.query(
-    `SELECT r.steam_id, p.account_ref, p.persona_name, p.custom_url,
-            r.app_id, COALESCE(r.name, g.name) AS name, g.name_en, r.recommended, r.hours_on_record, r.posted, r.content, r.url, r.position
-     FROM steam_reviews r
-     JOIN steam_profiles p ON p.steam_id = r.steam_id
-     LEFT JOIN steam_games g ON g.steam_id = r.steam_id AND g.app_id = r.app_id
-     ORDER BY r.position ASC LIMIT $1`, [limit])
+    `SELECT g.steam_id, p.account_ref, p.persona_name, p.custom_url,
+            g.app_id, a.name, a.name_en,
+            g.review_recommended AS recommended,
+            g.review_hours AS hours_on_record,
+            g.review_posted AS posted,
+            g.review_content AS content,
+            g.review_url AS url,
+            g.review_position AS position
+     FROM steam_games g
+     JOIN steam_profiles p ON p.steam_id = g.steam_id
+     JOIN steam_apps a ON a.app_id = g.app_id
+     WHERE g.review_content IS NOT NULL
+     ORDER BY g.review_position ASC LIMIT $1`, [limit])
   return rows.rows
 }
 
 async function getWishlist (limit = 2000) {
   const rows = await pool.query(
-    `SELECT w.steam_id, p.account_ref, p.persona_name, p.custom_url,
-            w.app_id, w.name, w.name_en, w.priority, w.added_at
-     FROM steam_wishlist w JOIN steam_profiles p ON p.steam_id = w.steam_id
-     ORDER BY w.added_at DESC NULLS LAST, w.priority ASC NULLS LAST, w.app_id ASC LIMIT $1`, [limit])
+    `SELECT g.steam_id, p.account_ref, p.persona_name, p.custom_url,
+            g.app_id, a.name, a.name_en,
+            g.wishlist_priority AS priority,
+            g.wishlisted_at AS added_at
+     FROM steam_games g
+     JOIN steam_profiles p ON p.steam_id = g.steam_id
+     JOIN steam_apps a ON a.app_id = g.app_id
+     WHERE g.wishlisted
+     ORDER BY g.wishlisted_at DESC NULLS LAST, g.wishlist_priority ASC NULLS LAST, g.app_id ASC LIMIT $1`, [limit])
   return rows.rows
 }
 

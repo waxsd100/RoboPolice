@@ -166,7 +166,7 @@ describe('stores', { skip: !database.available && 'needs PGHOST' }, () => {
       assert.equal(batch.model, 'gemini-embedding-001')
       await store.noteEmbeddingBatch('batches/s1', { state: 'BATCH_STATE_RUNNING' })
       await store.noteEmbeddingBatch('batches/s1', { error: 'HTTP 500' })
-      const [row] = await q("SELECT state, last_error, checked_at IS NOT NULL AS checked FROM embedding_batches WHERE name = 'batches/s1'")
+      const [row] = await q("SELECT state, last_error, checked_at IS NOT NULL AS checked FROM gemini_batches WHERE name = 'batches/s1' AND kind = 'embedding'")
       assert.deepEqual(row, { state: 'BATCH_STATE_RUNNING', last_error: 'HTTP 500', checked: true }, 'a failed look keeps the state')
       await store.deleteEmbeddingBatch('batches/s1')
       ;[batch] = (await store.runningEmbeddingBatches()).filter(b => b.name === 'batches/s1')
@@ -337,7 +337,7 @@ describe('stores', { skip: !database.available && 'needs PGHOST' }, () => {
   test('Discord messages: stored once (an edit replaces the text), by month in Japan time, deleted; history progress kept', async () => {
     const posts = require('../../src/db/interfaces/postgres/discordPosts')
     const tables = require('../../src/db/interfaces/postgres/discordKnowledge')
-    const post = (id, content, at) => ({ id, guildID: 'g1', channelID: 'c1', channelName: '雑談', authorID: 'u1', authorName: 'のばまん', content, createdAt: new Date(at) })
+    const post = (id, content, at) => ({ id, guildID: 'g1', channelID: 'c1', channelName: '雑談', authorID: 'u1', content, createdAt: new Date(at) })
     assert.equal((await posts.savePosts([post('d1', '告知', '2026-09-30T16:00:00Z'), post('d2', 'やあ', '2026-10-15T00:00:00Z')])).length, 2)
     assert.deepEqual((await posts.savePosts([post('d2', 'やあ', '2026-10-15T00:00:00Z')])), [], 'unchanged: not new')
     assert.equal((await posts.savePosts([post('d2', 'やあ（編集）', '2026-10-15T00:00:00Z')])).length, 1, 'edited')
@@ -457,7 +457,7 @@ describe('stores', { skip: !database.available && 'needs PGHOST' }, () => {
       assert.deepEqual((await q('SELECT count(*)::int AS n FROM youtube_videos'))[0].n, 2)
     })
 
-    test('a summary is made once and found by every server; other channels\' summaries are per server', async () => {
+    test('a summary is made once and shared across all servers, including other channels\' summaries', async () => {
       await store().saveSummary('g1', 'v1', '要約1', 1)
       assert.equal(await store().getSummary('v1'), '要約1')
       await store().saveSummary('g2', 'v1')
@@ -467,7 +467,8 @@ describe('stores', { skip: !database.available && 'needs PGHOST' }, () => {
       assert.equal(await store().updateRewrittenSummary('v1', '要約1', 2, '要約1'), true)
       assert.deepEqual(await store().legacySummaries(2, 10), [])
       assert.deepEqual(await store().getOtherSummaries('g1'), [{ video_id: 'x9', summary: '他の動画' }])
-      assert.deepEqual(await store().getOtherSummaries('g2'), [])
+      assert.deepEqual(await store().getOtherSummaries('g2'), [{ video_id: 'x9', summary: '他の動画' }])
+      assert.deepEqual((await store().videoCards(['v1', 'x9'])).map(v => v.video_id), ['v1'])
       const overview = await store().getOverview('g2')
       assert.deepEqual([overview.video_count, overview.summary_count, overview.live_count], [2, 1, 1])
       assert.deepEqual(overview.channels.map(c => [c.channel_id, c.video_count]), [['UC1', 2]])
@@ -495,8 +496,7 @@ describe('stores', { skip: !database.available && 'needs PGHOST' }, () => {
       await q("UPDATE youtube_videos SET archive_attempts = 0, archive_tried_at = NULL WHERE video_id = 'v2'")
       await store().saveSummary('g1', 'v2', '配信の要約')
       assert.deepEqual(await store().archivesToSummarize('g1', { waitMinutes: 0 }), [], 'not once summarized')
-      await q("DELETE FROM guild_youtube_summaries WHERE video_id = 'v2'")
-      await q("DELETE FROM youtube_summaries WHERE video_id = 'v2'")
+      await q("UPDATE youtube_videos SET summary = NULL, summary_created_at = NULL, summary_format_version = NULL WHERE video_id = 'v2'")
       // An upload's event is not a stream: its video is never summarized as an archive.
       await q("DELETE FROM youtube_live_events WHERE video_id = 'v2'")
       await q("UPDATE youtube_videos SET stream_ended_at = NULL WHERE video_id = 'v2'")
@@ -524,8 +524,21 @@ describe('stores', { skip: !database.available && 'needs PGHOST' }, () => {
       assert.deepEqual(await store().websubDue(new Date()), [])
     })
 
-    test('video embeddings', async () => {
+    test('video embeddings and summary batches', async () => {
       const embeddings = require('../../src/db/interfaces/postgres/embeddings')
+      const batches = require('../../src/db/interfaces/postgres/summaryBatches')
+      await batches.saveBatch({ name: 'batches/ys1', guildID: 'g1', channelID: 'c1', requesterID: 'u1', videoIDs: ['v2', 'extBatchVid'], model: 'gemini-3.8-flash' })
+      const [ys] = await batches.runningBatches('g1')
+      assert.deepEqual([ys.name, ys.guild_id, ys.channel_id, ys.requester_id, ys.model, ys.video_ids], ['batches/ys1', 'g1', 'c1', 'u1', 'gemini-3.8-flash', ['v2', 'extBatchVid']])
+      assert.deepEqual([...await store().getVideoIds()].sort(), ['v1', 'v2'], 'external batch placeholder is not treated as a followed channel video')
+      await batches.noteBatch('batches/ys1', { state: 'BATCH_STATE_RUNNING' })
+      await batches.noteBatch('batches/ys1', { error: 'HTTP 503' })
+      const [ysRow] = await q("SELECT state, last_error, checked_at IS NOT NULL AS checked FROM gemini_batches WHERE name = 'batches/ys1' AND kind = 'youtube_summary'")
+      assert.deepEqual(ysRow, { state: 'BATCH_STATE_RUNNING', last_error: 'HTTP 503', checked: true })
+      await batches.deleteBatch('batches/ys1')
+      assert.deepEqual(await batches.runningBatches('g1'), [])
+      assert.deepEqual(await q("SELECT video_id FROM youtube_videos WHERE video_id = 'extBatchVid'"), [], 'unsummarized external placeholder is cleaned up when batch ends')
+
       assert.deepEqual((await embeddings.videosForEmbedding()).map(v => [v.video_id, v.summary, v.text_hash]).sort(), [['v1', '要約1', null], ['v2', null, null]])
       const axis = i => { const v = new Int8Array(512); v[i] = 127; return v }
       const modelA = 'gemini-embedding-001'
@@ -540,9 +553,7 @@ describe('stores', { skip: !database.available && 'needs PGHOST' }, () => {
       assert.deepEqual(await embeddings.videoScores('g2', axis(0), modelB), {})
     })
 
-    test('a channel the bot stops following goes with its videos; summaries when no server asked for them', async () => {
-      // A summary of one of the bot's videos stays while the video does, whoever asked for it.
-      await q("DELETE FROM guild_youtube_summaries WHERE video_id = 'v1'")
+    test('a channel the bot stops following goes with its videos; external summaries stay shared across servers', async () => {
       await store().deleteGuildYouTube('nobody')
       assert.equal(await store().getSummary('v1'), '要約1')
 
@@ -552,20 +563,18 @@ describe('stores', { skip: !database.available && 'needs PGHOST' }, () => {
       assert.deepEqual([...await store().getVideoIds('UC1')].sort(), ['v1', 'v2'])
       assert.equal(await store().isKnownChannel('UC2'), true)
 
-      // The first dropped: its videos, embeddings and stream events go.
+      // The first dropped: its videos, embeddings and stream events go, while external summary x9 stays.
       await store().setBotChannels([{ ref: '@other', id: 'UC2' }])
       assert.deepEqual(await q('SELECT channel_id FROM youtube_channels'), [{ channel_id: 'UC2' }])
-      assert.deepEqual(await q('SELECT * FROM youtube_videos'), [])
-      assert.deepEqual(await q('SELECT * FROM youtube_videos'), [])
+      assert.deepEqual(await q('SELECT video_id, channel_id, summary FROM youtube_videos'), [{ video_id: 'x9', channel_id: null, summary: '他の動画' }])
       assert.deepEqual(await store().getLiveEvents('g1'), {})
       assert.equal(await store().isKnownChannel('UC1'), false)
 
-      // Then while a server asked for it.
-      assert.deepEqual((await q('SELECT video_id FROM youtube_summaries ORDER BY video_id')).map(r => r.video_id), ['x9'])
       await store().deleteGuildYouTube('g2')
       await store().deleteGuildYouTube('g1')
-      assert.deepEqual(await q('SELECT * FROM youtube_summaries'), [])
+      assert.equal(await store().getSummary('x9'), '他の動画')
       assert.deepEqual(await q("SELECT id FROM guilds WHERE id IN ('g1', 'g2') AND youtube_live_events"), [])
+      await q("DELETE FROM youtube_videos WHERE video_id = 'x9'")
       await store().setBotChannels([])
       assert.deepEqual(await q('SELECT * FROM youtube_channels'), [])
       // A sync that ends after its channel was dropped stores nothing.
@@ -629,18 +638,29 @@ describe('stores', { skip: !database.available && 'needs PGHOST' }, () => {
       })
       assert.deepEqual(res2, { newGames: 0, newReviews: 0 })
       const games = await store.getGames()
-      assert.deepEqual(games.map(g => [g.app_id, g.playtime_hours]), [[570, 1000], [255710, 50]])
+      assert.deepEqual(games.map(g => [g.app_id, g.name, g.playtime_hours]), [[570, 'Dota 2', 1000], [255710, 'Cities: Skylines', 50]])
+      const reviews = await store.getReviews()
+      assert.deepEqual(reviews.map(r => [r.app_id, r.name, r.recommended, r.content]), [[570, 'Dota 2', true, '神ゲー']])
+      const wishlist = await store.getWishlist()
+      assert.deepEqual(wishlist.map(w => [w.app_id, w.name, w.name_en, w.priority]), [[1091500, 'サイバーパンク2077', 'Cyberpunk 2077', 1]])
       const overview = await store.getOverview()
       assert.deepEqual(overview.map(p => [p.account_ref, p.stored_game_count, p.review_count, p.stored_wishlist_count]), [
         ['nobaman', 2, 1, 1],
         ['other', 0, 0, 0]
       ])
 
-      // Dropping an account cascades to its games, reviews and wishlist.
+      // Replacing wishlist deletes unowned/unreviewed wishlist-only rows and updates owned rows cleanly.
+      await store.saveAccountData('76561198995446647', { wishlist: [{ appId: 570, name: 'Dota 2', priority: 2 }] })
+      assert.deepEqual((await store.getWishlist()).map(w => [w.app_id, w.priority]), [[570, 2]])
+      assert.deepEqual((await q('SELECT app_id FROM steam_games ORDER BY app_id')).map(r => r.app_id), [570, 255710])
+      await store.saveAccountData('76561198995446647', { wishlist: [{ appId: 255710, name: 'Cities: Skylines', priority: 1 }] })
+      assert.deepEqual((await store.getWishlist()).map(w => [w.app_id, w.priority]), [[255710, 1]])
+      assert.deepEqual(await q('SELECT wishlisted, wishlist_priority FROM steam_games WHERE app_id = 570'), [{ wishlisted: false, wishlist_priority: null }])
+
+      // Dropping an account cascades to its games, reviews and wishlist while keeping steam_apps titles.
       await store.setProfiles([{ steamId: '76561198000000000', accountRef: 'other' }])
       assert.deepEqual(await q('SELECT * FROM steam_games'), [])
-      assert.deepEqual(await q('SELECT * FROM steam_reviews'), [])
-      assert.deepEqual(await q('SELECT * FROM steam_wishlist'), [])
+      assert.deepEqual((await q('SELECT app_id FROM steam_apps ORDER BY app_id')).map(r => r.app_id), [570, 255710, 1091500])
     })
   })
 

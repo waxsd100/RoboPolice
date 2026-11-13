@@ -90,19 +90,23 @@ async function hasFacts (guildID) {
 
 // { style, source_hash, updated_at } of the server, or null.
 async function getStyle (guildID) {
-  const rows = await pool.query('SELECT style, source_hash, updated_at FROM guild_lore_style WHERE guild_id = $1', [guildID])
+  const rows = await pool.query(
+    'SELECT lore_style AS style, lore_source_hash AS source_hash, lore_updated_at AS updated_at FROM guilds WHERE id = $1 AND lore_style IS NOT NULL',
+    [guildID])
   return rows.rows[0] || null
 }
 
 async function saveStyle (guildID, style, sourceHash) {
+  await require('./read').getGuild(guildID)
   await pool.query(
-    `INSERT INTO guild_lore_style (guild_id, style, source_hash) VALUES ($1, $2, $3)
-     ON CONFLICT (guild_id) DO UPDATE SET style = $2, source_hash = $3, updated_at = now()`,
+    'UPDATE guilds SET lore_style = $2, lore_source_hash = $3, lore_updated_at = now() WHERE id = $1',
     [guildID, style, sourceHash])
 }
 
 async function deleteStyle (guildID) {
-  await pool.query('DELETE FROM guild_lore_style WHERE guild_id = $1', [guildID])
+  await pool.query(
+    'UPDATE guilds SET lore_style = NULL, lore_source_hash = NULL, lore_updated_at = NULL WHERE id = $1',
+    [guildID])
 }
 
 // A member's stored messages in `channelIDs`, newest first: [{ channel_id, ts, content }]. Read when

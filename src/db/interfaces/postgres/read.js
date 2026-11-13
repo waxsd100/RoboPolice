@@ -7,8 +7,7 @@ const { ALL_EVENTS } = require('../../../bot/utils/constants')
 // channel ('' for none).
 const GUILD_SETTINGS = `SELECT g.id, g.owner_id, g.log_bots,
   COALESCE((SELECT json_object_agg(e.event, e.channel_id) FROM guild_event_logs e WHERE e.guild_id = g.id), '{}') AS logged_events,
-  COALESCE((SELECT array_agg(c.channel_id ORDER BY c.channel_id) FROM guild_ignored_channels c WHERE c.guild_id = g.id), '{}') AS ignored_channels,
-  COALESCE((SELECT array_agg(d.event ORDER BY d.event) FROM guild_disabled_events d WHERE d.guild_id = g.id), '{}') AS disabled_events
+  COALESCE((SELECT array_agg(c.id ORDER BY c.id) FROM discord_channels c WHERE c.guild_id = g.id AND c.ignored), '{}') AS ignored_channels
   FROM guilds g`
 
 function toSettings ({ logged_events: logged, ...row }) {

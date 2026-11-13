@@ -37,7 +37,7 @@ module.exports = async pkg => {
     webhookID = split[0]
     webhookToken = split[1]
   }
-  if (webhook && !guildSettings.eventIsDisabled(pkg.eventName)) {
+  if (webhook) {
     if (!pkg.embeds[0].footer && !pkg.noFooter) {
       pkg.embeds[0].footer = {
         text: `${global.bot.user.username}#${global.bot.user.discriminator}`,
