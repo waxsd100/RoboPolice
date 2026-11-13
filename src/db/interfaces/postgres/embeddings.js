@@ -16,22 +16,28 @@ async function pendingMessages (limit, { after = null, before = null } = {}) {
   const rows = await pool.query(
     `SELECT id, guild_id, channel_id, ts, content FROM messages m
      WHERE embedding_model IS NULL
+       AND m.embedding_batch IS NULL
        AND ($3::timestamptz IS NULL OR ts >= $3)
        AND ($4::timestamptz IS NULL OR ts < $4 OR ts IS NULL)
-       AND NOT EXISTS (SELECT 1 FROM embedding_batch_messages b WHERE b.message_id = m.id)
        AND EXISTS (SELECT 1 FROM guilds g WHERE g.id = m.guild_id AND coalesce(g.embed_messages, g.id = ANY($2)))
      ORDER BY (guild_id = ANY($2)) DESC NULLS LAST, ts DESC LIMIT $1`,
     [limit, ownerGuildIDs(), after, before])
   return rows.rows
 }
 
-// Embedding batches (migrations/028_embedding_batches.sql, 050_embedding_model_enum.sql).
+// Embedding batches (migrations/028_embedding_batches.sql, 052_consolidate_tables.sql).
 async function saveEmbeddingBatch (name, model, messageIDs) {
   const client = await pool.getPostgresClient()
   try {
     await client.query('BEGIN')
-    await client.query('INSERT INTO embedding_batches (name, model) VALUES ($1, $2)', [name, model])
-    await client.query('INSERT INTO embedding_batch_messages (message_id, batch_name) SELECT unnest($1::text[]), $2 ON CONFLICT DO NOTHING', [messageIDs, name])
+    await client.query(
+      "INSERT INTO gemini_batches (name, kind, model) VALUES ($1, 'embedding', $2::embedding_model::text)",
+      [name, model])
+    if (messageIDs.length) {
+      await client.query(
+        'UPDATE messages SET embedding_batch = $2 WHERE id = ANY($1::text[]) AND embedding_batch IS NULL',
+        [messageIDs, name])
+    }
     await client.query('COMMIT')
   } catch (e) {
     await client.query('ROLLBACK').catch(() => {})
@@ -44,10 +50,11 @@ async function saveEmbeddingBatch (name, model, messageIDs) {
 // [{ name, model, message_ids }], oldest first.
 async function runningEmbeddingBatches () {
   const rows = await pool.query(
-    `SELECT b.name, b.model, b.created_at, coalesce(array_agg(m.message_id) FILTER (WHERE m.message_id IS NOT NULL), '{}') AS message_ids
-     FROM embedding_batches b
-     LEFT JOIN embedding_batch_messages m ON m.batch_name = b.name
-     GROUP BY b.name, b.model, b.created_at ORDER BY b.created_at`)
+    `SELECT b.name, b.model, b.created_at,
+            coalesce((SELECT array_agg(m.id) FROM messages m WHERE m.embedding_batch = b.name), '{}') AS message_ids
+     FROM gemini_batches b
+     WHERE b.kind = 'embedding'
+     ORDER BY b.created_at`)
   return rows.rows
 }
 
@@ -56,12 +63,12 @@ async function runningEmbeddingBatches () {
 // look that failed (the state is kept then).
 async function noteEmbeddingBatch (name, { state = null, error = null } = {}) {
   await pool.query(
-    'UPDATE embedding_batches SET state = coalesce($2, state), last_error = $3, checked_at = now() WHERE name = $1',
+    "UPDATE gemini_batches SET state = coalesce($2, state), last_error = $3, checked_at = now() WHERE name = $1 AND kind = 'embedding'",
     [name, state, error ? String(error).slice(0, 500) : null])
 }
 
 async function deleteEmbeddingBatch (name) {
-  await pool.query('DELETE FROM embedding_batches WHERE name = $1', [name])
+  await pool.query("DELETE FROM gemini_batches WHERE name = $1 AND kind = 'embedding'", [name])
 }
 
 // Stores [{ id, embedding (an Int8Array from embed()), model }] and marks `handledIds` as handled by
@@ -168,8 +175,9 @@ async function getMessages (ids) {
 // [{ video_id, title, description, summary, text_hash }].
 async function videosForEmbedding () {
   const rows = await pool.query(
-    `SELECT v.video_id, v.title, v.description, s.summary, v.embedding_hash AS text_hash FROM youtube_videos v
-     LEFT JOIN youtube_summaries s ON s.video_id = v.video_id
+    `SELECT v.video_id, v.title, v.description, v.summary, v.embedding_hash AS text_hash
+     FROM youtube_videos v
+     WHERE v.channel_id IS NOT NULL
      ORDER BY v.published_at DESC NULLS LAST`)
   return rows.rows
 }
@@ -177,7 +185,7 @@ async function videosForEmbedding () {
 async function saveVideoEmbedding (videoID, embedding, hash, model) {
   // A video gone meanwhile (its channel was unset) is simply not there to update.
   await pool.query(
-    'UPDATE youtube_videos SET embedding = $2, embedding_hash = $3, embedding_model = $4 WHERE video_id = $1',
+    'UPDATE youtube_videos SET embedding = $2, embedding_hash = $3, embedding_model = $4 WHERE video_id = $1 AND channel_id IS NOT NULL',
     [videoID, toVectorLiteral(embedding), hash, model])
 }
 
@@ -185,7 +193,7 @@ async function saveVideoEmbedding (videoID, embedding, hash, model) {
 // same for every server; guildID is kept for the callers).
 async function hasVideoEmbeddings (guildID, model) {
   const rows = await pool.query(
-    'SELECT 1 FROM youtube_videos WHERE embedding_model = $1 AND embedding IS NOT NULL LIMIT 1',
+    'SELECT 1 FROM youtube_videos WHERE channel_id IS NOT NULL AND embedding_model = $1 AND embedding IS NOT NULL LIMIT 1',
     [model])
   return rows.rows.length !== 0
 }
@@ -195,7 +203,7 @@ async function hasVideoEmbeddings (guildID, model) {
 // videos each, so all are scored.
 async function videoScores (guildID, query, model) {
   const rows = await pool.query(
-    'SELECT video_id, 1 - (embedding <=> $2::halfvec) AS score FROM youtube_videos WHERE embedding_model = $1 AND embedding IS NOT NULL',
+    'SELECT video_id, 1 - (embedding <=> $2::halfvec) AS score FROM youtube_videos WHERE channel_id IS NOT NULL AND embedding_model = $1 AND embedding IS NOT NULL',
     [model, toVectorLiteral(query)])
   return Object.fromEntries(rows.rows.map(r => [r.video_id, Number(r.score)]))
 }

@@ -36,7 +36,6 @@ module.exports = async (event, type) => {
         }
 
         if (guildId !== true && !global.bot.guildSettingsCache[guildId]) return // true means skip guildsettings fetch
-        if (guildId !== true && event.name !== 'guildMemberUpdate' && event.name !== 'guildMemberRemove' && global.bot.guildSettingsCache[guildId].eventIsDisabled(event.name)) return
         await event.handle.apply(this, args)
       }
     })

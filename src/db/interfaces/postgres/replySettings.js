@@ -17,7 +17,7 @@ const { isOwnerGuild } = require('../../../bot/utils/priority')
 // safetyFilter: boolean, uncensoredR18: boolean }.
 async function getReplySettings (guildID) {
   const [rows, taskRows] = await Promise.all([
-    pool.query('SELECT reply_length, streamer_persona, debug_footer, token_limit_5h, token_limit_week, token_flex_at, token_unlimited, reply_model, reply_thinking, assistant_rules, embed_messages, embed_emojis, safety_filter, uncensored_r18 FROM guilds WHERE id = $1', [guildID]),
+    pool.query('SELECT reply_length, streamer_persona, debug_footer, token_limit_5h, token_limit_week, token_flex_at, token_unlimited, assistant_rules, embed_messages, embed_emojis, safety_filter, uncensored_r18 FROM guilds WHERE id = $1', [guildID]),
     pool.query('SELECT task, model, thinking, tier FROM guild_ai_models WHERE guild_id = $1', [guildID])
   ])
   const row = rows.rows[0]
@@ -25,20 +25,14 @@ async function getReplySettings (guildID) {
   for (const r of taskRows.rows) {
     aiModels[r.task] = { model: r.model || null, thinking: r.thinking || null, tier: r.tier || null }
   }
-  if ((row?.reply_model || row?.reply_thinking) && !aiModels.reply) {
-    aiModels.reply = { model: row.reply_model || null, thinking: row.reply_thinking || null, tier: null }
-  } else if (aiModels.reply) {
-    aiModels.reply.model = aiModels.reply.model || row?.reply_model || null
-    aiModels.reply.thinking = aiModels.reply.thinking || row?.reply_thinking || null
-  }
   const owner = isOwnerGuild(guildID)
   return {
     replyLength: row?.reply_length || null,
     streamerPersona: row ? row.streamer_persona !== false : true,
     debugFooter: row?.debug_footer === true,
     tokenLimits: { '5h': row?.token_limit_5h ?? null, week: row?.token_limit_week ?? null, flexAt: row?.token_flex_at ?? null, unlimited: row?.token_unlimited === true },
-    replyModel: aiModels.reply?.model || row?.reply_model || null,
-    replyThinking: aiModels.reply?.thinking || row?.reply_thinking || null,
+    replyModel: aiModels.reply?.model || null,
+    replyThinking: aiModels.reply?.thinking || null,
     aiModels,
     assistantRules: row?.assistant_rules || null,
     embeddings: {
@@ -72,14 +66,7 @@ async function getTaskModel (guildID, task) {
   if (!AI_TASKS.includes(task)) return null
   if (guildID) {
     const { rows } = await pool.query('SELECT model, thinking, tier FROM guild_ai_models WHERE guild_id = $1 AND task = $2', [guildID, task])
-    if (rows[0]) return { model: rows[0].model || null, thinking: rows[0].thinking || null, tier: rows[0].tier || null }
-    if (task === 'reply') {
-      const g = await pool.query('SELECT reply_model, reply_thinking FROM guilds WHERE id = $1', [guildID])
-      if (g.rows[0]?.reply_model || g.rows[0]?.reply_thinking) {
-        return { model: g.rows[0].reply_model || null, thinking: g.rows[0].reply_thinking || null, tier: null }
-      }
-    }
-    return null
+    return rows[0] ? { model: rows[0].model || null, thinking: rows[0].thinking || null, tier: rows[0].tier || null } : null
   }
   const { rows } = await pool.query('SELECT model, thinking, tier FROM guild_ai_models WHERE task = $1 ORDER BY guild_id LIMIT 1', [task])
   return rows[0] ? { model: rows[0].model || null, thinking: rows[0].thinking || null, tier: rows[0].tier || null } : null
@@ -154,7 +141,6 @@ async function setTaskModel (guildID, task, which, value) {
   if (which === 'all') {
     await ensureGuild(guildID)
     await pool.query('DELETE FROM guild_ai_models WHERE guild_id = $1 AND task = $2', [guildID, task])
-    if (task === 'reply') await pool.query('UPDATE guilds SET reply_model = NULL, reply_thinking = NULL WHERE id = $1', [guildID])
     return
   }
   const col = TASK_COLUMNS[which]
@@ -166,10 +152,6 @@ async function setTaskModel (guildID, task, which, value) {
     [guildID, task, value]
   )
   await pool.query('DELETE FROM guild_ai_models WHERE guild_id = $1 AND task = $2 AND model IS NULL AND thinking IS NULL AND tier IS NULL', [guildID, task])
-  if (task === 'reply' && (which === 'model' || which === 'thinking')) {
-    const guildCol = which === 'model' ? 'reply_model' : 'reply_thinking'
-    await pool.query(`UPDATE guilds SET ${guildCol} = $2 WHERE id = $1`, [guildID, value])
-  }
 }
 
 // Sets the server's model ('model'), thinking level ('thinking') or tier ('tier') for mention

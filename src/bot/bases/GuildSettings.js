@@ -10,7 +10,6 @@ class GuildSettings {
     this.logBots = data.logBots || data.log_bots
     this.event_logs = data.event_logs
     this.ownerID = data.ownerID || data.owner_id
-    this.disabledEvents = data.disabledEvents || data.disabled_events
 
     global.bot.guildSettingsCache[data.id] = this // someday, this will be replaced because it's dumb
   }
@@ -59,11 +58,7 @@ class GuildSettings {
   needsMessageCache () {
     if (!this.event_logs) return true
     return ['messageDelete', 'messageUpdate', 'messageDeleteBulk']
-      .some(event => !!this.event_logs[event] && !this.eventIsDisabled(event))
-  }
-
-  eventIsDisabled (event) {
-    return !!this.disabledEvents && this.disabledEvents.includes(event)
+      .some(event => !!this.event_logs[event])
   }
 }
 

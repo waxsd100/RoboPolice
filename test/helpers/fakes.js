@@ -714,13 +714,13 @@ function installYouTubeStore (knowledge = {}, summaries = {}) {
     summaryVersions[videoID] = formatVersion
     return true
   }
-  store.getOtherSummaries = async guildID => {
+  store.getOtherSummaries = async () => {
     const own = new Set(allVideos().map(v => v.video_id))
-    return Object.entries(summaries[guildID] || {}).filter(([id]) => !own.has(id)).map(([videoID, summary]) => ({ video_id: videoID, summary }))
+    const ids = [...new Set(Object.values(summaries).flatMap(s => Object.keys(s)))].filter(id => !own.has(id))
+    return ids.map(id => ({ video_id: id, summary: anySummary(id) })).filter(r => r.summary)
   }
   store.deleteGuildYouTube = async guildID => {
     delete liveSettings[guildID]
-    delete summaries[guildID]
     if (knowledge[guildID]?.channel) knowledge[guildID].channel.live_events = false
   }
   return { knowledge, summaries, summaryVersions, writes, liveEvents, archiveAttempts }

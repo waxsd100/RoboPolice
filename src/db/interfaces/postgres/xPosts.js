@@ -1,22 +1,15 @@
 // Posts of the streamer's X accounts: the x_posts table (migrations/014_social_posts.sql, renamed in 015_x_knowledge.sql).
 const pool = require('../../clients/postgres')
 
-// Stores posts not stored yet: [{ id, account, url, text, createdAt, replyTo, mediaUrls }].
+// Stores posts not stored yet: [{ id, account, url, text, createdAt, replyTo }].
 // Resolves to the ones that were new.
 async function savePosts (posts) {
   const added = []
   for (const p of posts) {
-    // With its media (x_post_media), in order.
     const result = await pool.query(
-      `WITH post AS (
-         INSERT INTO x_posts (id, account, url, text, created_at, reply_to) VALUES ($1, $2, $3, $4, $5, $6)
-         ON CONFLICT (id) DO NOTHING RETURNING id
-       ), media AS (
-         INSERT INTO x_post_media (post_id, position, url)
-         SELECT post.id, m.n - 1, m.url FROM post, unnest($7::text[]) WITH ORDINALITY AS m (url, n)
-       )
-       SELECT id FROM post`,
-      [p.id, p.account, p.url, p.text, p.createdAt, p.replyTo || null, (p.mediaUrls || []).filter(Boolean)])
+      `INSERT INTO x_posts (id, account, url, text, created_at, reply_to) VALUES ($1, $2, $3, $4, $5, $6)
+       ON CONFLICT (id) DO NOTHING RETURNING id`,
+      [p.id, p.account, p.url, p.text, p.createdAt, p.replyTo || null])
     if (result.rows.length) added.push(p)
   }
   return added

@@ -231,10 +231,7 @@ async function summarizeVideo (guildID, url, { onStart = () => {}, force = false
   const videoID = parseVideoId(url)
   if (!videoID) throw new Error('YouTube の動画リンクではありません')
   const cached = !force && await youtubeDB.getSummary(videoID)
-  if (cached) {
-    await youtubeDB.saveSummary(guildID, videoID)
-    return { videoID, summary: cleanSummary(cached) || cached, cached: true }
-  }
+  if (cached) return { videoID, summary: cleanSummary(cached) || cached, cached: true }
   const stored = durationSeconds(await youtubeDB.videoDuration(videoID).catch(() => null))
   let started = false
   const notifyStart = async () => {

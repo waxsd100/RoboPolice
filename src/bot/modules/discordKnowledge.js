@@ -83,10 +83,15 @@ function toPost (message, guild = message.channel.guild, channel = message.chann
     channelID: channel.id,
     channelName: channel.name || channel.id,
     authorID: message.author.id,
-    authorName: message.member?.nick || message.author.globalName || message.author.username || message.author.id,
     content,
     createdAt: new Date(message.timestamp)
   }
+}
+
+function resolveAuthorName (guild, authorID) {
+  const member = guild?.members?.get?.(authorID)
+  const user = member?.user || global.bot?.users?.get?.(authorID)
+  return member?.nick || user?.globalName || user?.username || null
 }
 
 const monthOf = date => new Intl.DateTimeFormat('sv-SE', { timeZone: 'Asia/Tokyo', year: 'numeric', month: '2-digit' }).format(date)
@@ -95,7 +100,7 @@ const pageUrl = (guildID, authorID, month) => `https://discord.com/channels/${gu
 const messageLink = (guildID, p) => `https://discord.com/channels/${guildID}/${p.channel_id}/${p.id}`
 
 // One month's messages as the parts of a page: one line per message, cut into parts of at most MAX_PART.
-function monthSections (guildID, month, posts) {
+function monthSections (guildID, month, posts, authorName = null) {
   const [year, m] = month.split('-')
   const lines = posts.map(p => `[${dayOf(new Date(p.created_at))}] #${p.channel_name}: ${p.content.replace(/\s+/g, ' ')} ${messageLink(guildID, p)}`.slice(0, MAX_PART))
   const sections = []
@@ -108,7 +113,7 @@ function monthSections (guildID, month, posts) {
     current.push(line)
   }
   if (current.length) sections.push(current)
-  const name = posts[posts.length - 1]?.author_name || '配信者'
+  const name = authorName || posts[posts.length - 1]?.author_name || '配信者'
   return {
     title: `${name} の Discord の発言（${year}年${Number(m)}月）`,
     sections: sections.map((s, i) => ({ heading: `${year}年${Number(m)}月 ${i + 1}`, text: s.join('\n'), images: [] }))
@@ -133,7 +138,7 @@ async function writeMonths (months, knownGuild = null) {
       await knowledgeStore.deletePagesExcept(url, [])
       continue
     }
-    const page = monthSections(guildID, month, posts)
+    const page = monthSections(guildID, month, posts, resolveAuthorName(guild, authorID))
     await knowledgeStore.savePage(url, page.title, page.sections)
   }
 }
