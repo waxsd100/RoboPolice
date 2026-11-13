@@ -458,14 +458,10 @@ describe('stores', { skip: !database.available && 'needs PGHOST' }, () => {
     })
 
     test('a summary is made once and shared across all servers, including other channels\' summaries', async () => {
-      await store().saveSummary('g1', 'v1', '要約1', 1)
+      await store().saveSummary('g1', 'v1', '要約1')
       assert.equal(await store().getSummary('v1'), '要約1')
       await store().saveSummary('g2', 'v1')
       await store().saveSummary('g1', 'x9', '他の動画')
-      assert.deepEqual(await store().legacySummaries(2, 10), [{ video_id: 'v1', summary: '要約1' }])
-      assert.equal(await store().updateRewrittenSummary('v1', '要約1', 2, '別の要約'), false)
-      assert.equal(await store().updateRewrittenSummary('v1', '要約1', 2, '要約1'), true)
-      assert.deepEqual(await store().legacySummaries(2, 10), [])
       assert.deepEqual(await store().getOtherSummaries('g1'), [{ video_id: 'x9', summary: '他の動画' }])
       assert.deepEqual(await store().getOtherSummaries('g2'), [{ video_id: 'x9', summary: '他の動画' }])
       assert.deepEqual((await store().videoCards(['v1', 'x9'])).map(v => v.video_id), ['v1'])
@@ -496,7 +492,7 @@ describe('stores', { skip: !database.available && 'needs PGHOST' }, () => {
       await q("UPDATE youtube_videos SET archive_attempts = 0, archive_tried_at = NULL WHERE video_id = 'v2'")
       await store().saveSummary('g1', 'v2', '配信の要約')
       assert.deepEqual(await store().archivesToSummarize('g1', { waitMinutes: 0 }), [], 'not once summarized')
-      await q("UPDATE youtube_videos SET summary = NULL, summary_created_at = NULL, summary_format_version = NULL WHERE video_id = 'v2'")
+      await q("UPDATE youtube_videos SET summary = NULL, summary_created_at = NULL WHERE video_id = 'v2'")
       // An upload's event is not a stream: its video is never summarized as an archive.
       await q("DELETE FROM youtube_live_events WHERE video_id = 'v2'")
       await q("UPDATE youtube_videos SET stream_ended_at = NULL WHERE video_id = 'v2'")

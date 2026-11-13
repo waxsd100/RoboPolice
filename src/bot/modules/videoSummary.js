@@ -7,11 +7,9 @@ const youtubeDB = require('../../db/interfaces/postgres/youtube')
 const youtube = require('../utils/youtube')
 const { parseVideoId, durationSeconds } = youtube
 const { cleanSummary, fmtSeconds: fmt } = require('../utils/textClean')
-const { isGatewayConfigured } = require('../utils/aiGateway')
 const backgroundQueue = require('../utils/backgroundQueue')
 
 const MAX_SUMMARY = 3000
-const SUMMARY_FORMAT_VERSION = 2
 // Gemini watches the whole video before answering, so an hour-long stream archive can take
 // several minutes. VIDEO_SUMMARY_TIMEOUT_MINUTES overrides the default.
 const DEFAULT_TIMEOUT_MINUTES = 10
@@ -42,21 +40,6 @@ const MERGE_PROMPT = [
   '- 出力は `- [時間] 行ったこと・結果` の箇条書き行だけにし、前置き（「要約しました！」など）・後書き（「以上です」など）・見出し（`###` など）・空行・感想・文字数は一切書かないでください。',
   '- 各項目の先頭の `[時間]` は書き換えずにそのまま残し、太字（`**`）や番号付きリスト・入れ子の箇条書きは使わず、すべての行を `- [時間] ` で始めてください。',
   '- 出来事の結果・結論や、告知・日時・場所・出演者・URL などの具体的な情報は漏らさず残し、体言止めまたは簡潔な常体で淡々と書いてください。'
-].join('\n')
-
-const REWRITE_PROMPT = [
-  '次は過去に作成された YouTube 動画の要約テキストです。書かれている事実・時間・数値・固有名詞・URL を一切変えずに、以下の固定テンプレートと文体へ書き直してください。',
-  '',
-  '【出力テンプレート（1行1項目・時系列順）】',
-  '- [0:00] 行ったこと・起きたことと、その結果',
-  '- [12:34] 次の出来事・話題と、その結果・結論',
-  '',
-  '【厳守事項】',
-  '- 前置き（「要約しました！」「以下が要約です」など）・後書き（「以上です」など）・見出し（`###` など）・空行・感想・文字数は一切書かず、箇条書きの行だけを出力してください。',
-  '- 元の要約に時間がある項目は `- [分:秒] 内容` または `- [時:分:秒] 内容` に揃えてください。元の要約に時間が一切ない場合は、架空の時間を絶対に作らず `- 行ったこと・結果` の箇条書きにしてください。',
-  '- 太字（`**`）や番号付きリスト・入れ子の箇条書きは使わないでください。',
-  '- 「〜について話しています」「〜の様子が見られます」などの冗長な表現は削り、何をしてどうなったか（結果・結論・勝敗・告知の日時や場所やURL）だけを体言止めまたは簡潔な常体で淡々と書いてください。',
-  '- 元のテキストに書かれていない事実・時間・結果を推測で補わないでください。'
 ].join('\n')
 
 // A video longer than Gemini can take in at once (about 3 hours at low resolution: its input is at
@@ -271,75 +254,4 @@ async function summarizeVideo (guildID, url, { onStart = () => {}, force = false
   return { videoID, summary, cached: false }
 }
 
-const REWRITE_BATCH = 10
-const REWRITE_PACE_MS = 500
-const REWRITE_RETRY_MS = 5 * 60 * 1000
-
-async function rewriteSummaryText (text) {
-  const input = cleanSummary(text)
-  if (!input) return ''
-  const model = lightModel()
-  const thinking = thinkingConfig(model, { setting: 'GEMINI_LIGHT_THINKING_LEVEL', fallback: 'low' })
-  const content = await backgroundQueue.run(null, () => callGemini(model, {
-    contents: [{ role: 'user', parts: [{ text: `${REWRITE_PROMPT}\n\n---\n${input}` }] }],
-    generationConfig: { temperature: 0.1, ...thinking }
-  }, { timeoutMs: 2 * 60 * 1000 + FLEX_EXTRA_MS, purpose: 'videoSummary-rewrite', flex: true, defaultSafety: true }))
-  return cleanSummary(textOf(content)).slice(0, MAX_SUMMARY)
-}
-
-let rewriting = false
-// Upgrades legacy summaries (`format_version < SUMMARY_FORMAT_VERSION`) in the background using the
-// lightweight text model on Flex inference, newest videos first. Safe to restart: each row is marked
-// as it finishes, and a summary replaced meanwhile by `force:True` is never overwritten.
-async function rewriteLegacySummaries ({ batchSize = REWRITE_BATCH } = {}) {
-  if (rewriting || typeof youtubeDB.legacySummaries !== 'function') return { rewritten: 0, retry: false }
-  rewriting = true
-  let rewritten = 0
-  try {
-    for (;;) {
-      const rows = await youtubeDB.legacySummaries(SUMMARY_FORMAT_VERSION, batchSize)
-      if (!rows.length) break
-      let progressed = false
-      for (const { video_id: videoID, summary: oldSummary } of rows) {
-        let next = ''
-        try {
-          next = await rewriteSummaryText(oldSummary)
-        } catch (e) {
-          if (!e.blocked) {
-            global.logger?.warn?.(`[SUMMARY]: Could not rewrite legacy summary for ${videoID}, retrying later: ${e.message}`)
-            return { rewritten, retry: true }
-          }
-        }
-        const finalSummary = next || cleanSummary(oldSummary).slice(0, MAX_SUMMARY) || String(oldSummary || '').trim().slice(0, MAX_SUMMARY)
-        if (finalSummary) {
-          const updated = await youtubeDB.updateRewrittenSummary(videoID, finalSummary, SUMMARY_FORMAT_VERSION, oldSummary)
-          if (updated) {
-            rewritten++
-            progressed = true
-          }
-        }
-      }
-      if (!progressed) break
-      if (REWRITE_PACE_MS) await retryTimer.sleep(REWRITE_PACE_MS)
-    }
-    if (rewritten > 0) global.logger?.info?.(`[SUMMARY]: Rewrote ${rewritten} existing video summary(s) to template v${SUMMARY_FORMAT_VERSION}`)
-    return { rewritten, retry: false }
-  } finally {
-    rewriting = false
-  }
-}
-
-function startSummaryRewriter () {
-  if (process.env.SUMMARY_REWRITE === 'false' || !isGatewayConfigured()) return null
-  const step = () => {
-    rewriteLegacySummaries()
-      .then(res => { if (res?.retry) setTimeout(step, REWRITE_RETRY_MS) })
-      .catch(e => {
-        global.logger?.warn?.(`[SUMMARY]: Legacy summary rewrite failed, retrying later: ${e.message}`)
-        setTimeout(step, REWRITE_RETRY_MS)
-      })
-  }
-  return setTimeout(step, 15 * 1000)
-}
-
-module.exports = { summarizeVideo, summarizeClip, mergePartSummaries, rewriteSummaryText, rewriteLegacySummaries, startSummaryRewriter, lengthOf, summaryRequest, storeSummary, cleanSummary, textOf, shiftTimestamps, partClips, partPrompt, formatPartSummary, canSplitError, MAX_SUMMARY, SUMMARY_FORMAT_VERSION, MAX_SINGLE_SECONDS, PART_SECONDS, TOO_LONG, INVALID_VIDEO_ARG, PROMPT, MERGE_PROMPT, REWRITE_PROMPT }
+module.exports = { summarizeVideo, summarizeClip, mergePartSummaries, lengthOf, summaryRequest, storeSummary, cleanSummary, textOf, shiftTimestamps, partClips, partPrompt, formatPartSummary, canSplitError, MAX_SUMMARY, MAX_SINGLE_SECONDS, PART_SECONDS, TOO_LONG, INVALID_VIDEO_ARG, PROMPT, MERGE_PROMPT }

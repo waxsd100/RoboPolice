@@ -1,7 +1,7 @@
 const { test, describe, beforeEach } = require('node:test')
 const assert = require('node:assert/strict')
 const { configureGateway, installGemini, installYouTubeStore } = require('../helpers/fakes')
-const { summarizeVideo, rewriteLegacySummaries } = require('../../src/bot/modules/videoSummary')
+const { summarizeVideo } = require('../../src/bot/modules/videoSummary')
 
 // Node's own fetch, before tests replace global.fetch with fakes.
 const realFetch = globalThis.fetch
@@ -250,8 +250,7 @@ describe('the assumption the long wait relies on', () => {
   })
 })
 
-describe('existing summaries (migration 051 + lightweight AI rewrite)', () => {
-  const { retryTimer, GeminiError } = require('../../src/bot/modules/eventDrafter')
+describe('migration 051', () => {
   const applyMigration051 = require('../../src/db/migrations/051_youtube_summary_format')
 
   test('migration 051 cleans chatter, headings, bold, and irregular timestamps from existing DB rows and drops chatter-only rows', async () => {
@@ -291,79 +290,5 @@ describe('existing summaries (migration 051 + lightweight AI rewrite)', () => {
     assert.equal(dbRows.get('v1'), '- [0:05] 挨拶とマイクテスト完了')
     assert.equal(dbRows.get('v2'), '- [0:00] 既に整っている要約')
     assert.equal(dbRows.has('v3'), false, 'chatter-only broken row is deleted')
-  })
-
-  test('rewriteLegacySummaries rewrites legacy v1 summaries newest-first on light Flex model, skips v2, and never clobbers concurrent force updates', async (t) => {
-    configureGateway()
-    t.mock.method(global.logger, 'info', () => {})
-    t.mock.method(retryTimer, 'sleep', async () => {})
-    const store = installYouTubeStore(
-      {
-        100: {
-          channel: { channel_id: 'UC1', title: 'Ch' },
-          videos: [
-            { video_id: 'oldVid00001', published_at: '2026-09-01T00:00:00Z' },
-            { video_id: 'newVid00002', published_at: '2026-10-15T00:00:00Z' },
-            { video_id: 'alreadyV2_3', published_at: '2026-10-20T00:00:00Z' }
-          ]
-        }
-      },
-      {
-        100: {
-          oldVid00001: 'オープニングで挨拶について話しています。その後ボスに勝利しました。',
-          newVid00002: '- [0:00] 冒頭ではルールについて説明しています。\n- [15:20] 決勝戦で優勝という結果になりました。'
-        }
-      }
-    )
-    const youtubeDB = require('../../src/db/interfaces/postgres/youtube')
-    await youtubeDB.saveSummary('100', 'alreadyV2_3', '- [0:00] 既にv2の要約', 2)
-
-    const requests = installGemini([
-      [{ text: '要約しました！\n- [0:00] ルール説明\n- [15:20] 決勝戦で優勝' }],
-      [{ text: '- オープニング挨拶\n- ボス戦に勝利' }]
-    ])
-
-    const res = await rewriteLegacySummaries({ batchSize: 1 })
-    assert.deepEqual(res, { rewritten: 2, retry: false })
-    assert.equal(requests.length, 2, 'only legacy v1 summaries are rewritten; v2 is untouched')
-    assert.match(requests[0].url, /gemini-3\.5-flash-lite:generateContent$/, 'uses cheap text light model')
-    assert.equal(requests[0].body.serviceTier, 'flex', 'uses half-price Flex tier')
-    assert.match(requests[0].body.contents[0].parts[0].text, /15:20/, 'newest legacy video is rewritten first')
-    assert.equal(store.summaries[100].newVid00002, '- [0:00] ルール説明\n- [15:20] 決勝戦で優勝')
-    assert.equal(store.summaries[100].oldVid00001, '- オープニング挨拶\n- ボス戦に勝利')
-    assert.equal(store.summaries[100].alreadyV2_3, '- [0:00] 既にv2の要約')
-
-    // A second pass finds 0 legacy rows and makes 0 API calls.
-    assert.deepEqual(await rewriteLegacySummaries(), { rewritten: 0, retry: false })
-    assert.equal(requests.length, 2)
-  })
-
-  test('rewriteLegacySummaries falls back to cleaned text when blocked, and does not overwrite a summary replaced mid-flight', async (t) => {
-    configureGateway()
-    t.mock.method(global.logger, 'info', () => {})
-    t.mock.method(retryTimer, 'sleep', async () => {})
-    const store = installYouTubeStore({}, {
-      100: {
-        blockedVid1: 'はい、要約しました！\n* **[01:00]** 下ネタトークで盛り上がる',
-        racedVid002: '- [0:00] 古い文面について話しています'
-      }
-    })
-    const youtubeDB = require('../../src/db/interfaces/postgres/youtube')
-    let turn = 0
-    global.fetch = async () => {
-      turn++
-      if (turn === 1) {
-        return { ok: true, json: async () => ({ promptFeedback: { blockReason: 'PROHIBITED_CONTENT' }, candidates: [] }) }
-      }
-      // Simulate a concurrent /youtube summarize force:True completing while rewrite is in flight
-      await youtubeDB.saveSummary('100', 'racedVid002', '- [0:00] forceで再生成した最新要約', 2)
-      return { ok: true, json: async () => ({ candidates: [{ content: { role: 'model', parts: [{ text: '- [0:00] 旧要約の書き換え' }] } }] }) }
-    }
-    assert.ok(GeminiError)
-    const res = await rewriteLegacySummaries({ batchSize: 10 })
-    assert.equal(res.retry, false)
-    assert.equal(store.summaries[100].blockedVid1, '- [1:00] 下ネタトークで盛り上がる', 'blocked row keeps cleaned summary and advances to v2')
-    assert.equal(store.summaries[100].racedVid002, '- [0:00] forceで再生成した最新要約', 'concurrent force:True summary is preserved')
-    assert.deepEqual(await youtubeDB.legacySummaries(2, 10), [])
   })
 })

@@ -284,10 +284,12 @@ describe('migrations', { skip: !database.available && 'needs PGHOST' }, () => {
   })
 
   test('summaries are kept once (the newest) directly on youtube_videos and shared across servers', async () => {
-    assert.deepEqual(await q('SELECT video_id, channel_id, title, summary, summary_format_version FROM youtube_videos WHERE summary IS NOT NULL ORDER BY video_id'), [
-      { video_id: 'v1', channel_id: 'UC1', title: '動画1', summary: '新しい要約', summary_format_version: 1 },
-      { video_id: 'x9', channel_id: null, title: null, summary: '他チャンネルの要約', summary_format_version: 1 }
+    assert.deepEqual(await q('SELECT video_id, channel_id, title, summary FROM youtube_videos WHERE summary IS NOT NULL ORDER BY video_id'), [
+      { video_id: 'v1', channel_id: 'UC1', title: '動画1', summary: '新しい要約' },
+      { video_id: 'x9', channel_id: null, title: null, summary: '他チャンネルの要約' }
     ])
+    const fmtCols = await q("SELECT table_name FROM information_schema.columns WHERE table_schema = 'public' AND column_name = 'summary_format_version'")
+    assert.deepEqual(fmtCols, [])
   })
 
   test('stream events whose video is gone are dropped; a stream\'s end and archive tries move to its video', async () => {
