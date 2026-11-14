@@ -1,6 +1,6 @@
 const Eris = require('eris')
 const { v4: uuidv4 } = require('uuid')
-const { draft, revise, isConfigured, isUncensoredConfigured, isUncensoredDirective, rememberThreadModel, isR18Text, STORY_REQUEST_PATTERN, ENTITY_TYPES } = require('./eventDrafter')
+const { draft, revise, isConfigured, isUncensoredUsable, isUncensoredDirective, rememberThreadModel, isR18Text, STORY_REQUEST_PATTERN, ENTITY_TYPES } = require('./eventDrafter')
 const { createTools, describeServer, worthSearching, withServerEmojis, sharedOwnerEmojis, withServerChannels, channelTheme, SHORT_TOPIC_PROMPT, StopDrafting } = require('./eventTools')
 const { embedQuery } = require('../utils/embeddings')
 const { withLinkCards } = require('../utils/linkCards')
@@ -101,22 +101,17 @@ const MAX_MESSAGE = 2000
 
 // Splits a long chat/novel reply (> 2,000 chars) at paragraph or sentence boundaries so the whole
 // story is delivered across consecutive Discord messages without truncation.
-function splitChatMessages (content, footer) {
+function splitChatMessages (content, footer = '') {
   const s = String(content || '')
-  const roomWithFooter = footer ? MAX_MESSAGE - footer.length - 1 : MAX_MESSAGE
-  if (s.length <= roomWithFooter) {
-    return [footer ? `${s}\n${footer}` : s]
+  const cleanFooter = footer ? String(footer).trimStart() : ''
+  if (!s.trim()) {
+    return cleanFooter ? [cleanFooter.slice(0, MAX_MESSAGE)] : ['']
   }
   const chunks = []
   let rest = s
   while (rest.length > 0) {
-    if (rest.length <= roomWithFooter) {
-      chunks.push(footer ? `${rest}\n${footer}` : rest)
-      break
-    }
     if (rest.length <= MAX_MESSAGE) {
       chunks.push(rest)
-      if (footer) chunks.push(footer)
       break
     }
     const slice = rest.slice(0, MAX_MESSAGE)
@@ -129,6 +124,19 @@ function splitChatMessages (content, footer) {
     if (cut < MAX_MESSAGE * 0.4) cut = MAX_MESSAGE
     chunks.push(rest.slice(0, cut).trimEnd())
     rest = rest.slice(cut).replace(/^\n+/, '')
+  }
+  if (!chunks.length) {
+    return cleanFooter ? [cleanFooter.slice(0, MAX_MESSAGE)] : ['']
+  }
+  if (cleanFooter) {
+    const last = chunks.length - 1
+    chunks[last] = chunks[last].trimEnd()
+    const appended = chunks[last] ? `${chunks[last]}\n${cleanFooter}` : cleanFooter
+    if (appended.length <= MAX_MESSAGE) {
+      chunks[last] = appended
+    } else {
+      chunks.push(cleanFooter.slice(0, MAX_MESSAGE))
+    }
   }
   return chunks
 }
@@ -258,7 +266,7 @@ const CANDIDATES_IMAGE = 'candidates.jpg'
 
 function coverParts (cover) {
   return {
-    fields: [{ name: '画像', value: cover.describe() }],
+    fields: [{ name: '画像', value: String(cover.describe() || 'なし').slice(0, 1024) }],
     image: cover.buffer ? { url: `attachment://${PREVIEW_IMAGE}` } : undefined
   }
 }
@@ -375,7 +383,7 @@ const KINDS = {
 // Edits the reply. With `files` ([{ filename, file }], or null to remove all) the edit goes through
 // the REST API directly: the pinned Eris cannot attach files when editing a message.
 async function editReply (reply, payload, files) {
-  if (files === undefined) return reply.edit(payload)
+  if (files === undefined) return reply.edit({ allowedMentions: NO_MENTIONS, ...payload })
   const list = files || []
   const { allowedMentions, ...body } = payload
   return global.bot.requestHandler.request('PATCH', `/channels/${reply.channel.id}/messages/${reply.id}`, true, {
@@ -408,7 +416,7 @@ function buttonRows (buttons, ids) {
 async function choose (reply, requesterID, message, buttons, files) {
   const { awaitCustomID, cancelCustomID } = require('../events/interactionCreate')
   const ids = buttons.map(() => uuidv4())
-  await editReply(reply, { ...message, components: buttonRows(buttons, ids) }, files)
+  await editReply(reply, { allowedMentions: NO_MENTIONS, ...message, components: buttonRows(buttons, ids) }, files)
   try {
     const interaction = await Promise.race(ids.map(id => awaitCustomID(id, requesterID, ANSWER_TIMEOUT_MS)))
     return { index: ids.indexOf(interaction.data.custom_id), interaction }
@@ -422,7 +430,7 @@ async function choose (reply, requesterID, message, buttons, files) {
 // Asks the requester to type their answer as their next message in the channel. Resolves to the
 // text, or with `withImages` to { text, images }.
 async function typedAnswer (reply, channelID, requesterID, prompt, { withImages = false } = {}) {
-  await reply.edit({ content: `${prompt}（5分以内にこのチャンネルへ書き込んでください）`, embeds: [], components: [] })
+  await reply.edit({ content: `${prompt}（5分以内にこのチャンネルへ書き込んでください）`, embeds: [], components: [], allowedMentions: NO_MENTIONS })
   const answer = await awaitReply(channelID, requesterID, { withImages })
   if (answer === null) throw new StopDrafting('時間内に入力がなかったため、作成を取りやめました。')
   return withImages ? answer : answer.text
@@ -437,7 +445,8 @@ function asker (reply, channelID, requesterID) {
   return async (question, options) => {
     const picked = await choose(reply, requesterID, {
       content: '',
-      embeds: [{ title: '確認させてください', description: question, color: EMBED_COLORS.YELLOW_ORANGE }]
+      embeds: [{ title: '確認させてください', description: question, color: EMBED_COLORS.YELLOW_ORANGE }],
+      allowedMentions: NO_MENTIONS
     }, [
       ...options.map(label => ({ label, style: PRIMARY })),
       { label: 'その他（文字で入力）', style: SECONDARY },
@@ -448,7 +457,7 @@ function asker (reply, channelID, requesterID) {
     const answer = picked.index === options.length
       ? await typedAnswer(reply, channelID, requesterID, `「${question}」への答えを入力してください`)
       : options[picked.index]
-    await reply.edit({ content: `「${answer.slice(0, 100)}」で続けます…`, embeds: [], components: [] })
+    await reply.edit({ content: `「${answer.slice(0, 100)}」で続けます…`, embeds: [], components: [], allowedMentions: NO_MENTIONS })
     return answer
   }
 }
@@ -467,7 +476,7 @@ async function handle (message) {
       global.logger.warn(`Mention drafting is disabled: ${missing.join(', ')} not set`)
     }
     if (!canManageEvents(message.member, guild)) return
-    return message.channel.createMessage({ content: `メンション機能が設定されていないため使えません（未設定: ${missing.join(', ')}）。`, ...reference }).catch(() => {})
+    return message.channel.createMessage({ content: `メンション機能が設定されていないため使えません（未設定: ${missing.join(', ')}）。`, allowedMentions: NO_MENTIONS, ...reference }).catch(() => {})
   }
 
   let request = extractRequest(message)
@@ -475,10 +484,10 @@ async function handle (message) {
   const embedded = embeddedImages(message)
   const repliedTo = message.messageReference?.messageID
   if (!request && !repliedTo && !attached.length && !embedded.length) {
-    return message.channel.createMessage({ content: '話したいことか、イベントやフォーラム投稿にしたい内容（文章・URL・メッセージリンク）を添えるか、元のメッセージに返信する形でメンションしてください。', ...reference }).catch(() => {})
+    return message.channel.createMessage({ content: '話したいことか、イベントやフォーラム投稿にしたい内容（文章・URL・メッセージリンク）を添えるか、元のメッセージに返信する形でメンションしてください。', allowedMentions: NO_MENTIONS, ...reference }).catch(() => {})
   }
   if (inProgress.has(message.author.id)) {
-    return message.channel.createMessage({ content: '前の依頼を処理中です。終わってからもう一度お試しください。', ...reference }).catch(() => {})
+    return message.channel.createMessage({ content: '前の依頼を処理中です。終わってからもう一度お試しください。', allowedMentions: NO_MENTIONS, ...reference }).catch(() => {})
   }
 
   inProgress.add(message.author.id)
@@ -488,28 +497,28 @@ async function handle (message) {
     let referenced = null
     let outcome = null
     try {
-      reply = await message.channel.createMessage({ content: '内容を読み取っています…', ...reference })
+      reply = await message.channel.createMessage({ content: '内容を読み取っています…', allowedMentions: NO_MENTIONS, ...reference })
       // /replylength, /persona, %debugfooter, %tokenlimit, %safety; without them (or the database) as by default.
       const { isOwnerGuild } = require('../utils/priority')
       const owner = isOwnerGuild(guild.id)
       const { replyLength, streamerPersona, debugFooter, tokenLimits, replyModel, replyThinking, aiModels, assistantRules, safety = {}, safetyFilter = !owner, uncensoredR18 = owner } = await replySettingsStore.getReplySettings(guild.id)
         .catch(() => ({ replyLength: null, streamerPersona: true, debugFooter: false, tokenLimits: {}, safety: {}, safetyFilter: !owner, uncensoredR18: owner }))
-      const allowUncensored = uncensoredR18 !== false || (safetyFilter === false && safety?.uncensored !== false)
+      const allowUncensored = Boolean(uncensoredR18) && (!safetyFilter || safety?.uncensored === true)
       // Per user across every server, in tokens, against this server's limits (mentionQuota.js). Near
       // a limit, every call goes to Flex inference: slower and half the price.
       const quota = await mentionQuota.take(message.author.id, guild.id, new Date(), { limits: tokenLimits })
       if (!quota.allowed) throw new StopDrafting(mentionQuota.refusal(quota))
       if (quota.flex) {
         usage.flex = true
-        await reply.edit({ content: `利用量が上限の ${Math.floor(quota.used * 100)}% に近づいたので、低速モード（Flex）で考えています…（数分かかることがあります）` }).catch(() => {})
+        await reply.edit({ content: `利用量が上限の ${Math.floor(quota.used * 100)}% に近づいたので、低速モード（Flex）で考えています…（数分かかることがあります）`, allowedMentions: NO_MENTIONS }).catch(() => {})
       }
-      usage.onWait = ms => reply.edit({ content: `AI が混み合っているため、${Math.ceil(ms / 1000)} 秒待ってから再試行します…` }).catch(() => {})
+      usage.onWait = ms => reply.edit({ content: `AI が混み合っているため、${Math.ceil(ms / 1000)} 秒待ってから再試行します…`, allowedMentions: NO_MENTIONS }).catch(() => {})
       const member = message.member
       const tools = createTools({
         guild,
         member,
         ask: asker(reply, message.channel.id, message.author.id),
-        progress: text => reply.edit({ content: text }).catch(() => {})
+        progress: text => reply.edit({ content: text, allowedMentions: NO_MENTIONS }).catch(() => {})
       })
       // Replying to something the bot made (or to the message saying it did) is a request to change it.
       const editTarget = repliedTo
@@ -519,7 +528,7 @@ async function handle (message) {
       // An image attached to the reply is what the image is to be replaced with.
       if (editTarget && !request) request = '画像を添付の画像に差し替えて'
       if (editTarget?.kind === 'event' && !canManageEvents(message.member, guild)) throw new StopDrafting(failure(NO_EVENT_PERMISSION))
-      const edit = editTarget && await postedEdit.load(guild, editTarget)
+      const edit = editTarget && await postedEdit.load(guild, editTarget, message.member)
       // A mention sent as a reply ("@bot これをイベントにして") is about the replied-to message.
       // Following the replies back makes a reply to the bot's answer continue that conversation.
       referenced = repliedTo && !edit
@@ -533,7 +542,7 @@ async function handle (message) {
       // What was just being talked about in the channel, as far as it bears on the request
       // (recentTopics.js); not when something the bot made is being changed.
       // The server's rules and what its moderators asked of the assistant (serverRules.js).
-      const directR18 = allowUncensored && isUncensoredConfigured() && (isUncensoredDirective(request, referenced) || isR18Text(request, referenced?.text))
+      const directR18 = allowUncensored && isUncensoredUsable() && (isUncensoredDirective(request, referenced) || isR18Text(request, referenced?.text))
       let queryVecPromise = null
       const queryVector = () => {
         if (!worthSearching(request)) return Promise.resolve(null)
@@ -577,7 +586,7 @@ async function handle (message) {
         streamerPersona,
         safetyFilter: !!safetyFilter,
         uncensoredR18: allowUncensored,
-        rules: directR18 ? null : { moderators: assistantRules || null, channels: [] },
+        rules: { moderators: assistantRules || null, channels: [] },
         model: replyModel || null,
         thinking: replyThinking || null,
         tier: aiModels?.reply?.tier || null,
@@ -637,9 +646,9 @@ async function handle (message) {
           result = { ...result, error: NO_EVENT_PERMISSION }
         }
         if (result.error) {
-          const errContent = failure(result.error)
+          const errContent = failure(checkedText(String(result.error), result, guild).slice(0, 1900))
           outcome = { kind: 'error', response: errContent }
-          await editReply(reply, { content: errContent, embeds: [], components: [] }, null)
+          await editReply(reply, { content: errContent, embeds: [], components: [], allowedMentions: NO_MENTIONS }, null)
           return
         }
         result = checkedDraft(result, guild)
@@ -666,7 +675,7 @@ async function handle (message) {
         if (needsCover && result.imageInstruction && result.imageInstruction !== lastInstruction && imageInstructions < MAX_IMAGE_INSTRUCTIONS) {
           lastInstruction = result.imageInstruction
           imageInstructions++
-          await reply.edit({ content: '画像を変更しています…', embeds: [], components: [] })
+          await reply.edit({ content: '画像を変更しています…', embeds: [], components: [], allowedMentions: NO_MENTIONS })
           await cover.instruct({ text: result.imageInstruction })
         }
         needsCover = false
@@ -706,7 +715,7 @@ async function handle (message) {
         if (!picked) {
           const timeoutContent = '時間内に確認されなかったため、取りやめました。'
           outcome = { kind: 'cancelled', response: timeoutContent }
-          await reply.edit({ content: timeoutContent, components: [] })
+          await reply.edit({ content: timeoutContent, components: [], allowedMentions: NO_MENTIONS })
           return
         }
         const { interaction } = picked
@@ -726,19 +735,19 @@ async function handle (message) {
           return
         }
         if (action.startsWith('candidate:') || action.startsWith('image:')) {
-          if (action === 'image:ai' && cover.needsAiRender()) await reply.edit({ content: 'AI で画像を作成しています…', components: [] })
+          if (action === 'image:ai' && cover.needsAiRender()) await reply.edit({ content: 'AI で画像を作成しています…', components: [], allowedMentions: NO_MENTIONS })
           await cover.pick(action)
           continue
         }
         if (action === 'instruct') {
           const answer = await typedAnswer(reply, message.channel.id, message.author.id, IMAGE_PROMPT, { withImages: true })
           imageInstructions++
-          await reply.edit({ content: '画像を変更しています…' })
+          await reply.edit({ content: '画像を変更しています…', allowedMentions: NO_MENTIONS })
           await cover.instruct(answer)
           continue
         }
         const correction = await typedAnswer(reply, message.channel.id, message.author.id, kind.revisePrompt)
-        await reply.edit({ content: '修正を反映しています…' })
+        await reply.edit({ content: '修正を反映しています…', allowedMentions: NO_MENTIONS })
         previous = result
         note = ''
         result = await revise(result.conversation, correction)
@@ -748,7 +757,7 @@ async function handle (message) {
     } catch (e) {
       if (e instanceof StopDrafting || e instanceof postedEdit.EditRefused) {
         outcome = { kind: 'refused', response: e.message }
-        await editReply(reply, { content: e.message, embeds: [], components: [] }, null).catch(() => {})
+        await editReply(reply, { content: e.message, embeds: [], components: [], allowedMentions: NO_MENTIONS }, null).catch(() => {})
         return
       }
       // Google refused to answer (its own filters, which no setting turns off): not a fault of the
@@ -757,8 +766,8 @@ async function handle (message) {
         global.logger.info(`[GEMINI]: A mention in ${guild.id} was refused by Google (${e.blocked})`)
         const content = 'ごめん、その内容は AI（Google）の制限で答えられなかった…！言い方や中身を変えてもう一回どうぞ。'
         outcome = { kind: 'refused', response: content }
-        if (reply) await editReply(reply, { content, embeds: [], components: [] }, null).catch(() => {})
-        else await message.channel.createMessage({ content, ...reference }).catch(() => {})
+        if (reply) await editReply(reply, { content, embeds: [], components: [], allowedMentions: NO_MENTIONS }, null).catch(() => {})
+        else await message.channel.createMessage({ content, allowedMentions: NO_MENTIONS, ...reference }).catch(() => {})
         return
       }
       global.logger.error(e)
@@ -768,9 +777,9 @@ async function handle (message) {
       const content = `⚠️ エラーが発生しました${cause ? `（${cause}）` : ''}。時間をおいてもう一度お試しください。\n${errorLog(e)}`
       outcome = { kind: 'error', response: content }
       if (reply) {
-        await editReply(reply, { content, embeds: [], components: [] }, null).catch(() => {})
+        await editReply(reply, { content, embeds: [], components: [], allowedMentions: NO_MENTIONS }, null).catch(() => {})
       } else {
-        await message.channel.createMessage({ content, ...reference }).catch(() => {})
+        await message.channel.createMessage({ content, allowedMentions: NO_MENTIONS, ...reference }).catch(() => {})
       }
     } finally {
       inProgress.delete(message.author.id)
@@ -801,4 +810,4 @@ async function handle (message) {
   })
 }
 
-module.exports = { handle, extractRequest }
+module.exports = { handle, extractRequest, splitChatMessages }

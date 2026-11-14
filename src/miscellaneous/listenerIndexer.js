@@ -1,15 +1,18 @@
 const fs = require('fs')
 const path = require('path')
 
+const EVENTS_DIR = path.join(__dirname, '..', 'bot', 'events')
+
 module.exports = () => {
-  const files = fs.readdirSync(path.resolve('src', 'bot', 'events'))
+  const files = fs.readdirSync(EVENTS_DIR).filter(f => f.endsWith('.js'))
   const once = []
   const on = []
   files.forEach(filename => {
-    if (require.cache[path.resolve('src', 'bot', 'events', filename)]) {
-      delete require.cache[path.resolve('src', 'bot', 'events', filename)]
+    const filePath = path.join(EVENTS_DIR, filename)
+    if (require.cache[filePath]) {
+      delete require.cache[filePath]
     }
-    const event = require(path.resolve('src', 'bot', 'events', filename))
+    const event = require(filePath)
     event.name = event.name.replace('.js', '')
     if (event.type === 'once') {
       once.push({ name: event.name, handle: event.handle })

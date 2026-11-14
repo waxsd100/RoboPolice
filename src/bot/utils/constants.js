@@ -99,7 +99,7 @@ exports.PRESET_EVENT_MAP = {
   member: ['guildMemberUpdate', 'guildMemberNickUpdate', 'guildMemberVerify', 'guildMemberBoostUpdate', 'presenceUpdate'],
   moderation: ['guildBanAdd', 'guildBanRemove', 'guildMemberKick'],
   joinlog: ['guildMemberAdd', 'guildMemberRemove'],
-  server: ['guildUpdate'],
+  server: ['guildUpdate', 'guildEmojisUpdate', 'guildStickersUpdate'],
   role: ['guildRoleUpdate', 'guildRoleCreate', 'guildRoleDelete'],
   channel: ['channelCreate', 'channelUpdate', 'channelDelete'],
   all: this.ALL_EVENTS

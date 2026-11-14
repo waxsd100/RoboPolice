@@ -33,15 +33,16 @@ Curtis Fowler氏による[Logger v3](https://github.com/curtisf/logger)からの
 
 | データ | 保存先 | 保存期間 |
 |---|---|---|
-| メッセージID、送信者ID、チャンネルID、サーバーID、タイムスタンプ、メッセージ本文、添付画像URL（受信時およびチャンネル履歴バックフィルで取得したもの） | PostgreSQL `messages`, `message_attachments`（および各チャンネルの取得進捗を記録する`message_backfill`） | `MESSAGE_HISTORY_DAYS`日間（未設定時は無期限）。BOTがサーバーから退出するとそのサーバーのデータはすべて削除されます |
-| サーバーごとの設定（ログ出力先チャンネル、無視するチャンネル、無効化したイベント、AI返信設定など）、サーバー名、アイコンURL、メンバー数、BOT参加日時、カスタム絵文字とAIによる説明文 | PostgreSQL `guilds`, `guild_emojis`, `guild_event_logs`, `guild_ignored_channels`, `guild_disabled_events` | BOTがサーバーから退出するまで |
-| 招待リンクの使用回数カウンタ（`AES_KEY`で暗号化）、Webhookハンドル、サーバー設定キャッシュ、メンション利用量のトークン集計 | Redis | キャッシュは3時間（トークン集計は5時間および7日間ウィンドウ） |
-| `SERVER_LORE=true`のときのみ: `@everyone`が閲覧できるチャンネルの保存メッセージから抽出したサーバー内の定番ネタ・用語・出来事・話し方の傾向（個人に関する記録は除外） | PostgreSQL `guild_lore_chunks`, `guild_lore_facts`, `guild_lore_style` | 直近`SERVER_LORE_WEEKS`週間分（既定8週間）。メッセージが変更・削除されると再抽出され、BOTがサーバーから退出するとすべて削除されます |
-| BOTがフォローしているYouTubeチャンネル（`YOUTUBE_CHANNELS`）の情報・動画一覧・動画要約、Twitch配信アーカイブ（`TWITCH_CHANNELS`）、Steamプロフィール・所持ゲーム・レビュー・ウィッシュリスト（`STEAM_ACCOUNTS`）、Wiki・X・Web・対象ユーザーのDiscord発言から構築した知識データ | PostgreSQL `youtube_channels`, `youtube_videos`, `youtube_summaries`, `guild_youtube_summaries`, `twitch_*`, `steam_*`, `x_posts`, `discord_posts`, `knowledge_*` | フォロー対象または設定が維持されている間 |
+| メッセージID、送信者ID、チャンネルID、サーバーID、タイムスタンプ、メッセージ本文（平文）、添付画像URL（受信時およびチャンネル履歴バックフィルで取得したもの） | PostgreSQL `messages`, `message_attachments`（および各チャンネルの取得進捗を記録する`discord_channels`） | `MESSAGE_HISTORY_DAYS`日間（未設定時は無期限）。メッセージ削除時、`/clearmydata`請求時、およびBOTがサーバーから退出した際にも削除されます |
+| BOTへのメンション（または返信）時のリクエスト本文、参照先メッセージ本文、BOTの応答テキスト、依頼者ID・表示名、使用モデル・トークン数 | PostgreSQL `mention_logs` | `MESSAGE_HISTORY_DAYS`日間（未設定時は無期限）。元メッセージの削除時、`/clearmydata`請求時、およびBOTのサーバー退出時にも削除されます |
+| サーバーごとの設定（ログ出力先チャンネル、無視するチャンネル、AI返信・モデル設定など）、サーバー名、アイコンURL、メンバー数、BOT参加日時、カスタム絵文字とAIによる説明文 | PostgreSQL `guilds`, `guild_emojis`, `guild_event_logs`, `guild_ai_models`, `discord_channels` | BOTがサーバーから退出するまで |
+| 招待リンクの使用回数カウンタ（招待コードは`AES_KEY`で暗号化）、Webhookハンドル、サーバー設定キャッシュ、メンション利用量のトークン集計 | Redis | キャッシュは3時間（トークン集計は5時間および7日間ウィンドウ） |
+| `SERVER_LORE=true`のときのみ: `@everyone`が閲覧できるチャンネルの保存メッセージから抽出したサーバー内の定番ネタ・用語・出来事・話し方の傾向（個人に関する記録は除外） | PostgreSQL `guild_lore_chunks`, `guild_lore_facts`（話し方の傾向は`guilds.lore_style`カラム） | 直近`SERVER_LORE_WEEKS`週間分（既定8週間）。メッセージが変更・削除されると再抽出され、BOTがサーバーから退出するとすべて削除されます |
+| BOTがフォローしているYouTubeチャンネル（`YOUTUBE_CHANNELS`）の情報・動画一覧・動画要約・配信イベント紐付け、Twitch配信アーカイブ（`TWITCH_CHANNELS`）、Steamプロフィール・所持ゲーム・レビュー・ウィッシュリスト（`STEAM_ACCOUNTS`）、Wiki・X・Web・対象ユーザーのDiscord発言から構築した知識データ | PostgreSQL `youtube_channels`, `youtube_videos`, `youtube_live_events`, `gemini_batches`, `twitch_channels`, `twitch_videos`, `steam_profiles`, `steam_apps`, `steam_games`, `x_posts`, `discord_posts`, `knowledge_pages`, `knowledge_sections`, `knowledge_facts`, `knowledge_fact_aliases` | フォロー対象または設定が維持されている間 |
 
 メッセージ行（`messages`テーブル）は、**メッセージ削除ログまたは編集ログの出力先チャンネルが設定されているサーバーでのみ**保存されます。これらのログを設定していないサーバーではメッセージ本文は保存されません。
 
-BOTが参加する前やログ設定前に送信された過去のメッセージは、同じルールのもとで**各チャンネルの履歴から自動的にバックフィル取得**されます（`src/bot/modules/historyBackfill.js`）。対象はBOTが閲覧可能なテキスト・ボイス・アナウンス・ステージチャンネルおよびアクティブなスレッドで、無視設定されたチャンネルやBOT・AutoModのメッセージは除外されます。取得範囲は`HISTORY_BACKFILL_SINCE`（`YYYY-MM-DD`、日本時間）または`HISTORY_BACKFILL_DAYS`（日数）、チャンネルごとの最大件数`HISTORY_BACKFILL_MAX_MESSAGES`、および`MESSAGE_HISTORY_DAYS`のうち最も新しい時点までです。1リクエストあたり100件を`HISTORY_BACKFILL_DELAY_MS`（既定1000ms）間隔で取得し、進捗は`message_backfill`に記録されるため再起動後も続きから再開します。`HISTORY_BACKFILL=false`で無効化できます。
+BOTが参加する前やログ設定前に送信された過去のメッセージは、同じルールのもとで**各チャンネルの履歴から自動的にバックフィル取得**されます（`src/bot/modules/historyBackfill.js`）。対象はBOTが閲覧可能なテキスト・ボイス・アナウンス・ステージチャンネルおよびアクティブなスレッドで、無視設定されたチャンネルやBOT・AutoModのメッセージは除外されます。取得範囲は`HISTORY_BACKFILL_SINCE`（`YYYY-MM-DD`、日本時間）または`HISTORY_BACKFILL_DAYS`（日数）、チャンネルごとの最大件数`HISTORY_BACKFILL_MAX_MESSAGES`、および`MESSAGE_HISTORY_DAYS`のうち最も新しい時点までです。1リクエストあたり100件を`HISTORY_BACKFILL_DELAY_MS`（既定1000ms）間隔で取得し、進捗は`discord_channels`に記録されるため再起動後も続きから再開します。`HISTORY_BACKFILL=false`で無効化できます。
 
 ## コマンド一覧
 
@@ -130,7 +131,7 @@ BOT がサーバーに入った瞬間から、すべてのイベントを記録�
 ### 知識ソース（Wiki・X・Discord・Web・Steam）
 
 - **コミュニティWiki（`WIKI_URLS`、`src/bot/modules/wikiKnowledge.js`）**:
-  シャード0を担当するワーカーが週1回（1秒に1ページ、`robots.txt`で許可された`/d/`ページのみ）Wikiの全ページを読み込み、見出しごとに分割してベクトル化の上`knowledge_pages`と`knowledge_sections`（ソース`wiki`、画像は`knowledge_section_images`）に保存します。さらに抽出モデル（`GEMINI_EXTRACT_MODEL`）が各セクションからキャラクター・名言・用語（定番ネタやスラング）を構造化JSONとして`knowledge_facts`（別名は`knowledge_fact_aliases`）に抽出します。モデルは`search_wiki`ツールでこれらを検索し、配信者らしい語録や知識を引用します（ファンによる記述であるため、配信者本人の公式発言としては断定しません）。
+  シャード0を担当するワーカーが週1回（1秒に1ページ、`robots.txt`で許可された`/d/`ページのみ）Wikiの全ページを読み込み、見出しごとに分割してベクトル化の上`knowledge_pages`と`knowledge_sections`（ソース`wiki`、代表画像URLは`image_url`カラム）に保存します。さらに抽出モデル（`GEMINI_EXTRACT_MODEL`）が各セクションからキャラクター・名言・用語（定番ネタやスラング）を構造化JSONとして`knowledge_facts`（別名は`knowledge_fact_aliases`）に抽出します。モデルは`search_wiki`ツールでこれらを検索し、配信者らしい語録や知識を引用します（ファンによる記述であるため、配信者本人の公式発言としては断定しません）。
 - **配信者のXポスト（`TWITTER_ACCOUNTS`、`src/bot/modules/twitterKnowledge.js`）**:
   FxTwitterの公開API（`api.fxtwitter.com`）経由で対象アカウントのポストを取得し（初回は最大`TWITTER_MAX_PAGES`ページ、以降は`TWITTER_REFRESH_HOURS`時間ごとに新着分のみ。他人のリポストは除外）、`x_posts`および月ごとの知識ページ（ソース`x`）に保存します。`search_wiki`でWikiと一緒に検索でき、言及する際はポストのURLを添えます。
 - **特定ユーザーのDiscord発言（`DISCORD_KNOWLEDGE_USERS`、`src/bot/modules/discordKnowledge.js`）**:
@@ -138,7 +139,7 @@ BOT がサーバーに入った瞬間から、すべてのイベントを記録�
 - **Web検索・固定URLの知識（`KNOWLEDGE_TOPICS` / `KNOWLEDGE_URLS`、`src/bot/modules/webKnowledge.js`）**:
   Wikiやポストだけでは情報が少ないトピック（例: `ぽみそしる`、`トマスコ`）を`WEB_REFRESH_HOURS`（既定168時間）ごとにGeminiのGoogle検索で調べて要約し、また`KNOWLEDGE_URLS`（`note.com`や`nobaman.com`のインタビュー記事など）の公開ページも読み込んで、ソース`web`として`search_wiki`の対象にします。
 - **Steamプロフィール・プレイ履歴・レビュー・ウィッシュリスト（`STEAM_ACCOUNTS`、`src/bot/modules/steamSync.js`）**:
-  `STEAM_SYNC_MINUTES`（既定360分）ごとに、対象アカウント（既定`nobaman`）の公開Steamプロフィール、所持・プレイ済みゲーム、レビュー、ウィッシュリストを同期し、`steam_profiles`、`steam_apps`、`steam_games`、`steam_reviews`、`steam_wishlist`に保存します（Steam Community XML/HTML、Steam Replay API、Wishlist/Store APIを組み合わせるため`STEAM_API_KEY`がなくても動作し、キーがあれば`GetOwnedGames`も併用します）。毎回のリクエストには1行のアカウント概要のみを渡し、ゲームのおすすめやプレイ時間・レビューを聞かれたときに`search_steam`ツールで詳細を検索します。また、Steamレビューは`knowledge_pages`（ソース`web`）にも書き出され、`search_wiki`からも検索されます。
+  `STEAM_SYNC_MINUTES`（既定360分）ごとに、対象アカウント（既定`nobaman`）の公開Steamプロフィール、所持・プレイ済みゲーム、レビュー、ウィッシュリストを同期し、`steam_profiles`、`steam_apps`、`steam_games`に保存します（Steam Community XML/HTML、Steam Replay API、Wishlist/Store APIを組み合わせるため`STEAM_API_KEY`がなくても動作し、キーがあれば`GetOwnedGames`も併用します）。毎回のリクエストには1行のアカウント概要のみを渡し、ゲームのおすすめやプレイ時間・レビューを聞かれたときに`search_steam`ツールで詳細を検索します。また、Steamレビューは`knowledge_pages`（ソース`web`）にも書き出され、`search_wiki`からも検索されます。
 
 ### カスタム絵文字の説明とベクトル化
 
@@ -163,7 +164,7 @@ BOT がサーバーに入った瞬間から、すべてのイベントを記録�
 
 既定ではオフです。`SERVER_LORE=true`にすると、BOTは各サーバーの`@everyone`が閲覧可能なテキスト・アナウンスチャンネルに保存されたメッセージ（ログ設定のあるサーバーのみ）から、サーバー固有の文脈を学習します。
 - **定番ネタ・用語・出来事**: 1日1回、過去`SERVER_LORE_WEEKS`週間（既定8週間）のメッセージをチャンネル×週単位のチャンクで読み取り、個人情報を除外した上で定番ネタやスラング・出来事を`guild_lore_chunks` / `guild_lore_facts`に抽出・ベクトル化します。
-- **話し方の傾向**: 直近のメッセージからサーバー全体のトーン（語尾やノリ）を週1回まで`guild_lore_style`に要約します。
+- **話し方の傾向**: 直近のメッセージからサーバー全体のトーン（語尾やノリ）を週1回まで`guilds`テーブル（`lore_style`カラム）に要約します。
 - **メンバー情報の参照（`about_member`ツール）**: 特定のメンバーについて質問されたときだけ、依頼者とBOTの双方が読めるチャンネルでの最新の発言（最大30件）と表示名・ロール・参加日を参照します。
 
 ※有効化する場合は、事前にプライバシーポリシーおよび特権インテントの申請内容を更新してください（[`docs/discord/privileged-intent-review.md`](docs/discord/privileged-intent-review.md) §9参照）。
@@ -321,7 +322,7 @@ rm robopolice-key.json
 
 ## データ保持期間と自動削除
 
-`src/miscellaneous/prune.js`が、`MESSAGE_HISTORY_DAYS`より古いメッセージ行をバッチ単位で削除します。
+`src/miscellaneous/prune.js`が、`MESSAGE_HISTORY_DAYS`より古いメッセージ行（`messages`）およびメンション履歴（`mention_logs`）をバッチ単位で削除します。
 - **プロセス内実行（既定）**: シャード0を担当するワーカーが1時間ごとに自動実行します。
 - **外部cronジョブ実行**: `node src/miscellaneous/prune.js`を単発実行すると、古い行を削除して件数を出力し終了します。外部実行する場合はBOT側に`PRUNE_EXTERNAL=true`を設定してください。
 
@@ -331,7 +332,7 @@ rm robopolice-key.json
 
 ```bash
 node index.js          # BOT本体の起動
-npm run lint           # ESLintによるコードチェック
+npm run lint           # StandardJSによるコードチェック
 npm test               # StandardJSスタイルチェック
 npm run test:unit      # ユニットテスト (node:test)
 npm run test:it        # 結合テスト（DiscordとGeminiをモック化したメンション→ツール→ボタン→作成の一連テスト）

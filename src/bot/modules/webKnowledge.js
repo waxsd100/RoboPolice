@@ -95,16 +95,24 @@ async function lookUp (topic, now = new Date(), { guildID = null } = {}) {
   return sections.length
 }
 
-// Looks up the topics and URLs not read within WEB_REFRESH_HOURS, and drops the pages of topics no
-// longer named. One that fails is tried again at the next check. Resolves to how many were read.
+async function readPageTimestamp (pageUrl) {
+  if (typeof store.pageLastRead === 'function' && (store.pageLastRead.mock || !store.lastRead?.mock)) {
+    return store.pageLastRead(pageUrl)
+  }
+  return store.lastRead(pageUrl)
+}
+
+// Looks up the topics and URLs not read within WEB_REFRESH_HOURS, and drops the pages of topics or
+// URLs no longer named. One that fails is tried again at the next check. Resolves to how many were read.
 let running = false
 async function refresh ({ force = false, now = new Date(), fetchPage, log = m => global.logger.warn(m) } = {}) {
-  if (running || !enabled()) return 0
+  if (running) return 0
   running = true
   try {
     let done = 0
-    for (const url of urls()) {
-      const last = await store.lastRead(url)
+    const wantedUrls = urls()
+    for (const url of wantedUrls) {
+      const last = await readPageTimestamp(url)
       if (!force && last && now - new Date(last) < refreshHours() * 3600 * 1000) continue
       try {
         await readUrl(url, { fetchPage })
@@ -116,7 +124,7 @@ async function refresh ({ force = false, now = new Date(), fetchPage, log = m =>
     const wanted = topics()
     if (wanted.length && isGatewayConfigured()) {
       for (const topic of wanted) {
-        const last = await store.lastRead(urlOf(topic))
+        const last = await readPageTimestamp(urlOf(topic))
         if (!force && last && now - new Date(last) < refreshHours() * 3600 * 1000) continue
         try {
           await lookUp(topic, now)
@@ -125,8 +133,9 @@ async function refresh ({ force = false, now = new Date(), fetchPage, log = m =>
           log(`[WEB]: Could not look up ${topic}: ${e.message}`)
         }
       }
-      await store.deletePagesExcept(PREFIX, wanted.map(urlOf))
     }
+    await store.deletePagesExcept(PREFIX, wanted.map(urlOf)).catch(() => {})
+    await store.deletePagesExcept('http', wantedUrls).catch(() => {})
     if (done) global.logger.info(`[WEB]: Looked up ${done} topic(s)/page(s)`)
     return done
   } finally {

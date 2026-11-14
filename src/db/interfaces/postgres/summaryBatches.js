@@ -18,7 +18,8 @@ async function saveBatch ({ name, guildID, channelID, requesterID, videoIDs, mod
          FROM unnest($2::text[]) WITH ORDINALITY AS v (video_id, n)
          ON CONFLICT (video_id) DO UPDATE SET
            summary_batch = EXCLUDED.summary_batch,
-           summary_batch_position = EXCLUDED.summary_batch_position`,
+           summary_batch_position = EXCLUDED.summary_batch_position
+         WHERE youtube_videos.summary_batch IS NULL`,
         [name, uniqueIDs])
     }
     await client.query('COMMIT')

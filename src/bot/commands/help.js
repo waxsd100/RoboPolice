@@ -77,7 +77,7 @@ module.exports = {
               inline: false,
               name: '支援について',
               value: `このBOTを気に入っていただけた場合は[サポートサーバー](${SUPPORT_SERVER_URL})までご連絡ください。`
-            }],
+            }]
           }]
         })
         await message.addReaction('📜')

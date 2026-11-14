@@ -76,11 +76,26 @@ function plainText (stored) {
   return fromStoredContent(stored).trim()
 }
 
+let verifiedMessageModel = null
+let verifiedResetFn = null
+function resetVerifiedMessageModel () {
+  verifiedMessageModel = null
+  verifiedResetFn = null
+}
+
 // Embeds the newest messages not handled yet, after sending those embedded by another model back
 // to be done again. Resolves to how many were embedded.
 async function indexMessages () {
-  const reset = await store.resetStaleMessageEmbeddings(model(), MESSAGES_PER_RUN)
-  if (reset) global.logger.info(`[EMBEDDINGS]: ${reset} message(s) were embedded by another model and will be embedded again`)
+  const current = model()
+  if (verifiedResetFn !== store.resetStaleMessageEmbeddings) {
+    verifiedMessageModel = null
+    verifiedResetFn = store.resetStaleMessageEmbeddings
+  }
+  if (verifiedMessageModel !== current) {
+    const cleared = await store.resetStaleMessageEmbeddings(current, MESSAGES_PER_RUN)
+    if (cleared) global.logger.info(`[EMBEDDINGS]: ${cleared} message(s) were embedded by another model and will be embedded again`)
+    if (cleared < MESSAGES_PER_RUN) verifiedMessageModel = current
+  }
   const hours = batchAfterHours()
   const cutoff = hours ? new Date(Date.now() - hours * 60 * 60 * 1000) : null
   // A batch that cannot be dealt with never holds up the recent messages.
@@ -90,9 +105,9 @@ async function indexMessages () {
   const wanted = worthEmbedding(pending)
   const vectors = wanted.length ? await embed(wanted.map(m => m.text)) : []
   await store.saveMessageEmbeddings(
-    wanted.map((m, i) => ({ id: m.id, embedding: vectors[i], model: model() })),
+    wanted.map((m, i) => ({ id: m.id, embedding: vectors[i], model: current })),
     pending.map(m => m.id),
-    model())
+    current)
   return wanted.length
 }
 
@@ -220,4 +235,4 @@ function startIndexer () {
   return setInterval(runOnce, minutes * 60 * 1000)
 }
 
-module.exports = { MAX_BATCH_HOURS, startIndexer, runOnce, indexVideos, indexMessages, batchPastMessages, batchAfterHours, cleanseMessages, cleanse, messageEmbeddingsEnabled, videoText, hashOf }
+module.exports = { MAX_BATCH_HOURS, startIndexer, runOnce, indexVideos, indexMessages, resetVerifiedMessageModel, batchPastMessages, batchAfterHours, cleanseMessages, cleanse, messageEmbeddingsEnabled, videoText, hashOf }

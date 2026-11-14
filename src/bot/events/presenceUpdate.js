@@ -9,7 +9,7 @@ module.exports = {
 
     // If there is no old presence, we can't compare to detect a change.
     if (!oldPresence) return
-    
+
     // Ignore bots
     if (member.bot && (!global.bot.guildSettingsCache[member.guild.id] || !global.bot.guildSettingsCache[member.guild.id].isLogBots())) return
 
@@ -21,7 +21,7 @@ module.exports = {
 
     // If custom status text hasn't changed (or it never had one), ignore
     if (newState === oldState) return
-    
+
     const presenceUpdatePayload = {
       guildID: member.guild.id,
       eventName: 'presenceUpdate',
@@ -34,11 +34,11 @@ module.exports = {
         fields: [
           {
             name: '変更前のステータス',
-            value: oldState || '（設定なし）'
+            value: (oldState || '（設定なし）').slice(0, 1024)
           },
           {
             name: '変更後のステータス',
-            value: newState || '（設定なし）'
+            value: (newState || '（設定なし）').slice(0, 1024)
           },
           {
             name: 'ID',

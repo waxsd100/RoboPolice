@@ -62,8 +62,11 @@ async function mget (keys) {
 
 async function set (key, value, seconds) {
   try {
-    await store.set(key, String(value), seconds)
-  } catch (_) {}
+    const res = await store.set(key, String(value), seconds)
+    return res !== false
+  } catch (_) {
+    return false
+  }
 }
 
 async function setJson (key, value, seconds) {

@@ -15,8 +15,14 @@
 //   4. Recreates the compact indexes on `messages` one at a time with `max_parallel_maintenance_workers = 0`.
 require('dotenv').config()
 
-const pool = require('../db/clients/postgres')
 const { prune } = require('./prune')
+const { loadSecrets } = require('./secrets')
+
+let _pool = null
+function getPool () {
+  if (!_pool) _pool = require('../db/clients/postgres')
+  return _pool
+}
 
 function formatMB (bytes) {
   return `${(Number(bytes || 0) / (1024 * 1024)).toFixed(2)} MB`
@@ -40,15 +46,30 @@ async function topRelations (client, limit = 10) {
   return rows
 }
 
+async function recreateMessageIndexes (client, log) {
+  log('[COMPACT]: Recreating compact indexes on messages...')
+  await client.query('CREATE INDEX IF NOT EXISTS messages_channel_ts ON messages (channel_id, ts DESC)')
+  await client.query('CREATE INDEX IF NOT EXISTS messages_guild ON messages (guild_id)')
+  await client.query('CREATE INDEX IF NOT EXISTS messages_ts ON messages (ts)')
+  await client.query('CREATE INDEX IF NOT EXISTS messages_unembedded ON messages (guild_id, ts DESC) WHERE embedding_model IS NULL AND embedding_batch IS NULL')
+  await client.query('CREATE INDEX IF NOT EXISTS messages_embedding_batch ON messages (embedding_batch) WHERE embedding_batch IS NOT NULL')
+  await client.query(`
+    CREATE INDEX IF NOT EXISTS messages_embedding_hnsw ON messages
+    USING hnsw (embedding halfvec_cosine_ops)
+    WITH (m = 8, ef_construction = 32)
+    WHERE embedding IS NOT NULL`)
+}
+
 async function compactDatabase ({ log = console.log } = {}) {
   const pruned = await prune().catch(() => ({ deleted: 0, days: null }))
   if (pruned.deleted > 0) {
     log(`[COMPACT]: Pruned ${pruned.deleted.toLocaleString()} expired message(s) older than ${pruned.days} days.`)
   }
 
-  const client = await pool.getPostgresClient()
+  const client = await getPool().getPostgresClient()
   try {
     await client.query('SET max_parallel_maintenance_workers = 0')
+    await client.query("SET maintenance_work_mem = '32MB'")
     const beforeBytes = await dbSizeBytes(client)
     log(`[COMPACT]: Database size before compaction: ${formatMB(beforeBytes)}`)
     for (const r of await topRelations(client, 8)) {
@@ -56,35 +77,27 @@ async function compactDatabase ({ log = console.log } = {}) {
     }
 
     log('[COMPACT]: Dropping secondary indexes on messages to free disk headroom before VACUUM FULL...')
-    await client.query('DROP INDEX IF EXISTS messages_embedding_hnsw')
-    await client.query('DROP INDEX IF EXISTS messages_channel_ts')
-    await client.query('DROP INDEX IF EXISTS messages_guild_ts')
-    await client.query('DROP INDEX IF EXISTS messages_guild')
-    await client.query('DROP INDEX IF EXISTS messages_ts')
-    await client.query('DROP INDEX IF EXISTS messages_unembedded')
-    await client.query('DROP INDEX IF EXISTS messages_embedding_batch')
+    try {
+      await client.query('DROP INDEX IF EXISTS messages_embedding_hnsw')
+      await client.query('DROP INDEX IF EXISTS messages_channel_ts')
+      await client.query('DROP INDEX IF EXISTS messages_guild_ts')
+      await client.query('DROP INDEX IF EXISTS messages_guild')
+      await client.query('DROP INDEX IF EXISTS messages_ts')
+      await client.query('DROP INDEX IF EXISTS messages_unembedded')
+      await client.query('DROP INDEX IF EXISTS messages_embedding_batch')
 
-    const { rows: tables } = await client.query(`
-      SELECT tablename FROM pg_tables
-      WHERE schemaname = 'public'
-      ORDER BY pg_total_relation_size(quote_ident(tablename)::regclass) ASC`)
+      const { rows: tables } = await client.query(`
+        SELECT tablename FROM pg_tables
+        WHERE schemaname = 'public'
+        ORDER BY pg_total_relation_size(quote_ident(tablename)::regclass) ASC`)
 
-    for (const { tablename } of tables) {
-      log(`[COMPACT]: Running VACUUM (FULL, ANALYZE) on ${tablename}...`)
-      await client.query(`VACUUM (FULL, ANALYZE) "${tablename.replace(/"/g, '""')}"`)
+      for (const { tablename } of tables) {
+        log(`[COMPACT]: Running VACUUM (FULL, ANALYZE) on ${tablename}...`)
+        await client.query(`VACUUM (FULL, ANALYZE) "${tablename.replace(/"/g, '""')}"`)
+      }
+    } finally {
+      await recreateMessageIndexes(client, log)
     }
-
-    log('[COMPACT]: Recreating compact indexes on messages...')
-    await client.query('CREATE INDEX IF NOT EXISTS messages_channel_ts ON messages (channel_id, ts DESC)')
-    await client.query('CREATE INDEX IF NOT EXISTS messages_guild ON messages (guild_id)')
-    await client.query('CREATE INDEX IF NOT EXISTS messages_ts ON messages (ts)')
-    await client.query('CREATE INDEX IF NOT EXISTS messages_unembedded ON messages (guild_id, ts DESC) WHERE embedding_model IS NULL AND embedding_batch IS NULL')
-    await client.query('CREATE INDEX IF NOT EXISTS messages_embedding_batch ON messages (embedding_batch) WHERE embedding_batch IS NOT NULL')
-    await client.query(`
-      CREATE INDEX IF NOT EXISTS messages_embedding_hnsw ON messages
-      USING hnsw (embedding halfvec_cosine_ops)
-      WITH (m = 8, ef_construction = 32)
-      WHERE embedding IS NOT NULL`)
 
     const afterBytes = await dbSizeBytes(client)
     const savedBytes = Math.max(0, beforeBytes - afterBytes)
@@ -94,20 +107,32 @@ async function compactDatabase ({ log = console.log } = {}) {
     }
     return { beforeBytes, afterBytes, savedBytes }
   } finally {
+    await client.query('RESET maintenance_work_mem').catch(() => {})
     await client.query('RESET max_parallel_maintenance_workers').catch(() => {})
     client.release()
   }
 }
 
+async function main () {
+  await loadSecrets()
+  const pool = getPool()
+  let exitCode = 0
+  try {
+    await compactDatabase()
+  } catch (e) {
+    console.error(`[COMPACT]: ${e.message}`)
+    exitCode = 1
+  } finally {
+    await pool.end().catch(() => {})
+  }
+  process.exit(exitCode)
+}
+
 if (require.main === module) {
-  require('./secrets').loadSecrets()
-    .then(() => compactDatabase())
-    .then(() => pool.end())
-    .then(() => process.exit(0))
-    .catch(e => {
-      console.error(`[COMPACT]: ${e.message}`)
-      process.exit(1)
-    })
+  main().catch(e => {
+    console.error(`[COMPACT]: ${e.message}`)
+    process.exit(1)
+  })
 }
 
 module.exports = { compactDatabase }

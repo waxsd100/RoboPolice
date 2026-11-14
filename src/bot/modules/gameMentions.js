@@ -12,8 +12,7 @@ const TIMEOUT_MS = 60 * 1000
 const REDIS_INDEX_KEY = 'game-mentions:index'
 const MAX_L1_GAMES = 64
 
-let index = null
-let loadedAt = 0
+let memIndex = null
 let loading = null
 const l1Cache = new Map()
 
@@ -44,26 +43,25 @@ async function load ({ fetchImpl = fetch } = {}) {
   const res = await fetchImpl(DETECTABLE, { signal: AbortSignal.timeout(TIMEOUT_MS) })
   if (!res.ok) throw new Error(`Discord's game list: HTTP ${res.status}`)
   const byName = buildIndex(await res.json())
-  loadedAt = Date.now()
+  memIndex = { data: byName, expiresAt: Date.now() + REFRESH_MS }
   l1Cache.clear()
-  const storedInRedis = await aiCache.setJson(REDIS_INDEX_KEY, Object.fromEntries(byName), REFRESH_TTL_SECONDS)
-  // When Redis holds the full index, avoid keeping ~60,000 entries in the Node.js heap.
-  index = storedInRedis ? null : byName
+  await aiCache.setJson(REDIS_INDEX_KEY, Object.fromEntries(byName), REFRESH_TTL_SECONDS)
   return byName
 }
 
 // The index, read again once a day. If reading fails, the old one is kept (or none).
 async function games (options) {
-  if (index && Date.now() - loadedAt < REFRESH_MS) return index
+  if (memIndex && Date.now() < memIndex.expiresAt) return memIndex.data
   const cached = await aiCache.getJson(REDIS_INDEX_KEY)
   if (cached && typeof cached === 'object') {
-    if (!loadedAt) loadedAt = Date.now()
-    return new Map(Object.entries(cached))
+    const byName = new Map(Object.entries(cached))
+    memIndex = { data: byName, expiresAt: Date.now() + REFRESH_MS }
+    return byName
   }
   if (!loading) {
     loading = load(options).catch(e => {
       global.logger.warn(`[GAMES]: ${e.message}`)
-      return index
+      return memIndex?.data || null
     }).finally(() => { loading = null })
   }
   return loading
@@ -73,7 +71,7 @@ async function games (options) {
 async function findGame (names, options) {
   const cleaned = names.filter(Boolean)
   if (!cleaned.length) return null
-  if (loadedAt && Date.now() - loadedAt < REFRESH_MS) {
+  if (memIndex && Date.now() < memIndex.expiresAt) {
     for (const name of cleaned) {
       const hit = l1Cache.get(normalize(name))
       if (hit) return { ...hit, mention: `<@$${hit.id}>` }
@@ -93,8 +91,7 @@ async function findGame (names, options) {
 }
 
 function reset () {
-  index = null
-  loadedAt = 0
+  memIndex = null
   l1Cache.clear()
   aiCache.del(REDIS_INDEX_KEY)
 }

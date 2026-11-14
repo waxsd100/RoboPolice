@@ -1,12 +1,47 @@
 const cluster = require('cluster')
 const webhookLogger = require('./webhooklogger')
+const websub = require('./websub')
 
 const workerCrashes = {}
 
-module.exports = async worker => {
+function safeSend (worker, message) {
+  if (!worker?.isConnected?.()) return
+  try {
+    worker.send(message, err => {
+      if (err) global.logger?.error?.(`Worker ${worker.id} IPC send error`, err)
+    })
+  } catch (err) {
+    global.logger?.error?.(`Worker ${worker.id} IPC send failed`, err)
+  }
+}
+
+function broadcast (message, excludeWorkerId = null) {
+  for (const worker of Object.values(cluster.workers || {})) {
+    if (!worker || worker.id === excludeWorkerId) continue
+    safeSend(worker, message)
+  }
+}
+
+async function attachWorkerListeners (worker) {
+  worker.on('error', err => {
+    global.logger.error('Worker IPC error', err)
+  })
+
+  worker.on('message', msg => {
+    if (msg?.type === 'youtubeWebsubRenew') {
+      if (websub.enabled?.()) {
+        Promise.resolve(websub.renew?.()).catch(err => {
+          global.logger.warn(`[WEBSUB]: ${err.message}`)
+        })
+      }
+    } else if (msg?.type === 'broadcast' && msg.payload) {
+      broadcast(msg.payload, worker.id)
+    }
+  })
+
   worker.on('online', () => {
     global.logger.startup(`WORKER ${worker.id} started hosting ${worker.rangeForShard}`)
-    worker.send({
+    safeSend(worker, {
       type: 'startup',
       processType: 'bot',
       rangeForShard: worker.rangeForShard,
@@ -47,15 +82,18 @@ module.exports = async worker => {
         shardEnd: worker.shardEnd,
         totalShards: worker.totalShards
       })
-      module.exports(nw) // assign listeners to recreated worker
+      attachWorkerListeners(nw) // assign listeners to recreated worker
 
       global.webhook.generic(`Respawned dead worker ${worker.id} hosting ${worker.rangeForShard} as ${nw.id}.`)
       if (workerCrashes[worker.rangeForShard]) workerCrashes[worker.rangeForShard]++
       else workerCrashes[worker.rangeForShard] = 1
       setTimeout(() => {
         if (workerCrashes[worker.rangeForShard] === 1) delete workerCrashes[worker.rangeForShard]
-        else workerCrashes[worker.rangeForShard]--
-      }, 60000)
+        else if (workerCrashes[worker.rangeForShard] > 1) workerCrashes[worker.rangeForShard]--
+      }, 60000).unref?.()
     }
   })
 }
+
+module.exports = attachWorkerListeners
+module.exports.broadcast = broadcast

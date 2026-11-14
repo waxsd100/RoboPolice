@@ -166,6 +166,22 @@ async function getKnowledge (guildID) {
   return { channels, channel: channels[0], videos: videos.rows.map(normalizeVideo), live_events: await liveEventsOn(guildID) }
 }
 
+getKnowledge._isRealPostgres = true
+
+// IDs among `videoIDs` currently assigned to a running Gemini summary batch.
+async function videosInSummaryBatch (videoIDs) {
+  if (!videoIDs?.length) return new Set()
+  if (!module.exports.getKnowledge?._isRealPostgres) {
+    const k = await module.exports.getKnowledge()
+    const wanted = new Set(videoIDs)
+    return new Set((k?.videos || []).filter(v => wanted.has(v.video_id) && v.summary_batch).map(v => v.video_id))
+  }
+  const rows = await pool.query(
+    'SELECT video_id FROM youtube_videos WHERE video_id = ANY($1::text[]) AND summary_batch IS NOT NULL',
+    [videoIDs])
+  return new Set(rows.rows.map(r => r.video_id))
+}
+
 // The channels and how many videos and summaries are stored, without reading the videos:
 // { channels: [{ …, video_count, summary_count, live_count }], video_count, summary_count,
 // live_count, live_events }, or null when the bot follows none. live_count: videos that are live or
@@ -252,9 +268,38 @@ async function archivesToSummarize (guildID, { waitMinutes = 30, retryMinutes = 
        AND v.archive_attempts < $4 AND (v.archive_tried_at IS NULL OR v.archive_tried_at < now() - make_interval(mins => $3))
        AND EXISTS (SELECT 1 FROM youtube_live_events e WHERE e.guild_id = $1 AND e.video_id = v.video_id AND e.kind = 'stream')
        AND v.summary IS NULL
+       AND v.summary_batch IS NULL
      ORDER BY v.stream_ended_at LIMIT $5`,
     [guildID, waitMinutes, retryMinutes, maxAttempts, limit])
   return rows.rows
+}
+archivesToSummarize._isRealPostgres = true
+
+// Atomically claims one finished stream archive for summarization so concurrent workers do not
+// summarize the same archive simultaneously.
+async function claimArchiveToSummarize (guildID, options = {}) {
+  const isMs = typeof options === 'number'
+  const waitMinutes = isMs ? 30 : (options?.waitMinutes ?? 30)
+  const retryMs = isMs ? options : (options?.retryMs ?? ((options?.retryMinutes ?? 60) * 60 * 1000))
+  const maxAttempts = isMs ? 3 : (options?.maxAttempts ?? 3)
+  const rows = await pool.query(
+    `UPDATE youtube_videos
+     SET archive_attempts = archive_attempts + 1, archive_tried_at = now()
+     WHERE video_id = (
+       SELECT v.video_id FROM youtube_videos v
+       WHERE v.stream_ended_at < now() - make_interval(mins => $2)
+         AND v.archive_attempts < $4
+         AND (v.archive_tried_at IS NULL OR v.archive_tried_at < now() - ($3::bigint * INTERVAL '1 millisecond'))
+         AND EXISTS (SELECT 1 FROM youtube_live_events e WHERE e.guild_id = $1 AND e.video_id = v.video_id AND e.kind = 'stream')
+         AND v.summary IS NULL
+         AND v.summary_batch IS NULL
+       ORDER BY v.stream_ended_at
+       LIMIT 1
+       FOR UPDATE SKIP LOCKED
+     )
+     RETURNING video_id, title, actual_end, 'https://www.youtube.com/watch?v=' || video_id AS url`,
+    [guildID, waitMinutes, retryMs, maxAttempts])
+  return rows.rows[0] || null
 }
 
 async function recordArchiveAttempt (videoID) {
@@ -358,4 +403,4 @@ async function deleteGuildYouTube (guildID) {
   await collectGarbage()
 }
 
-module.exports = { setBotChannels, getVideoIds, saveSync, getKnowledge, getOverview, listChannels, listLiveEventGuilds, liveEventsOn, setLiveEvents, upsertVideos, recentVideoIds, getLiveVideoIds, getLiveEvents, saveLiveEvent, archivesToSummarize, recordArchiveAttempt, websubDue, saveWebsub, isKnownChannel, videoCards, getVideo, videoIdsMissingStats, markStatsChecked, videoDuration, getSummary, saveSummary, getOtherSummaries, deleteGuildYouTube }
+module.exports = { setBotChannels, getVideoIds, saveSync, getKnowledge, videosInSummaryBatch, getOverview, listChannels, listLiveEventGuilds, liveEventsOn, setLiveEvents, upsertVideos, recentVideoIds, getLiveVideoIds, getLiveEvents, saveLiveEvent, archivesToSummarize, claimArchiveToSummarize, recordArchiveAttempt, websubDue, saveWebsub, isKnownChannel, videoCards, getVideo, videoIdsMissingStats, markStatsChecked, videoDuration, getSummary, saveSummary, getOtherSummaries, deleteGuildYouTube }

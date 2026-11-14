@@ -64,8 +64,10 @@ describe('stores', { skip: !database.available && 'needs PGHOST' }, () => {
       assert.deepEqual(await q('SELECT * FROM guild_event_logs'), [])
     })
 
-    test('ignoring a channel toggles, and bots can be logged', async () => {
+    test('ignoring a channel toggles, refuses cross-guild channel IDs, and bots can be logged', async () => {
       assert.equal(await update().ignoreChannel('g1', 'c5'), true)
+      assert.equal(global.bot.guildSettingsCache.g1.isChannelIgnored('c5'), true)
+      assert.equal(await update().ignoreChannel('g2', 'c5'), null, 'another server cannot toggle g1\'s channel')
       assert.equal(global.bot.guildSettingsCache.g1.isChannelIgnored('c5'), true)
       assert.equal(await update().ignoreChannel('g1', 'c5'), false)
       await update().ignoreChannel('g1', 'c6')
@@ -524,8 +526,13 @@ describe('stores', { skip: !database.available && 'needs PGHOST' }, () => {
       const embeddings = require('../../src/db/interfaces/postgres/embeddings')
       const batches = require('../../src/db/interfaces/postgres/summaryBatches')
       await batches.saveBatch({ name: 'batches/ys1', guildID: 'g1', channelID: 'c1', requesterID: 'u1', videoIDs: ['v2', 'extBatchVid'], model: 'gemini-3.8-flash' })
+      await batches.saveBatch({ name: 'batches/ys2', guildID: 'g2', channelID: 'c2', requesterID: 'u2', videoIDs: ['v2'], model: 'gemini-3.8-flash' })
       const [ys] = await batches.runningBatches('g1')
       assert.deepEqual([ys.name, ys.guild_id, ys.channel_id, ys.requester_id, ys.model, ys.video_ids], ['batches/ys1', 'g1', 'c1', 'u1', 'gemini-3.8-flash', ['v2', 'extBatchVid']])
+      const [ys2] = await batches.runningBatches('g2')
+      assert.deepEqual(ys2.video_ids, [], 'v2 stays owned by batches/ys1 while running')
+      await batches.deleteBatch('batches/ys2')
+      assert.deepEqual([...(await store().videosInSummaryBatch(['v1', 'v2', 'extBatchVid']))].sort(), ['extBatchVid', 'v2'])
       assert.deepEqual([...await store().getVideoIds()].sort(), ['v1', 'v2'], 'external batch placeholder is not treated as a followed channel video')
       await batches.noteBatch('batches/ys1', { state: 'BATCH_STATE_RUNNING' })
       await batches.noteBatch('batches/ys1', { error: 'HTTP 503' })
@@ -718,6 +725,25 @@ describe('stores', { skip: !database.available && 'needs PGHOST' }, () => {
       const byUser = await store.getMentionLogs('g1', { userID: 'u1' })
       assert.equal(byUser.length, 1)
       assert.equal(byUser[0].user_name, 'alice')
+
+      await store.saveMentionLog({
+        guildID: 'g1',
+        channelID: 'c1',
+        messageID: 'm103',
+        replyMessageID: 'r103',
+        userID: 'u1',
+        userName: 'alice',
+        kind: 'forum',
+        request: '募集スレッド立てて',
+        response: 'フォーラムに投稿しました: https://discord.com/channels/g1/7001'
+      })
+      assert.equal(await store.findPostCreator('g1', '7001'), 'u1')
+      assert.equal(await store.findPostCreator('g1', '9999'), null)
+
+      const del = require('../../src/db/interfaces/postgres/delete')
+      await del.deleteMessage('m101')
+      await del.deleteMessages(['r102', 'm103'])
+      assert.deepEqual(await store.getMentionLogs('g1'), [], 'deleting request or reply messages purges mention_logs')
     })
   })
 })

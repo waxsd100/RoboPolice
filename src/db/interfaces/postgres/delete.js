@@ -23,5 +23,13 @@ exports.resetGuild = async function (guildID) {
 // it would otherwise be written later and stay searchable after being deleted).
 exports.deleteMessage = async function (messageID) {
   removeMessage(messageID)
+  await pool.query('DELETE FROM mention_logs WHERE message_id = $1 OR reply_message_id = $1', [messageID]).catch(() => {})
   return await pool.query('DELETE FROM messages WHERE id=$1', [messageID])
+}
+
+exports.deleteMessages = async function (ids) {
+  if (!ids?.length) return
+  for (const id of ids) removeMessage(id)
+  await pool.query('DELETE FROM mention_logs WHERE message_id = ANY($1::text[]) OR reply_message_id = ANY($1::text[])', [ids]).catch(() => {})
+  return await pool.query('DELETE FROM messages WHERE id = ANY($1::text[])', [ids])
 }

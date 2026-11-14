@@ -56,7 +56,7 @@ module.exports = async client => {
   // can reclaim dead tuples and recycle WAL segments immediately.
   await client.query('COMMIT')
   try {
-    await client.query('CHECKPOINT')
+    await client.query('CHECKPOINT').catch(() => {})
 
     if (await hasColumn(client, 'messages', 'embedding_model_id') && await hasTable(client, 'embedding_models')) {
       for (;;) {
@@ -78,7 +78,7 @@ module.exports = async client => {
         `, [BATCH_SIZE])
         if (res.rowCount === 0) break
         await client.query('VACUUM messages')
-        await client.query('CHECKPOINT')
+        await client.query('CHECKPOINT').catch(() => {})
       }
       await client.query('ALTER TABLE messages DROP COLUMN IF EXISTS embedding_model_id')
     }
@@ -87,7 +87,7 @@ module.exports = async client => {
     // Compact the `messages` heap while secondary indexes are dropped (needs <1.5 GB of headroom,
     // which is available now that the 2 GB of secondary indexes are gone), then recycle WAL.
     await client.query('VACUUM FULL messages')
-    await client.query('CHECKPOINT')
+    await client.query('CHECKPOINT').catch(() => {})
 
     const messageIndexes = [
       'CREATE INDEX IF NOT EXISTS messages_channel_ts ON messages (channel_id, ts DESC)',
@@ -101,7 +101,7 @@ module.exports = async client => {
     ]
     for (const ddl of messageIndexes) {
       await client.query(ddl)
-      await client.query('CHECKPOINT')
+      await client.query('CHECKPOINT').catch(() => {})
     }
   } finally {
     await client.query('BEGIN')

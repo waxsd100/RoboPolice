@@ -4,6 +4,7 @@ module.exports = {
   name: 'guildRoleCreate',
   type: 'on',
   handle: async (guild, role) => {
+    if (!guild || !role) return
     const guildRoleCreateEvent = {
       guildID: guild.id,
       eventName: 'guildRoleCreate',
@@ -11,7 +12,7 @@ module.exports = {
         description: 'A role が作成されました',
         fields: [{
           name: '名前',
-          value: role.name
+          value: role.name || '不明'
         }, {
           name: '種類',
           value: 'User'
@@ -21,13 +22,17 @@ module.exports = {
         }]
       }]
     }
-    if (!guild.members.find(m => m.username === role.name)) { // if this isn't an auto role
+    const membersList = guild.members ? [...guild.members.values()] : []
+    if (!membersList.some(m => m.username === role.name)) { // if this isn't an auto role
       if (role.managed && role.tags?.bot_id) {
         guildRoleCreateEvent.embeds[0].fields[1].value = 'Bot'
       }
-      const logs = await guild.getAuditLog({ limit: 5, actionType: 30 }).catch(() => {})
-      if (!logs) return
-      const log = logs.entries.find(e => e.targetID === role.id && (new Date().getTime() - new Date((e.id / 4194304) + 1420070400000).getTime()) < 3000)
+      const canViewAudit = guild.members?.get?.(global.bot.user.id)?.permissions?.has?.('viewAuditLog') !== false
+      const logs = canViewAudit && typeof guild.getAuditLog === 'function'
+        ? await guild.getAuditLog({ limit: 5, actionType: 30 }).catch(() => ({ entries: [], users: [] }))
+        : { entries: [], users: [] }
+      const entries = Array.isArray(logs?.entries) ? logs.entries : []
+      const log = entries.find(e => e.targetID === role.id && (new Date().getTime() - new Date((e.id / 4194304) + 1420070400000).getTime()) < 3000)
       if (log) {
         const perp = log.user
         if (!perp) return await send(guildRoleCreateEvent)

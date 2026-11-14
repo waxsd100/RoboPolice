@@ -4,7 +4,10 @@
 // way, and with the same permissions it took to make it.
 const urlFetcher = require('../utils/urlFetcher')
 const { ENTITY_TYPES } = require('./eventDrafter')
-const { FORUM_TYPES } = require('./forumPost')
+const { FORUM_TYPES, canPost } = require('./forumPost')
+const { isCreator } = require('../utils/creatorIds')
+const { hasStaffAccess } = require('../utils/staffAccess')
+const mentionLogsStore = require('../../db/interfaces/postgres/mentionLogs')
 
 const EVENT_LINK = /https:\/\/discord\.com\/events\/(\d+)\/(\d+)/
 const POST_LINK = /https:\/\/discord\.com\/channels\/(\d+)\/(\d+)(?!\/)/
@@ -15,6 +18,21 @@ const LOCATION_TYPES = { [ENTITY_TYPES.stage]: 'stage', [ENTITY_TYPES.voice]: 'v
 const EDIT_HINT = '-# 後から直すときは、このメッセージに返信する形でメンションして、直したいことを書いてください。'
 
 class EditRefused extends Error {}
+
+function safePermissionsOf (channel, memberOrId) {
+  if (!channel || typeof channel.permissionsOf !== 'function' || !memberOrId) return null
+  const id = typeof memberOrId === 'string' ? memberOrId : (memberOrId.id || memberOrId.user?.id)
+  if (id) {
+    try {
+      const perms = channel.permissionsOf(id)
+      if (perms) return perms
+    } catch (_) {}
+  }
+  if (typeof memberOrId === 'object') {
+    try { return channel.permissionsOf(memberOrId) || null } catch (_) {}
+  }
+  return null
+}
 
 function request (method, url, body, files) {
   return global.bot.requestHandler.request(method, url, true, body, files)
@@ -45,7 +63,7 @@ async function currentImage (url) {
 }
 
 // The target's present content, as the submit tool's arguments, plus what is needed to update it.
-async function load (guild, target) {
+async function load (guild, target, member = null) {
   if (target.kind === 'event') {
     const event = await request('GET', `/guilds/${guild.id}/scheduled-events/${target.id}`).catch(() => null)
     if (!event || event.creator_id !== global.bot.user.id) throw new EditRefused('BOT が登録したイベントではないため、直せません。')
@@ -74,6 +92,21 @@ async function load (guild, target) {
   }
   const forum = await request('GET', `/channels/${thread.parent_id}`)
   if (!FORUM_TYPES.includes(forum.type)) throw new EditRefused('フォーラムの投稿ではないため、直せません。')
+  const forumChannel = guild.channels?.get?.(thread.parent_id) || global.bot?.getChannel?.(thread.parent_id) || null
+  if (member) {
+    if (!isCreator(member.id) && !(forumChannel && canPost(forumChannel, member))) {
+      throw new EditRefused('このフォーラムに投稿する権限がないため編集できません')
+    }
+    if (thread.thread_metadata?.locked && !isCreator(member.id) && !safePermissionsOf(forumChannel, member)?.has('manageThreads')) {
+      throw new EditRefused('ロックされたスレッドは編集できません')
+    }
+    const creatorID = typeof mentionLogsStore.findPostCreator === 'function'
+      ? await mentionLogsStore.findPostCreator(guild.id, thread.id).catch(() => null)
+      : null
+    if (creatorID && creatorID !== member.id && !isCreator(member.id) && !hasStaffAccess(member.roles, guild) && !safePermissionsOf(forumChannel, member)?.has('manageThreads')) {
+      throw new EditRefused('他のメンバーが作成したフォーラム投稿は編集できません')
+    }
+  }
   const tagNames = new Map((forum.available_tags || []).map(t => [t.id, t.name]))
   const attached = (starter.attachments || []).find(a => /^image\//.test(a.content_type || '') || /\.(jpe?g|png|webp|gif)$/i.test(a.filename || ''))
   return {
@@ -138,20 +171,27 @@ function update (guild, target, result, cover, author) {
 
 // What the draft changes, by name, so the requester can see nothing else is touched.
 function changes (target, result) {
+  if (!target || !result || (result.kind && result.kind !== target.kind)) return []
   const was = target.current
   if (target.kind === 'event') {
     const { event } = result
+    if (!event) return []
     const location = event.entity_type === ENTITY_TYPES.external ? `external:${event.entity_metadata.location}` : `${LOCATION_TYPES[event.entity_type]}:${event.channel_id}`
     const wasLocation = was.location_type === 'external' ? `external:${was.location}` : `${was.location_type}:${was.channel_id}`
+    const nextStart = event.scheduled_start_time ? new Date(event.scheduled_start_time).toISOString() : ''
+    const prevStart = was.start ? new Date(was.start).toISOString() : ''
+    const nextEnd = event.scheduled_end_time ? new Date(event.scheduled_end_time).toISOString() : ''
+    const prevEnd = was.end ? new Date(was.end).toISOString() : ''
     return [
       event.name !== was.name && 'イベント名',
       (event.description || '') !== was.description && '説明',
-      event.scheduled_start_time !== new Date(was.start).toISOString() && '開始',
-      was.end && event.scheduled_end_time !== new Date(was.end).toISOString() && '終了',
+      nextStart !== prevStart && '開始',
+      nextEnd !== prevEnd && '終了',
       location !== wasLocation && '場所'
     ].filter(Boolean)
   }
-  const { post, tagNames } = result
+  const { post, tagNames = [] } = result
+  if (!post) return []
   return [
     post.name !== was.title && '題名',
     post.message.content !== was.content && '本文',

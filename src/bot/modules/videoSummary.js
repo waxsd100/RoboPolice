@@ -68,6 +68,13 @@ function partClips (seconds, partSeconds = MAX_SINGLE_SECONDS) {
   for (let start = 0; start < seconds; start += partSeconds) {
     clips.push({ start, end: Math.min(seconds, start + partSeconds) })
   }
+  if (clips.length > 1) {
+    const last = clips[clips.length - 1]
+    if (last.end - last.start < 60) {
+      clips[clips.length - 2].end = last.end
+      clips.pop()
+    }
+  }
   return clips
 }
 

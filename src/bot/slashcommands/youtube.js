@@ -143,17 +143,22 @@ async function summarizeInBatch (interaction, videoIDs) {
 async function summarizeOne (interaction, url, force) {
   const guildID = interaction.guildID
   const text = textOf(interaction)
-  if (!parseVideoId(url)) return { content: text.badLink }
-  // A stored summary is shown at once; a new one goes in a batch, unless it is a channel's newest or a
-  // short video: those are summarized at once on Flex inference.
-  let flex = false
-  if (summaryBatch.enabled() && (force || !await youtubeDB.getSummary(parseVideoId(url)))) {
-    if (!(await summaryBatch.quickVideoIDs(guildID, [parseVideoId(url)])).has(parseVideoId(url))) return summarizeInBatch(interaction, [parseVideoId(url)])
-    flex = true
-  }
+  const parsedID = parseVideoId(url)
+  if (!parsedID) return { content: text.badLink }
   if (summarizing.has(guildID)) return { content: text.busy }
   summarizing.add(guildID)
   try {
+    if (!force && typeof youtubeDB.videosInSummaryBatch === 'function') {
+      const inBatch = await youtubeDB.videosInSummaryBatch([parsedID])
+      if (inBatch?.has(parsedID)) return { content: text.batchRunning }
+    }
+    // A stored summary is shown at once; a new one goes in a batch, unless it is a channel's newest or a
+    // short video: those are summarized at once on Flex inference.
+    let flex = false
+    if (summaryBatch.enabled() && (force || !await youtubeDB.getSummary(parsedID))) {
+      if (!(await summaryBatch.quickVideoIDs(guildID, [parsedID])).has(parsedID)) return await summarizeInBatch(interaction, [parsedID])
+      flex = true
+    }
     const { videoID, summary, cached } = await summarizeVideo(guildID, url, {
       force,
       flex,
@@ -177,25 +182,25 @@ async function summarize (interaction, sub) {
   const text = textOf(interaction)
   const guildID = interaction.guildID
   if (summarizing.has(guildID)) return { content: text.busy }
-  let videos = await videosToSummarize(guildID, count, { force })
-  if (videos.length === 0) {
-    return { content: force ? text.nothingForced : text.nothing }
-  }
-  // With batches: each channel's newest and short videos are summarized at once on Flex inference,
-  // the rest go in a batch.
-  let flex = false
-  let note = ''
-  if (summaryBatch.enabled()) {
-    const quick = await summaryBatch.quickVideoIDs(guildID, videos.map(v => v.video_id))
-    const later = videos.filter(v => !quick.has(v.video_id))
-    videos = videos.filter(v => quick.has(v.video_id))
-    if (later.length) note = (await summarizeInBatch(interaction, later.map(v => v.video_id))).content
-    if (videos.length === 0) return { content: note }
-    flex = true
-    if (note) await interaction.editOriginalMessage({ content: note }).catch(() => {})
-  }
   summarizing.add(guildID)
   try {
+    let videos = await videosToSummarize(guildID, count, { force })
+    if (videos.length === 0) {
+      return { content: force ? text.nothingForced : text.nothing }
+    }
+    // With batches: each channel's newest and short videos are summarized at once on Flex inference,
+    // the rest go in a batch.
+    let flex = false
+    let note = ''
+    if (summaryBatch.enabled()) {
+      const quick = await summaryBatch.quickVideoIDs(guildID, videos.map(v => v.video_id))
+      const later = videos.filter(v => !quick.has(v.video_id))
+      videos = videos.filter(v => quick.has(v.video_id))
+      if (later.length) note = (await summarizeInBatch(interaction, later.map(v => v.video_id))).content
+      if (videos.length === 0) return { content: note }
+      flex = true
+      if (note) await interaction.editOriginalMessage({ content: note }).catch(() => {})
+    }
     const results = await summarizeLatest(guildID, videos, {
       force,
       flex,

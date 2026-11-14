@@ -1,6 +1,15 @@
+const cluster = require('cluster')
 const sa = require('superagent')
+const { redact } = require('../bot/utils/redact')
 
-require('dotenv').config()
+if (!cluster.isWorker && !process.env.DISCORD_WEBHOOK_URL && !process.env.BOT_TOKEN) {
+  require('dotenv').config()
+}
+
+const MAX_DESCRIPTION_LENGTH = 4096
+const MAX_TITLE_LENGTH = 256
+const DEFAULT_AVATAR_URL = 'https://cdn4.iconfinder.com/data/icons/ionicons/512/icon-ios7-bell-512.png'
+
 let globalHookErrors = 0
 let warnedMissingUrl = false
 
@@ -17,17 +26,23 @@ function getWebhookUrl () {
   return null
 }
 
+function sanitizeDescription (msg, fallback = 'No message description provided.') {
+  const raw = msg instanceof Error ? (msg.stack || msg.message || String(msg)) : String(msg ?? '')
+  const clean = redact(raw).slice(0, MAX_DESCRIPTION_LENGTH)
+  return clean || fallback
+}
+
 function fatal (message) {
   const url = getWebhookUrl()
   if (url && globalHookErrors < 5) {
     sa
       .post(url)
       .send({
-        avatar_url: 'https://cdn4.iconfinder.com/data/icons/ionicons/512/icon-ios7-bell-512.png',
-        username: `Fatal Error LoggerBot Webhook Notification`,
+        avatar_url: DEFAULT_AVATAR_URL,
+        username: 'Fatal Error LoggerBot Webhook Notification',
         embeds: [{
           title: 'Fatal',
-          description: message,
+          description: sanitizeDescription(message),
           color: 16777215
         }]
       })
@@ -43,11 +58,11 @@ function error (message) {
     sa
       .post(url)
       .send({
-        avatar_url: 'https://cdn4.iconfinder.com/data/icons/ionicons/512/icon-ios7-bell-512.png',
-        username: `Error LoggerBot Webhook Notification`,
+        avatar_url: DEFAULT_AVATAR_URL,
+        username: 'Error LoggerBot Webhook Notification',
         embeds: [{
           title: 'Error',
-          description: message,
+          description: sanitizeDescription(message),
           color: 16711680
         }]
       })
@@ -63,11 +78,11 @@ function warn (message) {
     sa
       .post(url)
       .send({
-        avatar_url: 'https://cdn4.iconfinder.com/data/icons/ionicons/512/icon-ios7-bell-512.png',
-        username: `Warning LoggerBot Webhook Notification`,
+        avatar_url: DEFAULT_AVATAR_URL,
+        username: 'Warning LoggerBot Webhook Notification',
         embeds: [{
           title: 'Warning',
-          description: message,
+          description: sanitizeDescription(message),
           color: 15466375
         }]
       })
@@ -83,11 +98,11 @@ function generic (message) {
     sa
       .post(url)
       .send({
-        avatar_url: 'https://cdn4.iconfinder.com/data/icons/ionicons/512/icon-ios7-bell-512.png',
-        username: `Generic LoggerBot Webhook Notification`,
+        avatar_url: DEFAULT_AVATAR_URL,
+        username: 'Generic LoggerBot Webhook Notification',
         embeds: [{
           title: 'Generic',
-          description: message,
+          description: sanitizeDescription(message),
           color: 6052351
         }]
       })
@@ -103,11 +118,11 @@ function custom (message) {
     sa
       .post(url)
       .send({
-        avatar_url: message.avatar_url || 'https://cdn4.iconfinder.com/data/icons/ionicons/512/icon-ios7-bell-512.png',
+        avatar_url: message?.avatar_url || DEFAULT_AVATAR_URL,
         embeds: [{
-          title: message.title || 'Custom Notification',
-          color: message.color || 6052351,
-          description: message.description || 'No message description provided.'
+          title: redact(String(message?.title || 'Custom Notification')).slice(0, MAX_TITLE_LENGTH),
+          color: message?.color || 6052351,
+          description: sanitizeDescription(message?.description)
         }],
         timestamp: new Date()
       })

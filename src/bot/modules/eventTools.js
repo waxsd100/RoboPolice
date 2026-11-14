@@ -183,9 +183,37 @@ const LIVE_LABELS = { live: '配信中', upcoming: '配信予定' }
 
 const CHANNEL_TYPES = { 0: 'text', 2: 'voice', 4: 'category', 5: 'announcement', 13: 'stage', 15: 'forum', 16: 'media', 10: 'thread', 11: 'thread', 12: 'thread' }
 
-function canRead (channel, userID) {
-  const perms = channel?.permissionsOf?.(userID)
-  return !!perms && perms.has('viewChannel') && perms.has('readMessageHistory')
+function safePermissionsOf (channel, memberOrId) {
+  if (!channel || typeof channel.permissionsOf !== 'function' || !memberOrId) return null
+  const id = typeof memberOrId === 'string' ? memberOrId : (memberOrId.id || memberOrId.user?.id)
+  try {
+    return channel.permissionsOf(id)
+  } catch (_) {
+    if (typeof memberOrId === 'object') {
+      try { return channel.permissionsOf(memberOrId) } catch (__) {}
+    }
+    return null
+  }
+}
+
+function canView (channel, memberOrId) {
+  const perms = safePermissionsOf(channel, memberOrId)
+  if (!perms || !perms.has('viewChannel')) return false
+  const id = typeof memberOrId === 'string' ? memberOrId : (memberOrId?.id || memberOrId?.user?.id)
+  if (channel?.type === 12 && id !== global.bot?.user?.id && !perms.has('manageThreads')) {
+    return Boolean(channel.members?.has?.(id))
+  }
+  return true
+}
+
+function canRead (channel, memberOrId) {
+  const perms = safePermissionsOf(channel, memberOrId)
+  if (!perms || !perms.has('viewChannel') || !perms.has('readMessageHistory')) return false
+  const id = typeof memberOrId === 'string' ? memberOrId : (memberOrId?.id || memberOrId?.user?.id)
+  if (channel?.type === 12 && id !== global.bot?.user?.id && !perms.has('manageThreads')) {
+    return Boolean(channel.members?.has?.(id))
+  }
+  return true
 }
 
 // How many messages a reply chain is followed back, for a conversation with the bot.
@@ -241,16 +269,24 @@ function createTools ({ guild, member, ask, progress = () => {} }) {
   const sources = []
   let questions = 0
 
-  function readableChannel (channelID) {
+  async function readableChannel (channelID) {
     const channel = global.bot.getChannel(channelID)
     if (!channel || channel.guild?.id !== guild.id) throw new Error('このサーバーのチャンネルではありません')
-    if (!canRead(channel, member.id)) throw new Error('依頼者がこのチャンネルのメッセージを閲覧できません')
+    const userPerms = safePermissionsOf(channel, member)
+    if (!userPerms || !userPerms.has('viewChannel') || !userPerms.has('readMessageHistory')) {
+      throw new Error('依頼者がこのチャンネルのメッセージを閲覧できません')
+    }
+    if (channel.type === 12 && !userPerms.has('manageThreads') && !channel.members?.has?.(member.id)) {
+      const joined = await global.bot.requestHandler?.request?.('GET', `/channels/${channel.id}/thread-members/${member.id}`, true)
+        .then(res => Boolean(res?.user_id || res?.id), () => false)
+      if (!joined) throw new Error('依頼者がこのプライベートスレッドを閲覧できません')
+    }
     if (!canRead(channel, global.bot.user.id)) throw new Error('BOTがこのチャンネルのメッセージを閲覧できません')
     return channel
   }
 
   async function readMessage (channelID, messageID) {
-    readableChannel(channelID)
+    await readableChannel(channelID)
     return formatMessage(await global.bot.getMessage(channelID, messageID))
   }
 
@@ -260,7 +296,7 @@ function createTools ({ guild, member, ask, progress = () => {} }) {
     const messages = []
     let next = { channelID, messageID }
     while (next?.messageID && messages.length < MAX_THREAD) {
-      readableChannel(next.channelID)
+      await readableChannel(next.channelID)
       const m = await global.bot.getMessage(next.channelID, next.messageID).catch(e => {
         if (messages.length === 0) throw e
         return null
@@ -327,14 +363,14 @@ function createTools ({ guild, member, ask, progress = () => {} }) {
       return text
     },
     async get_recent_messages ({ channel_id: channelID, limit }) {
-      const channel = readableChannel(channelID)
+      const channel = await readableChannel(channelID)
       const count = Math.min(Math.max(parseInt(limit, 10) || 20, 1), MAX_RECENT_MESSAGES)
       const messages = await global.bot.getMessages(channelID, { limit: count })
       sources.push(`<#${channel.id}>`)
       return messages.filter(Boolean).map(m => formatMessage(m)).join('\n') // null: one Eris could not read
     },
     async search_channel_history ({ channel_id: channelID, query }) {
-      const channel = readableChannel(channelID)
+      const channel = await readableChannel(channelID)
       // Stored text is escaped for log embeds; search and show what people actually wrote.
       const rows = (await messageDB.getChannelHistory(channelID, HISTORY_SCAN))
         .map(r => ({ ...r, content: fromStoredContent(r.content) }))
@@ -372,7 +408,7 @@ function createTools ({ guild, member, ask, progress = () => {} }) {
     },
     async search_server_messages ({ query }) {
       if (!String(query || '').trim()) throw new Error('query を指定してください')
-      const channels = [...guild.channels.values()].filter(c => canRead(c, member.id) && canRead(c, global.bot.user.id))
+      const channels = [...guild.channels.values()].filter(c => canRead(c, member) && canRead(c, global.bot.user.id))
       const found = await semanticSearch.searchMessages(guild.id, channels.map(c => c.id), String(query), { limit: MAX_HISTORY_RESULTS })
       const name = id => guild.members.get(id)?.username || id
       if (found.length === 0) return '意味の近いメッセージは見つかりませんでした（メッセージの埋め込みがまだ作られていない可能性があります）'
@@ -386,7 +422,7 @@ function createTools ({ guild, member, ask, progress = () => {} }) {
       const all = [...guild.channels.values()]
       const order = c => [guild.channels.get(c.parentID)?.position ?? -1, c.position ?? 0]
       return all
-        .filter(c => c.type !== 4 && c.permissionsOf(member.id).has('viewChannel'))
+        .filter(c => c.type !== 4 && canView(c, member))
         .sort((a, b) => order(a)[0] - order(b)[0] || order(a)[1] - order(b)[1])
         .map(c => {
           const category = guild.channels.get(c.parentID)?.name
@@ -445,7 +481,7 @@ function createTools ({ guild, member, ask, progress = () => {} }) {
       if (found.length > 1) return `「${who}」に当てはまるメンバーが複数います。どの人か依頼者に確かめてください:\n${found.slice(0, MAX_MEMBER_MATCHES).map(m => `- ${displayName(m)}（@${m.username}、ID: ${m.id}）`).join('\n')}`
       const [m] = found
       const roles = (m.roles || []).map(id => guild.roles.get(id)).filter(r => r && !r.managed).sort((a, b) => (b.position ?? 0) - (a.position ?? 0)).map(r => r.name)
-      const channels = [...guild.channels.values()].filter(c => canRead(c, member.id) && canRead(c, global.bot.user.id))
+      const channels = [...guild.channels.values()].filter(c => canRead(c, member) && canRead(c, global.bot.user.id))
       // The stored messages only where reading them for this is declared (SERVER_LORE, serverLore.js).
       const messages = serverLore.enabled() && channels.length ? await loreStore.memberMessages(guild.id, m.id, channels.map(c => c.id), MAX_MEMBER_MESSAGES) : []
       const channelName = id => guild.channels.get(id)?.name || id
@@ -670,7 +706,7 @@ async function searchYouTube (guildID, query, sort) {
 
   // Summaries of linked videos from other channels are knowledge too.
   const externalFetchedSet = new Set(externalVideos.map(v => v.video_id))
-  const others = (await youtubeDB.getOtherSummaries(guildID))
+  const others = (await youtubeDB.getOtherSummaries())
     .filter(s => !externalFetchedSet.has(s.video_id) && (linkedIds.includes(s.video_id) || matchesAll(words.length ? words : rawWords, s.summary)))
     .map(s => `- https://www.youtube.com/watch?v=${s.video_id}\n  内容の要約: ${linkTimestamps(s.summary.replace(/\s+/g, ' ').slice(0, 400), s.video_id)}`)
   const otherLines = others.length ? ['', `その他の要約済み動画（${others.length} 件）:`, ...others.slice(0, MAX_YOUTUBE_RESULTS)] : []
@@ -953,7 +989,7 @@ function canUseExternalEmojis (channelOrID, guild) {
     : (c?.parentID ? (guild?.channels?.get?.(c.parentID) || global.bot?.getChannel?.(c.parentID)) : null)
   const botID = global.bot?.user?.id || (guild?.members?.has?.('BOT') ? 'BOT' : null)
   if (!target || typeof target.permissionsOf !== 'function' || !botID) return false
-  const perms = target.permissionsOf(botID)
+  const perms = safePermissionsOf(target, botID)
   if (!perms) return false
   if (typeof perms.has === 'function') return Boolean(perms.has('externalEmojis'))
   return Boolean(perms.json?.externalEmojis)
@@ -1006,6 +1042,7 @@ async function sharedOwnerEmojis (guild, channelOrID) {
 // formatting; others are left as written.
 const EMOJI = '(?:<a?:\\w{2,32}:\\d+>|:\\w{2,32}:)'
 const CODED_EMOJIS = new RegExp(`(\`{1,3})\\s*(${EMOJI}(?:\\s*${EMOJI})*)\\s*\\1`, 'g')
+const CODE_OR_URL_PREFIX = '```[\\s\\S]*?```|``[^`\\n]+``|`[^`\\n]+`|https?:\\/\\/\\S+'
 function withServerEmojis (text, guild, extraEmojis = []) {
   const own = usableEmojis(guild)
   const extra = (extraEmojis || []).filter(e => e && e.id && e.name && e.available !== false && !(e.roles || []).length)
@@ -1016,11 +1053,13 @@ function withServerEmojis (text, guild, extraEmojis = []) {
     if (!byID.has(e.id)) byID.set(e.id, e)
   }
   const find = (name, id, bare) => bare ? byName.get(bare) : (byID.get(id) || byName.get(name))
-  const ONE = /<(a?):(\w{2,32}):(\d+)>|:(\w{2,32}):/g
+  const ONE = /<(a?):(\w{2,32}):(\d+)>|(?<![:\w]):(\w{2,32}):(?![:\w])/g
+  const SAFE_ONE = new RegExp(`(${CODE_OR_URL_PREFIX})|<(a?):(\\w{2,32}):(\\d+)>|(?<![:\\w]):(\\w{2,32}):(?![:\\w])`, 'g')
   return text
     // Only when every emoji inside is usable here: anything else in ` may be meant as code.
     .replace(CODED_EMOJIS, (whole, ticks, inside) => [...inside.matchAll(ONE)].every(m => find(m[2], m[3], m[4])) ? inside : whole)
-    .replace(ONE, (whole, animated, name, id, bare) => {
+    .replace(SAFE_ONE, (whole, protectedSpan, animated, name, id, bare) => {
+      if (protectedSpan) return whole
       const emoji = find(name, id, bare)
       return emoji ? emojiCode(emoji) : whole
     })
@@ -1031,13 +1070,13 @@ function withServerEmojis (text, guild, extraEmojis = []) {
 // (a hashtag, a URL fragment, <#ID> already).
 function withServerChannels (text, guild, member) {
   const channels = [...guild.channels.values()]
-    .filter(c => c.type !== 4 && c.name && c.permissionsOf(member.id).has('viewChannel'))
+    .filter(c => c.type !== 4 && c.name && canView(c, member))
     .sort((a, b) => b.name.length - a.name.length)
   if (!channels.length) return text
   const byName = new Map(channels.map(c => [c.name, c]))
   const names = [...byName.keys()].map(n => n.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'))
-  const pattern = new RegExp(`(?<![\\p{L}\\p{N}_/<&=-])#(${names.join('|')})(?![\\p{L}\\p{N}_-])`, 'gu')
-  return text.replace(pattern, (whole, name) => `<#${byName.get(name).id}>`)
+  const pattern = new RegExp(`(${CODE_OR_URL_PREFIX})|(?<![\\p{L}\\p{N}_/<&=-])#(${names.join('|')})(?![\\p{L}\\p{N}_-])`, 'gu')
+  return text.replace(pattern, (whole, protectedSpan, name) => protectedSpan ? whole : `<#${byName.get(name).id}>`)
 }
 
 const GENERIC_CHANNEL_NAME = /^(?:general|chat|main|lobby|lounge|random|free|talk|bot|bots|bot[-_]?commands?|commands?|cmd|test|testing|sandbox|雑談|メイン|なんでも|フリー|ロビー|ラウンジ|おしゃべり|会話|チャット|全体|総合|ボット|コマンド|テスト|お試し|砂場|質問|相談)(?:[-_\s・｜|]*\d+)?$/iu
@@ -1114,7 +1153,7 @@ function namedChannels (texts, guild, member) {
     }
   }
   return [...ids].map(id => guild.channels.get(id))
-    .filter(c => c && c.permissionsOf(member.id).has('viewChannel'))
+    .filter(c => c && canView(c, member))
     .map(c => `- <#${c.id}>: #${c.name}（${CHANNEL_TYPES[c.type] || c.type}）${c.topic ? ` — ${c.topic.replace(/\s+/g, ' ').slice(0, MAX_TOPIC)}` : ''}`)
 }
 
@@ -1222,7 +1261,7 @@ const MIN_MESSAGE_SCORE = 0.65
 const MAX_RELATED_MESSAGE_CHARS = 120
 async function relatedMessages (guild, member, vectorOf) {
   if (!messageEmbeddingsEnabled()) return []
-  const channels = [...guild.channels.values()].filter(c => canRead(c, member.id) && canRead(c, global.bot.user.id))
+  const channels = [...guild.channels.values()].filter(c => canRead(c, member) && canRead(c, global.bot.user.id))
   if (!channels.length) return []
   const vector = await vectorOf()
   if (!vector) return []

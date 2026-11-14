@@ -15,7 +15,8 @@ module.exports = {
     global.logger.info(`Worker instance hosting ${cluster.worker.rangeForShard} on id ${cluster.worker.id} is now ready to serve requests. This shard or shard range has ${global.bot.guilds.size} guilds and ${global.bot.users.size} users cached.`)
     global.webhook.generic(`Worker instance hosting ${cluster.worker.rangeForShard} on id ${cluster.worker.id} is now ready to serve requests. This shard or shard range has ${global.bot.guilds.size} guilds and ${global.bot.users.size} users cached.`)
 
-    if (global.bot.shards.find(s => s.id === 0)) { // only check for missing settings once
+    const hasShardZero = Boolean(global.bot.shards.find(s => s.id === 0))
+    if (hasShardZero) { // only check for missing settings once
       await checkForMissingSettings()
       await require('../utils/syncSlashCommands').syncGlobalSlashCommands()
       prune.startScheduler() // one worker owns the sweep so shards don't duplicate the delete
@@ -25,11 +26,12 @@ module.exports = {
       require('../modules/twitterKnowledge').startTwitter() // ...and the streamer's X posts (TWITTER_ACCOUNTS)
       require('../modules/twitchSync').startTwitch() // ...and the archives of the Twitch channels (TWITCH_CHANNELS)
       require('../modules/steamSync').startSteam() // ...and the games and reviews of the Steam accounts (STEAM_ACCOUNTS)
-      require('../modules/eventDrafter').startUncensoredCheck() // ...and checks whether the uncensored fallback model (UNCENSORED_API_URL) responds
-      require('../utils/sokudan').startSokudanCheck() // ...and checks whether the Sokudan System-1 decision sidecar (SOKUDAN_URL) responds
       // ...and, once, finds the channel of messages stored before channels were recorded.
       require('../../miscellaneous/backfillChannels').startBackfill()
     }
+    // Every worker checks its own in-process state for the uncensored model and Sokudan sidecar.
+    require('../modules/eventDrafter').startUncensoredCheck({ notifyWebhook: hasShardZero })
+    require('../utils/sokudan').startSokudanCheck()
     // Every worker keeps the details of the servers it hosts current (member counts change hourly enough).
     const saveDetails = () => Promise.all([...global.bot.guilds.values()].map(g => saveGuildDetails(g)))
       .catch(e => global.logger.warn(`Could not save server details: ${e.message}`))
@@ -48,9 +50,9 @@ module.exports = {
     // ...and follows their streams, for those that turned stream events on.
     liveWatcher.startWatcher()
     setInterval(() => {
-      if (global.bot.shards.filter(shard => shard.latency == Infinity && shard.status === 'disconnected').length !== 0) {
+      if (global.bot.shards.filter(shard => shard.latency === Infinity && shard.status === 'disconnected').length !== 0) {
         failedHealthCheckCount++
-        global.logger.warn(`[${cluster.worker.rangeForShard}] Found disconnected shards ${global.bot.shards.filter(shard => shard.latency == Infinity && shard.status === 'disconnected').map(s => s.id).join(', ')}, failure count is ${failedHealthCheckCount}`)
+        global.logger.warn(`[${cluster.worker.rangeForShard}] Found disconnected shards ${global.bot.shards.filter(shard => shard.latency === Infinity && shard.status === 'disconnected').map(s => s.id).join(', ')}, failure count is ${failedHealthCheckCount}`)
         if (failedHealthCheckCount >= 5) {
           global.logger.warn(`[${cluster.worker.rangeForShard}] Shard health check failed 5 times in a row, hard resetting shards`)
           global.webhook.error(`[${cluster.worker.rangeForShard}] Shard health check failed 5 times in a row, hard resetting shards`)
@@ -66,4 +68,3 @@ module.exports = {
     }, 1000 * 60)
   }
 }
-

@@ -50,17 +50,28 @@ async function cleanUnusedDiscordChannels (guildID) {
     [guildID])
 }
 
-// Ignores the channel, or stops ignoring it if it was. Resolves to whether it is now ignored.
+// Ignores the channel, or stops ignoring it if it was. Resolves to whether it is now ignored, or
+// null when the channel ID belongs to another server.
 async function ignoreChannel (guildID, channelID) {
   await ensureGuild(guildID)
   const res = await pool.query(
     `INSERT INTO discord_channels (id, guild_id, ignored) VALUES ($1, $2, true)
      ON CONFLICT (id) DO UPDATE SET ignored = NOT discord_channels.ignored
+     WHERE discord_channels.guild_id = EXCLUDED.guild_id
      RETURNING ignored`,
     [channelID, guildID])
-  const disabled = !!res.rows[0]?.ignored
+  if (!res.rows.length) return null
+  const disabled = !!res.rows[0].ignored
   if (!disabled) await cleanUnusedDiscordChannels(guildID)
   await cacheGuild(guildID)
+  const cached = global.bot?.guildSettingsCache?.[guildID]
+  if (cached && Array.isArray(cached.ignoredChannels)) {
+    if (disabled && !cached.ignoredChannels.includes(channelID)) {
+      cached.ignoredChannels.push(channelID)
+    } else if (!disabled) {
+      cached.ignoredChannels = cached.ignoredChannels.filter(id => id !== channelID)
+    }
+  }
   return disabled
 }
 
@@ -74,6 +85,7 @@ async function clearIgnoredChannels (guildID) {
 async function toggleLogBots (guildID) {
   await ensureGuild(guildID)
   const rows = await pool.query('UPDATE guilds SET log_bots = NOT log_bots WHERE id = $1 RETURNING log_bots', [guildID])
+  if (!rows.rows.length) return false
   await cacheGuild(guildID)
   return rows.rows[0].log_bots
 }
@@ -88,8 +100,8 @@ async function saveGuildDetails (guild) {
 
 async function updateMessageByID (id, changedAttrs) {
   const result = await updateMessageRow(id, changedAttrs)
-  // Edited text is embedded again (only when message embeddings are on, see embeddings.js).
-  if ('content' in changedAttrs && process.env.MESSAGE_EMBEDDINGS === 'true') {
+  // Edited text is invalidated unconditionally so re-enabling message embeddings never serves stale vectors.
+  if ('content' in changedAttrs) {
     await require('./embeddings').invalidateMessage(id).catch(e => global.logger.warn(`Could not reset the embedding of ${id}: ${e.message}`))
   }
   return result

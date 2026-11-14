@@ -206,9 +206,12 @@ const factText = f => `${KIND_LABELS[f.kind]}: ${f.name}\n${f.content}`
 
 async function embedPending () {
   const current = model()
+  const guildIDs = global.bot?.guilds instanceof Map ? [...global.bot.guilds.keys()] : null
   let done = 0
   for (;;) {
-    const batch = await store.factsToEmbed(current, EMBED_BATCH)
+    const batch = guildIDs !== null
+      ? await store.factsToEmbed(current, EMBED_BATCH, guildIDs)
+      : await store.factsToEmbed(current, EMBED_BATCH)
     if (batch.length === 0) return done
     const vectors = await embed(batch.map(factText))
     for (const [i, f] of batch.entries()) await store.saveFactEmbedding(f.id, vectors[i], current)

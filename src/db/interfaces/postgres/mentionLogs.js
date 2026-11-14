@@ -69,4 +69,20 @@ async function getMentionLogs (guildID, { limit = 50, userID = null } = {}) {
   return res.rows
 }
 
-module.exports = { saveMentionLog, getMentionLogs }
+async function findPostCreator (guildID, threadID) {
+  if (!guildID || !threadID) return null
+  try {
+    const { rows } = await pool.query(
+      `SELECT user_id FROM mention_logs
+       WHERE guild_id = $1 AND kind = 'forum' AND strpos(response, '/channels/' || $1 || '/' || $2) > 0
+       ORDER BY id ASC LIMIT 1`,
+      [guildID, threadID]
+    )
+    return rows[0]?.user_id || null
+  } catch (e) {
+    global.logger?.warn?.('Failed to look up forum post creator', e)
+    return null
+  }
+}
+
+module.exports = { saveMentionLog, getMentionLogs, findPostCreator }

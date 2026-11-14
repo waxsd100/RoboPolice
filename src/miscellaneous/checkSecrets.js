@@ -58,7 +58,7 @@ const SECRET_RULES = [
   {
     id: 'discord-bot-token',
     description: 'Discord Bot Token',
-    regex: /\b[MN][A-Za-z\d]{23,28}\.[A-Za-z\d_-]{6,7}\.[A-Za-z\d_-]{27,}\b/
+    regex: /\b[MNO][A-Za-z\d]{23,28}\.[\w-]{6,7}\.[\w-]{27,}\b/
   },
   {
     id: 'discord-webhook-url',
@@ -99,7 +99,7 @@ const SECRET_RULES = [
   {
     id: 'env-secret-assignment',
     description: 'Hardcoded secret value assigned to sensitive environment variable',
-    regex: /(?:^|;\s*)\s*(?:export\s+)?(BOT_TOKEN|DISCORD_WEBHOOK_URL|GEMINI_API_KEY|CLOUDFLARE_AI_GATEWAY_TOKEN|CF_ACCESS_CLIENT_SECRET|UNCENSORED_API_KEY|SOKUDAN_API_KEY|GCP_SERVICE_ACCOUNT_KEY|STEAM_API_KEY|TWITCH_CLIENT_SECRET|YOUTUBE_API_KEY|YOUTUBE_WEBSUB_SECRET|REDIS_PASSWORD|PGPASSWORD|AES_KEY)\s*=\s*['"]?([^\s'"#;,]+)['"]?/g,
+    regex: /(?:^|;\s*)\s*(?:export\s+)?((?:DISCORD_)?BOT_TOKEN|DISCORD_WEBHOOK_URL|GEMINI_API_KEY|CLOUDFLARE_AI_GATEWAY_TOKEN|CF_ACCESS_CLIENT_SECRET|LLAMA_API_KEY|UNCENSORED_API_KEY|UNCENSORED_R18_API_KEY|SOKUDAN_API_KEY|GCP_SERVICE_ACCOUNT_KEY|STEAM_API_KEY|TWITCH_CLIENT_SECRET|YOUTUBE_API_KEY|YOUTUBE_WEBSUB_SECRET|REDIS_PASSWORD|PGPASSWORD|AES_KEY)\s*=\s*['"]?([^\s'"#;,]+)['"]?/g,
     validateMatch: match => {
       const val = String(match[2] || '').trim()
       if (val.length < 16) return false
@@ -198,7 +198,7 @@ function parseUnifiedDiffAddedLines (diffText) {
 
 function scanStaged ({ cwd = process.cwd() } = {}) {
   const findings = []
-  const namesOut = execFileSync('git', ['diff', '--cached', '--name-only', '--diff-filter=ACMR'], {
+  const namesOut = execFileSync('git', ['-c', 'core.quotePath=false', 'diff', '--cached', '--name-only', '--diff-filter=ACMR'], {
     cwd,
     encoding: 'utf8'
   })
@@ -208,7 +208,7 @@ function scanStaged ({ cwd = process.cwd() } = {}) {
     if (pathFinding) findings.push(pathFinding)
   }
   if (!stagedFiles.length) return findings
-  const diffOut = execFileSync('git', ['diff', '--cached', '-U0', '--diff-filter=ACMR'], {
+  const diffOut = execFileSync('git', ['-c', 'core.quotePath=false', 'diff', '--cached', '-U0', '--diff-filter=ACMR'], {
     cwd,
     encoding: 'utf8',
     maxBuffer: 20 * 1024 * 1024
@@ -221,7 +221,7 @@ function scanStaged ({ cwd = process.cwd() } = {}) {
 
 function scanAllTracked ({ cwd = process.cwd() } = {}) {
   const findings = []
-  const filesOut = execFileSync('git', ['ls-files'], { cwd, encoding: 'utf8', maxBuffer: 10 * 1024 * 1024 })
+  const filesOut = execFileSync('git', ['-c', 'core.quotePath=false', 'ls-files'], { cwd, encoding: 'utf8', maxBuffer: 10 * 1024 * 1024 })
   const files = filesOut.split(/\r?\n/).map(s => s.trim()).filter(Boolean)
   for (const file of files) {
     const pathFinding = checkFilePath(file)

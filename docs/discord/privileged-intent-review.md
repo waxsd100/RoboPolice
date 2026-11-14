@@ -34,9 +34,9 @@ Discord から「10,000ユーザー到達につき特権インテントの審査
 
 | 特権インテント | 実際の使用 | 申請 | 根拠 |
 |---|---|---|---|
-| **Server Members** (`GUILD_MEMBERS`) | **使用中** | **申請する** | `src/bot/index.js:65` で有効化。参加/退出/キック/ニックネーム/ロール変更ログの根幹 |
-| **Message Content** (`MESSAGE_CONTENT`) | **使用中**（実機確認済み） | **申請する** | 削除/編集メッセージの本文ログに必須。詳細は 1.1 |
-| **Presence** (`GUILD_PRESENCES`) | **使用中** | **申請する** | メンバーのカスタムステータスの変更を検知してログを出力するため |
+| **Server Members** (`GUILD_MEMBERS`) | **使用中** | **申請する** | `src/bot/index.js:49` で有効化。参加/退出/キック/ニックネーム/ロール変更ログの根幹 |
+| **Message Content** (`MESSAGE_CONTENT`) | **使用中**（実機確認済み） | **申請する** | 削除/編集メッセージの本文ログおよびメンション応答に必須。詳細は 1.1 |
+| **Presence** (`GUILD_PRESENCES`) | **使用中** | **申請する** | `src/bot/index.js:52` で有効化。メンバーのカスタムステータスの変更を検知してログを出力するため |
 
 ### 1.1 Message Content は本番で動作している（実機確認済み）
 
@@ -46,14 +46,14 @@ Discord から「10,000ユーザー到達につき特権インテントの審査
 
 一方で、**このリポジトリの内容そのままでは Message Content を要求できません**（申請とは別件の乖離）：
 
-- `src/bot/index.js:60-68` の intents 配列に `messageContent` が無い
+- `src/bot/index.js:44-53` の intents 配列に `messageContent` が無い
 - `package-lock.json` が固定している Eris は `curtisf/eris` の commit `c075c5b`（`0.16.2-dev`）で、
   この版の `lib/Constants.js` の `Intents` は `directMessageTyping` (`1 << 14`) で終わっており、
   `messageContent` の定数が存在しない
 - `lib/Client.js:176-188` は配列を走査して未知の名前を `warn` して**黙って捨てる**実装のため、
   仮に `'messageContent'` を配列に足しても無視される
 
-この状態で計算されるビットフィールドは `719`（`messageContent` の `32768` を含まない）です。
+この状態で計算されるビットフィールドは `975`（`guilds(1) | guildMembers(2) | guildBans(4) | guildEmojis(8) | guildInvites(64) | guildVoiceStates(128) | guildPresences(256) | guildMessages(512) = 975` であり、`messageContent` の `32768` を含まない）です。
 実機が動いている以上、**本番環境は別バージョンの Eris か、別の intents 指定で稼働しています。**
 （Developer Portal 側でも MESSAGE CONTENT INTENT は ON であることを確認済み。2026-09-13）
 
@@ -73,7 +73,7 @@ Discord から「10,000ユーザー到達につき特権インテントの審査
 | 退出／キックログ（Audit Log 照合で退出とキックを判別、所持ロールを記録） | `src/bot/events/guildMemberRemove.js:14-16`（ロール記録）, `:28-31`（Audit Log 照合） |
 | ニックネーム変更・ロール変更・メンバー認証通過ログ | `src/bot/events/guildMemberUpdate.js` |
 | 他の全ログ埋め込みでの表示名／ニックネーム／アバター解決 | `src/bot/events/messageDelete.js:39-42`, `messageUpdate.js:16` |
-| `/userinfo` コマンド | `src/bot/slashcommands/userinfo.js` |
+| `%userinfo` コマンド（テキストコマンド） | `src/bot/commands/userinfo.js` |
 | BAN / BAN解除ログの対象者情報 | `src/bot/events/guildBanAdd.js`, `guildBanRemove.js` |
 
 **代替不可の理由**：`GUILD_MEMBER_ADD` / `REMOVE` / `UPDATE` は特権インテント無しでは一切届きません。
@@ -83,11 +83,13 @@ Discord から「10,000ユーザー到達につき特権インテントの審査
 
 | 機能 | ファイル |
 |---|---|
-| メッセージをAES-256暗号化してDBへ保存（削除時ログの元データ） | `src/db/interfaces/postgres/create.js:42-64` |
+| メッセージ本文（平文）・添付画像URLをDB（`messages` / `message_attachments`）へ保存（削除・編集時ログの元データ） | `src/db/interfaces/postgres/create.js:27-32`, `src/db/messageBatcher.js` |
 | 削除メッセージの本文表示 | `src/bot/events/messageDelete.js:44-60` |
 | 編集の Before / After 差分表示 | `src/bot/events/messageUpdate.js:60-110` |
 | 一括削除ログ | `src/bot/events/messageDeleteBulk.js` |
-| メンションによるイベント登録・フォーラム投稿（依頼メッセージと、そこから参照されたメッセージの本文を解析） | `src/bot/modules/mentionEvent.js`, `src/bot/modules/eventTools.js` |
+| メンションによるチャット応答・イベント登録・フォーラム投稿（依頼メッセージと参照先メッセージの解析、および `mention_logs` への記録） | `src/bot/modules/mentionEvent.js`, `src/bot/modules/eventDrafter.js`, `src/bot/modules/eventTools.js`, `src/db/interfaces/postgres/mentionLogs.js` |
+
+> ⚠️ **暗号化に関する正確な整理（重要）**：PostgreSQL の `messages`・`message_attachments`・`mention_logs` テーブルの本文は、全文検索・ベクトル検索を行うためアプリケーション層では**平文**で保存されています（旧 `AES_KEY` によるメッセージ暗号化は `006_decrypt_messages.js` で廃止済み。現在アプリケーション層で `AES_KEY` を使用しているのは Redis 上の招待コードキャッシュ `src/bot/modules/invitecache.js` のみです）。したがって自由記述欄で「メッセージをアプリ側で AES-256 暗号化して保存」とは**絶対に書かないでください**（公開コードと矛盾し審査落ちの原因になります）。フォームの「保存中のデータを暗号化しますか？」に **Yes** と答える根拠は、クラウド基盤（Railway / Google Cloud）のストレージ暗号化（Encryption at Rest）および通信経路の暗号化です。
 
 **代替不可の理由**：削除されたメッセージは Discord API から再取得できません。
 モデレーターが荒らし・詐欺リンク・ハラスメントに対処するには、削除される*前*に本文を保持している必要があり、
@@ -109,15 +111,15 @@ Discord から「10,000ユーザー到達につき特権インテントの審査
 | ③ どのインテントを申請しますか？ | **Server Members / Message Content / Presence の3つ** |
 | SM: Discordの外部でAPIデータを保存しますか？ | **Yes** |
 | SM: APIデータを30日以内にわたって保存しますか？ | **Yes** |
-| SM: 保存中のデータを暗号化しますか？ | **Yes** |
+| SM: 保存中のデータを暗号化しますか？ | **Yes**（クラウド基盤のディスク暗号化 + Redis 招待コードの AES 暗号化） |
 | MC: ユーザーはメッセージ内容データの追跡をオプトアウトできますか？ | **No**（→ §3.5 要判断） |
 | MC: メッセージコンテンツデータをプラットフォーム外で保存しますか？ | **Yes** |
 | MC: ユーザーメッセージ内容データを30日以内にわたって保存しますか？ | **Yes** |
-| MC: 保存中のデータを暗号化しますか？ | **Yes** |
+| MC: 保存中のデータを暗号化しますか？ | **Yes**（クラウド基盤のストレージ暗号化による。アプリ層での `messages` 暗号化ではない点に注意） |
 | MC: 機械学習またはAIモデルのトレーニングに使用されますか？ | **No** |
 
 > **「Discordの外部でAPIデータを保存しますか？」は Server Members セクションでも Yes です。**
-> メンバーのプロフィールは保存していませんが、保存するメッセージ行には投稿者IDが含まれており、
+> メンバーのプロフィールは保存していませんが、保存するメッセージ行（`messages`）やメンション履歴（`mention_logs`）には投稿者ID（およびメンション時の表示名）が含まれており、
 > これはメンバー由来のAPIデータだからです。ここで No と答えると Message Content セクションの
 > Yes と矛盾して見えます。
 
@@ -126,7 +128,7 @@ Discord から「10,000ユーザー到達につき特権インテントの審査
 #### ① アプリケーションでは何が行われますか？（2000字）
 
 ```
-ロボポリスは、Discordサーバーの管理者・モデレーターがサーバーの治安維持を行うための「監査ログBOT」です。
+ロボポリスは、Discordサーバーの管理者・モデレーターがサーバーの治安維持を行うための「監査ログ＆コミュニティ補助BOT」です。
 管理者が /setup コマンドでイベント種別ごとにスタッフ専用のログチャンネルを割り当てると、
 モデレーション上重要なイベントが発生するたびに、そのチャンネルへ構造化された埋め込み（ログ）を投稿します。
 これにより、モデレーターは「いつ・誰が・サーバー内で何をしたか」を後から正確に確認・追跡できます。
@@ -140,13 +142,13 @@ Discord から「10,000ユーザー到達につき特権インテントの審査
 - チャンネル・ロール・絵文字・サーバー設定などの各種変更
 - ボイスチャンネルの入室・退室・移動状況
 
-モデレーター向けコマンド：
-- /setup（ログ出力先の詳細設定）
+モデレーター・メンバー向けコマンド：
+- /setup（ログ出力先やAI設定の詳細設定）
 - /ignorechannel（特定チャンネルをログ対象外にするプライバシー配慮機能）
 - /stoplogging（ログ出力を即時停止する）
-- /userinfo, /serverinfo（対象の詳細情報取得）
+- %userinfo, %serverinfo（テキストコマンドによる対象の詳細情報取得）
 - /clearmydata（ユーザーからのデータ削除請求方法を案内する）
-- BOTへのメンション（「イベントの管理」権限を持つメンバーが文章・イベントページのURL・メッセージリンクを添えてメンションすると、サーバーイベントまたはフォーラム投稿の下書きを作成し、本人が確認ボタンを押した場合のみ登録・投稿する）
+- BOTへのメンション（チャットでの質問応答のほか、「イベントの管理」権限を持つメンバーによるサーバーイベントの下書き作成や、投稿権限を持つメンバーによるフォーラム投稿の下書き作成を行い、イベント・フォーラム投稿は本人が確認ボタンを押した場合のみ登録・投稿する）
 
 【補足：アプリの運用実態について】
 本アプリは一般公開しておらず、当方が運営する1万人規模のコミュニティサーバーおよび少数の
@@ -203,14 +205,14 @@ https://github.com/waxsd100/RoboPolice/wiki/Terms-of-Service
 3. メンバー更新ログ：ニックネームの変更や、モデレーターによるロール付与・剥奪の履歴を追跡します。
 4. ユーザー解決：他のすべてのログ（メッセージ削除やBANなど）において、対象者のIDをわかりやすい名前（ニックネーム等）に解決して表示します。
 
-※取得したプロフィール情報（名前、アバター等）はログ出力のための一時的なメモリキャッシュとしてのみ利用し、データベースには保存していません。
+※取得したプロフィール情報（名前、アバター等）はログ出力のための一時的なメモリキャッシュとしてのみ利用し、データベースには保存していません（メンション機能を利用した際の依頼者表示名を mention_logs に記録する分を除きます）。
 ```
 
 #### 使用例を示すスクリーンショットや動画へのリンク（2000字）
 
 ```
 https://github.com/waxsd100/RoboPolice/blob/master/docs/discord/evidence_images/MembersIntent_Log.png
-（※上記画像はメンバー参加ログの例です。退出ログやロール変更ログ、/userinfo 等も同様のフォーマットで運用されています）
+（※上記画像はメンバー参加ログの例です。退出ログやロール変更ログ、%userinfo 等も同様のフォーマットで運用されています）
 ```
 <img src="./evidence_images/MembersIntent_Log.png" width="600" alt="Members Intent Evidence" />
 
@@ -225,10 +227,10 @@ https://github.com/waxsd100/RoboPolice/blob/master/docs/discord/evidence_images/
 1. アプリ内コマンド: サーバー内で /clearmydata コマンドを実行すると、具体的な連絡方法とプライバシーポリシーへのリンクがユーザーに提示されます。
 2. サポートサーバー: コミュニティのサポートサーバー（ https://discord.com/invite/nobaman ）にて、運営スタッフが直接対応します。
 
-リクエストを受けた場合は、ユーザーIDに紐づくすべての保存データを削除します。なお、リクエストの有無にかかわらず、保存されたメッセージ等のデータは最長30日でシステムによって自動的に削除されます。
+リクエストを受けた場合は、ユーザーIDに紐づくすべての保存データ（messages および mention_logs）を削除します。また、メッセージの削除時やBOTのサーバー退出時にも削除されるほか、リクエストの有無にかかわらず最長30日でシステムによって自動的に削除されます。
 ```
 
-##### 開発者ポリシーで要求されている通り、保存中のデータを暗号化しますか？ → **Yes**
+##### 開発者ポリシーで要求されている通り、保存中のデータを暗号化しますか？ → **Yes**（クラウド基盤のストレージ暗号化 + Redis 招待コードの AES 暗号化）
 
 ### 3.3 Message Content Intent セクション
 
@@ -242,11 +244,11 @@ https://github.com/waxsd100/RoboPolice/blob/master/docs/discord/evidence_images/
 
 → §3.2 と同じ文面を貼り付け。
 
-##### 開発者ポリシーで要求されている通り、保存中のデータを暗号化しますか？ → **Yes**
+##### 開発者ポリシーで要求されている通り、保存中のデータを暗号化しますか？ → **Yes**（クラウド基盤のストレージ暗号化による）
 
 #### メッセージコンテンツデータは機械学習またはAIモデルのトレーニングに使用されますか？ → **No**
 
-> イベント登録・フォーラム投稿の機能はメンションされたメッセージを Gemini API で**推論**に使いますが、学習には使いません。
+> メンション機能はメッセージを Gemini API 等で**推論**に使いますが、モデルの学習には使いません。
 > この回答が真であるためには、Gemini API を**有料枠**で使う必要があります（無料枠では Google が
 > 入力をモデル改善に使う場合があります）。用途は下の自由記述欄の 4. で開示しています。
 
@@ -256,18 +258,18 @@ https://github.com/waxsd100/RoboPolice/blob/master/docs/discord/evidence_images/
 > プルダウンで No と答えた2項目の補足を、必ずここに書いてください。
 
 ```
-本アプリの中核である「メッセージの削除・編集履歴の記録機能」を実現するために必要です。
+本アプリの中核である「メッセージの削除・編集履歴の記録機能」および「メンションによる補助機能」を実現するために必要です。
 Discordの仕様上、削除されたメッセージの内容を後からAPIで取得することはできないため、あらかじめメッセージの内容を受信・保持しておく必要があります。
 
 【具体的な用途】
 1. メッセージ削除ログ：削除されたメッセージの本文や画像をモデレーター専用チャンネルに記録し、スパムや不適切なコンテンツの検証に使用します。
 2. メッセージ編集ログ：変更前・変更後の差分を記録し、「無害な投稿後に悪質なリンクに書き換える」などの悪質な挙動を検知します。
 3. 一括削除ログ：モデレーターによる大量のメッセージ削除（パージ）が行われた件数を記録します。
-4. イベント登録・フォーラム投稿：「イベントの管理」権限を持つメンバーがBOTにメンションしたメッセージに限り、その本文と、そこから参照されたWebページ・メッセージ（依頼者本人が閲覧できるチャンネルのもののみ）の内容を、サーバーの公開情報（チャンネル名と説明・ロール名・予定中のイベント）や、運営が設定した YouTube チャンネルの公開情報とともに Google Gemini（Cloudflare AI Gateway 経由）で解析し、サーバーイベントまたはフォーラム投稿の下書きを作成します。登録・投稿は本人が確認ボタンを押した場合のみ行います。この処理で受け取った内容は保存せず、AIモデルの学習にも使用されません（学習に使われない有料のAPI枠を利用）。
+4. メンション応答・イベント登録・フォーラム投稿：メンバーがBOTにメンションした際、その本文や参照先メッセージ（依頼者本人が閲覧できるチャンネルのもののみ）を、サーバーの基本情報や運営が設定した公開知識（youtube_channels / youtube_videos 等）とともに Google Gemini（Cloudflare AI Gateway 経由、入力がAIモデルの学習に使われない有料API枠）等で解析し、質問への返信、またはサーバーイベント（「イベントの管理」権限が必要）・フォーラム投稿の下書き作成を行います。イベントやフォーラム投稿は本人が確認ボタンを押した場合のみ作成されます。メンションのやり取りは監査・不正利用防止のため mention_logs に記録されますが、messages と同様にメッセージ削除時・/clearmydata 請求時・サーバー退出時・および最長30日の自動削除（prune.js）で削除されます。
 
 【オプトアウトとプライバシー保護について（補足）】
 監査ログBOTという性質上、特定のメンバーのみログ取得から除外する（オプトアウトする）仕組みはありませんが、サーバー管理者は /ignorechannel コマンドによる特定チャンネルの除外や、機能自体の完全停止（/stoplogging）が可能です。
-取得したメッセージデータは厳重に暗号化（AES-256）して保存され、機械学習やプロファイリング、広告利用などの目的には一切使用しません。また、保存されたデータは最長30日で完全に自動削除されます。
+取得したデータは暗号化されたクラウドストレージ上のアクセス制限された専用データベースに保管され（招待コードキャッシュはアプリ層でもAES暗号化）、AIモデルの学習や広告利用などの目的には一切使用しません。また、保存されたメッセージおよびメンション履歴は最長30日で完全に自動削除されます。
 ```
 
 #### 使用例を示すスクリーンショットや動画へのリンク（2000字）
@@ -355,9 +357,9 @@ commit `c075c5b`）では構造的に要求できません。**申請作業の�
 
    ```js
    // guilds(1) | guildMembers(2) | guildBans(4) | guildEmojis(8)
-   // | guildInvites(64) | guildVoiceStates(128) | guildMessages(512)
+   // | guildInvites(64) | guildVoiceStates(128) | guildPresences(256) | guildMessages(512)
    // | messageContent(1 << 15 = 32768)
-   intents: 719 | (1 << 15), // = 33487
+   intents: 975 | (1 << 15), // = 33743
    ```
 
 > ⚠️ 特権インテントが Portal で無効な状態でこのビットを送ると、ゲートウェイが
@@ -391,7 +393,7 @@ commit `c075c5b`）では構造的に要求できません。**申請作業の�
 | A2 | README 冒頭が上流 Logger の説明で、**別のサポートサーバー**を案内していた | `README.md:1` | RoboPolice の説明に差し替え |
 | A3 | `/help` `/info` が **`tizzysaurus/logger`** を「current code」として案内。提出するリポジトリと不一致（AGPL の観点でも不適切） | `slashcommands/help.js:21` ほか | `waxsd100/RoboPolice` に修正 |
 | A4 | 「メッセージ削除時に行も削除される」が**一括削除では成立しない** | `messageDelete.js:20` にはあるが `messageDeleteBulk.js` に削除呼び出しが無い | 「単一削除のみ」と正確に記述 |
-| A5 | `/ignorechannel` が遡及しないこと、**サーバー単位の削除が構造的に不可能**なこと（guild_id 未保存）を伏せていた | `generateDB.js` のスキーマ | Wikiポリシーに明記 |
+| A5 | `/ignorechannel` が遡及しないこと、**サーバー単位の削除が構造的に不可能**なこと（guild_id 未保存）を伏せていた | `generateDB.js` のスキーマ | Wikiポリシーに明記（その後マイグレーションで `guild_id` カスケード削除に対応済み） |
 | A6 | 「Database access is restricted to the App's own host」は**私が書いた未検証の主張** | — | 削除 |
 | A7 | ToS の「メンバーには告知されている」も未検証の断定 | — | 「管理者が周知する責任を負う」に変更 |
 
@@ -414,9 +416,8 @@ commit `c075c5b`）では構造的に要求できません。**申請作業の�
 
 1. ~~保存期間の上限が無い~~ → **解消。** 30日の自動削除を `src/miscellaneous/prune.js` で実装し、
    両セクションの「30日以内か」に Yes と答えられるようになりました。本申請で最も弱かった点です。
-   なお `messages` にサーバーIDを保存していないため「サーバー単位でまとめて削除」は依然できませんが、
-   30日で全件が失効するため実質的な問題は小さくなりました。
-2. **`/invite` コマンドが招待リンクを2種類提示する。**
+   また、その後のマイグレーションにより `messages` および `mention_logs` にも `guild_id`（`guilds` への `ON DELETE CASCADE`）が保存されるようになったため、BOTがサーバーから退出した際はサーバー単位で自動的にカスケード削除されます。
+2. **`/invite` コマンドが招待リンクを3種類提示する（`src/bot/slashcommands/invite.js`：全機能推奨 `318364830896`［イベントの管理・Webhookの管理・監査ログの表示などを含む］、招待追跡 `537218224`、最小権限 `537218176`）。**
    プライベートBOTという説明と見た目が矛盾します。Public Bot が OFF なら他者は実際には追加できない
    ため実害はありませんが、スクリーンショットに写り込ませないでください。
 
@@ -428,10 +429,10 @@ commit `c075c5b`）では構造的に要求できません。**申請作業の�
 
 | 対象 | 期限 | 実装 |
 |---|---|---|
-| PostgreSQL `messages` の行（削除・編集ログの出力先があるサーバーのみ保存） | `MESSAGE_HISTORY_DAYS` 日（既定30） | `src/miscellaneous/prune.js` |
-| 単一削除されたメッセージの行 | 削除がログ出力された時点 | `src/bot/events/messageDelete.js:20` |
-| PostgreSQL `guilds` の行 | BOTがサーバーから離脱した時点 | `src/bot/events/guildDelete.js:8` |
-| Redis の招待／Webhook／設定キャッシュ | 3時間 | キー設定時の `EX` |
+| PostgreSQL `messages`（削除・編集ログの出力先があるサーバーのみ保存）および `mention_logs`（メンション応答履歴）の行 | `MESSAGE_HISTORY_DAYS` 日（既定30） | `src/miscellaneous/prune.js` |
+| 単一削除されたメッセージに対応する `messages` / `mention_logs` の行、および `/clearmydata` 請求対象ユーザーの行 | 削除が検知された時点／削除対応時点 | `src/bot/events/messageDelete.js`, `src/db/interfaces/postgres/delete.js`, `mentionLogs.js` |
+| PostgreSQL `guilds` の行（外部キー参照により `messages`, `mention_logs` 等のサーバー関連行もカスケード削除） | BOTがサーバーから離脱した時点 | `src/bot/events/guildDelete.js:8` |
+| Redis の招待／Webhook／設定キャッシュ（メンションのトークン利用量集計は5時間／7日間ウィンドウ） | 3時間（トークン集計は5時間／7日） | キー設定時の `EX` |
 
 ### 8.2 実行方式は2択（どちらか一方）
 
@@ -498,8 +499,8 @@ BOT導入前や停止中のメッセージ）まで出すと、古い削除の�
 | 何を | どこで |
 |---|---|
 | `@everyone` が読めるテキスト・アナウンスチャンネルの保存済みメッセージを、チャンネル×週ごとに Gemini に送り、身内ネタ・用語・出来事・話題を取り出して保存（個人情報・特定の人への評価は除くよう指示） | `serverLore.js` `refreshGuild` / `extractFacts`、`guild_lore_chunks` / `guild_lore_facts` |
-| 最近のメッセージから、サーバー全体の話し方（雰囲気・言い回し）の短い説明を作って保存（個人については書かない） | `serverLore.js` `describeStyle`、`guild_lore_style` |
-| 保存は直近 `SERVER_LORE_WEEKS` 週（既定8）だけ。メッセージが編集・削除・`/clearmydata` で変われば取り出し直し、期間外は削除。サーバーから抜ければすべて削除（外部キー） | `refreshGuild` / `deleteChunksExcept`、`migrations/022_server_lore.sql` |
+| 最近のメッセージから、サーバー全体の話し方（雰囲気・言い回し）の短い説明を作って保存（個人については書かない） | `serverLore.js` `describeStyle`、`guilds.lore_style` |
+| 保存は直近 `SERVER_LORE_WEEKS` 週（既定8）だけ。メッセージが編集・削除・`/clearmydata` で変われば取り出し直し、期間外は削除。サーバーから抜ければすべて削除（外部キー） | `refreshGuild` / `deleteChunksExcept`、`migrations/022_server_lore.sql`, `migrations/052_consolidate_tables.sql` |
 | メンバーについて聞かれたときだけ、そのメンバーの最近の保存済みメッセージ（依頼者と BOT が読めるチャンネルのもの、最大30件）を読んで Gemini に渡す。保存しない | `eventTools.js` `about_member` |
 
 §3.3 の自由記述「4.」の後に足す文の案:

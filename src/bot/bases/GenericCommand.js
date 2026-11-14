@@ -19,9 +19,10 @@ class GenericCommand {
     this.examples = data.examples
     this.func = data.func
     this.args = data.args || []
-    this.noDM = data.noDM || true
+    this.noDM = data.noDM ?? true
+    this.defaultPermission = data.defaultPermission ?? true
     this.perm = data.perm // single perm (should probably just move to using perms: ['perm'])
-    this.perms = data.perms // multiple perms 
+    this.perms = data.perms // multiple perms
     this.type = data.type || 'any'
     this.hidden = !!data.hidden
     this.noThread = !!data.noThread

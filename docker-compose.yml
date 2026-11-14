@@ -1,4 +1,28 @@
 services:
+  postgres:
+    image: pgvector/pgvector:0.8.0-pg16
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${PGDATABASE:-logger}
+      POSTGRES_USER: ${PGUSER:-postgresusername}
+      POSTGRES_PASSWORD: ${PGPASSWORD:-postgrespassword}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U \"$${POSTGRES_USER}\" -d \"$${POSTGRES_DB}\""]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
   sokudan:
     build:
       context: .
@@ -26,7 +50,16 @@ services:
     env_file:
       - .env
     environment:
+      PGHOST: ${COMPOSE_PGHOST:-postgres}
+      REDIS_HOST: ${COMPOSE_REDIS_HOST:-redis}
       SOKUDAN_URL: http://sokudan:8000
     depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
       sokudan:
         condition: service_healthy
+
+volumes:
+  postgres_data:

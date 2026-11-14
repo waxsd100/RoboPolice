@@ -123,16 +123,15 @@ function monthSections (guildID, month, posts, authorName = null) {
 // Writes the learning pages of the months given as `${guildID}/${authorID}/${month}`, referencing
 // only channels @everyone can read; a month with no public messages left loses its page.
 async function writeMonths (months, knownGuild = null) {
-  for (const key of months) {
+  for (const key of new Set(months)) {
     const [guildID, authorID, month] = key.split('/')
     const guild = (knownGuild?.id === guildID ? knownGuild : null) || global.bot?.guilds?.get(guildID)
     const allPosts = await store.postsOfMonth(guildID, authorID, month)
-    const posts = guild
-      ? allPosts.filter(p => {
-        const ch = guild.channels?.get(p.channel_id)
-        return ch && everyoneCanRead(guild, ch)
-      })
-      : allPosts
+    const posts = allPosts.filter(p => {
+      if (!guild) return false
+      const ch = guild.channels?.get(p.channel_id)
+      return !!(ch && everyoneCanRead(guild, ch))
+    })
     const url = pageUrl(guildID, authorID, month)
     if (!posts.length) {
       await knowledgeStore.deletePagesExcept(url, [])
@@ -213,9 +212,23 @@ async function onMessage (message) {
 
 // A deleted message: gone from the knowledge too.
 async function onDelete (messageID) {
-  if (!enabled()) return
+  if (Array.isArray(messageID)) return onDeleteMany(messageID)
+  if (!enabled() || !messageID) return
   const gone = await store.deletePost(messageID)
-  if (gone) await writeMonths([`${gone.guild_id}/${gone.author_id}/${monthOf(new Date(gone.created_at))}`])
+  if (gone) await writeMonths(new Set([`${gone.guild_id}/${gone.author_id}/${monthOf(new Date(gone.created_at))}`]))
+}
+
+// Bulk deleted messages: deduplicates month keys so each affected month page is rebuilt once.
+async function onDeleteMany (messageIDs) {
+  if (!enabled() || !messageIDs?.length) return
+  const uniqueIDs = [...new Set(messageIDs.filter(Boolean))]
+  if (!uniqueIDs.length) return
+  const deleted = typeof store.deletePosts === 'function' && (store.deletePosts.mock || !store.deletePost?.mock)
+    ? await store.deletePosts(uniqueIDs)
+    : (await Promise.all(uniqueIDs.map(id => store.deletePost(id)))).filter(Boolean)
+  if (!deleted.length) return
+  const months = new Set(deleted.map(g => `${g.guild_id}/${g.author_id}/${monthOf(new Date(g.created_at))}`))
+  await writeMonths(months)
 }
 
 function startDiscordKnowledge () {
@@ -225,4 +238,4 @@ function startDiscordKnowledge () {
   backfill().catch(e => global.logger.warn(`[DISCORD]: Reading past messages failed: ${e.message}`))
 }
 
-module.exports = { startDiscordKnowledge, backfill, readChannel, onMessage, onDelete, everyoneCanRead, botChannels, publicChannels, monthSections, users, enabled }
+module.exports = { startDiscordKnowledge, backfill, readChannel, writeMonths, onMessage, onDelete, onDeleteMany, everyoneCanRead, botChannels, publicChannels, monthSections, users, enabled }

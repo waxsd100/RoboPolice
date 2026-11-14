@@ -33,7 +33,8 @@ async function saveBackfill (guildID, channelID, { beforeID = null, done = false
        msg_reached_start = $6,
        msg_limit_start = $7,
        msg_limit_max = $8,
-       msg_backfill_at = now()`,
+       msg_backfill_at = now()
+     WHERE discord_channels.guild_id = EXCLUDED.guild_id`,
     [channelID, guildID, beforeID, done, readCount, reachedStart, limitStart, limitMax])
 }
 

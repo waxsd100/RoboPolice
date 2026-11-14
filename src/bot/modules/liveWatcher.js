@@ -201,9 +201,29 @@ async function announceUpload (guild, video, now = new Date()) {
   return { eventID, status: 'active', scheduledStart: start, scheduledEnd, kind: 'upload' }
 }
 
-// An upload's event once its time is up: ended (Discord may have ended it already).
-async function endUpload (guild, record, now = new Date()) {
-  if (record.status !== 'active' || new Date(record.scheduled_end || 0) > now) return null
+// An upload's event once its time is up (or the upload was deleted/privated): ended.
+// Supports both endUpload(guild, video, record, now) and legacy endUpload(guild, record, now).
+async function endUpload (guild, videoOrRecord, maybeRecord, maybeNow) {
+  let video
+  let record
+  let now
+  if (videoOrRecord && typeof videoOrRecord === 'object' && 'event_id' in videoOrRecord && (!maybeRecord || maybeRecord instanceof Date)) {
+    video = undefined
+    record = videoOrRecord
+    now = maybeRecord || new Date()
+  } else {
+    video = videoOrRecord
+    record = maybeRecord
+    now = maybeNow || new Date()
+  }
+  if (!record || record.status !== 'active') return null
+  const uploadDurationMs = hoursSetting('UPLOAD_EVENT_HOURS', DEFAULT_UPLOAD_EVENT_HOURS) * 3600 * 1000
+  const startMs = record.scheduled_start ? new Date(record.scheduled_start).getTime() : NaN
+  const endMs = record.scheduled_end ? new Date(record.scheduled_end).getTime() : NaN
+  const videoGone = video !== undefined && !video
+  const durationElapsed = Number.isFinite(startMs) && (now.getTime() - startMs >= uploadDurationMs)
+  const endReached = Number.isFinite(endMs) && endMs <= now.getTime()
+  if (!videoGone && !durationElapsed && !endReached) return null
   await setStatus(guild, record.event_id, 'completed').catch(e => { if (!/400|completed/i.test(e.message)) throw e })
   return { eventID: record.event_id, status: 'completed', scheduledStart: record.scheduled_start, scheduledEnd: record.scheduled_end, kind: 'upload' }
 }
@@ -231,7 +251,7 @@ async function checkChannel (channelID, guildIDs, now = new Date()) {
     const videos = await fetchVideos(ids, process.env.YOUTUBE_API_KEY)
     await youtubeDB.upsertVideos(channelID, videos)
     let changed = 0
-    for (const guild of guilds) changed += await updateGuild(guild, ids, new Map(videos.map(v => [v.id, v])), recordsOf.get(guild.id))
+    for (const guild of guilds) changed += await updateGuild(guild, ids, new Map(videos.map(v => [v.id, v])), recordsOf.get(guild.id), now)
     return changed
   } finally {
     checkingChannels.delete(channelID)
@@ -239,7 +259,7 @@ async function checkChannel (channelID, guildIDs, now = new Date()) {
 }
 
 // One server's events for the channel's videos `ids` (byId: their current state from YouTube).
-async function updateGuild (guild, ids, byId, records) {
+async function updateGuild (guild, ids, byId, records, now = new Date()) {
   if (!guild.members.get(global.bot.user.id)?.permissions.has('manageEvents')) {
     global.logger.warn(`[LIVE]: Cannot make events in ${guild.id}: the bot lacks Manage Events`)
     return 0
@@ -253,8 +273,8 @@ async function updateGuild (guild, ids, byId, records) {
     if (upload && !record && !uploadEventsEnabled()) continue
     try {
       const next = upload
-        ? (record ? await endUpload(guild, record) : await announceUpload(guild, video))
-        : await follow(guild, video, record)
+        ? (record ? await endUpload(guild, video, record, now) : await announceUpload(guild, video, now))
+        : await follow(guild, video, record, now)
       if (next) {
         await youtubeDB.saveLiveEvent(guild.id, id, next)
         changed++
@@ -296,13 +316,20 @@ function archiveSummariesEnabled () {
   return isGatewayConfigured() && process.env.LIVE_ARCHIVE_SUMMARY !== 'false'
 }
 
-async function summarizeArchives (guildID) {
-  if (summarizingArchive || !archiveSummariesEnabled()) return null
-  summarizingArchive = true
+async function summarizeGuildArchive (guildID) {
   try {
-    const [archive] = await youtubeDB.archivesToSummarize(guildID)
-    if (!archive) return null
-    await youtubeDB.recordArchiveAttempt(archive.video_id)
+    const useClaim = typeof youtubeDB.claimArchiveToSummarize === 'function' &&
+      (youtubeDB.claimArchiveToSummarize.mock || (youtubeDB.archivesToSummarize?._isRealPostgres && !youtubeDB.archivesToSummarize?.mock))
+    let archive = null
+    if (useClaim) {
+      archive = await youtubeDB.claimArchiveToSummarize(guildID)
+      if (!archive) return null
+      if (!archive.url) archive = { ...archive, url: `https://www.youtube.com/watch?v=${archive.video_id}` }
+    } else {
+      ;[archive] = await youtubeDB.archivesToSummarize(guildID)
+      if (!archive) return null
+      await youtubeDB.recordArchiveAttempt(archive.video_id)
+    }
     const { flex } = await require('./eventDrafter').resolveTaskConfig('summary', guildID)
     await require('./videoSummary').summarizeVideo(guildID, archive.url, { flex })
     global.logger.info(`[LIVE]: Summarized the archive of ${archive.video_id} in ${guildID}`)
@@ -310,6 +337,27 @@ async function summarizeArchives (guildID) {
   } catch (e) {
     global.logger.warn(`[LIVE]: Could not summarize an archive in ${guildID}, trying again later: ${e.message}`)
     return null
+  }
+}
+
+async function summarizeArchives (guildID) {
+  if (summarizingArchive || !archiveSummariesEnabled()) return null
+  summarizingArchive = true
+  try {
+    return await summarizeGuildArchive(guildID)
+  } finally {
+    summarizingArchive = false
+  }
+}
+
+async function summarizeAllGuildArchives (guildIDs) {
+  if (summarizingArchive || !archiveSummariesEnabled()) return
+  summarizingArchive = true
+  try {
+    for (const guildID of guildIDs) {
+      if (!archiveSummariesEnabled()) break
+      await summarizeGuildArchive(guildID)
+    }
   } finally {
     summarizingArchive = false
   }
@@ -328,7 +376,7 @@ async function checkAll (channelID = null) {
     for (const { channel_id: id } of (await youtubeDB.listChannels()).filter(c => !channelID || c.channel_id === channelID)) {
       await checkChannel(id, guildIDs).catch(e => global.logger.warn(`[LIVE]: Checking ${id} failed: ${e.message}`))
     }
-    for (const guildID of guildIDs) summarizeArchives(guildID) // not awaited
+    summarizeAllGuildArchives(guildIDs) // not awaited
   } catch (e) {
     global.logger.warn(`[LIVE]: Checking streams failed: ${e.message}`)
   } finally {
@@ -346,4 +394,4 @@ function startWatcher () {
   return setInterval(() => checkAll(), seconds * 1000)
 }
 
-module.exports = { isShort, startWatcher, checkAll, checkGuild, checkChannel, follow, announceUpload, endUpload, summarizeArchives, eventDescription, STATUS }
+module.exports = { isShort, startWatcher, checkAll, checkGuild, checkChannel, follow, announceUpload, endUpload, summarizeArchives, summarizeAllGuildArchives, eventDescription, STATUS }

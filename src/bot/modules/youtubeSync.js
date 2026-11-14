@@ -167,12 +167,16 @@ function startAutoSync () {
 }
 
 // The newest `count` stored videos that have no summary yet (with force, whether or not they have
-// one), skipping streams that are not over.
+// one), skipping streams that are not over and (unless forced) videos already in a summary batch.
 async function videosToSummarize (guildID, count, { force = false } = {}) {
   const knowledge = await youtubeDB.getKnowledge(guildID)
-  return (knowledge?.videos || [])
+  let candidates = (knowledge?.videos || [])
     .filter(v => (force || !v.summary) && !['live', 'upcoming'].includes(v.live_status))
-    .slice(0, Math.min(Math.max(count, 1), MAX_SUMMARIES))
+  if (!force && candidates.length && typeof youtubeDB.videosInSummaryBatch === 'function') {
+    const inBatch = await youtubeDB.videosInSummaryBatch(candidates.map(v => v.video_id))
+    if (inBatch?.size) candidates = candidates.filter(v => !inBatch.has(v.video_id))
+  }
+  return candidates.slice(0, Math.min(Math.max(count, 1), MAX_SUMMARIES))
 }
 
 const DEFAULT_CONCURRENCY = 3

@@ -304,7 +304,7 @@ class GeminiError extends Error {
   }
 }
 
-const BLOCKING_FINISH_REASONS = ['SAFETY', 'PROHIBITED_CONTENT', 'BLOCKLIST', 'SPII']
+const BLOCKING_FINISH_REASONS = ['SAFETY', 'PROHIBITED_CONTENT', 'BLOCKLIST', 'SPII', 'IMAGE_SAFETY', 'IMAGE_PROHIBITED_CONTENT', 'RECITATION']
 
 // fetch gives up on a response that has not started after 5 minutes (undici's headersTimeout and
 // bodyTimeout), whatever the AbortSignal says. Gemini answers only once it is done, so a call
@@ -363,13 +363,25 @@ async function geminiRequest (model, method, body, options = {}) {
 async function streamed (res) {
   if (!res.body) return res.json()
   const parts = []
+  let sawData = false
+  let sawCandidate = false
+  let rawAll = ''
   const merged = { candidates: [{ content: { role: 'model', parts } }] }
   const take = line => {
     const m = line.match(/^data:\s*(.*)$/)
-    if (!m || !m[1].trim()) return
+    if (!m) return
+    sawData = true
+    if (!m[1].trim() || m[1].trim() === '[DONE]') return
     let chunk
     try { chunk = JSON.parse(m[1]) } catch (_) { return }
+    if (chunk?.error) {
+      const code = Number(chunk.error.code) || null
+      const msg = chunk.error.message || JSON.stringify(chunk.error)
+      const hint = code ? `AI の呼び出しに失敗しました（HTTP ${code}）` : 'AI の呼び出しに失敗しました'
+      throw new GeminiError(msg, hint, null, code)
+    }
     const candidate = chunk.candidates?.[0]
+    if (candidate) sawCandidate = true
     for (const part of candidate?.content?.parts || []) {
       if (part.thought && !part.thoughtSignature) continue
       const last = parts[parts.length - 1]
@@ -383,12 +395,25 @@ async function streamed (res) {
   }
   let buffer = ''
   for await (const text of textChunks(res)) {
+    rawAll += text
     buffer += text
     const lines = buffer.split(/\r?\n/)
     buffer = lines.pop()
     lines.forEach(take)
   }
   take(buffer)
+  if (!sawData && rawAll.trim()) {
+    let parsed = null
+    try { parsed = JSON.parse(rawAll) } catch (_) {}
+    if (parsed?.error) {
+      const code = Number(parsed.error.code) || null
+      const msg = parsed.error.message || JSON.stringify(parsed.error)
+      const hint = code ? `AI の呼び出しに失敗しました（HTTP ${code}）` : 'AI の呼び出しに失敗しました'
+      throw new GeminiError(msg, hint, null, code)
+    }
+    if (parsed) return parsed
+  }
+  if (!sawCandidate) merged.candidates = []
   return merged
 }
 
@@ -560,7 +585,7 @@ async function callGemini (model, body, options) {
   const finish = candidate?.finishReason
   const blocked = data.promptFeedback?.blockReason || (BLOCKING_FINISH_REASONS.includes(finish) ? finish : null)
   const hasAnswer = content?.parts?.some(p => !p.thought)
-  if (!content?.parts?.length || (blocked && !hasAnswer)) {
+  if (!hasAnswer) {
     throw new GeminiError(`Gemini returned no content: ${JSON.stringify(data).slice(0, 1000)}`, 'AI から応答がありませんでした', blocked)
   }
   return content
@@ -570,7 +595,7 @@ async function callGemini (model, body, options) {
 // tokens: `setting` names the environment variable, `fallback` the level without it. Mention
 // replies and drafts think at high (GEMINI_THINKING_LEVEL), video summaries at low
 // (VIDEO_SUMMARY_THINKING_LEVEL), and everything else at low (GEMINI_LIGHT_THINKING_LEVEL). Only sent to Gemini 3 models (older ones refuse the setting).
-const { THINKING_LEVELS, SERVICE_TIERS } = require('../utils/replyOptions')
+const { REPLY_MODELS, THINKING_LEVELS, SERVICE_TIERS } = require('../utils/replyOptions')
 const replySettings = () => require('../../db/interfaces/postgres/replySettings')
 
 function thinkingConfig (model, { setting = 'GEMINI_THINKING_LEVEL', fallback = 'high' } = {}) {
@@ -640,9 +665,18 @@ const CACHE_LABEL = 'robopolice-mention'
 const MAX_CACHE_LIST_PAGES = 10
 const MAX_MEMORY_CACHES = 16
 const MAX_MEMORY_PURGED = 16
+const MAX_UNCENSORED_CACHE_KEYS = 256
 const UNCENSORED_REPLY_CACHE_TTL_SECONDS = 10 * 60
 const caches = new Map()
 const uncensoredCacheKeys = new Set()
+const rawUncensoredKeysAdd = uncensoredCacheKeys.add.bind(uncensoredCacheKeys)
+uncensoredCacheKeys.add = key => {
+  if (uncensoredCacheKeys.has(key)) uncensoredCacheKeys.delete(key)
+  else if (uncensoredCacheKeys.size >= MAX_UNCENSORED_CACHE_KEYS) {
+    uncensoredCacheKeys.delete(uncensoredCacheKeys.keys().next().value)
+  }
+  return rawUncensoredKeysAdd(key)
+}
 const rawCachesSet = caches.set.bind(caches)
 caches.set = (key, value) => {
   if (caches.has(key)) caches.delete(key)
@@ -905,36 +939,83 @@ function extractReferencedDirective (referenced) {
   if (typeof referenced.lastBotModel === 'string' && referenced.lastBotModel.trim() && !/^gemini-/i.test(referenced.lastBotModel.trim())) {
     return referenced.lastBotModel.trim()
   }
-  const sources = [referenced.othersText, referenced.text].filter(t => typeof t === 'string' && t.trim())
-  for (const src of sources) {
-    const lines = src.split(/\r?\n/).reverse()
+  if (typeof referenced.text === 'string' && referenced.text.trim()) {
+    const lines = referenced.text.split(/\r?\n/)
+    let canUseDirective = true
+    const candidates = []
     for (const line of lines) {
       const footerMatch = line.match(/^-#\s*model:\s*(.+?)\s*·/)
       if (footerMatch) {
         const lastModel = footerMatch[1].split('→').pop().replace(/\s*\(flex\)\s*$/i, '').trim()
-        if (lastModel && !/^gemini-/i.test(lastModel)) return lastModel
+        if (lastModel && !/^gemini-/i.test(lastModel)) candidates.push(lastModel)
+        continue
       }
-      const msgMatch = line.match(/^\[[^\]]+\]\s+[^:]+:\s*(.*)$/)
-      const body = (msgMatch ? msgMatch[1] : line).replace(/<@!?\d+>|<@&\d+>/g, '').trim()
+      const msgMatch = line.match(/^\[[^\]]+\]\s+([^:]+):\s*(.*)$/)
+      if (msgMatch) {
+        canUseDirective = msgMatch[1].includes('（依頼者）')
+      }
+      if (!canUseDirective) continue
+      const body = (msgMatch ? msgMatch[2] : line).replace(/<@!?\d+>|<@&\d+>/g, '').trim()
       if (!body) continue
       const parsed = parseModelDirective(body)
-      if (parsed.directive) return parsed.directive
+      if (parsed.directive) candidates.push(parsed.directive)
     }
+    if (candidates.length) return candidates[candidates.length - 1]
   }
   return null
+}
+
+function uncensoredEnvModel () {
+  const m = String(process.env.UNCENSORED_MODEL || '').trim()
+  return m && m.toLowerCase() !== 'auto' ? m : null
+}
+
+function uncensoredR18EnvModel () {
+  const m = String(process.env.UNCENSORED_R18_MODEL || '').trim()
+  return m && m.toLowerCase() !== 'auto' ? m : null
+}
+
+function isAllowedUncensoredModelName (directive) {
+  const normalized = normalizeDirectiveValue(directive)
+  if (!normalized) return false
+  const custom = normalizeLocalModelId(normalized)
+  const rawLower = normalized.toLowerCase()
+  const customLower = custom.toLowerCase()
+  const known = [
+    uncensoredBaseModel(),
+    uncensoredR18Model(),
+    uncensoredEnvModel(),
+    uncensoredR18EnvModel(),
+    uncensoredState.detectedModel,
+    uncensoredState.detectedR18Model
+  ].filter(Boolean)
+  if (known.some(m => {
+    const ml = String(m).trim().toLowerCase()
+    const nl = normalizeLocalModelId(m).toLowerCase()
+    return rawLower === ml || customLower === ml || customLower === nl
+  })) {
+    return true
+  }
+  const endpoint = uncensoredEndpoint()
+  return Boolean(endpoint && !endpoint.gateway && isLocalUncensoredUrl(endpoint.url))
 }
 
 function isUncensoredDirective (request, referenced = null) {
   const d = parseModelDirective(request).directive || extractReferencedDirective(referenced)
   if (!d) return false
-  const lower = String(d).trim().toLowerCase()
-  if (lower === 'deep' || lower === 'argon' || GEMINI_DIRECTIVE_ALIASES[lower] || /^gemini-/i.test(d)) return false
-  return true
+  const normalized = normalizeDirectiveValue(d)
+  const lower = normalized.toLowerCase()
+  if (lower === 'deep' || lower === 'argon' || GEMINI_DIRECTIVE_ALIASES[lower] || /^gemini-/i.test(normalized)) return false
+  if (lower === '1' || lower === 'uncensored' || lower === 'fallback' || lower === 'heretic' || lower === '2' || lower === 'r18' || lower === 'deckard') {
+    return true
+  }
+  return isAllowedUncensoredModelName(normalized)
 }
 
 function applyModelDirective (contents, directive, { inherited = false } = {}) {
   if (!directive || !contents) return false
-  const lower = normalizeDirectiveValue(directive).toLowerCase()
+  const normalized = normalizeDirectiveValue(directive)
+  const lower = normalized.toLowerCase()
   if (lower === 'deep' || lower === 'argon') {
     if (deepModel()) {
       contents.deep = true
@@ -943,13 +1024,24 @@ function applyModelDirective (contents, directive, { inherited = false } = {}) {
     }
     return false
   }
-  if (GEMINI_DIRECTIVE_ALIASES[lower] || /^gemini-/i.test(directive)) {
-    contents.model = GEMINI_DIRECTIVE_ALIASES[lower] || String(directive).trim()
+  if (GEMINI_DIRECTIVE_ALIASES[lower] || /^gemini-/i.test(normalized)) {
+    const canonical = (GEMINI_DIRECTIVE_ALIASES[lower] || normalized).toLowerCase()
+    if (/image/i.test(canonical)) return false
+    const deep = deepModel()
+    if (canonical === 'gemini-4-argon' || (deep && canonical === deep.toLowerCase())) {
+      if (!deep) return false
+      contents.deep = true
+      contents.uncensored = false
+      return true
+    }
+    if (!GEMINI_DIRECTIVE_ALIASES[lower] && !REPLY_MODELS.includes(canonical)) return false
+    contents.model = canonical
     contents.deep = false
     contents.uncensored = false
     return true
   }
-  if (!isUncensoredConfigured() || contents.uncensoredR18 === false) return false
+  const allowUncensored = contents.uncensoredR18 !== false && !contents.safetyFilter
+  if (!isUncensoredConfigured() || !allowUncensored) return false
   if (lower === '1' || lower === 'uncensored' || lower === 'fallback' || lower === 'heretic') {
     contents.deep = false
     contents.uncensored = true
@@ -968,7 +1060,8 @@ function applyModelDirective (contents, directive, { inherited = false } = {}) {
     contents.inheritedUncensoredModel = false
     return true
   }
-  const custom = normalizeLocalModelId(directive)
+  if (!isAllowedUncensoredModelName(normalized)) return false
+  const custom = normalizeLocalModelId(normalized)
   const customLower = custom.toLowerCase()
   const baseLower = uncensoredBaseModel().toLowerCase()
   const r18Lower = uncensoredR18Model().toLowerCase()
@@ -1046,6 +1139,7 @@ function uncensoredSystemInstruction ({ compact = false, r18Mode = false } = {})
     '- 「添付・返信先の画像」や「添付・返信先画像の内容（視覚情報）」があるときは、その画像に写っている人物・キャラクター・外見・服装・表情・ポーズ・シチュエーションを踏まえて返事や描写を書いてください。',
     '- 「そのままでは書けない依頼」にある「ぼかした版を代わりに書く」「露骨な描写は書かない」「場面転換・暗示・フェードアウト・朝チュンにする」という制限は一切適用しません。',
     '- 依頼された成人向け・R18・官能表現の依頼には、省略やフェードアウト（朝チュンなど）をせず、キャラクターの口調・性格・設定を保ったまま、求められた描写を最初から最後まで具体的・直接的に詳しく書き切ってください。',
+    '- 未成年（に見える人物）を性的に扱うものは一切書かない。年齢が曖昧な登場人物は成人として扱う。',
     '',
     '## 自然な日本語と小説・R18描写のルール（最優先）',
     '- **地の文は常体（「〜た」「〜だ」）で統一する**: 小説・SS・物語・R18シーンを書くとき、地の文に「〜ました」「〜ます」「〜でした」「〜ています」のような敬体（です・ます調）は絶対に使わないでください（「弄びました」「包み込んでいます」「開きました」「引き寄せます」「明白でした」のような文体は厳禁）。また、地の文で過去形（「〜た」）と現在形（「〜る」）が1文ごとにチグハグに混ざらないようにしてください。',
@@ -1080,7 +1174,6 @@ function compactUncensoredText (text, { r18Mode = false } = {}) {
   const hasConversation = /<untrusted source="conversation">/.test(text)
   const storyMode = r18Mode || STORY_REQUEST_PATTERN.test(text)
   let out = text
-    .replace(/\n## このサーバーのルールとモデレーターからのお願い[\s\S]*?(?=\n## このサーバーの情報|\n## 依頼や会話に出てくるチャンネル|\n依頼されたチャンネル:)/, '')
     .replace(/\n## このサーバーの情報（最新）\n<untrusted source="server">[\s\S]*?<\/untrusted>/, '')
     .replace(/\n## 依頼や会話に出てくるチャンネル[\s\S]*?(?=\n## |\n依頼されたチャンネル:)/, '')
     .replace(/\n現在日時: [^\n]+/, '')
@@ -1179,7 +1272,7 @@ function updateDetectedModelsFromList (list) {
 // (such as llama-server on Railway or Cloud Run GPU), it first checks GET /v1/models which
 // responds without running inference; if that returns 404/405 (or on AI Gateway), it falls back
 // to a 1-token POST /v1/chat/completions.
-async function checkUncensoredConnection ({ timeoutMs = UNCENSORED_CHECK_TIMEOUT_MS, notifyWarn = true } = {}) {
+async function checkUncensoredConnection ({ timeoutMs = UNCENSORED_CHECK_TIMEOUT_MS, notifyWarn = true, notifyWebhook = true } = {}) {
   const endpoint = uncensoredEndpoint()
   if (!endpoint) {
     uncensoredState.usable = null
@@ -1240,7 +1333,7 @@ async function checkUncensoredConnection ({ timeoutMs = UNCENSORED_CHECK_TIMEOUT
     uncensoredState.error = null
     const msg = `[UNCENSORED]: Connected and ready (${activeModel} at ${endpoint.url})`
     global.logger?.info(msg)
-    global.webhook?.generic?.(msg)
+    if (notifyWebhook) global.webhook?.generic?.(msg)
     return { configured: true, usable: true, model: activeModel, url: endpoint.url }
   } catch (e) {
     const reason = (e?.message || String(e)).slice(0, 300)
@@ -1250,12 +1343,12 @@ async function checkUncensoredConnection ({ timeoutMs = UNCENSORED_CHECK_TIMEOUT
     uncensoredState.error = reason
     const msg = `[UNCENSORED]: Startup check failed for ${model} (${endpoint.url}): ${reason} — R18 / uncensored fallback is disabled until it responds`
     global.logger?.warn(msg)
-    if (notifyWarn) global.webhook?.warn?.(msg)
+    if (notifyWebhook && notifyWarn) global.webhook?.warn?.(msg)
     return { configured: true, usable: false, model, url: endpoint.url, error: reason }
   }
 }
 
-function startUncensoredCheck () {
+function startUncensoredCheck ({ notifyWebhook = true } = {}) {
   const endpoint = uncensoredEndpoint()
   if (endpoint && process.env.UNCENSORED_SKIP_STARTUP_PROBE === 'true') {
     const model = uncensoredModel()
@@ -1269,7 +1362,7 @@ function startUncensoredCheck () {
   let attempts = 0
   const run = async () => {
     attempts++
-    const res = await checkUncensoredConnection({ notifyWarn: attempts === 1 })
+    const res = await checkUncensoredConnection({ notifyWarn: attempts === 1, notifyWebhook })
     if (res.configured && !res.usable && attempts < UNCENSORED_MAX_STARTUP_CHECKS) {
       const timer = setTimeout(run, UNCENSORED_RETRY_INTERVAL_MS)
       timer.unref?.()
@@ -1317,6 +1410,8 @@ function extractLookupNotes (turns) {
 function toOpenAIMessages (system, contents, { compact = false, r18Mode = false } = {}) {
   const messages = [{ role: 'system', content: system }]
   let pendingCallIds = []
+  let appendedImageDesc = false
+  let appendedLookupNotes = false
   for (const turn of contents) {
     const parts = turn.parts || []
     if (turn.role === 'model') {
@@ -1352,8 +1447,13 @@ function toOpenAIMessages (system, contents, { compact = false, r18Mode = false 
         const contentParts = other.map(p => p.inlineData
           ? { type: 'image_url', image_url: { url: `data:${p.inlineData.mimeType};base64,${p.inlineData.data}` } }
           : { type: 'text', text: String(p.text || '') })
-        if (contents.imageDescription) {
+        if (contents.imageDescription && !appendedImageDesc && !contentParts.some(p => p.type === 'text' && p.text.includes('## 添付・返信先画像の内容（視覚情報）'))) {
           contentParts.push({ type: 'text', text: `## 添付・返信先画像の内容（視覚情報）\n${contents.imageDescription}` })
+          appendedImageDesc = true
+        }
+        if (contents.lookupNotes && !appendedLookupNotes && !contentParts.some(p => p.type === 'text' && p.text.includes('## ツールで調べた関連情報'))) {
+          contentParts.push({ type: 'text', text: `## ツールで調べた関連情報\n${contents.lookupNotes}` })
+          appendedLookupNotes = true
         }
         messages.push({
           role: 'user',
@@ -1362,11 +1462,16 @@ function toOpenAIMessages (system, contents, { compact = false, r18Mode = false 
       } else {
         const joined = other.filter(p => typeof p.text === 'string').map(p => p.text).join('\n')
         const baseText = compact ? compactUncensoredText(joined, { r18Mode }) : joined
-        const withImages = contents.imageDescription
-          ? `${baseText}\n\n## 添付・返信先画像の内容（視覚情報）\n${contents.imageDescription}`
-          : baseText
-        const withLookups = compact && contents.lookupNotes ? `${withImages}\n\n## ツールで調べた関連情報\n${contents.lookupNotes}` : withImages
-        messages.push({ role: 'user', content: withLookups })
+        let finalContent = baseText
+        if (contents.imageDescription && !appendedImageDesc && !finalContent.includes('## 添付・返信先画像の内容（視覚情報）')) {
+          finalContent = `${finalContent}\n\n## 添付・返信先画像の内容（視覚情報）\n${contents.imageDescription}`
+          appendedImageDesc = true
+        }
+        if (contents.lookupNotes && !appendedLookupNotes && !finalContent.includes('## ツールで調べた関連情報')) {
+          finalContent = `${finalContent}\n\n## ツールで調べた関連情報\n${contents.lookupNotes}`
+          appendedLookupNotes = true
+        }
+        messages.push({ role: 'user', content: finalContent })
       }
     }
   }
@@ -1671,10 +1776,12 @@ async function callUncensored (contents, declarations, allowed = null, { timeout
   const endpoint = uncensoredEndpoint()
   if (!endpoint) throw new GeminiError('Uncensored endpoint is not configured', 'AI の呼び出しに失敗しました')
   let model = uncensoredModel(contents)
+  const modelOverride = Boolean(contents?.explicitUncensoredModel)
   const headers = uncensoredHeaders(endpoint)
   const local = !endpoint.gateway && isLocalUncensoredUrl(endpoint.url)
   const canSubmitChat = (!allowed || allowed.includes(SUBMIT_CHAT_DECLARATION.name)) && declarations.some(d => d.name === SUBMIT_CHAT_DECLARATION.name)
-  const useCompact = local && canSubmitChat
+  const isMultiTurnOrEdit = Boolean(contents?.isEdit || contents?.isRevision) || (Array.isArray(contents) && contents.length > 1)
+  const useCompact = local && canSubmitChat && !isMultiTurnOrEdit
   if (contents && !contents.imageDescription && Array.isArray(contents.attachedPictures) && contents.attachedPictures.length) {
     const desc = await describeImagesForUncensored(contents.attachedPictures)
     if (desc) contents.imageDescription = desc
@@ -1709,6 +1816,13 @@ async function callUncensored (contents, declarations, allowed = null, { timeout
             ? { type: 'function', function: { name: allowed[0] } }
             : 'required'
         })
+  }
+  const markUnusable = () => {
+    if (!modelOverride) {
+      uncensoredState.url = endpoint.url
+      uncensoredState.usable = false
+      uncensoredState.checkedAt = Date.now()
+    }
   }
   const usage = currentUsage()
   const send = async payload => {
@@ -1753,44 +1867,78 @@ async function callUncensored (contents, declarations, allowed = null, { timeout
       ...UNCENSORED_SAMPLING_PARAMS
     }
   }
-  let res = await send(body)
-  if (res.status === 400) {
-    await res.text().catch(() => {})
-    res = await send(buildMinimalBody())
+  let res
+  try {
+    res = await send(body)
+    if (res.status === 400) {
+      await res.text().catch(() => {})
+      res = await send(buildMinimalBody())
+    }
+  } catch (err) {
+    markUnusable()
+    throw err
   }
   if (!res.ok) {
+    if (res.status >= 500) markUnusable()
     const text = (await res.text()).slice(0, 1000)
     throw new GeminiError(`Uncensored request failed: HTTP ${res.status} ${text}`, `AI の呼び出しに失敗しました（HTTP ${res.status}）`, null, res.status)
   }
-  let data = await readUncensoredResponse(res)
+  let data
+  try {
+    data = await readUncensoredResponse(res)
+  } catch (err) {
+    markUnusable()
+    throw err
+  }
   let parts = parseUncensoredParts(data?.choices?.[0]?.message, declarations, allowed)
   if (!parts.length && useCompact) {
-    const retryRes = await send(buildMinimalBody())
+    let retryRes
+    try {
+      retryRes = await send(buildMinimalBody())
+    } catch (err) {
+      markUnusable()
+      throw err
+    }
     if (retryRes.ok) {
-      data = await readUncensoredResponse(retryRes)
+      try {
+        data = await readUncensoredResponse(retryRes)
+      } catch (err) {
+        markUnusable()
+        throw err
+      }
       parts = parseUncensoredParts(data?.choices?.[0]?.message, declarations, allowed)
+    } else if (retryRes.status >= 500) {
+      markUnusable()
     }
   }
-  uncensoredState.usable = true
-  uncensoredState.url = endpoint.url
   const msg = data?.choices?.[0]?.message
-  const rawPromptChars = messages.reduce((sum, m) => sum + (typeof m.content === 'string' ? m.content.length : 0), 0)
-  const rawCompletionChars = (typeof msg?.content === 'string' ? msg.content.length : 0) +
-    (typeof msg?.reasoning_content === 'string' ? msg.reasoning_content.length : 0)
+  const rawPromptChars = messages.reduce((sum, m) => {
+    const c = m?.content
+    if (typeof c === 'string') return sum + c.length
+    if (Array.isArray(c)) return sum + c.reduce((n, p) => n + (typeof p?.text === 'string' ? p.text.length : 0), 0)
+    return sum
+  }, 0)
+  const rawAnswerChars = typeof msg?.content === 'string' ? msg.content.length : 0
   const rawReasoningChars = typeof msg?.reasoning_content === 'string' ? msg.reasoning_content.length : 0
+  const reasoningTokens = data?.usage?.completion_tokens_details?.reasoning_tokens || 0
+  const estimatedThoughts = rawReasoningChars ? Math.ceil(rawReasoningChars / 3) : 0
   const usageMeta = data?.usage
     ? {
         promptTokenCount: data.usage.prompt_tokens || 0,
         cachedContentTokenCount: data.usage.prompt_tokens_details?.cached_tokens || 0,
-        candidatesTokenCount: data.usage.completion_tokens || 0,
-        thoughtsTokenCount: data.usage.completion_tokens_details?.reasoning_tokens || 0
+        candidatesTokenCount: data.usage.completion_tokens != null
+          ? Math.max(0, (data.usage.completion_tokens || 0) - reasoningTokens)
+          : (rawAnswerChars ? Math.ceil(rawAnswerChars / 3) : 0),
+        thoughtsTokenCount: data.usage.completion_tokens != null
+          ? reasoningTokens
+          : (reasoningTokens || estimatedThoughts)
       }
-    : (rawCompletionChars > 0
+    : (rawAnswerChars + rawReasoningChars > 0
         ? {
             promptTokenCount: Math.max(1, Math.round(rawPromptChars / 3)),
             cachedContentTokenCount: 0,
-            candidatesTokenCount: Math.max(1, Math.round(rawCompletionChars / 3)),
-            thoughtsTokenCount: rawReasoningChars > 0 ? Math.max(1, Math.round(rawReasoningChars / 3)) : 0
+            candidatesTokenCount: rawAnswerChars > 0 ? Math.max(1, Math.round(rawAnswerChars / 3)) : 0,
+            thoughtsTokenCount: estimatedThoughts
           }
         : undefined)
   recordTokens('mention-uncensored', model, usageMeta)
@@ -1800,6 +1948,8 @@ async function callUncensored (contents, declarations, allowed = null, { timeout
   if (!parts.length) {
     throw new GeminiError(`Uncensored model returned no content: ${JSON.stringify(data).slice(0, 1000)}`, 'AI から応答がありませんでした')
   }
+  uncensoredState.usable = true
+  uncensoredState.url = endpoint.url
   if (replyCacheKey) {
     uncensoredCacheKeys.add(replyCacheKey)
     await aiCache.setJson(replyCacheKey, { parts }, UNCENSORED_REPLY_CACHE_TTL_SECONDS)
@@ -2023,8 +2173,34 @@ async function generate (contents, declarations, allowed = null, { deep = false,
 // HTTP statuses of a Flex request that found no capacity or was not waited for.
 const FLEX_UNAVAILABLE = [429, 503, 524]
 
+function stripModelTurnThoughts (turn) {
+  if (!turn || turn.role !== 'model' || !Array.isArray(turn.parts)) return turn
+  const hasThoughtOrSig = turn.parts.some(p => p?.thought || (p && typeof p === 'object' && ('thoughtSignature' in p || 'thought_signature' in p)))
+  if (!hasThoughtOrSig) return turn
+  const parts = turn.parts
+    .filter(p => !p?.thought)
+    .map(p => {
+      if (!p || typeof p !== 'object' || (!('thoughtSignature' in p) && !('thought_signature' in p))) return p
+      const copy = { ...p }
+      delete copy.thoughtSignature
+      delete copy.thought_signature
+      return copy
+    })
+  return { ...turn, parts }
+}
+
+function cloneContentsWithoutThoughts (contents) {
+  const stripped = contents.map(stripModelTurnThoughts)
+  for (const key of Object.keys(contents)) {
+    if (!/^(?:0|[1-9]\d*)$/.test(key)) {
+      stripped[key] = contents[key]
+    }
+  }
+  return stripped
+}
+
 async function runAgent (contents, tools, submits = SUBMIT_DECLARATIONS) {
-  const allowUncensored = contents.uncensoredR18 !== false
+  const allowUncensored = contents.uncensoredR18 !== false && !contents.safetyFilter
   // Not offered again once the stronger model or the uncensored fallback took over this conversation.
   const offered = [
     ...(deepModel() && !contents.deepRefused && !contents.uncensored && !contents.uncensoredFailed ? [THINK_DEEPER_DECLARATION] : []),
@@ -2068,6 +2244,7 @@ async function runAgent (contents, tools, submits = SUBMIT_DECLARATIONS) {
         global.logger?.warn(`[UNCENSORED]: ${currentModel} failed (${e.message.slice(0, 200)}); ${fallback} answers instead`)
         addFallback(`${currentModel} unavailable → ${fallback}`)
         contents.splice(start)
+        for (let i = 0; i < contents.length; i++) contents[i] = stripModelTurnThoughts(contents[i])
         contents.uncensored = false
         contents.uncensoredFailed = true
         contents.deepRefused = true
@@ -2102,6 +2279,7 @@ async function runAgent (contents, tools, submits = SUBMIT_DECLARATIONS) {
         global.logger?.info(`[GEMINI]: ${deepModel()} ${why}; ${fallback} answers instead`)
         addFallback(`${deepModel()} ${why} → ${fallback}`)
         contents.splice(start)
+        for (let i = 0; i < contents.length; i++) contents[i] = stripModelTurnThoughts(contents[i])
         contents.deep = false
         contents.deepRefused = true
         offered.length = 0
@@ -2135,6 +2313,7 @@ async function runAgent (contents, tools, submits = SUBMIT_DECLARATIONS) {
       // The stronger model starts this turn again from the request: one model's thought
       // signatures are not another's, so nothing of this model's turn goes with it.
       contents.splice(start)
+      for (let i = 0; i < contents.length; i++) contents[i] = stripModelTurnThoughts(contents[i])
       contents.deep = true
       global.logger?.info(`[GEMINI]: Handing a request over to ${deepModel()}`)
       await tools.progress?.(DEEP_PROGRESS)
@@ -2220,6 +2399,9 @@ function toScheduledEvent (draft, guild, now, { keepStart = null } = {}) {
 async function check (conversation, { name, args, calls = [] }) {
   const { guild, member, now, forum, edit } = conversation
   conversation.lastCalls = calls
+  conversation.lastGeminiModel = conversation.contents?.uncensored
+    ? null
+    : (conversation.contents?.deep ? deepModel() : replyModel(conversation.contents))
   if (Array.isArray(conversation.contents?.toolUrls) && conversation.contents.toolUrls.length) {
     conversation.toolUrls = conversation.contents.toolUrls
   }
@@ -2298,7 +2480,7 @@ async function draft ({ request, referenced, recent = [], channelName, channelID
   conversation.contents.thinking = THINKING_LEVELS.includes(thinking) ? thinking : null
   conversation.contents.tier = SERVICE_TIERS.includes(tier) ? tier : null
   conversation.contents.safetyFilter = !!safetyFilter
-  conversation.contents.uncensoredR18 = uncensoredR18 !== false
+  conversation.contents.uncensoredR18 = uncensoredR18 !== false && !safetyFilter
   conversation.contents.onProgress = tools?.progress || null
   conversation.contents.requestText = request
   conversation.contents.isEdit = !!edit
@@ -2358,6 +2540,9 @@ async function draft ({ request, referenced, recent = [], channelName, channelID
 async function revise (conversation, correction) {
   const parsed = parseModelDirective(correction)
   if (parsed.directive) correction = parsed.text || correction
+  const prevGeminiModel = conversation.lastGeminiModel !== undefined
+    ? conversation.lastGeminiModel
+    : (conversation.contents.uncensored ? null : (conversation.contents.deep ? deepModel() : replyModel(conversation.contents)))
   conversation.contents.isRevision = true
   conversation.contents.requestText = correction
   conversation.contents.push({
@@ -2371,12 +2556,13 @@ async function revise (conversation, correction) {
       }
     }))
   })
+  const allowUncensored = conversation.contents.uncensoredR18 !== false && !conversation.contents.safetyFilter
   if (parsed.directive && applyModelDirective(conversation.contents, parsed.directive)) {
     const chosen = conversation.contents.uncensored
       ? uncensoredModel(conversation.contents)
       : (conversation.contents.deep ? deepModel() : replyModel(conversation.contents))
     global.logger?.info(`[GEMINI]: Explicit model directive "${parsed.directive}" in revision; using ${chosen}`)
-  } else if (conversation.contents.uncensoredR18 !== false && !conversation.contents.uncensored && isUncensoredConfigured() && isR18Text(correction)) {
+  } else if (allowUncensored && !conversation.contents.uncensored && isUncensoredConfigured() && isR18Text(correction)) {
     conversation.contents.deep = false
     conversation.contents.uncensored = true
     conversation.contents.directUncensored = true
@@ -2384,7 +2570,7 @@ async function revise (conversation, correction) {
     const initial = replyModel(conversation.contents)
     const fallback = uncensoredModel(conversation.contents)
     global.logger?.info(`[GEMINI]: R18 detected in revision; ${fallback} answers instead of ${initial}`)
-  } else if (conversation.contents.uncensoredR18 !== false && !conversation.contents.uncensored && isUncensoredConfigured() && sokudan.isUsable()) {
+  } else if (allowUncensored && !conversation.contents.uncensored && isUncensoredConfigured() && sokudan.isUsable()) {
     const decision = await sokudan.classifyMentionRequest(correction)
     if (decision) {
       conversation.contents.sokudanDecision = decision
@@ -2398,6 +2584,12 @@ async function revise (conversation, correction) {
         global.logger?.info(`[SOKUDAN]: R18 intent detected in revision (p=${decision.r18Prob.toFixed(2)}); ${fallback} answers instead of ${initial}`)
       }
     }
+  }
+  const nextGeminiModel = conversation.contents.uncensored
+    ? null
+    : (conversation.contents.deep ? deepModel() : replyModel(conversation.contents))
+  if (nextGeminiModel && nextGeminiModel !== prevGeminiModel) {
+    conversation.contents = cloneContentsWithoutThoughts(conversation.contents)
   }
   return check(conversation, await runAgent(conversation.contents, conversation.tools, conversation.submits))
 }

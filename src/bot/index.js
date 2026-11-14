@@ -5,7 +5,9 @@ const indexCommands = require('../miscellaneous/commandIndexer')
 const cacheGuildInfo = require('./utils/cacheGuildSettings')
 const addBotListeners = require('./utils/addbotlisteners')
 
-require('dotenv').config()
+if (!cluster.isWorker && !process.env.BOT_TOKEN) {
+  require('dotenv').config()
+}
 
 // How long a worker holds the Redis lock while its shards identify, so workers connect one at a time.
 const CONNECT_LOCK_TTL_MS = 2000
@@ -66,19 +68,29 @@ async function init () {
   connect()
 }
 
+let shuttingDown = false
+
+async function gracefulShutdown (signal) {
+  if (shuttingDown) return
+  shuttingDown = true
+  global.logger.info(`${signal} caught. Flushing message batch, disconnecting bot, and closing database pool...`)
+  try {
+    global.bot?.disconnect?.({ reconnect: false })
+  } catch (_) {}
+  const { submitBatch } = require('../db/messageBatcher')
+  await submitBatch(Infinity).catch(() => {})
+  await Promise.resolve(require('../db/clients/postgres').end()).catch(() => {})
+  process.exit(0)
+}
+
 process.on('exit', (code) => {
-  global.logger.error(`The process is exiting with code ${code}. Terminating pgsql connections...`)
-  const poolClient = require('../db/clients/postgres')
-  poolClient.end(() => {
-    global.logger.info('PostgreSQL clients returned')
-  })
+  if (!shuttingDown) {
+    global.logger.error(`The process is exiting with code ${code}.`)
+  }
 })
 
-process.on('SIGINT', async () => {
-  global.logger.error('SIGINT caught. Cleaning up and exiting...')
-  require('../db/clients/postgres').end()
-  process.exit()
-})
+process.on('SIGINT', () => gracefulShutdown('SIGINT'))
+process.on('SIGTERM', () => gracefulShutdown('SIGTERM'))
 
 process.on('unhandledRejection', (e) => {
   const msg = typeof e?.message === 'string' ? e.message : String(e ?? '')

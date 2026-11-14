@@ -44,11 +44,19 @@ function configuredPrices () {
   }
 }
 
+const MAX_TRACKED_MODELS = 256
 const warned = new Set()
 const customUncensoredModels = new Set()
 
+function addBounded (set, value) {
+  if (set.has(value)) return
+  if (set.size >= MAX_TRACKED_MODELS) set.delete(set.keys().next().value)
+  set.add(value)
+}
+
 function registerUncensoredModel (model) {
-  if (model && typeof model === 'string') customUncensoredModels.add(model.trim())
+  const trimmed = typeof model === 'string' ? model.trim() : ''
+  if (trimmed) addBounded(customUncensoredModels, trimmed)
 }
 
 const DEFAULT_UNCENSORED_PRICE = { input: 0.28, cached: 0.14, output: 0.28, imageOutput: 0.28 }
@@ -74,7 +82,7 @@ function priceOf (model, now = new Date()) {
       return { ...DEFAULT_UNCENSORED_PRICE }
     }
     if (model && !warned.has(model)) {
-      warned.add(model)
+      addBounded(warned, model)
       global.logger?.warn(`[GEMINI]: No price listed for ${model}; counting it as ${FALLBACK_MODEL} (geminiPrices.js, MENTION_TOKEN_PRICES)`)
     }
     return priceOf(FALLBACK_MODEL, now)
