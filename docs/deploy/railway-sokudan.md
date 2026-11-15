@@ -15,11 +15,11 @@ Hugging Face アカウント登録や API キー取得は一切不要で、ビ�
  │     ▼  Railway Private Network (内部通信・通信料無料・外部非公開)
  └── sokudan (新規サービス / Dockerfile.sokudan)
        ├─ Public Networking: 無効（外部インターネットからはアクセス不可）
-       ├─ Healthcheck Path: /health
+       ├─ Healthcheck Path: 設定しない（下の注意を参照）
        └─ CPU 推論 (メモリ使用量目安: 約 1.0〜1.4 GB)
 ```
 
-- `Dockerfile.sokudan` は自動でデュアルスタック（`::` = IPv6 + IPv4 両対応）でリッスンするため、Railway の IPv6 内部ネットワーク（`*.railway.internal`）からそのまま接続できます。
+- `Dockerfile.sokudan` は IPv6 が使えるとき `::` でリッスンするため、Railway の IPv6 内部ネットワーク（`*.railway.internal`）からそのまま接続できます。ただし、このとき待ち受けるのは **IPv6 だけ**です（Python の asyncio は `::` に `IPV6_V6ONLY` を付けます）。Railway のヘルスチェックは IPv4 で届くので、Healthcheck Path を設定すると `1/1 replicas never became healthy!` でデプロイが失敗します。
 - 万が一 `sokudan` サービスを再起動・停止中であっても、Bot 側は 3 秒タイムアウト＋30 秒サーキットブレーカーで自動的に既存の正規表現／Gemini 判定へフォールバックし、メンション応答は止まりません。
 
 ---
@@ -41,7 +41,7 @@ Hugging Face アカウント登録や API キー取得は一切不要で、ビ�
 | **Source** → **Branch** | `master`（PR マージ前のお試しなら `feat/sokudan-decision-model`） | 自動デプロイ対象ブランチ |
 | **Build** → **Builder** | `Dockerfile` | — |
 | **Build** → **Dockerfile Path** | `Dockerfile.sokudan` | **重要**: 通常の `Dockerfile` ではなくこちらを指定します |
-| **Deploy** → **Healthcheck Path** | `/health` | モデルのロード完了後に Ready になります |
+| **Deploy** → **Healthcheck Path** | **設定しない（空のまま）** | `/health` を入れると、上の理由でデプロイが失敗します。sokudan が落ちているかどうかは Bot 側が自分で検知します |
 | **Networking** → **Public Networking** | **設定しない（Generate Domain を押さない）** | 内部ネットワーク（`railway.internal`）だけで通信するため外部公開は不要・安全です |
 
 ### ステップ 3: `sokudan` サービスの環境変数（Variables）
