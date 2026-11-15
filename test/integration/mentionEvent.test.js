@@ -717,7 +717,7 @@ describe('mention → event / forum post (integration)', () => {
       }
     ])
     await mentionEvent.handle(mention(channel, '<@BOT> マイクラ巨大城建築の動画の再生数と公開日は？'))
-    assert.match(requests[0].body.systemInstruction.parts[0].text, /確定した数値や日付を聞かれたときは、記憶や推測/)
+    assert.match(requests[0].body.systemInstruction.parts[0].text, /数値と日付（再生数[^\n]*記憶や推測（[^\n]*で答えず、対応するツール/)
     assert.match(replies[0].state.content, /2026年10月28日公開で、再生数は 152,300回（15万2,300回）/)
   })
 
@@ -990,7 +990,7 @@ describe('mention → event / forum post (integration)', () => {
     const prompt = requests[0].body.contents[0].parts[0].text
     // (The fake server has no members to look up; the unit tests cover the names of those named.)
     assert.match(prompt, /## 依頼した人と、依頼や会話に出てくるメンバー（<@ID> は Discord のメンション）\n<untrusted source="members">\n- 依頼した人（このメッセージを書いた人）: [^\n]*ID: 1）\n<\/untrusted>/)
-    assert.match(requests[0].body.systemInstruction.parts[0].text, /話しかけてきたのは「依頼した人」の欄の人です/)
+    assert.match(requests[0].body.systemInstruction.parts[0].text, /話しかけてきたのは「依頼した人」の欄の人（返信の会話では「（依頼者）」の付いた人）/)
   })
 
   test('chat: with %debugfooter on in the server, the models and tokens go under the reply in small grey text; off by default', async () => {
@@ -1238,7 +1238,7 @@ describe('mention → event / forum post (integration)', () => {
       const { channel, replies } = createChannel()
       installGemini([body => {
         assert.match(body.contents[0].parts[0].text, /### サーバー絵文字（返事で使うときは、この書き方のまま書く）\n<:nobaman_wave:950>/)
-        assert.match(body.systemInstruction.parts[0].text, /サーバー絵文字」があれば、話の流れに合うときに使って[\s\S]*` や ``` で囲まないで/)
+        assert.match(body.systemInstruction.parts[0].text, /サーバー絵文字」があれば、話の流れに合うときに、読みにくくならない程度に使う。[^\n]*` や ``` で囲むと絵文字にならないので、紹介・一覧するときも囲まずに/)
         return [call('submit_chat_reply', { text: 'こんばんは :nobaman_wave:' })]
       }])
       await mentionEvent.handle(mention(channel, '<@BOT> こんばんは'))
@@ -1522,7 +1522,7 @@ describe('mention → event / forum post (integration)', () => {
     const prompt = requests[0].body.contents[0].parts[0].text
     assert.match(prompt, /## 依頼されたチャンネルの最近の会話（依頼に関係しそうなものだけ。古い順）\n<untrusted source="recent">\n- \[\d\d:\d\d\] [^\n]*（<@2>）: マイクラの建築どうする？\n<\/untrusted>/)
     assert.doesNotMatch(prompt, /晩ごはん/)
-    assert.match(requests[0].body.systemInstruction.parts[0].text, /「依頼されたチャンネルの最近の会話」は、[\s\S]*それを踏まえて考え、答える。関係がなければ使わず/)
+    assert.match(requests[0].body.systemInstruction.parts[0].text, /依頼されたチャンネルの最近の会話: [^\n]*なら踏まえて答え、関係がなければ使わない。だれが何を言ったかを取り違えない/)
   })
 
   test('each user has a token limit across every server: what a mention used counts, and a full window refuses until it resets', async () => {
