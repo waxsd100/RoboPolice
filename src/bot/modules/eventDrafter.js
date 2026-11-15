@@ -97,8 +97,10 @@ function modelName () {
 
 // The system instructions for chat replies and drafts (prompts/chat/system.md), with extra
 // character notes from the operator (CHAT_PERSONA), e.g. a catchphrase or how to address members.
-function systemInstruction () {
-  return prompts.render('chat/system', { modelName: modelName(), persona: (process.env.CHAT_PERSONA || '').trim() })
+// uncensored: for the uncensored model, whose own rules say how far adult requests go
+// (prompts/chat/uncensored/rules.md) in place of the server's setting in the request.
+function systemInstruction ({ uncensored = false } = {}) {
+  return prompts.render('chat/system', { modelName: modelName(), persona: (process.env.CHAT_PERSONA || '').trim(), uncensored })
 }
 
 function isConfigured () {
@@ -129,6 +131,11 @@ const PERSONAS = {
   streamer: prompts.render('chat/persona/streamer'),
   bot: prompts.render('chat/persona/bot')
 }
+// How far dirty jokes and adult requests go, by the server's safety filter. The uncensored model
+// is not given this part of the request (withoutMatureSection).
+const MATURE_HEADING = '## 下ネタ・大人向けの依頼（このサーバーの設定）'
+const MATURE_SECTION = new RegExp(`\\n${MATURE_HEADING}\\n(?:[ \\t]*- [^\\n]+(?:\\n|$))+`)
+const withoutMatureSection = text => String(text).replace(MATURE_SECTION, '')
 const replyLengthOf = length => REPLY_LENGTHS[length] ? length : DEFAULT_REPLY_LENGTH
 
 // The request as the model gets it, the parts that change least first and the request itself last:
@@ -146,9 +153,9 @@ function buildPrompt ({ request, referenced, recent = [], channelName, channelID
     '## 返事の長さ（このサーバーの設定）',
     ...REPLY_LENGTHS[replyLengthOf(replyLength)]
   ]
-  if (safetyFilter) {
-    lines.push('', prompts.render('chat/safety-filter'))
-  }
+  // One of the two, never both: the system instructions leave this to the server's setting, so
+  // nothing said there has to be taken back here.
+  lines.push('', MATURE_HEADING, prompts.render(safetyFilter ? 'chat/mature/filtered' : 'chat/mature/open'))
   if (rules?.moderators || rules?.channels?.length) {
     lines.push('', '## このサーバーのルールとモデレーターからのお願い（返事・下書きはこれに従う）')
     if (rules.moderators) lines.push('### モデレーターから AI へのお願い', wrap('rules', rules.moderators))
@@ -985,7 +992,7 @@ function applyModelDirective (contents, directive, { inherited = false } = {}) {
 
 const HAND_OVER_R18_DECLARATION = {
   name: 'hand_over_r18',
-  description: 'R18・成人向け・性的な描写や官能小説など、大人向けの内容を求められていて、そのままでは書けない（または「そのままでは書けない依頼」としてぼかした版・フェードアウト・朝チュンにする必要がある）と判断したときに呼ぶ。R18・成人向けの創作やその続きでは think_deeper ではなく必ずこちらを呼ぶ。登場人物や設定を調べる必要があるときは、先に検索ツール（search_wiki など）で調べてから呼ぶ。添付画像や返信先の画像があるときは、引き継ぎ先のモデルに画像の内容を伝えるため image_description に画像に写っている内容（人物・外見・髪型・服装・表情・ポーズ・状況・文字など）を詳しく書いて渡す。呼ぶと、ここからは検閲なしのモデルが引き継いで答える。',
+  description: 'R18・成人向け・性的な描写や官能小説など、大人向けの内容を求められていて、そのままでは書けない（ぼかした版・フェードアウト・朝チュンにするしかない）と判断したときに呼ぶ。R18・成人向けの創作やその続きでは think_deeper ではなく必ずこちらを呼ぶ。登場人物や設定を調べる必要があるときは、先に検索ツール（search_wiki など）で調べてから呼ぶ。添付画像や返信先の画像があるときは、引き継ぎ先のモデルに画像の内容を伝えるため image_description に画像に写っている内容（人物・外見・髪型・服装・表情・ポーズ・状況・文字など）を詳しく書いて渡す。呼ぶと、ここからは検閲なしのモデルが引き継いで答える。',
   parameters: {
     type: 'OBJECT',
     properties: {
@@ -1016,7 +1023,7 @@ async function isRefusalReplyAsync (text) {
 const STORY_REQUEST_PATTERN = /小説|ss|物語|お話|ストーリー|シナリオ|脚本|創作|ライトノベル|ラノベ|地の文|官能|濡れ場|えっち|エッチ|続き|書いて|執筆/i
 
 function uncensoredSystemInstruction ({ compact = false, r18Mode = false } = {}) {
-  const rules = prompts.render('chat/uncensored/rules', { r18Mode })
+  const rules = prompts.render('chat/uncensored/rules', { r18Mode, compact })
   if (compact) {
     const persona = (process.env.CHAT_PERSONA || '').trim()
     return [
@@ -1026,8 +1033,7 @@ function uncensoredSystemInstruction ({ compact = false, r18Mode = false } = {})
       rules
     ].join('\n')
   }
-  const base = systemInstruction().replace(/\n## 下ネタ[\s\S]*?(?=\n## 返事の書き方)/, '')
-  return [base, '', rules].join('\n')
+  return [systemInstruction({ uncensored: true }), '', rules].join('\n')
 }
 
 const MAX_UNCENSORED_CONVERSATION_CHARS = 1800
@@ -1045,11 +1051,10 @@ function compactUncensoredText (text, { r18Mode = false } = {}) {
     .replace(/(<untrusted source="members">\n?)([\s\S]*?)(\n?<\/untrusted>)/, (whole, open, body, close) =>
       body.length > MAX_UNCENSORED_MEMBERS_CHARS ? `${open}${body.slice(0, MAX_UNCENSORED_MEMBERS_CHARS)}${close}` : whole
     )
+  // A story is written by the uncensored model's own rules for style and length (in its system
+  // instructions, and once more after the request), not as a chat reply.
   if (storyMode) {
-    out = out.replace(
-      /## 話し方（このサーバーの設定）\n[\s\S]*?\n\n## 返事の長さ（このサーバーの設定）\n(?:\s*- [^\n]+\n?)+/,
-      prompts.render('chat/uncensored/story-style') + '\n'
-    )
+    out = out.replace(/## 話し方（このサーバーの設定）\n[\s\S]*?\n\n## 返事の長さ（このサーバーの設定）\n(?:\s*- [^\n]+\n?)+/, '')
   }
   if (hasConversation) {
     out = out
@@ -1062,7 +1067,7 @@ function compactUncensoredText (text, { r18Mode = false } = {}) {
       body.length > MAX_UNCENSORED_RECENT_CHARS ? `${open}${body.slice(-MAX_UNCENSORED_RECENT_CHARS)}${close}` : whole
     )
   }
-  out = out.replace(/<\/?untrusted(?:\s+source="[^"]*")?>\n?/g, '')
+  out = out.replace(/<\/?untrusted(?:\s+source="[^"]*")?>\n?/g, '').replace(/^\n+/, '')
   if (storyMode) {
     out += `\n\n${prompts.render('chat/uncensored/story-note')}`
   }
@@ -1306,7 +1311,7 @@ function toOpenAIMessages (system, contents, { compact = false, r18Mode = false 
       if (hasImages) {
         const contentParts = other.map(p => p.inlineData
           ? { type: 'image_url', image_url: { url: `data:${p.inlineData.mimeType};base64,${p.inlineData.data}` } }
-          : { type: 'text', text: String(p.text || '') })
+          : { type: 'text', text: withoutMatureSection(p.text || '') })
         if (contents.imageDescription && !appendedImageDesc && !contentParts.some(p => p.type === 'text' && p.text.includes('## 添付・返信先画像の内容（視覚情報）'))) {
           contentParts.push({ type: 'text', text: `## 添付・返信先画像の内容（視覚情報）\n${contents.imageDescription}` })
           appendedImageDesc = true
@@ -1320,7 +1325,7 @@ function toOpenAIMessages (system, contents, { compact = false, r18Mode = false 
           content: contentParts
         })
       } else {
-        const joined = other.filter(p => typeof p.text === 'string').map(p => p.text).join('\n')
+        const joined = withoutMatureSection(other.filter(p => typeof p.text === 'string').map(p => p.text).join('\n'))
         const baseText = compact ? compactUncensoredText(joined, { r18Mode }) : joined
         let finalContent = baseText
         if (contents.imageDescription && !appendedImageDesc && !finalContent.includes('## 添付・返信先画像の内容（視覚情報）')) {

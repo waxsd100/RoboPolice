@@ -211,7 +211,12 @@ describe('draft', () => {
     const strictDraft = installGemini([[call('submit_chat_reply', { text: 'お断りします' })]])
     await draft({ request: 'A', channelName: 'general', safetyFilter: true, guild, tools, now: NOW })
     assert.deepEqual(strictDraft[0].body.safetySettings, STRICT_SAFETY_SETTINGS)
-    assert.match(strictDraft[0].body.contents[0].parts[0].text, /## セーフティ保護（このサーバーの設定・最優先）/)
+    // The server's setting is the one thing said about adult requests: with the filter, only that
+    // they are turned down, with nothing that allows them said first and taken back.
+    const strictPrompt = strictDraft[0].body.contents[0].parts[0].text
+    assert.match(strictPrompt, /## 下ネタ・大人向けの依頼（このサーバーの設定）\n- このサーバーではセーフティフィルタが有効です。[^\n]*応じない。[^\n]*丁寧に断る。\n\n/)
+    assert.doesNotMatch(strictPrompt, /普通にノって返す|ぼかした版を代わりに書く|hand_over_r18/)
+    assert.doesNotMatch(strictDraft[0].body.systemInstruction.parts[0].text, /普通にノって返す|ぼかした版|年齢制限|朝チュン|優先してください/)
   })
 
   test('think_deeper hands the request over to the stronger model on Flex, from the start', async () => {
@@ -363,16 +368,20 @@ describe('draft', () => {
     assert.match(instruction, /相手の言ったこと・ボケ・思い込み・頼みごとを、なるべく否定しない。[\s\S]*まず乗っかってから返す/)
     assert.match(instruction, /事実の間違いを直すのは、放っておくと相手が困るときだけ/)
     // Stories and other creative writing count as long texts: the stronger model writes them.
-    assert.match(instruction, /小説・物語・SS・脚本・歌詞・ポエムなどの創作を頼まれたときは、長さの指定がなくても長い文章の依頼として扱い、think_deeper を呼ぶ/)
-    // What cannot be written as asked is written toned down, not just refused.
-    assert.match(instruction, /## そのままでは書けない依頼\n- [\s\S]*断るだけで終わらせない。その部分をぼかした版を代わりに書く/)
+    assert.match(instruction, /think_deeper（呼べるときだけ。ほかのツールより先に呼ぶ）: [^\n]*小説・物語・SS・脚本・歌詞・ポエムなどの創作（長さの指定がなくても長い文章として扱う/)
     // Asked what model it is, it gives the bot's own name.
     assert.match(instruction, /使っている AI・モデルの名前を聞かれたら「nobaman llm 3\.9 Flash」と答える。/)
-    // Dirty jokes are played along with, not refused; explicit only in an age-restricted channel.
-    assert.match(instruction, /## 下ネタ\n- 下ネタ・エロネタ・下品なボケには、断ったり、注意したり、話をそらしたりせず、普通にノって返す/)
-    assert.match(instruction, /依頼されたチャンネルが「年齢制限あり」なら、大人向けの話にもそのまま応じてよい/)
-    assert.match(instruction, /ぼかしたこと・書き直したこと・方向を変えたことには触れず、作品だけを出す/, 'no note that it was toned down')
-    assert.doesNotMatch(instruction, /一言だけ「そこはぼかしておいたよ」のように添える/)
+    // How far dirty jokes and adult requests go is the server's setting, said once, with the
+    // request: played along with, explicit only in an age-restricted channel, and what cannot be
+    // written as asked is written toned down (or handed over), not just refused.
+    assert.match(instruction, /## 下ネタ・大人向けの依頼\n[^\n]*依頼に書いてある「下ネタ・大人向けの依頼」（サーバーの設定）に従う。\n\n## 返事の書き方/)
+    assert.doesNotMatch(instruction, /普通にノって返す|ぼかした版|年齢制限|朝チュン/)
+    const prompt = requests[0].body.contents[0].parts[0].text
+    assert.match(prompt, /## 下ネタ・大人向けの依頼（このサーバーの設定）\n- 下ネタ・エロネタ・下品なボケには、断ったり、注意したり、話をそらしたりせず、普通にノって返す/)
+    assert.match(prompt, /露骨な描写を書くのは、依頼されたチャンネルが「年齢制限あり」のときだけ/)
+    assert.match(prompt, /断るだけで終わらせない。hand_over_r18 が呼べるなら呼び、呼べないなら、その部分をぼかした版を代わりに書く/)
+    assert.match(prompt, /ぼかしたこと・書き直したこと・方向を変えたことには触れず、作品だけを出す/, 'no note that it was toned down')
+    assert.doesNotMatch(prompt, /セーフティフィルタ/)
   })
 
   test('adds the operator\'s character notes from CHAT_PERSONA', async () => {
@@ -430,7 +439,7 @@ describe('draft', () => {
     assert.match(prompt, /## 依頼メッセージ（\d+文字）\n<untrusted source="request">\n交流会/)
     assert.match(prompt, /## 依頼メッセージ（3文字）/, 'its length, to choose how long to answer')
     assert.match(requests[0].body.systemInstruction.parts[0].text, /返事の長さは、依頼に書いてある「返事の長さ」（サーバーの設定）に従う/)
-    assert.match(prompt, /## 返事の長さ（このサーバーの設定）\n- Discord のメッセージとして読みやすく、長くても500文字程度。/, 'long by default')
+    assert.match(prompt, /## 返事の長さ（このサーバーの設定）\n- 創作以外の返事: 長くても500文字程度。\n- 小説・物語・SS・脚本などの創作: 文字数の上限を設けず/, 'long by default')
     assert.match(prompt, /## 依頼メッセージの返信先\n<untrusted source="conversation">\n告知文/)
   })
 
@@ -454,7 +463,7 @@ describe('draft', () => {
     const requests = installGemini([[call('submit_chat_reply', { text: 'x' })]])
     await draft({ request: 'やあ', referenced: { text: '前の話', count: 1 }, channelName: 'general', server: 'サーバーの説明', guild, tools, now: NOW })
     const prompt = requests[0].body.contents[0].parts[0].text
-    const order = ['## 話し方', '## 返事の長さ', '## このサーバーの情報', '依頼されたチャンネル:', '## 依頼メッセージの返信先', '現在日時:', '## 依頼メッセージ（'].map(h => prompt.indexOf(h))
+    const order = ['## 話し方', '## 返事の長さ', '## 下ネタ・大人向けの依頼', '## このサーバーの情報', '依頼されたチャンネル:', '## 依頼メッセージの返信先', '現在日時:', '## 依頼メッセージ（'].map(h => prompt.indexOf(h))
     assert.ok(order.every(i => i >= 0), 'every part is there')
     assert.deepEqual(order, [...order].sort((a, b) => a - b))
     assert.ok(prompt.trimEnd().endsWith('</untrusted>'), 'the request is last')
@@ -1148,8 +1157,14 @@ describe('explicit cache and thinking', () => {
     assert.equal(cloudRunBody.min_p, 0.05)
     assert.equal(cloudRunBody.presence_penalty, undefined)
     assert.match(cloudRunBody.messages[0].content, /地の文は常体（「〜た」「〜だ」）で統一する/)
-    assert.match(cloudRunBody.messages.at(-1).content, /## 文体と長さの指示（小説・描写モード）/)
-    assert.doesNotMatch(cloudRunBody.messages.at(-1).content, /長くても500文字程度/)
+    // A story goes by the uncensored model's own rules: the server's settings for chat replies
+    // and for adult requests are not passed on, so nothing in its instructions is taken back.
+    assert.match(cloudRunBody.messages.at(-1).content, /^依頼されたチャンネル: /)
+    assert.match(cloudRunBody.messages.at(-1).content, /※執筆時の注意: 地の文は必ず「〜た」「〜だ」の常体で統一し/)
+    assert.doesNotMatch(cloudRunBody.messages.at(-1).content, /長くても500文字程度|## 話し方|## 返事の長さ|## 下ネタ・大人向けの依頼|ぼかした版/)
+    assert.doesNotMatch(cloudRunBody.messages[0].content, /一切適用しません|ぼかした版を代わりに書く|下ネタ・大人向けの依頼/)
+    assert.match(cloudRunBody.messages[0].content, /省略・ぼかし・フェードアウト（朝チュンなど）をせず/)
+    assert.match(cloudRunBody.messages[0].content, /未成年（に見える人物）を性的に扱うものは一切書かない/)
     assert.doesNotMatch(cloudRunBody.messages.at(-1).content, /<untrusted/)
 
     // 2. Normal Gemini block fallback uses Model 1 (UNCENSORED_MODEL)
