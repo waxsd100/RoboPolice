@@ -188,6 +188,7 @@ function scoreToThinkingLevel (score, intent) {
 // - intent ('event' | 'chat' | 'forum')
 // - needsDeep (whether the request asks for a story/novel, long explanation, or complex reasoning)
 // - isR18 (whether the request asks for adult / R18 / erotic content, including euphemistic wording)
+// - isStory (whether the request asks for a story or other fiction to be written, or continued)
 // - complexityScore (0..2) and thinkingLevel ('minimal' | 'low' | 'medium' | 'high')
 async function classifyMentionRequest (request, referencedText = '', channelContext = '') {
   if (!isUsable()) return null
@@ -228,6 +229,10 @@ async function classifyMentionRequest (request, referencedText = '', channelCont
       type: 'noul',
       instructions: '成人向け・R18・性的な描写・官能小説・エッチな展開やシチュエーションを求めているか'
     },
+    is_story: {
+      type: 'noul',
+      instructions: '小説・物語・SS・脚本・シナリオなどの創作を書くこと、または前に書いた創作の続きや書き直しを求めているか'
+    },
     complexity: {
       type: 'score',
       instructions: '依頼に答えるために必要な思考の深さ・複雑さを評価してください。',
@@ -243,12 +248,15 @@ async function classifyMentionRequest (request, referencedText = '', channelCont
   const intentAns = data.answers.intent
   const deepAns = data.answers.needs_deep
   const r18Ans = data.answers.is_r18
+  const storyAns = data.answers.is_story
   const compAns = data.answers.complexity
 
   const intent = typeof intentAns?.choice === 'string' ? intentAns.choice : 'chat'
   const intentConfidence = Number.isFinite(intentAns?.confidence) ? intentAns.confidence : 0
   const deepProb = Number.isFinite(deepAns?.noul) ? deepAns.noul : 0
   const r18Prob = Number.isFinite(r18Ans?.noul) ? r18Ans.noul : 0
+  // null when the sidecar did not answer this one: the caller then judges by its own pattern.
+  const storyProb = Number.isFinite(storyAns?.noul) ? storyAns.noul : null
   const complexityScore = Number.isFinite(compAns?.score) ? compAns.score : null
 
   const r18Thresh = boolThreshold('SOKUDAN_R18_THRESHOLD')
@@ -261,6 +269,8 @@ async function classifyMentionRequest (request, referencedText = '', channelCont
     deepProb,
     isR18: r18Prob >= r18Thresh,
     r18Prob,
+    isStory: storyProb === null ? null : storyProb >= boolThreshold('SOKUDAN_STORY_THRESHOLD'),
+    storyProb,
     complexityScore,
     thinkingLevel: scoreToThinkingLevel(complexityScore, intent)
   }

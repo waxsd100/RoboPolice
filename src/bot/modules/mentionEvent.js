@@ -3,6 +3,7 @@ const { v4: uuidv4 } = require('uuid')
 const { draft, revise, isConfigured, isUncensoredUsable, isUncensoredDirective, rememberThreadModel, isR18Text, STORY_REQUEST_PATTERN, ENTITY_TYPES } = require('./eventDrafter')
 const { createTools, describeServer, worthSearching, withServerEmojis, sharedOwnerEmojis, withServerChannels, channelTheme, SHORT_TOPIC_PROMPT, StopDrafting } = require('./eventTools')
 const { embedQuery } = require('../utils/embeddings')
+const sokudan = require('../utils/sokudan')
 const { withLinkCards } = require('../utils/linkCards')
 const { safeLinks } = require('../utils/linkSafety')
 const { reportInjectionAsync } = require('../utils/untrusted')
@@ -542,7 +543,14 @@ async function handle (message) {
       // What was just being talked about in the channel, as far as it bears on the request
       // (recentTopics.js); not when something the bot made is being changed.
       // The server's rules and what its moderators asked of the assistant (serverRules.js).
-      const directR18 = allowUncensored && isUncensoredUsable() && (isUncensoredDirective(request, referenced) || isR18Text(request, referenced?.text))
+      const theme = channelTheme(message.channel.id, guild, message.channel.name)
+      // How sokudan reads the request, asked once here and passed on to draft; null when it is not
+      // set up or gave no answer, and the patterns decide instead.
+      const decision = sokudan.isUsable()
+        ? await sokudan.classifyMentionRequest(request, referenced?.text, theme).catch(() => null)
+        : null
+      const asksForStory = typeof decision?.isStory === 'boolean' ? decision.isStory : STORY_REQUEST_PATTERN.test(request)
+      const directR18 = allowUncensored && isUncensoredUsable() && (isUncensoredDirective(request, referenced) || isR18Text(request, referenced?.text) || !!decision?.isR18)
       let queryVecPromise = null
       const queryVector = () => {
         if (!worthSearching(request)) return Promise.resolve(null)
@@ -550,11 +558,10 @@ async function handle (message) {
         return queryVecPromise
       }
       const combinedQuery = [request, referenced?.othersText].filter(Boolean).join('\n')
-      const theme = channelTheme(message.channel.id, guild, message.channel.name)
       const communityKeyword = /サーバー|チャンネル|配信|動画|youtube|twitch|steam|ゲーム|イベント|フォーラム|ルール|wiki|メンバー|キャラ|名言|<#\d+>|<@!?\d+>/i
       const slimProfile = Boolean(edit) ||
         (!worthSearching(combinedQuery) && !attached.length && !embedded.length && !(theme && SHORT_TOPIC_PROMPT.test(request))) ||
-        (STORY_REQUEST_PATTERN.test(request) && !communityKeyword.test([combinedQuery, theme].filter(Boolean).join('\n')))
+        (asksForStory && !communityKeyword.test([combinedQuery, theme].filter(Boolean).join('\n')))
       const extraEmojis = await sharedOwnerEmojis(guild, message.channel).catch(() => [])
       const [server, recent] = await Promise.all([
         directR18
@@ -590,6 +597,7 @@ async function handle (message) {
         model: replyModel || null,
         thinking: replyThinking || null,
         tier: aiModels?.reply?.tier || null,
+        decision,
         channelName: message.channel.name,
         channelID: message.channel.id,
         server,

@@ -1040,6 +1040,13 @@ const MAX_UNCENSORED_CONVERSATION_CHARS = 1800
 const MAX_UNCENSORED_RECENT_CHARS = 400
 const MAX_UNCENSORED_MEMBERS_CHARS = 250
 
+// Whether a story was asked for, as sokudan judged the request (draft); null when it gave no
+// answer, and the words of the request decide (STORY_REQUEST_PATTERN).
+function asksForStory (contents) {
+  const answer = contents?.sokudanDecision?.isStory
+  return typeof answer === 'boolean' ? answer : null
+}
+
 // What was asked, in a request as buildPrompt writes it: the request and the conversation it
 // replies to, without their headings. The server's settings before them are left out: they name
 // stories too (the reply lengths), which made every request look like one for a story.
@@ -1048,10 +1055,10 @@ function askedIn (text) {
   return (at === -1 ? text : text.slice(at)).split('\n').filter(line => !line.startsWith('## ')).join('\n')
 }
 
-function compactUncensoredText (text, { r18Mode = false } = {}) {
+function compactUncensoredText (text, { r18Mode = false, story = null } = {}) {
   if (typeof text !== 'string') return ''
   const hasConversation = /<untrusted source="conversation">/.test(text)
-  const storyMode = r18Mode || STORY_REQUEST_PATTERN.test(askedIn(text))
+  const storyMode = r18Mode || (typeof story === 'boolean' ? story : STORY_REQUEST_PATTERN.test(askedIn(text)))
   let out = text
     .replace(/\n## このサーバーの情報（最新）\n<untrusted source="server">[\s\S]*?<\/untrusted>/, '')
     .replace(/\n## 依頼や会話に出てくるチャンネル[\s\S]*?(?=\n## |\n依頼されたチャンネル:)/, '')
@@ -1334,7 +1341,7 @@ function toOpenAIMessages (system, contents, { compact = false, r18Mode = false 
         })
       } else {
         const joined = withoutMatureSection(other.filter(p => typeof p.text === 'string').map(p => p.text).join('\n'))
-        const baseText = compact ? compactUncensoredText(joined, { r18Mode }) : joined
+        const baseText = compact ? compactUncensoredText(joined, { r18Mode, story: asksForStory(contents) }) : joined
         let finalContent = baseText
         if (contents.imageDescription && !appendedImageDesc && !finalContent.includes('## 添付・返信先画像の内容（視覚情報）')) {
           finalContent = `${finalContent}\n\n## 添付・返信先画像の内容（視覚情報）\n${contents.imageDescription}`
@@ -1848,14 +1855,19 @@ function adaptiveThinkingLevel (contents) {
     raw = m ? m[1] : firstText
   }
   if (!raw.trim()) return 'high'
+  // sokudan's reading of the request comes first; the patterns and lengths below are for when it
+  // gave none.
+  const decision = contents?.sokudanDecision
+  if (decision) {
+    if (decision.isStory || decision.needsDeep) return 'high'
+    if (THINKING_LEVELS.includes(decision.thinkingLevel)) return decision.thinkingLevel
+  }
   if (HIGH_THINKING_PATTERN.test(raw) || STORY_REQUEST_PATTERN.test(raw)) return 'high'
   const stripped = raw
     .replace(/<a?:\w+:\d+>|<[@#][!&]?\d+>|https?:\/\/\S+|:\w+:/g, '')
     .replace(/[\s\p{P}\p{S}]/gu, '')
   const len = [...stripped].length
   if (len > 160) return 'high'
-  const sokudanLevel = contents?.sokudanDecision?.thinkingLevel
-  if (sokudanLevel && THINKING_LEVELS.includes(sokudanLevel)) return sokudanLevel
   const firstStep = !Array.isArray(contents) || contents.length <= 1
   if (len <= 12 && firstStep && !contents?.hasReference && !contents?.hasPictures && !QUESTION_OR_LOOKUP_PATTERN.test(raw)) {
     return 'minimal'
@@ -2302,7 +2314,7 @@ async function check (conversation, { name, args, calls = [] }) {
 const eventTools = () => require('./eventTools')
 
 // model, thinking, tier: the server's own model, thinking level and tier (%replymodel); null for the default.
-async function draft ({ request, referenced, recent = [], channelName, channelID, server, forum = null, images = [], pictures = [], edit = null, replyLength = null, streamerPersona = true, safetyFilter = false, uncensoredR18 = true, rules = null, model = null, thinking = null, tier = null, guild, member, tools, now = new Date() }) {
+async function draft ({ request, referenced, recent = [], channelName, channelID, server, forum = null, images = [], pictures = [], edit = null, replyLength = null, streamerPersona = true, safetyFilter = false, uncensoredR18 = true, rules = null, model = null, thinking = null, tier = null, decision, guild, member, tools, now = new Date() }) {
   const parsed = parseModelDirective(request)
   const attachedPics = pictures.filter(p => p.attachment)
   if (parsed.directive) {
@@ -2361,6 +2373,15 @@ async function draft ({ request, referenced, recent = [], channelName, channelID
   conversation.contents.hasReference = !!referenced
   conversation.contents.hasPictures = attachedPics.length > 0 || images.length > 0
   if (attachedPics.length) conversation.contents.attachedPictures = attachedPics
+  // How sokudan reads the request (what is asked for, a story, R18, how much thought), asked once
+  // for every request; `decision` when the caller already asked (null: it gave no answer). Kept
+  // with the conversation: the thinking level and how the uncensored model is written to go by it.
+  if (decision === undefined) {
+    decision = sokudan.isUsable()
+      ? await sokudan.classifyMentionRequest(request, referenced?.text, eventTools().channelTheme(channelID, guild, channelName))
+      : null
+  }
+  if (decision) conversation.contents.sokudanDecision = decision
   if (parsed.directive && applyModelDirective(conversation.contents, parsed.directive)) {
     const chosen = conversation.contents.uncensored
       ? uncensoredModel(conversation.contents)
@@ -2385,22 +2406,18 @@ async function draft ({ request, referenced, recent = [], channelName, channelID
     const initial = replyModel(conversation.contents)
     const fallback = uncensoredModel(conversation.contents)
     global.logger?.info(`[GEMINI]: R18 detected in reply thread; ${fallback} answers instead of ${initial}`)
-  } else if (sokudan.isUsable()) {
-    const decision = await sokudan.classifyMentionRequest(request, referenced?.text, eventTools().channelTheme(channelID, guild, channelName))
-    if (decision) {
-      conversation.contents.sokudanDecision = decision
-      if (decision.isR18 && conversation.contents.uncensoredR18 && isUncensoredConfigured()) {
-        conversation.contents.uncensored = true
-        conversation.contents.directUncensored = true
-        conversation.contents.uncensoredR18Mode = true
-        const initial = replyModel(conversation.contents)
-        const fallback = uncensoredModel(conversation.contents)
-        global.logger?.info(`[SOKUDAN]: R18 intent detected in request (p=${decision.r18Prob.toFixed(2)}); ${fallback} answers instead of ${initial}`)
-      } else if (decision.needsDeep && deepModel() && !edit && decision.intent === 'chat') {
-        conversation.contents.deep = true
-        global.logger?.info(`[SOKUDAN]: Deep reasoning/creative request detected (p=${decision.deepProb.toFixed(2)}); routing directly to ${deepModel()}`)
-        await tools?.progress?.(DEEP_PROGRESS)
-      }
+  } else if (decision) {
+    if (decision.isR18 && conversation.contents.uncensoredR18 && isUncensoredConfigured()) {
+      conversation.contents.uncensored = true
+      conversation.contents.directUncensored = true
+      conversation.contents.uncensoredR18Mode = true
+      const initial = replyModel(conversation.contents)
+      const fallback = uncensoredModel(conversation.contents)
+      global.logger?.info(`[SOKUDAN]: R18 intent detected in request (p=${decision.r18Prob.toFixed(2)}); ${fallback} answers instead of ${initial}`)
+    } else if (decision.needsDeep && deepModel() && !edit && decision.intent === 'chat') {
+      conversation.contents.deep = true
+      global.logger?.info(`[SOKUDAN]: Deep reasoning/creative request detected (p=${decision.deepProb.toFixed(2)}); routing directly to ${deepModel()}`)
+      await tools?.progress?.(DEEP_PROGRESS)
     }
   }
   return check(conversation, await runAgent(conversation.contents, tools, conversation.submits))
