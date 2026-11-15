@@ -2,6 +2,7 @@
 // keeps the summary so the same video is never summarized twice. Only run when the
 // model decides it needs a video's contents (a video was linked, or a question is about what a
 // video says): it is far costlier than reading titles and descriptions.
+const prompts = require('../utils/prompts')
 const { callGemini, DEFAULT_GEMINI_MODEL, GeminiError, lightModel, resolveTaskConfig, retryTimer, thinkingConfig } = require('./eventDrafter')
 const youtubeDB = require('../../db/interfaces/postgres/youtube')
 const youtube = require('../utils/youtube')
@@ -19,28 +20,9 @@ function summaryTimeoutMs () {
   return (minutes > 0 ? minutes : DEFAULT_TIMEOUT_MINUTES) * 60 * 1000
 }
 
-const PROMPT = [
-  'この YouTube 動画の内容を、以下の固定テンプレートに従って日本語で記録してください（全体で最大1500文字程度まで）。',
-  '',
-  '【出力テンプレート（1行1項目・時系列順）】',
-  '- [0:00] 行ったこと・起きたことと、その結果',
-  '- [12:34] 次の出来事・話題と、その結果・結論',
-  '- [1:05:00] 告知や決定事項があれば具体的内容（日時・場所・出演者・URLなど）',
-  '',
-  '【厳守事項】',
-  '- 上の `- [時間] 内容` の箇条書き行だけを出力し、前置き（「要約しました！」「以下が要約です」など）・後書き（「以上です」など）・見出し・空行・感想・挨拶・文字数は一切書かないでください。',
-  '- 時間は1時間未満なら `[分:秒]`（例: `[0:00]`, `[5:30]`）、1時間以上なら `[時:分:秒]`（例: `[1:05:00]`）で統一してください。',
-  '- 太字（`**`）や番号付きリスト・入れ子の箇条書きは使わず、すべての行を `- [時間] ` で始めてください。',
-  '- 「〜について話しています」のような冗長な表現は避け、何をしてどうなったか（結果・勝敗・達成状況・結論・告知の具体情報）だけを体言止めまたは簡潔な常体で淡々と書いてください。',
-  '- 分からないことは推測で書かないでください。'
-].join('\n')
+const PROMPT = prompts.render('video/summary')
 
-const MERGE_PROMPT = [
-  '次は1本の長い動画を時間帯ごとに分けて記録したものです。重複を整理し、動画全体で1つの時系列リストにまとめてください（全体で最大1500文字程度まで）。',
-  '- 出力は `- [時間] 行ったこと・結果` の箇条書き行だけにし、前置き（「要約しました！」など）・後書き（「以上です」など）・見出し（`###` など）・空行・感想・文字数は一切書かないでください。',
-  '- 各項目の先頭の `[時間]` は書き換えずにそのまま残し、太字（`**`）や番号付きリスト・入れ子の箇条書きは使わず、すべての行を `- [時間] ` で始めてください。',
-  '- 出来事の結果・結論や、告知・日時・場所・出演者・URL などの具体的な情報は漏らさず残し、体言止めまたは簡潔な常体で淡々と書いてください。'
-].join('\n')
+const MERGE_PROMPT = prompts.render('video/merge')
 
 // A video longer than Gemini can take in at once (about 3 hours at low resolution: its input is at
 // most about a million tokens, and multi-hour YouTube URLs fail unclipped with HTTP 400

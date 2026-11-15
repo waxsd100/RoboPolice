@@ -7,6 +7,7 @@
 //
 // What search finds can be out of date or wrong; the page says when it was looked up and lists
 // its sources, and the model is told not to state it as certain.
+const prompts = require('../utils/prompts')
 const { knowledgeSetting } = require('../utils/knowledgeDefaults')
 const { callGemini, resolveTaskConfig } = require('./eventDrafter')
 const { isGatewayConfigured } = require('../utils/aiGateway')
@@ -43,15 +44,7 @@ const nameOf = topic => topic.split(/[（(]/)[0].trim() || topic
 const urlOf = topic => `${PREFIX}${nameOf(topic)}`
 const dayOf = date => new Intl.DateTimeFormat('sv-SE', { timeZone: 'Asia/Tokyo' }).format(date)
 
-const prompt = (topic, now) => [
-  `今日は ${dayOf(now)} です。Google 検索で調べて、次のテーマについて日本語でまとめてください: ${topic}`,
-  '- 何か（グループ・ユニット・企画など）、正式名称と略称・読み',
-  '- メンバー（今のメンバーと、卒業・脱退したメンバーがいれば分けて、分かればその時期も）。テーマに書かれたメンバーは手がかりなので、今もそうか確かめる',
-  '- 結成・開始の時期、主な活動・企画・作品、ファンネームなど',
-  '- 公式サイト・公式 X・YouTube チャンネルなどの URL',
-  '見出しごとに短くまとめ、最後に「出典」として参考にしたページの URL を並べてください。',
-  '見つかったことだけを書き、分からないことは書かないでください。情報源によって違うときは、その旨を書いてください。前置きや文字数は書かないでください。'
-].join('\n')
+const prompt = (topic, now) => prompts.render('web/topic', { today: dayOf(now), topic })
 
 // The text cut into parts of at most MAX_PART, at blank lines where it can.
 function parts (text) {

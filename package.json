@@ -32,6 +32,7 @@
     "eris": "github:curtisf/eris#ff-dev",
     "ioredis": "^5.3.2",
     "markdown-escape": "^2.0.0",
+    "mustache": "^4.2.0",
     "pg": "^8.11.3",
     "pg-format": "^1.0.4",
     "redlock": "^4.2.0",

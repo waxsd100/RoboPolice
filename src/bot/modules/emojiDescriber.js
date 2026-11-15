@@ -6,6 +6,7 @@
 // Runs in the background on each worker for the servers it hosts: at startup, when a server's
 // emojis change, and every 6 hours (for those that failed). Only new or renamed emojis are described; changing GEMINI_EMBEDDING_MODEL embeds
 // them again. EMOJI_DESCRIPTIONS=false turns it off.
+const prompts = require('../utils/prompts')
 const store = require('../../db/interfaces/postgres/emojis')
 const urlFetcher = require('../utils/urlFetcher')
 const { callGemini, resolveTaskConfig } = require('./eventDrafter')
@@ -76,15 +77,14 @@ async function describeEmoji (emoji, context = {}) {
     ? characters.split('\n').filter(line => matchesNamed(line, named)).join('\n')
     : ''
   const characterText = matchedLines || characters
-  const known = characterText
-    ? [
-        '', '', `このコミュニティの配信者のキャラクター（コミュニティの wiki より）:\n${characterText}`,
-        ...(pickedRefs.length ? ['', '下にこのうち何人かの wiki の画像を、絵文字の画像の前に付けています。絵文字がそのキャラクターかどうか、形（頭の飾り・顔・輪郭など）で見比べてください。'] : []),
-        ...(named.length ? ['', `絵文字の名前「${emoji.name}」には、キャラクター「${named.join('」「')}」の名前が入っています。`] : []),
-        '', '絵文字がこの中のキャラクターなら、説明の最初にその名前を書き、色や形を並べるより wiki に書かれたそのキャラクターの特徴（何者か・目立つ部分）を踏まえて書いてください。wiki にない設定は付け足さないでください。どれにも当てはまらなければ名前は書かないでください。'
-      ].join('\n')
-    : ''
-  const parts = [{ text: `Discord のカスタム絵文字「:${emoji.name}:」の画像（最後の画像）です。何が描かれているか、どんな気持ちや場面で使う絵文字かを、日本語の短い1文で書いてください。前置きや文字数は書かないでください。${known}` }]
+  const parts = [{
+    text: prompts.render('emoji/describe', {
+      emoji: emoji.name,
+      characters: characterText,
+      hasReferences: pickedRefs.length !== 0,
+      namedCharacters: named.join('」「')
+    })
+  }]
   if (characterText) {
     for (const r of pickedRefs) parts.push({ text: `参考: wiki の「${r.name}」の画像` }, inline(r.buffer, r.contentType))
   }
