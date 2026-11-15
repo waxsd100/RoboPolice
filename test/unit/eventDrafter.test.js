@@ -384,6 +384,29 @@ describe('draft', () => {
     assert.doesNotMatch(prompt, /セーフティフィルタ/)
   })
 
+  test('for the uncensored model, only a request for a story is written as one', async () => {
+    const { compactUncensoredText } = require('../../src/bot/modules/eventDrafter')
+    const promptOf = async (request, referenced) => {
+      const requests = installGemini([[call('submit_chat_reply', { text: 'x' })]])
+      await draft({ request, referenced, channelName: 'general', guild, tools, now: NOW })
+      return requests[0].body.contents[0].parts[0].text
+    }
+    // The server's settings name stories too (the reply lengths), and the heading of a replied-to
+    // conversation says 続き: neither makes a greeting a story.
+    const chat = compactUncensoredText(await promptOf('やあ', { text: 'A: おはよう', count: 2 }))
+    assert.match(chat, /^## 話し方（このサーバーの設定）\n[^\n]+\n\n## 返事の長さ（このサーバーの設定）\n/)
+    assert.doesNotMatch(chat, /※執筆時の注意/)
+    assert.doesNotMatch(chat, /\n{3,}|<untrusted/)
+    for (const text of [
+      compactUncensoredText(await promptOf('小説を書いて')),
+      compactUncensoredText(await promptOf('もっと', { text: 'あなた（BOT）: 物語の一節', count: 1 })),
+      compactUncensoredText(await promptOf('やあ'), { r18Mode: true })
+    ]) {
+      assert.doesNotMatch(text, /## 話し方|## 返事の長さ/)
+      assert.match(text, /\n\n※執筆時の注意: [^\n]+$/)
+    }
+  })
+
   test('adds the operator\'s character notes from CHAT_PERSONA', async () => {
     process.env.CHAT_PERSONA = '語尾は「〜だぜ」'
     try {

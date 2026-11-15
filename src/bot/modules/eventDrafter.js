@@ -1040,10 +1040,18 @@ const MAX_UNCENSORED_CONVERSATION_CHARS = 1800
 const MAX_UNCENSORED_RECENT_CHARS = 400
 const MAX_UNCENSORED_MEMBERS_CHARS = 250
 
+// What was asked, in a request as buildPrompt writes it: the request and the conversation it
+// replies to, without their headings. The server's settings before them are left out: they name
+// stories too (the reply lengths), which made every request look like one for a story.
+function askedIn (text) {
+  const at = text.search(/(?:^|\n)## 依頼メッセージ/)
+  return (at === -1 ? text : text.slice(at)).split('\n').filter(line => !line.startsWith('## ')).join('\n')
+}
+
 function compactUncensoredText (text, { r18Mode = false } = {}) {
   if (typeof text !== 'string') return ''
   const hasConversation = /<untrusted source="conversation">/.test(text)
-  const storyMode = r18Mode || STORY_REQUEST_PATTERN.test(text)
+  const storyMode = r18Mode || STORY_REQUEST_PATTERN.test(askedIn(text))
   let out = text
     .replace(/\n## このサーバーの情報（最新）\n<untrusted source="server">[\s\S]*?<\/untrusted>/, '')
     .replace(/\n## 依頼や会話に出てくるチャンネル[\s\S]*?(?=\n## |\n依頼されたチャンネル:)/, '')
@@ -1071,7 +1079,7 @@ function compactUncensoredText (text, { r18Mode = false } = {}) {
   if (storyMode) {
     out += `\n\n${prompts.render('chat/uncensored/story-note')}`
   }
-  return out
+  return out.replace(/\n{3,}/g, '\n\n')
 }
 
 function isLocalUncensoredUrl (url) {
@@ -2459,4 +2467,4 @@ async function revise (conversation, correction) {
   return check(conversation, await runAgent(conversation.contents, conversation.tools, conversation.submits))
 }
 
-module.exports = { THINKING_LEVELS, SERVICE_TIERS, defaultTaskConfig, resolveTaskConfig, replyTimeoutMs, flexUsable, SAFETY_SETTINGS, STRICT_SAFETY_SETTINGS, withSafetySettings, THINK_DEEPER_DECLARATION, HAND_OVER_R18_DECLARATION, isR18Text, isRefusalReply, isRefusalReplyAsync, STORY_REQUEST_PATTERN, adaptiveThinkingLevel, compactContentsForWire, compressToolResult, deepModel, DEFAULT_UNCENSORED_MODEL, normalizeLocalModelId, uncensoredModel, uncensoredR18Model, parseModelDirective, extractReferencedDirective, rememberThreadModel, isUncensoredDirective, applyModelDirective, isLocalUncensoredUrl, uncensoredEndpoint, isUncensoredConfigured, isUncensoredUsable, checkUncensoredConnection, startUncensoredCheck, uncensoredState, ensureUncensoredModelLoaded, cleanUncensoredContent, extractUncensoredAnswer, UNCENSORED_SAMPLING_PARAMS, readUncensoredResponse, callUncensored, REPLY_LENGTHS, DEFAULT_REPLY_LENGTH, PERSONAS, thinkingConfig, cachedPrefix, caches, purgedFor, promptVersion, lightModel, extractModel, DEFAULT_EXTRACT_MODEL, draft, revise, MAX_STEPS, isConfigured, toScheduledEvent, callGemini, geminiRequest, geminiSend, geminiStream, retryTimer, DEFAULT_GEMINI_MODEL, ENTITY_TYPES, GeminiError }
+module.exports = { THINKING_LEVELS, SERVICE_TIERS, defaultTaskConfig, resolveTaskConfig, replyTimeoutMs, flexUsable, SAFETY_SETTINGS, STRICT_SAFETY_SETTINGS, withSafetySettings, THINK_DEEPER_DECLARATION, HAND_OVER_R18_DECLARATION, isR18Text, isRefusalReply, isRefusalReplyAsync, STORY_REQUEST_PATTERN, adaptiveThinkingLevel, compactContentsForWire, compressToolResult, deepModel, DEFAULT_UNCENSORED_MODEL, normalizeLocalModelId, uncensoredModel, uncensoredR18Model, parseModelDirective, extractReferencedDirective, rememberThreadModel, isUncensoredDirective, applyModelDirective, isLocalUncensoredUrl, uncensoredEndpoint, isUncensoredConfigured, isUncensoredUsable, checkUncensoredConnection, startUncensoredCheck, uncensoredState, ensureUncensoredModelLoaded, cleanUncensoredContent, compactUncensoredText, extractUncensoredAnswer, UNCENSORED_SAMPLING_PARAMS, readUncensoredResponse, callUncensored, REPLY_LENGTHS, DEFAULT_REPLY_LENGTH, PERSONAS, thinkingConfig, cachedPrefix, caches, purgedFor, promptVersion, lightModel, extractModel, DEFAULT_EXTRACT_MODEL, draft, revise, MAX_STEPS, isConfigured, toScheduledEvent, callGemini, geminiRequest, geminiSend, geminiStream, retryTimer, DEFAULT_GEMINI_MODEL, ENTITY_TYPES, GeminiError }
