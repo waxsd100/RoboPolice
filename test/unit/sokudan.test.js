@@ -3,7 +3,7 @@ const assert = require('node:assert/strict')
 const sokudan = require('../../src/bot/utils/sokudan')
 const { looksLikeInjectionAsync, reportInjectionAsync } = require('../../src/bot/utils/untrusted')
 const { polish } = require('../../src/bot/modules/replyPolish')
-const { draft, revise, adaptiveThinkingLevel, isRefusalReplyAsync } = require('../../src/bot/modules/eventDrafter')
+const { draft, revise, adaptiveThinkingLevel, isRefusalReplyAsync, compactUncensoredText } = require('../../src/bot/modules/eventDrafter')
 const { createTools } = require('../../src/bot/modules/eventTools')
 const { createGuild, createMember, installBot, configureGateway, startServer, call } = require('../helpers/fakes')
 
@@ -14,6 +14,7 @@ function resetSokudanEnv () {
   delete process.env.SOKUDAN_BOOL_THRESHOLD
   delete process.env.SOKUDAN_R18_THRESHOLD
   delete process.env.SOKUDAN_DEEP_THRESHOLD
+  delete process.env.SOKUDAN_STORY_THRESHOLD
   delete process.env.SOKUDAN_INJECTION_THRESHOLD
   delete process.env.SOKUDAN_REFUSAL_THRESHOLD
   delete process.env.SOKUDAN_POLISH_THRESHOLD
@@ -680,6 +681,92 @@ test('classifyMentionRequest and draft() include themed channel context while om
 
     await draft({ request: '隠れた名作教えて', channelName: '📺｜のばまんの動画について語る', channelID: '2', guild, member, tools })
     assert.equal(states[1], 'チャンネル: のばまんの動画について語る — 過去動画の感想を語る場所\n\n依頼メッセージ:\n隠れた名作教えて')
+  } finally {
+    global.fetch = origFetch
+    delete process.env.GEMINI_STREAM
+    resetSokudanEnv()
+    await sokudanSrv.close()
+  }
+})
+
+test('sokudan\'s reading of the request comes before the word patterns: a story, and how much to think', async () => {
+  configureGateway()
+  resetSokudanEnv()
+  const guild = createGuild()
+  const member = createMember()
+  installBot({ guilds: [guild] })
+
+  let story = 0.9
+  let asked = 0
+  const sokudanSrv = await startServer((req, res) => {
+    let body = ''
+    req.on('data', c => { body += c })
+    req.on('end', () => {
+      asked++
+      assert.match(JSON.parse(body).questions.is_story.instructions, /小説・物語・SS・脚本・シナリオなどの創作を書くこと、または前に書いた創作の続き/)
+      res.writeHead(200, { 'Content-Type': 'application/json' })
+      res.end(JSON.stringify({
+        answers: {
+          intent: { type: 'choice', choice: 'chat', confidence: 0.9 },
+          needs_deep: { type: 'bool', noul: 0.1 },
+          is_r18: { type: 'bool', noul: 0.01 },
+          is_story: { type: 'bool', noul: story },
+          complexity: { type: 'score', score: 0.2 }
+        }
+      }))
+    })
+  })
+
+  const origFetch = global.fetch
+  try {
+    process.env.SOKUDAN_URL = sokudanSrv.url
+    process.env.GEMINI_STREAM = 'false'
+    const bodies = []
+    global.fetch = async (url, init) => {
+      if (String(url).startsWith(sokudanSrv.url)) return origFetch(url, init)
+      bodies.push(JSON.parse(init.body))
+      return { ok: true, json: async () => ({ candidates: [{ content: { role: 'model', parts: [call('submit_chat_reply', { text: 'x' })] } }] }) }
+    }
+
+    // No word of the pattern in it ("むかしむかし"), and sokudan says it asks for a story.
+    const yes = await sokudan.classifyMentionRequest('むかしむかしで始まるやつお願い')
+    assert.equal(yes.isStory, true)
+    assert.equal(yes.storyProb, 0.9)
+    // A word of the pattern ("書いて"), and sokudan says it does not.
+    story = 0.05
+    const no = await sokudan.classifyMentionRequest('黒板に書いてあったこと教えて')
+    assert.equal(no.isStory, false)
+    process.env.SOKUDAN_STORY_THRESHOLD = '0.04'
+    assert.equal((await sokudan.classifyMentionRequest('黒板に書いてあったこと教えて')).isStory, true, 'its own threshold')
+    delete process.env.SOKUDAN_STORY_THRESHOLD
+
+    // The uncensored model is written to as sokudan judged, whatever words the request has.
+    const tools = createTools({ guild, member, ask: async () => '' })
+    await draft({ request: '黒板に書いてあったこと教えて', channelName: 'general', guild, member, tools })
+    const prompt = bodies.at(-1).contents[0].parts[0].text
+    assert.match(compactUncensoredText(prompt, { story: false }), /^## 話し方（このサーバーの設定）/)
+    assert.doesNotMatch(compactUncensoredText(prompt, { story: false }), /※執筆時の注意/)
+    assert.match(compactUncensoredText(prompt, { story: true }), /※執筆時の注意/)
+    assert.match(compactUncensoredText(prompt), /※執筆時の注意/, 'without an answer, the words decide (書いて)')
+    assert.match(compactUncensoredText(prompt, { story: false, r18Mode: true }), /※執筆時の注意/, 'R18 mode is always a story')
+
+    // How much to think: sokudan's level before the patterns ("書いて" alone would make it high).
+    assert.equal(bodies.at(-1).generationConfig.thinkingConfig.thinkingLevel, 'minimal')
+    const contents = []
+    contents.requestText = '黒板に書いてあったこと教えて'
+    assert.equal(adaptiveThinkingLevel(contents), 'high', 'by the pattern when sokudan gave no answer')
+    contents.sokudanDecision = { thinkingLevel: 'low', isStory: false, needsDeep: false }
+    assert.equal(adaptiveThinkingLevel(contents), 'low')
+    contents.sokudanDecision = { thinkingLevel: 'low', isStory: true, needsDeep: false }
+    assert.equal(adaptiveThinkingLevel(contents), 'high', 'a story is thought through')
+
+    // A caller that already asked passes the answer on: sokudan is not asked again.
+    const before = asked
+    await draft({ request: 'やあ', channelName: 'general', decision: yes, guild, member, tools })
+    await draft({ request: 'やあ', channelName: 'general', decision: null, guild, member, tools })
+    assert.equal(asked, before)
+    await draft({ request: 'やあ', channelName: 'general', guild, member, tools })
+    assert.equal(asked, before + 1)
   } finally {
     global.fetch = origFetch
     delete process.env.GEMINI_STREAM

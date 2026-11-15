@@ -15,11 +15,11 @@ Hugging Face アカウント登録や API キー取得は一切不要で、ビ�
  │     ▼  Railway Private Network (内部通信・通信料無料・外部非公開)
  └── sokudan (新規サービス / Dockerfile.sokudan)
        ├─ Public Networking: 無効（外部インターネットからはアクセス不可）
-       ├─ Healthcheck Path: /health
+       ├─ Healthcheck Path: 設定しない（下の注意を参照）
        └─ CPU 推論 (メモリ使用量目安: 約 1.0〜1.4 GB)
 ```
 
-- `Dockerfile.sokudan` は自動でデュアルスタック（`::` = IPv6 + IPv4 両対応）でリッスンするため、Railway の IPv6 内部ネットワーク（`*.railway.internal`）からそのまま接続できます。
+- `Dockerfile.sokudan` は IPv6 が使えるとき `::` でリッスンするため、Railway の IPv6 内部ネットワーク（`*.railway.internal`）からそのまま接続できます。ただし、このとき待ち受けるのは **IPv6 だけ**です（Python の asyncio は `::` に `IPV6_V6ONLY` を付けます）。Railway のヘルスチェックは IPv4 で届くので、Healthcheck Path を設定すると `1/1 replicas never became healthy!` でデプロイが失敗します。
 - 万が一 `sokudan` サービスを再起動・停止中であっても、Bot 側は 3 秒タイムアウト＋30 秒サーキットブレーカーで自動的に既存の正規表現／Gemini 判定へフォールバックし、メンション応答は止まりません。
 
 ---
@@ -41,7 +41,7 @@ Hugging Face アカウント登録や API キー取得は一切不要で、ビ�
 | **Source** → **Branch** | `master`（PR マージ前のお試しなら `feat/sokudan-decision-model`） | 自動デプロイ対象ブランチ |
 | **Build** → **Builder** | `Dockerfile` | — |
 | **Build** → **Dockerfile Path** | `Dockerfile.sokudan` | **重要**: 通常の `Dockerfile` ではなくこちらを指定します |
-| **Deploy** → **Healthcheck Path** | `/health` | モデルのロード完了後に Ready になります |
+| **Deploy** → **Healthcheck Path** | **設定しない（空のまま）** | `/health` を入れると、上の理由でデプロイが失敗します。sokudan が落ちているかどうかは Bot 側が自分で検知します |
 | **Networking** → **Public Networking** | **設定しない（Generate Domain を押さない）** | 内部ネットワーク（`railway.internal`）だけで通信するため外部公開は不要・安全です |
 
 ### ステップ 3: `sokudan` サービスの環境変数（Variables）
@@ -76,6 +76,7 @@ SOKUDAN_URL=http://${{sokudan.RAILWAY_PRIVATE_DOMAIN}}:${{sokudan.PORT}}
 | `SOKUDAN_BOOL_THRESHOLD` | `0.35` | `noul`（真偽判定）の共通閾値（モデルの出力分布に合わせて調整済み） |
 | `SOKUDAN_R18_THRESHOLD` | `SOKUDAN_BOOL_THRESHOLD` | 用途1: R18 事前振り分けの閾値だけ個別に変えたい場合（例: `0.40`） |
 | `SOKUDAN_DEEP_THRESHOLD` | `SOKUDAN_BOOL_THRESHOLD` | 用途1: `deepModel` 直接振り分けの閾値だけ個別に変えたい場合 |
+| `SOKUDAN_STORY_THRESHOLD` | `SOKUDAN_BOOL_THRESHOLD` | 用途1: 小説・物語などの創作の依頼かどうか（検閲なしモデルへの書かせ方・考える深さ・サーバー情報を省くかの判定）の閾値だけ個別に変えたい場合 |
 | `SOKUDAN_INJECTION_THRESHOLD` | `SOKUDAN_BOOL_THRESHOLD` | 用途2a: プロンプトインジェクション警告の閾値 |
 | `SOKUDAN_REFUSAL_THRESHOLD` | `SOKUDAN_BOOL_THRESHOLD` | 用途2b: R18 ソフト拒否／朝チュン検知の閾値 |
 | `SOKUDAN_POLISH_THRESHOLD` | `SOKUDAN_BOOL_THRESHOLD` | 用途3: `replyPolish` で書き直しを実行する `noul` 閾値 |
