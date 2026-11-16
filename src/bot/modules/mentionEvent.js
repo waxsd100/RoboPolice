@@ -608,7 +608,7 @@ async function handle (message) {
         ? await sokudan.classifyMentionRequest(request, referenced?.text, theme).catch(() => null)
         : null
       const asksForStory = typeof decision?.isStory === 'boolean' ? decision.isStory : STORY_REQUEST_PATTERN.test(request)
-      const directR18 = allowUncensored && isUncensoredUsable() && (isUncensoredDirective(request, referenced) || r18Route({ request, referenced, decision }).route)
+      const directR18 = allowUncensored && isUncensoredUsable() && (isUncensoredDirective(request, referenced, decision) || r18Route({ request, referenced, decision }).route)
       let queryVecPromise = null
       const queryVector = () => {
         if (!worthSearching(request)) return Promise.resolve(null)

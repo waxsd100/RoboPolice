@@ -1194,7 +1194,7 @@ describe('explicit cache and thinking', () => {
 
     // 1b. The same R18 model, but not asked for a story: the server's reply length holds, and
     // nothing says to write long.
-    await draft({ request: 'R18 --2 今日どうだった？', channelName: 'general', replyLength: 'short', guild, tools: quietTools, now: NOW })
+    await draft({ request: '--2 R18 今日どうだった？', channelName: 'general', replyLength: 'short', guild, tools: quietTools, now: NOW })
     assert.equal(cloudRunBody.model, 'gemma-4-31B-it-The-DECKARD-HERETIC-UNCENSORED-Thinking.Q4_K_M')
     assert.match(cloudRunBody.messages[0].content, /## 返事の長さ（この依頼は小説ではない）\n- [^\n]*「返事の長さ」（サーバーの設定）に従い、それより長く書かない/)
     assert.doesNotMatch(cloudRunBody.messages[0].content, /文字数の上限はありません|長編で書き切る|地の文は常体/)
@@ -1220,7 +1220,7 @@ describe('explicit cache and thinking', () => {
     assert.equal(blockedFallbackModel, 'gemma-4-31B-it-ARA-heretic.IQ4_XS')
 
     // 3. Explicit model directives in the message (--model 1/2, --1, --2, --r18, trailing flags, reply threads, custom GGUF)
-    const { parseModelDirective, rememberThreadModel } = require('../../src/bot/modules/eventDrafter')
+    const { parseModelDirective, rememberThreadModel, resolveReferencedDirective, isUncensoredDirective } = require('../../src/bot/modules/eventDrafter')
     assert.deepEqual(parseModelDirective('--model 1 こんにちは'), { directive: '1', text: 'こんにちは' })
     assert.deepEqual(parseModelDirective('-m 2 秘密の話'), { directive: '2', text: '秘密の話' })
     assert.deepEqual(parseModelDirective('[model:2] 続きを書いて'), { directive: '2', text: '続きを書いて' })
@@ -1229,6 +1229,10 @@ describe('explicit cache and thinking', () => {
     assert.deepEqual(parseModelDirective('—r18 続きを書いて'), { directive: 'r18', text: '続きを書いて' })
     assert.deepEqual(parseModelDirective('ーー２ 続きを書いて'), { directive: '2', text: '続きを書いて' })
     assert.deepEqual(parseModelDirective('【R18】続きを書いて'), { directive: 'r18', text: '続きを書いて' })
+    // Accidental hyphens, list numbers, or questions about R18/NSFW must NOT parse as directives
+    for (const ordinary of ['-1点だった', 'ー1番好きな動画は？', '-2人で遊べるゲーム', 'ー2時間配信した', '[1] 質問です', '【2】について', '【18禁】とは？', '【R18】とは？', '[NSFW] チャンネルどこ？']) {
+      assert.equal(parseModelDirective(ordinary).directive, null, ordinary)
+    }
 
     let explicitPayload = null
     global.fetch = async (url, init) => {
@@ -1251,38 +1255,47 @@ describe('explicit cache and thinking', () => {
     await draft({ request: '--model my-custom-model.Q4_K_M.gguf カスタムモデルで答えて', channelName: 'general', guild, tools: quietTools, now: NOW })
     assert.equal(explicitPayload.model, 'my-custom-model.Q4_K_M')
 
-    // 4. Reply thread inherits earlier model directive or remembered uncensored model without falling back to Argon4
+    // 4. Reply thread inherits earlier model directive or remembered uncensored model on continuations,
+    //    but releases back to Gemini on unrelated chat, lookups, or image requests.
+    const explicitThreadRef = {
+      text: '[2026-11-09T10:00:00.000Z] user (1)（依頼者）: <@999> --2 夜の物語を書いて\n[2026-11-09T10:00:05.000Z] あなた（BOT）: いいよ！',
+      othersText: '[2026-11-09T10:00:00.000Z] user (1)（依頼者）: <@999> --2 夜の物語を書いて',
+      count: 2
+    }
     explicitPayload = null
     await draft({
       request: 'もっと続きを書いて',
-      referenced: {
-        text: '[2026-11-09T10:00:00.000Z] user (1)（依頼者）: <@999> --2 夜の物語を書いて\n[2026-11-09T10:00:05.000Z] あなた（BOT）: いいよ！',
-        othersText: '[2026-11-09T10:00:00.000Z] user (1)（依頼者）: <@999> --2 夜の物語を書いて',
-        count: 2
-      },
+      referenced: explicitThreadRef,
       channelName: 'general',
       guild,
       tools: quietTools,
       now: NOW
     })
     assert.equal(explicitPayload.model, 'gemma-4-31B-it-The-DECKARD-HERETIC-UNCENSORED-Thinking.Q4_K_M')
+    assert.equal(resolveReferencedDirective('最新の動画教えて', explicitThreadRef), null)
+    assert.equal(resolveReferencedDirective('ありがとう！おやすみ', explicitThreadRef), null)
+    assert.equal(isUncensoredDirective('可愛いイラスト描いて', explicitThreadRef), false)
 
     explicitPayload = null
     rememberThreadModel(['msg-bot-1'], { uncensored: true, uncensoredR18Mode: true })
+    const implicitThreadRef = {
+      text: '[2026-11-09T10:00:05.000Z] あなた（BOT）: 続きだよ',
+      othersText: '',
+      messageIds: ['msg-bot-1'],
+      count: 1
+    }
     await draft({
       request: 'さらに続きをお願い',
-      referenced: {
-        text: '[2026-11-09T10:00:05.000Z] あなた（BOT）: 続きだよ',
-        othersText: '',
-        messageIds: ['msg-bot-1'],
-        count: 1
-      },
+      referenced: implicitThreadRef,
       channelName: 'general',
       guild,
       tools: quietTools,
       now: NOW
     })
     assert.equal(explicitPayload.model, 'gemma-4-31B-it-The-DECKARD-HERETIC-UNCENSORED-Thinking.Q4_K_M')
+    assert.equal(resolveReferencedDirective('ありがとう！', implicitThreadRef), null)
+    assert.equal(resolveReferencedDirective('ちんこって言ってみて', implicitThreadRef), null)
+    assert.equal(isUncensoredDirective('昨日の配信どうだった？', implicitThreadRef), false)
 
     // 5. Router mode pre-loads unloaded model via POST /models/load and polls GET /v1/models until loaded
     let loadCalledWith = null

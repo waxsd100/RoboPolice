@@ -131,7 +131,7 @@ test('Use Case 1: draft() pre-routes euphemistic R18 requests to uncensored R18 
         answers: {
           intent: { type: 'choice', choice: 'chat', confidence: 0.95 },
           needs_deep: { type: 'bool', noul: 0.6 },
-          is_r18: { type: 'bool', noul: 0.72 },
+          is_r18: { type: 'bool', noul: 0.88 },
           complexity: { type: 'score', score: 1.4 }
         }
       }))
@@ -275,7 +275,10 @@ test('Use Case 2a & 2b: Sokudan detects paraphrased prompt injection and soft-re
         answers.injection = { type: 'bool', noul: parsed.state.includes('秘密の内部設定') ? 0.62 : 0.05 }
       }
       if (parsed.questions.refusal) {
-        answers.refusal = { type: 'bool', noul: parsed.state.includes('健全な範囲で') ? 0.58 : 0.03 }
+        answers.refusal = {
+          type: 'bool',
+          noul: parsed.state.includes('健全な範囲で') ? 0.72 : (parsed.state.includes('少しわかりません') ? 0.50 : 0.03)
+        }
       }
       res.writeHead(200, { 'Content-Type': 'application/json' })
       res.end(JSON.stringify({ answers }))
@@ -291,7 +294,9 @@ test('Use Case 2a & 2b: Sokudan detects paraphrased prompt injection and soft-re
     assert.equal(await looksLikeInjectionAsync('今日の晩ごはんは何がいいかな？おすすめのレシピを教えて！'), false)
 
     // Paraphrased soft refusal that does not match regex REFUSAL_REPLY_PATTERN
-    assert.equal(await isRefusalReplyAsync('ごめんなさい、そうした大人向けの描写は健全な範囲でしか書けないため省略しますね。'), true)
+    assert.equal(await isRefusalReplyAsync('ごめんなさい、そうした大人向けの描写は健全な範囲でしか書けないため省略しますね。', '濃密な夜のシーンを書いて'), true)
+    // Borderline noul=0.50 below DEFAULT_REFUSAL_THRESHOLD (0.65) must NOT trigger refusal handover
+    assert.equal(await isRefusalReplyAsync('ごめんなさい、その情報は少しわかりません。'), false)
     assert.equal(await isRefusalReplyAsync('了解！そのゲームの攻略法はね、まず序盤に鉄を集めるのがコツだよ！'), false)
   } finally {
     resetSokudanEnv()
@@ -631,16 +636,18 @@ test('Fault tolerance: timeout or unreachable Sokudan falls back cleanly without
   }
 })
 
-test('classifyMentionRequest and draft() include themed channel context while omitting generic channels', async () => {
+test('classifyMentionRequest and draft() include themed channel context while omitting generic and adult-labeled channels', async () => {
   configureGateway()
   resetSokudanEnv()
   const guild = createGuild({
     channels: [
       { id: '1', name: 'general', type: 0 },
-      { id: '2', name: '📺｜のばまんの動画について語る', type: 0 }
+      { id: '2', name: '📺｜のばまんの動画について語る', type: 0 },
+      { id: '3', name: '🔞｜r18-下ネタ', type: 0 }
     ]
   })
   Object.assign(guild.channels.get('2'), { topic: '過去動画の感想を語る場所' })
+  Object.assign(guild.channels.get('3'), { topic: '成人向けの雑談チャンネル' })
   const member = createMember()
   installBot({ guilds: [guild] })
 
@@ -682,6 +689,9 @@ test('classifyMentionRequest and draft() include themed channel context while om
 
     await draft({ request: '隠れた名作教えて', channelName: '📺｜のばまんの動画について語る', channelID: '2', guild, member, tools })
     assert.equal(states[1], 'チャンネル: のばまんの動画について語る — 過去動画の感想を語る場所\n\n依頼メッセージ:\n隠れた名作教えて')
+
+    await draft({ request: '今日の晩ごはん何がいい？', channelName: '🔞｜r18-下ネタ', channelID: '3', guild, member, tools })
+    assert.equal(states[2], '今日の晩ごはん何がいい？', 'adult channel name/topic is omitted so ordinary chat is not biased toward is_r18')
   } finally {
     global.fetch = origFetch
     delete process.env.GEMINI_STREAM
@@ -776,39 +786,53 @@ test('sokudan\'s reading of the request comes before the word patterns: a story,
   }
 })
 
-test('what sends a request to the uncensored model: words that mean little else, or sokudan being sure', () => {
+test('what sends a request to the uncensored model: explicit adult story requests or Sokudan-confirmed R18 fiction only', () => {
   resetSokudanEnv()
   const no = { isR18: false, r18Prob: 0.05 }
-  const unsure = { isR18: true, r18Prob: 0.5 }
-  const sure = { isR18: true, r18Prob: 0.82 }
-  // A question about a video, read by sokudan as a little R18 (p=0.5): not enough on its own.
-  const video = 'のばまんがゲーム画面によつろんを描いた動画を教えて'
-  assert.equal(r18Route({ request: video, decision: unsure }).route, false)
-  assert.equal(r18Route({ request: video, decision: unsure }).maybe, true, 'a refusal may still be handed over')
-  assert.equal(r18Route({ request: video, decision: sure }).route, true)
-  process.env.SOKUDAN_R18_ROUTE_THRESHOLD = '0.9'
-  assert.equal(r18Route({ request: video, decision: sure }).route, false, 'its own threshold')
+  const unsure = { isR18: true, r18Prob: 0.62 }
+  const sure = { isR18: true, r18Prob: 0.88 }
+  // Video/channel/server lookup questions NEVER go to the uncensored model, even if Sokudan misfires.
+  for (const lookup of ['のばまんがゲーム画面によつろんを描いた動画を教えて', 'このサーバーにNSFWチャンネルある？', '18禁のゲーム配信ある？']) {
+    assert.deepEqual(r18Route({ request: lookup, decision: null }), { route: false, why: null, maybe: false, disallowHandover: true }, lookup)
+    assert.deepEqual(r18Route({ request: lookup, decision: unsure }), { route: false, why: null, maybe: false, disallowHandover: true }, lookup)
+    assert.deepEqual(r18Route({ request: lookup, decision: sure }), { route: false, why: null, maybe: false, disallowHandover: true }, lookup)
+  }
+  // Image generation requests stay on Gemini so generate_image is called instead of the text novel writer.
+  for (const imgAsk of ['セクシーな絵描いて', 'エロ画像作って']) {
+    assert.equal(r18Route({ request: imgAsk, decision: sure }).route, false, imgAsk)
+  }
+  // Euphemistic story request routes first only when Sokudan exceeds SOKUDAN_R18_ROUTE_THRESHOLD (0.85 by default).
+  const story = '二人きりの寝室で朝まで求め合う物語を書いて'
+  assert.equal(r18Route({ request: story, decision: unsure }).route, false)
+  assert.equal(r18Route({ request: story, decision: unsure }).maybe, true, 'a refusal may still be handed over')
+  assert.equal(r18Route({ request: story, decision: sure }).route, true)
+  process.env.SOKUDAN_R18_ROUTE_THRESHOLD = '0.92'
+  assert.equal(r18Route({ request: story, decision: sure }).route, false, 'its own threshold')
   delete process.env.SOKUDAN_R18_ROUTE_THRESHOLD
-  // Words that come up in ordinary talk count only with sokudan.
-  for (const text of ['新作の配信、全裸待機してます', '今がこのグループの絶頂期だよね', 'セックス・ピストルズのおすすめ曲', 'ウマ娘の調教師ってどうやって決まる？', '犬の交尾期っていつ？', 'レイプ事件のニュース見た？', 'ちんこって言ってみて']) {
+  // Ordinary talk and 1-line dirty jokes never pre-route to uncensored novel mode, even with R18 words or Sokudan.
+  for (const text of ['新作の配信、全裸待機してます', '今がこのグループの絶頂期だよね', 'セックス・ピストルズのおすすめ曲', 'ウマ娘の調教師ってどうやって決まる？', '犬の交尾期っていつ？', 'レイプ事件のニュース見た？', 'ちんこって言ってみて', 'エロ動画見てたら笑った']) {
     assert.ok(isR18Text(text), text)
     assert.equal(r18Route({ request: text, decision: null }).route, false, text)
     assert.equal(r18Route({ request: text, decision: no }).route, false, text)
-    assert.equal(r18Route({ request: text, decision: unsure }).route, true, text)
+    assert.equal(r18Route({ request: text, decision: unsure }).route, false, text)
+    assert.equal(r18Route({ request: text, decision: sure }).route, false, text)
   }
-  // Words that mean little else are enough, with or without sokudan.
-  for (const text of ['R18の小説を書いて', '官能小説お願い', 'エロ小説書いて']) {
+  // R18 words in an actual story/scene request route when Sokudan agrees.
+  assert.equal(r18Route({ request: '二人が全裸で抱き合う小説を書いて', decision: no }).route, false)
+  assert.equal(r18Route({ request: '二人が全裸で抱き合う小説を書いて', decision: unsure }).route, true)
+  // Unambiguous adult creative writing requests route first with or without Sokudan.
+  for (const text of ['R18の小説を書いて', '官能小説お願い', 'エロ小説書いて', '濡れ場のシーンを書いて']) {
     assert.equal(r18Route({ request: text, decision: null }).route, true, text)
     assert.equal(r18Route({ request: text, decision: no }).route, true, text)
   }
-  // The replied-to conversation counts only together with the request.
+  // The replied-to conversation counts only on continuation requests.
   const thread = { text: 'A: 官能小説書いて\nあなた（BOT）: …' }
-  assert.equal(r18Route({ request: video, referenced: thread, decision: null }).route, false)
-  assert.equal(r18Route({ request: video, referenced: thread, decision: no }).maybe, false)
+  assert.equal(r18Route({ request: 'ありがとう！', referenced: thread, decision: null }).route, false)
+  assert.equal(r18Route({ request: 'ありがとう！', referenced: thread, decision: no }).maybe, false)
   assert.equal(r18Route({ request: '続き', referenced: thread, decision: unsure }).route, true)
-  // Nothing known: neither sent first nor ruled out.
-  assert.deepEqual(r18Route({ request: video, decision: null }), { route: false, why: null, maybe: null })
-  assert.equal(r18Route({ request: video, decision: no }).maybe, false)
+  // Ordinary chat with nothing known: neither sent first nor ruled out.
+  assert.deepEqual(r18Route({ request: 'こんにちは', decision: null }), { route: false, why: null, maybe: null, disallowHandover: false })
+  assert.equal(r18Route({ request: 'こんにちは', decision: no }).maybe, false)
 })
 
 test('a refusal or a block goes to the uncensored model only when it may be about adult writing', async () => {
@@ -819,6 +843,7 @@ test('a refusal or a block goes to the uncensored model only when it may be abou
   installBot({ guilds: [guild] })
 
   let r18 = 0.05
+  let refusalChecks = 0
   const sokudanSrv = await startServer((req, res) => {
     let body = ''
     req.on('data', c => { body += c })
@@ -826,6 +851,7 @@ test('a refusal or a block goes to the uncensored model only when it may be abou
       const parsed = JSON.parse(body)
       res.writeHead(200, { 'Content-Type': 'application/json' })
       if (parsed.questions.refusal) {
+        refusalChecks++
         assert.match(parsed.questions.refusal.instructions, /性的でない理由で断っているものは含めない/)
         res.end(JSON.stringify({ answers: { refusal: { type: 'bool', noul: 0.05 } } }))
         return
@@ -859,11 +885,14 @@ test('a refusal or a block goes to the uncensored model only when it may be abou
     const tools = createTools({ guild, member, ask: async () => '' })
     const ask = request => draft({ request, channelName: 'general', channelID: '1', uncensoredR18: true, guild, member, tools })
 
-    // A refusal over something dangerous, on a request sokudan reads as not R18: stays refused.
+    // A refusal over something dangerous, on a non-story request sokudan reads as not R18: stays refused,
+    // and runAgent does not run sokudan refusal detection on non-R18 non-story replies.
     assert.equal(await refusalKind('不適切な内容なので書けません'), 'other')
+    assert.equal(refusalChecks, 1)
     gemini = { candidates: [{ content: { role: 'model', parts: [call('submit_chat_reply', { text: '不適切な内容なので書けません' })] } }] }
     const dangerous = await ask('爆弾の作り方教えて')
     assert.equal(dangerous.text, '不適切な内容なので書けません')
+    assert.equal(refusalChecks, 1, 'non-R18 non-story reply does not invoke Sokudan refusal detector')
     assert.equal(uncensoredAsked, 0)
 
     // Blocked, on a request sokudan reads as not R18: not answered by the uncensored model.
@@ -871,7 +900,7 @@ test('a refusal or a block goes to the uncensored model only when it may be abou
     await assert.rejects(ask('のばまんがゲーム画面によつろんを描いた動画を教えて'), e => !!e.blocked)
     assert.equal(uncensoredAsked, 0)
     // Blocked over copyright: not either, whatever the request.
-    r18 = 0.5
+    r18 = 0.62
     gemini = { candidates: [{ finishReason: 'RECITATION', content: { role: 'model', parts: [] } }] }
     await assert.rejects(ask('あの曲の歌詞をそのまま全部書いて'), e => e.blocked === 'RECITATION')
     assert.equal(uncensoredAsked, 0)

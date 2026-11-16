@@ -199,7 +199,7 @@ class GeminiError extends Error {
 }
 
 // The blocks that may be about adult content, which the uncensored model can answer instead.
-const R18_BLOCKS = ['SAFETY', 'PROHIBITED_CONTENT', 'BLOCKLIST', 'IMAGE_SAFETY', 'IMAGE_PROHIBITED_CONTENT']
+const R18_BLOCKS = ['SAFETY', 'PROHIBITED_CONTENT', 'IMAGE_SAFETY', 'IMAGE_PROHIBITED_CONTENT']
 const BLOCKING_FINISH_REASONS = ['SAFETY', 'PROHIBITED_CONTENT', 'BLOCKLIST', 'SPII', 'IMAGE_SAFETY', 'IMAGE_PROHIBITED_CONTENT', 'RECITATION']
 
 // fetch gives up on a response that has not started after 5 minutes (undici's headersTimeout and
@@ -748,14 +748,15 @@ function uncensoredModel (contents = null) {
 // Explicit model directive at the start or end of a mention request (or in a replied-to message):
 //   --model <1|2|uncensored|r18|deep|flash|lite|model-name>
 //   -m <...> / model:<...> / [model:<...>] / [r18] / 【R18】
-//   --1 / --2 / --uncensored / --r18 / --deep / --flash / --lite (also supports smart dashes — / – / ― / ー)
-const DIRECTIVE_ALIASES = '1|2|uncensored|fallback|heretic|r-?18|18禁|nsfw|deckard|deep|argon|flash|lite'
+//   --1 / --2 / --uncensored / --r18 / --deep / --flash / --lite (also supports smart dashes — / – / ― or doubled ー / －)
+const DIRECTIVE_ALIASES = '1|2|uncensored|fallback|heretic|r-?18|deckard|deep|argon|flash|lite'
+const BRACKET_DIRECTIVE_ALIASES = 'uncensored|fallback|heretic|r-?18|deckard|deep|argon|flash|lite'
 const LEADING_DIRECTIVE_PATTERN = new RegExp(
-  `^((?:<@!?\\d+>|<@&\\d+>\\s*)*)\\s*(?:(?:(?:--|[—–―ー－]{1,2})model(?:=|:|\\s+)|-m(?:=|:|\\s+)|model\\s*[:=]\\s*)(\\S+)|\\[model\\s*[:=]\\s*([^\\]]+)\\]|\\[(${DIRECTIVE_ALIASES})\\]|【(?:model\\s*[:=]\\s*)?(${DIRECTIVE_ALIASES})】|(?:--|-|[—–―ー－]{1,2})(${DIRECTIVE_ALIASES})(?=\\s|$|[、。！？!?:：\\]）】]|[^\\w-]))\\s*`,
+  `^((?:<@!?[\\w-]+>|<@&[\\w-]+>\\s*)*)\\s*(?:(?:(?:--|[—–―]{1,2}|[ー－]{2})model(?:=|:|\\s+)|-m(?:=|:|\\s+)|model\\s*[:=]\\s*)(\\S+)|\\[model\\s*[:=]\\s*([^\\]]+)\\]|(?:\\[(${BRACKET_DIRECTIVE_ALIASES})\\]|【(?:model\\s*[:=]\\s*)?(${BRACKET_DIRECTIVE_ALIASES})】)(?!\\s*(?:とは|って|の(?:意味|設定|チャンネル|ゲーム|配信|動画|基準|タグ|マーク)|チャンネル|設定))|(?:--|[—–―]{1,2}|[ー－]{2})(${DIRECTIVE_ALIASES})(?=\\s|$))\\s*`,
   'i'
 )
 const TRAILING_DIRECTIVE_PATTERN = new RegExp(
-  `(?:^|\\s+)(?:(?:(?:--|[—–―ー－]{1,2})model(?:=|:|\\s+)|-m(?:=|:|\\s+)|model\\s*[:=]\\s*)(\\S+)|\\[model\\s*[:=]\\s*([^\\]]+)\\]|\\[(${DIRECTIVE_ALIASES})\\]|【(?:model\\s*[:=]\\s*)?(${DIRECTIVE_ALIASES})】|(?:--|[—–―ー－]{1,2})(${DIRECTIVE_ALIASES}))\\s*$`,
+  `(?:^|\\s+)(?:(?:(?:--|[—–―]{1,2}|[ー－]{2})model(?:=|:|\\s+)|-m(?:=|:|\\s+)|model\\s*[:=]\\s*)(\\S+)|\\[model\\s*[:=]\\s*([^\\]]+)\\]|\\[(${BRACKET_DIRECTIVE_ALIASES})\\]|【(?:model\\s*[:=]\\s*)?(${BRACKET_DIRECTIVE_ALIASES})】|(?:--|[—–―]{1,2}|[ー－]{2})(${DIRECTIVE_ALIASES}))\\s*$`,
   'i'
 )
 const GEMINI_DIRECTIVE_ALIASES = {
@@ -799,19 +800,21 @@ function rememberThreadModel (messageIds, contents) {
   if (!contents || !Array.isArray(messageIds)) return
   let directive = null
   if (contents.uncensored) {
+    if (!contents.directUncensored && !contents.uncensoredR18Mode && !contents.explicitUncensoredModel) return
     if (contents.explicitUncensoredModel) directive = contents.explicitUncensoredModel
     else directive = contents.uncensoredR18Mode ? '2' : '1'
   } else if (contents.deep) {
     directive = 'deep'
   }
   if (!directive) return
+  const entry = { directive, explicit: Boolean(contents.explicitDirective) }
   for (const id of messageIds) {
     if (!id) continue
     if (threadModelMemory.has(id)) threadModelMemory.delete(id)
     else if (threadModelMemory.size >= MAX_THREAD_MODEL_MEMORY) {
       threadModelMemory.delete(threadModelMemory.keys().next().value)
     }
-    threadModelMemory.set(id, directive)
+    threadModelMemory.set(id, entry)
   }
 }
 
@@ -822,26 +825,18 @@ function stripDebugFooterLines (text) {
   return text.replace(DEBUG_FOOTER_PATTERN, '').trimEnd()
 }
 
-function extractReferencedDirective (referenced) {
+function extractReferencedDirectiveInfo (referenced) {
   if (!referenced) return null
-  if (Array.isArray(referenced.messageIds)) {
-    for (let i = referenced.messageIds.length - 1; i >= 0; i--) {
-      const remembered = threadModelMemory.get(referenced.messageIds[i])
-      if (remembered) return remembered
-    }
-  }
-  if (typeof referenced.lastBotModel === 'string' && referenced.lastBotModel.trim() && !/^gemini-/i.test(referenced.lastBotModel.trim())) {
-    return referenced.lastBotModel.trim()
-  }
   if (typeof referenced.text === 'string' && referenced.text.trim()) {
     const lines = referenced.text.split(/\r?\n/)
     let canUseDirective = true
-    const candidates = []
+    const explicitCandidates = []
+    const footerCandidates = []
     for (const line of lines) {
       const footerMatch = line.match(/^-#\s*model:\s*(.+?)\s*·/)
       if (footerMatch) {
         const lastModel = footerMatch[1].split('→').pop().replace(/\s*\(flex\)\s*$/i, '').trim()
-        if (lastModel && !/^gemini-/i.test(lastModel)) candidates.push(lastModel)
+        if (lastModel && !/^gemini-/i.test(lastModel)) footerCandidates.push(lastModel)
         continue
       }
       const msgMatch = line.match(/^\[[^\]]+\]\s+([^:]+):\s*(.*)$/)
@@ -849,14 +844,38 @@ function extractReferencedDirective (referenced) {
         canUseDirective = msgMatch[1].includes('（依頼者）')
       }
       if (!canUseDirective) continue
-      const body = (msgMatch ? msgMatch[2] : line).replace(/<@!?\d+>|<@&\d+>/g, '').trim()
+      const body = (msgMatch ? msgMatch[2] : line).replace(/<@!?[\w-]+>|<@&[\w-]+>/g, '').trim()
       if (!body) continue
       const parsed = parseModelDirective(body)
-      if (parsed.directive) candidates.push(parsed.directive)
+      if (parsed.directive) explicitCandidates.push(parsed.directive)
     }
-    if (candidates.length) return candidates[candidates.length - 1]
+    if (explicitCandidates.length) return { directive: explicitCandidates[explicitCandidates.length - 1], explicit: true }
+    if (Array.isArray(referenced.messageIds)) {
+      for (let i = referenced.messageIds.length - 1; i >= 0; i--) {
+        const remembered = threadModelMemory.get(referenced.messageIds[i])
+        if (remembered) return typeof remembered === 'string' ? { directive: remembered, explicit: false } : remembered
+      }
+    }
+    if (typeof referenced.lastBotModel === 'string' && referenced.lastBotModel.trim() && !/^gemini-/i.test(referenced.lastBotModel.trim())) {
+      return { directive: referenced.lastBotModel.trim(), explicit: false }
+    }
+    if (footerCandidates.length) return { directive: footerCandidates[footerCandidates.length - 1], explicit: false }
+    return null
+  }
+  if (Array.isArray(referenced.messageIds)) {
+    for (let i = referenced.messageIds.length - 1; i >= 0; i--) {
+      const remembered = threadModelMemory.get(referenced.messageIds[i])
+      if (remembered) return typeof remembered === 'string' ? { directive: remembered, explicit: false } : remembered
+    }
+  }
+  if (typeof referenced.lastBotModel === 'string' && referenced.lastBotModel.trim() && !/^gemini-/i.test(referenced.lastBotModel.trim())) {
+    return { directive: referenced.lastBotModel.trim(), explicit: false }
   }
   return null
+}
+
+function extractReferencedDirective (referenced) {
+  return extractReferencedDirectiveInfo(referenced)?.directive || null
 }
 
 function uncensoredEnvModel () {
@@ -891,19 +910,56 @@ function isAllowedUncensoredModelName (directive) {
     return true
   }
   const endpoint = uncensoredEndpoint()
-  return Boolean(endpoint && !endpoint.gateway && isLocalUncensoredUrl(endpoint.url))
+  if (!endpoint || endpoint.gateway || !isLocalUncensoredUrl(endpoint.url)) return false
+  return /^[a-z0-9][a-z0-9._:/-]*$/i.test(custom) && /(?:[-_./:]|gguf|heretic|deckard|uncensored|llama|gemma|qwen|mistral|deepseek)/i.test(custom)
 }
 
-function isUncensoredDirective (request, referenced = null) {
-  const d = parseModelDirective(request).directive || extractReferencedDirective(referenced)
-  if (!d) return false
-  const normalized = normalizeDirectiveValue(d)
+function isDirectiveUncensoredValue (directive) {
+  if (!directive) return false
+  const normalized = normalizeDirectiveValue(directive)
   const lower = normalized.toLowerCase()
   if (lower === 'deep' || lower === 'argon' || GEMINI_DIRECTIVE_ALIASES[lower] || /^gemini-/i.test(normalized)) return false
   if (lower === '1' || lower === 'uncensored' || lower === 'fallback' || lower === 'heretic' || lower === '2' || lower === 'r18' || lower === 'deckard') {
     return true
   }
   return isAllowedUncensoredModelName(normalized)
+}
+
+function isR18ModelDirective (directive) {
+  const lower = normalizeDirectiveValue(directive).toLowerCase()
+  if (lower === '2' || lower === 'r18' || lower === 'deckard' || /deckard|r-?18|uncensored-thinking/i.test(lower)) return true
+  const custom = normalizeLocalModelId(directive).toLowerCase()
+  const baseLower = uncensoredBaseModel().toLowerCase()
+  const r18Lower = uncensoredR18Model().toLowerCase()
+  return r18Lower !== baseLower && custom === r18Lower
+}
+
+function resolveReferencedDirective (request, referenced = null, decision = null) {
+  const info = extractReferencedDirectiveInfo(referenced)
+  if (!info?.directive) return null
+  if (!isDirectiveUncensoredValue(info.directive)) return info.directive
+  const req = String(request || '').trim()
+  if (decision?.intent && decision.intent !== 'chat') return null
+  if (isLookupOrMetaQuestion(req) || isImageGenerationRequest(req)) return null
+  const isCont = CONTINUATION_REQUEST_PATTERN.test(req)
+  if (decision && !decision.isR18 && decision.isStory === false && !isCont) return null
+  const wantsStory = typeof decision?.isStory === 'boolean'
+    ? decision.isStory
+    : STORY_OR_SCENE_REQUEST_PATTERN.test(req)
+  if (info.explicit) {
+    const keepsExplicit = !req || isCont || wantsStory || !!decision?.isR18 || isR18Text(req)
+    return keepsExplicit ? info.directive : null
+  }
+  if (isR18ModelDirective(info.directive) && wantsStory && (!decision || decision.isR18)) {
+    return info.directive
+  }
+  return isCont ? info.directive : null
+}
+
+function isUncensoredDirective (request, referenced = null, decision = null) {
+  const explicit = parseModelDirective(request).directive
+  if (explicit) return isDirectiveUncensoredValue(explicit)
+  return isDirectiveUncensoredValue(resolveReferencedDirective(request, referenced, decision))
 }
 
 function applyModelDirective (contents, directive, { inherited = false } = {}) {
@@ -914,6 +970,7 @@ function applyModelDirective (contents, directive, { inherited = false } = {}) {
     if (deepModel()) {
       contents.deep = true
       contents.uncensored = false
+      contents.explicitDirective = !inherited
       return true
     }
     return false
@@ -926,12 +983,14 @@ function applyModelDirective (contents, directive, { inherited = false } = {}) {
       if (!deep) return false
       contents.deep = true
       contents.uncensored = false
+      contents.explicitDirective = !inherited
       return true
     }
     if (!GEMINI_DIRECTIVE_ALIASES[lower] && !REPLY_MODELS.includes(canonical)) return false
     contents.model = canonical
     contents.deep = false
     contents.uncensored = false
+    contents.explicitDirective = !inherited
     return true
   }
   const allowUncensored = contents.uncensoredR18 !== false && !contents.safetyFilter
@@ -943,6 +1002,7 @@ function applyModelDirective (contents, directive, { inherited = false } = {}) {
     contents.uncensoredR18Mode = false
     contents.explicitUncensoredModel = null
     contents.inheritedUncensoredModel = false
+    contents.explicitDirective = !inherited
     return true
   }
   if (lower === '2' || lower === 'r18' || lower === 'deckard') {
@@ -952,6 +1012,7 @@ function applyModelDirective (contents, directive, { inherited = false } = {}) {
     contents.uncensoredR18Mode = true
     contents.explicitUncensoredModel = null
     contents.inheritedUncensoredModel = false
+    contents.explicitDirective = !inherited
     return true
   }
   if (!isAllowedUncensoredModelName(normalized)) return false
@@ -966,6 +1027,7 @@ function applyModelDirective (contents, directive, { inherited = false } = {}) {
     contents.uncensoredR18Mode = true
     contents.explicitUncensoredModel = null
     contents.inheritedUncensoredModel = false
+    contents.explicitDirective = !inherited
     return true
   }
   if (customLower === baseLower) {
@@ -975,6 +1037,7 @@ function applyModelDirective (contents, directive, { inherited = false } = {}) {
     contents.uncensoredR18Mode = false
     contents.explicitUncensoredModel = null
     contents.inheritedUncensoredModel = false
+    contents.explicitDirective = !inherited
     return true
   }
   require('../utils/geminiPrices').registerUncensoredModel(custom)
@@ -983,6 +1046,7 @@ function applyModelDirective (contents, directive, { inherited = false } = {}) {
   contents.directUncensored = true
   contents.explicitUncensoredModel = custom
   contents.inheritedUncensoredModel = !!inherited
+  contents.explicitDirective = !inherited
   if (/deckard|r-?18|uncensored-thinking/i.test(custom)) contents.uncensoredR18Mode = true
   return true
 }
@@ -998,45 +1062,75 @@ const HAND_OVER_R18_DECLARATION = prompts.tool('hand_over_r18', {
   }
 })
 
-const R18_PATTERN = /(?:^|[^a-z0-9])(?:r-?18|nsfw)(?:$|[^a-z0-9])|18禁|成人向け|アダルト|官能(?:小説|的)?|エロ(?:小説|ss|話|ネタ|画像|会話|台詞|セリフ|展開|描写|プレイ|ゲー|動画|本|漫画|同人)|えっち(?:な|しよ|して|しよう)|エッチ(?:な|しよ|して|しよう)|濡れ場|セックス|性行為|性交|交尾|中出し|射精|絶頂|オーガズム|オナニー|自慰|フェラ(?:チオ)?|パイズリ|手コキ|足コキ|素股|潮吹き|愛液|勃起|ちんこ|ちんぽ|チンポ|まんこ|マンコ|おまんこ|クリトリス|アナル|淫語|喘ぎ(?:声)?|凌辱|調教|輪姦|レイプ|催眠エロ|触手(?:責め|プレイ)|全裸|裸に|服を脱が|下着を脱/i
+const R18_PATTERN = /(?:^|[^a-z0-9])(?:r-?18|nsfw)(?:$|[^a-z0-9])|18禁|成人向け|アダルト|官能(?:小説|的)?|エロ(?:小説|ss|話|ネタ|画像|会話|台詞|セリフ|展開|描写|プレイ|ゲー|動画|本|漫画|同人)|えっち(?:な|しよ|して|しよう)|エッチ(?:な|しよ|して|しよう)|濡れ場|(?:肌|身体|体)を重ね|セックス|性行為|性交|交尾|中出し|射精|絶頂|オーガズム|オナニー|自慰|フェラ(?:チオ)?|パイズリ|手コキ|足コキ|素股|潮吹き|愛液|勃起|ちんこ|ちんぽ|チンポ|まんこ|マンコ|おまんこ|クリトリス|アナル|淫語|喘ぎ(?:声)?|凌辱|調教|輪姦|レイプ|催眠エロ|触手(?:責め|プレイ)|全裸|裸に|服を脱が|下着を脱/i
 function isR18Text (...texts) {
   return texts.some(t => typeof t === 'string' && R18_PATTERN.test(t))
 }
 
-// The words of R18_PATTERN that mean little else. The rest come up in ordinary talk too (絶頂期,
-// 全裸待機, 調教師, セックス・ピストルズ, 交尾期, news of a レイプ case, a ちんこ joke), so they count only
-// when sokudan also reads the request as one for adult writing.
-const EXPLICIT_R18_PATTERN = /(?:^|[^a-z0-9])(?:r-?18|nsfw)(?:$|[^a-z0-9])|18禁|成人向け|官能(?:小説|的)|エロ(?:小説|ss|話|画像|会話|台詞|セリフ|展開|描写|プレイ|動画|漫画|同人)|えっち(?:しよ|して|しよう)|エッチ(?:しよ|して|しよう)|濡れ場|性行為|性交|中出し|射精|オーガズム|オナニー|自慰|フェラ(?:チオ)?|パイズリ|手コキ|足コキ|素股|潮吹き|愛液|勃起|おまんこ|クリトリス|淫語|凌辱|輪姦|催眠エロ|触手(?:責め|プレイ)|服を脱が|下着を脱/i
+// Phrases that unmistakably ask the bot to write explicit adult fiction / scenes rather than merely
+// mentioning R18/NSFW terms in a joke, setting question, or video/game lookup.
+const EXPLICIT_R18_PATTERN = /(?:(?:^|[^a-z0-9])r-?18(?:$|[^a-z0-9])|18禁|成人向け|アダルト|エロ|官能|えっちな|エッチな)[\sの・]*(?:小説|ss|物語|お話|ストーリー|シナリオ|脚本|創作|官能小説|濡れ場|(?:シーン|場面|描写|展開|パート)(?:[をにへも]|と?して)?[^\n。！？!?]{0,12}(?:書いて|描いて|変えて|変更|して|入れて|お願い|作って))|官能小説|(?:濡れ場|性行為|性交|中出し|フェラ(?:チオ)?|パイズリ|手コキ|足コキ|素股|潮吹き|凌辱|輪姦|催眠エロ|触手(?:責め|プレイ))[\sの]*(?:小説|ss|物語|お話|シーン|場面|描写|展開)(?:[をにへもで]|お願い|書いて|描いて|変えて|して)?/i
 const isExplicitR18Text = (...texts) => texts.some(t => typeof t === 'string' && EXPLICIT_R18_PATTERN.test(t))
 
-// How sure sokudan has to be to send a request to the uncensored model on its own, without a word
-// of R18_PATTERN (SOKUDAN_R18_ROUTE_THRESHOLD, 0-1). Above the threshold that makes it say yes
-// (SOKUDAN_R18_THRESHOLD): that one also lets a word of R18_PATTERN count, and lets a refusal by
-// Gemini be handed over.
-const DEFAULT_R18_ROUTE_THRESHOLD = 0.7
+const CONTINUATION_REQUEST_PATTERN = /続き|続編|その先|その後|(?:もっと|さらに|そのまま|そこから)(?:激しく|濃く|詳しく|甘く|えっちに|エロく|奥まで)?\s*(?:書いて|描いて|続け|お願い|ちょうだい|見せて|聞かせて|[！!。…\s]*$)|書き直|別の展開/i
+const STORY_OR_SCENE_REQUEST_PATTERN = new RegExp(
+  `小説|ss|物語|お話|ストーリー|シナリオ|脚本|創作|ライトノベル|ラノベ|地の文|官能|濡れ場|(?:シーン|場面|展開|描写|パート)(?:[をにへも]|と?して)?[^\\n。！？!?]{0,12}(?:書いて|描いて|変えて|変更|して|入れて|足して|追加|続け|お願い|作って)|${CONTINUATION_REQUEST_PATTERN.source}`,
+  'i'
+)
+const LOOKUP_OR_META_QUESTION_PATTERN = /(?:動画|配信|アーカイブ|切り抜き|生放送|youtube|twitch|steam|実績|プレイ時間|レビュー|ウィッシュリスト|チャンネル|サーバー|ルール|イベント|フォーラム|スレッド|wiki|コマンド|モデル|設定)[^\n]{0,30}(?:教え|調べ|探し|どれ|いつ|どこ|誰|だれ|何|なに|なんの|どう|なぜ|なんで|いくら|ある|ありま|見せて|一覧|まとめ|おすすめ|オススメ|[?？])|(?:とは|ってなに|って何|どういう意味)[?？。！!\s]*$/i
+const IMAGE_GENERATION_REQUEST_PATTERN = /(?:画像|イラスト|絵|写真|アイコン|サムネ(?:イル)?)を?\s*(?:作って|描いて|生成|書いて|お願い|くれ|ちょうだい)|(?:絵|イラスト)を?描いて/i
+
+function isLookupOrMetaQuestion (text) {
+  const s = String(text || '')
+  return LOOKUP_OR_META_QUESTION_PATTERN.test(s) && !/小説|ss|物語|お話|シナリオ|脚本|官能小説|濡れ場/i.test(s)
+}
+
+function isImageGenerationRequest (text) {
+  const s = String(text || '')
+  return IMAGE_GENERATION_REQUEST_PATTERN.test(s) && !/小説|ss|物語|お話/i.test(s)
+}
+
+// How sure sokudan has to be to send a story/scene request to the uncensored model on its own,
+// without a word of R18_PATTERN (SOKUDAN_R18_ROUTE_THRESHOLD, 0-1).
+const DEFAULT_R18_ROUTE_THRESHOLD = 0.85
 function r18RouteThreshold () {
   const n = Number(process.env.SOKUDAN_R18_ROUTE_THRESHOLD)
   return process.env.SOKUDAN_R18_ROUTE_THRESHOLD && n > 0 && n <= 1 ? n : DEFAULT_R18_ROUTE_THRESHOLD
 }
 
 // Whether a request goes to the uncensored model before Gemini sees it (`route`, with why), and
-// whether it may be handed over if Gemini refuses or is blocked (`maybe`). Going first is only a
-// shortcut: Gemini can still hand over itself (hand_over_r18), so this errs on the side of not.
-// `decision`: sokudan's reading of the request and the conversation it replies to, or null. The
-// replied-to conversation counts only together with the request: replying in a thread where
-// something R18 was once said does not make a question about a video one.
+// whether it may be handed over if Gemini refuses or is blocked (`maybe`). Going first is reserved
+// strictly for explicit R18 creative writing requests (or continuations of one): ordinary jokes,
+// banter, image requests, and video/game/server lookups always go to Gemini first.
 function r18Route ({ request, referenced = null, decision = null }) {
+  const req = String(request || '')
   const ref = typeof referenced === 'string' ? referenced : referenced?.text
+  const nonChatIntent = Boolean(decision?.intent && decision.intent !== 'chat')
+  const lookupAsk = isLookupOrMetaQuestion(req)
+  const imageAsk = isImageGenerationRequest(req)
+  const isCont = CONTINUATION_REQUEST_PATTERN.test(req)
+  const wantsStory = typeof decision?.isStory === 'boolean'
+    ? (decision.isStory || isCont)
+    : STORY_OR_SCENE_REQUEST_PATTERN.test(req)
   const sokudanSays = !!decision?.isR18
   const sure = Number.isFinite(decision?.r18Prob) && decision.r18Prob >= r18RouteThreshold()
   let why = null
-  if (isExplicitR18Text(request)) why = 'R18 words in the request'
-  else if (sokudanSays && isR18Text(request, ref)) why = `R18 words and sokudan (p=${decision.r18Prob.toFixed(2)})`
-  else if (sure) why = `sokudan (p=${decision.r18Prob.toFixed(2)})`
-  // maybe: true when something says it is, false when sokudan read it and says not, null when
-  // nothing is known (no sokudan, no word): a block is then handed over as before.
-  const maybe = (!!why || sokudanSays || isR18Text(request) || (!decision && isExplicitR18Text(ref))) ? true : (decision ? false : null)
-  return { route: !!why, why, maybe }
+  if (!nonChatIntent && !lookupAsk && !imageAsk) {
+    if (isExplicitR18Text(req)) why = 'explicit R18 writing request'
+    else if (wantsStory && sokudanSays && (isR18Text(req) || (isCont && isR18Text(ref)))) why = `R18 story and sokudan (p=${decision.r18Prob.toFixed(2)})`
+    else if (wantsStory && sure) why = `sokudan R18 story (p=${decision.r18Prob.toFixed(2)})`
+  }
+  let maybe
+  if (nonChatIntent || lookupAsk) {
+    maybe = false
+  } else if (why || sokudanSays) {
+    maybe = true
+  } else if (decision) {
+    maybe = false
+  } else {
+    maybe = (isR18Text(req) || (isCont && isExplicitR18Text(ref))) ? true : null
+  }
+  return { route: !!why, why, maybe, disallowHandover: nonChatIntent || lookupAsk }
 }
 
 const REFUSAL_REPLY_PATTERN = /(?:性的|成人向け|アダルト|r-?18|18禁|露骨な描写|不適切|ポリシー|ガイドライン|安全上の理由)[\s\S]{0,60}(?:お応えでき|答えられ|書けま|作成でき|対応でき|控えさせて|お断り)|(?:お応えでき|答えられ|書けま|作成でき|対応でき)(?:ません|かねます)[\s\S]{0,40}(?:性的|成人向け|アダルト|r-?18|18禁|露骨|ポリシー|ガイドライン)|(?:朝の光|朝日|翌朝)[\s\S]{0,80}乱れたシーツ|乱れたシーツ[\s\S]{0,80}(?:朝の光|朝日|翌朝)/i
@@ -1049,19 +1143,19 @@ function isRefusalReply (text) {
 // about something dangerous or hateful.
 const SEXUAL_REFUSAL_PATTERN = /(?:性的|成人向け|アダルト|r-?18|18禁|露骨な描写)[\s\S]{0,60}(?:お応えでき|答えられ|書けま|作成でき|対応でき|控えさせて|お断り)|(?:お応えでき|答えられ|書けま|作成でき|対応でき)(?:ません|かねます)[\s\S]{0,40}(?:性的|成人向け|アダルト|r-?18|18禁|露骨)|(?:朝の光|朝日|翌朝)[\s\S]{0,80}乱れたシーツ|乱れたシーツ[\s\S]{0,80}(?:朝の光|朝日|翌朝)/i
 
-// What kind of refusal a reply is: 'sexual' (by SEXUAL_REFUSAL_PATTERN, or sokudan, whose question
-// asks only about that), 'other' (any other refusal of REFUSAL_REPLY_PATTERN), or null.
-async function refusalKind (text) {
+// What kind of refusal a reply is: 'sexual' (by SEXUAL_REFUSAL_PATTERN, or sokudan when checking a
+// story / R18 candidate), 'other' (any other refusal of REFUSAL_REPLY_PATTERN), or null.
+async function refusalKind (text, { checkSokudan = true, requestText = '' } = {}) {
   if (typeof text !== 'string') return null
   if (SEXUAL_REFUSAL_PATTERN.test(text)) return 'sexual'
-  if (sokudan.isUsable() && (await sokudan.detectRefusalReply(text)).refused) return 'sexual'
+  if (checkSokudan && sokudan.isUsable() && (await sokudan.detectRefusalReply(text, requestText)).refused) return 'sexual'
   return isRefusalReply(text) ? 'other' : null
 }
 
-async function isRefusalReplyAsync (text) {
+async function isRefusalReplyAsync (text, requestText = '') {
   if (isRefusalReply(text)) return true
   if (!sokudan.isUsable()) return false
-  const res = await sokudan.detectRefusalReply(text)
+  const res = await sokudan.detectRefusalReply(text, requestText)
   return !!res?.refused
 }
 
@@ -2138,7 +2232,7 @@ async function runAgent (contents, tools, submits = SUBMIT_DECLARATIONS) {
   // Not offered again once the stronger model or the uncensored fallback took over this conversation.
   const offered = [
     ...(deepModel() && !contents.deepRefused && !contents.uncensored && !contents.uncensoredFailed ? [THINK_DEEPER_DECLARATION] : []),
-    ...(allowUncensored && isUncensoredConfigured() && !contents.uncensored && !contents.uncensoredFailed ? [HAND_OVER_R18_DECLARATION] : [])
+    ...(allowUncensored && !contents.isEdit && !contents.disallowUncensoredHandover && isUncensoredConfigured() && !contents.uncensored && !contents.uncensoredFailed ? [HAND_OVER_R18_DECLARATION] : [])
   ]
   const declarationsFor = () => [
     ...tools.declarations,
@@ -2189,7 +2283,7 @@ async function runAgent (contents, tools, submits = SUBMIT_DECLARATIONS) {
       }
       // Only a request that may be one for adult writing: a block for something else (copyright,
       // personal data, dangerous content) is not answered by the uncensored model instead.
-      if (allowUncensored && !contents.uncensored && e.blocked && R18_BLOCKS.includes(e.blocked) && contents.r18Maybe !== false && isUncensoredConfigured() && !contents.uncensoredFailed) {
+      if (allowUncensored && !contents.disallowUncensoredHandover && !contents.uncensored && e.blocked && R18_BLOCKS.includes(e.blocked) && contents.r18Maybe !== false && isUncensoredConfigured() && !contents.uncensoredFailed) {
         const failed = contents.deep ? deepModel() : replyModel(contents)
         const notes = extractLookupNotes(contents.slice(start))
         if (notes) contents.lookupNotes = notes
@@ -2224,7 +2318,7 @@ async function runAgent (contents, tools, submits = SUBMIT_DECLARATIONS) {
       }
       throw e
     }
-    const r18HandOver = allowUncensored && !contents.uncensored && isUncensoredConfigured() && !contents.uncensoredFailed && content.parts.some(p => p.functionCall?.name === HAND_OVER_R18_DECLARATION.name)
+    const r18HandOver = allowUncensored && !contents.disallowUncensoredHandover && !contents.uncensored && isUncensoredConfigured() && !contents.uncensoredFailed && content.parts.some(p => p.functionCall?.name === HAND_OVER_R18_DECLARATION.name)
     if (r18HandOver) {
       const fromModel = contents.deep ? deepModel() : replyModel(contents)
       const handOverCall = content.parts.find(p => p.functionCall?.name === HAND_OVER_R18_DECLARATION.name)?.functionCall
@@ -2262,8 +2356,10 @@ async function runAgent (contents, tools, submits = SUBMIT_DECLARATIONS) {
     const submitted = calls.find(c => submits.some(d => d.name === c.name))
     // A refusal is handed over when it was over sexual content, or, for another refusal, when the
     // request is known to be one for adult writing: one turned down as dangerous or hateful stays so.
-    const refusal = submitted && allowUncensored && !contents.uncensored && isUncensoredConfigured() && !contents.uncensoredFailed && submitted.name === SUBMIT_CHAT_DECLARATION.name
-      ? await refusalKind(submitted.args?.text)
+    const storyCandidate = asksForStory(contents) === true || (asksForStory(contents) !== false && STORY_OR_SCENE_REQUEST_PATTERN.test(String(contents.requestText || '')))
+    const checkSokudanRefusal = contents.r18Maybe === true || storyCandidate
+    const refusal = submitted && allowUncensored && !contents.disallowUncensoredHandover && !contents.uncensored && isUncensoredConfigured() && !contents.uncensoredFailed && submitted.name === SUBMIT_CHAT_DECLARATION.name
+      ? await refusalKind(submitted.args?.text, { checkSokudan: checkSokudanRefusal, requestText: contents.requestText || '' })
       : null
     if (refusal === 'sexual' || (refusal === 'other' && contents.r18Maybe === true)) {
       const fromModel = contents.deep ? deepModel() : replyModel(contents)
@@ -2382,7 +2478,7 @@ async function draft ({ request, referenced, recent = [], channelName, channelID
   if (parsed.directive) {
     request = parsed.text || (!referenced && (images.length || attachedPics.length) ? '（添付された画像を見て返事や作成をしてください）' : '（返信先のメッセージに答えてください）')
   }
-  const threadDirective = !parsed.directive ? extractReferencedDirective(referenced) : null
+  const rawReferenced = referenced
   if (referenced && (typeof referenced.text === 'string' || typeof referenced.othersText === 'string')) {
     referenced = {
       ...referenced,
@@ -2443,8 +2539,10 @@ async function draft ({ request, referenced, recent = [], channelName, channelID
       : null
   }
   if (decision) conversation.contents.sokudanDecision = decision
+  const threadDirective = !parsed.directive ? resolveReferencedDirective(request, rawReferenced, decision) : null
   const r18 = r18Route({ request, referenced, decision })
   conversation.contents.r18Maybe = r18.maybe
+  conversation.contents.disallowUncensoredHandover = !!r18.disallowHandover
   if (parsed.directive && applyModelDirective(conversation.contents, parsed.directive)) {
     const chosen = conversation.contents.uncensored
       ? uncensoredModel(conversation.contents)
@@ -2506,6 +2604,8 @@ async function revise (conversation, correction) {
     if (decision) conversation.contents.sokudanDecision = decision
     const r18 = r18Route({ request: correction, decision })
     if (r18.maybe) conversation.contents.r18Maybe = true
+    if (r18.disallowHandover) conversation.contents.disallowUncensoredHandover = true
+    else if (r18.maybe) conversation.contents.disallowUncensoredHandover = false
     if (r18.route) {
       conversation.contents.deep = false
       conversation.contents.uncensored = true
@@ -2525,4 +2625,4 @@ async function revise (conversation, correction) {
   return check(conversation, await runAgent(conversation.contents, conversation.tools, conversation.submits))
 }
 
-module.exports = { THINKING_LEVELS, SERVICE_TIERS, defaultTaskConfig, resolveTaskConfig, replyTimeoutMs, flexUsable, SAFETY_SETTINGS, STRICT_SAFETY_SETTINGS, withSafetySettings, THINK_DEEPER_DECLARATION, HAND_OVER_R18_DECLARATION, isR18Text, isExplicitR18Text, r18Route, isRefusalReply, isRefusalReplyAsync, refusalKind, STORY_REQUEST_PATTERN, adaptiveThinkingLevel, compactContentsForWire, compressToolResult, deepModel, DEFAULT_UNCENSORED_MODEL, normalizeLocalModelId, uncensoredModel, uncensoredR18Model, parseModelDirective, extractReferencedDirective, rememberThreadModel, isUncensoredDirective, applyModelDirective, isLocalUncensoredUrl, uncensoredEndpoint, isUncensoredConfigured, isUncensoredUsable, checkUncensoredConnection, startUncensoredCheck, uncensoredState, ensureUncensoredModelLoaded, cleanUncensoredContent, compactUncensoredText, extractUncensoredAnswer, UNCENSORED_SAMPLING_PARAMS, readUncensoredResponse, callUncensored, REPLY_LENGTHS, DEFAULT_REPLY_LENGTH, PERSONAS, thinkingConfig, cachedPrefix, caches, purgedFor, promptVersion, lightModel, extractModel, DEFAULT_EXTRACT_MODEL, draft, revise, MAX_STEPS, isConfigured, toScheduledEvent, callGemini, geminiRequest, geminiSend, geminiStream, retryTimer, DEFAULT_GEMINI_MODEL, ENTITY_TYPES, GeminiError }
+module.exports = { THINKING_LEVELS, SERVICE_TIERS, defaultTaskConfig, resolveTaskConfig, replyTimeoutMs, flexUsable, SAFETY_SETTINGS, STRICT_SAFETY_SETTINGS, withSafetySettings, THINK_DEEPER_DECLARATION, HAND_OVER_R18_DECLARATION, isR18Text, isExplicitR18Text, r18Route, isRefusalReply, isRefusalReplyAsync, refusalKind, STORY_REQUEST_PATTERN, adaptiveThinkingLevel, compactContentsForWire, compressToolResult, deepModel, DEFAULT_UNCENSORED_MODEL, normalizeLocalModelId, uncensoredModel, uncensoredR18Model, parseModelDirective, extractReferencedDirective, resolveReferencedDirective, rememberThreadModel, isUncensoredDirective, applyModelDirective, isLocalUncensoredUrl, uncensoredEndpoint, isUncensoredConfigured, isUncensoredUsable, checkUncensoredConnection, startUncensoredCheck, uncensoredState, ensureUncensoredModelLoaded, cleanUncensoredContent, compactUncensoredText, extractUncensoredAnswer, UNCENSORED_SAMPLING_PARAMS, readUncensoredResponse, callUncensored, REPLY_LENGTHS, DEFAULT_REPLY_LENGTH, PERSONAS, thinkingConfig, cachedPrefix, caches, purgedFor, promptVersion, lightModel, extractModel, DEFAULT_EXTRACT_MODEL, draft, revise, MAX_STEPS, isConfigured, toScheduledEvent, callGemini, geminiRequest, geminiSend, geminiStream, retryTimer, DEFAULT_GEMINI_MODEL, ENTITY_TYPES, GeminiError }
