@@ -43,6 +43,7 @@ const TEXT = {
       '・**質問・雑談**: `@ロボポリス 最近の配信でおすすめは？`（BOT の返信にメンション付きで返信すると会話を継続）',
       '・**予定イベント作成**: `@ロボポリス 11/3 19時から交流会`（依頼者と BOT に `イベントの管理` 権限が必要）',
       '・**フォーラム投稿作成**: `@ロボポリス #募集 に交流会の募集を立てて`（カバー画像の切り抜き・AI生成・指示編集にも対応）',
+      '・**チャンネルへの書き込み**: `@ロボポリス #お知らせ に「今夜21時から配信」って書いて`（モデレーター以上のみ）',
       '・**作成後の修正**: BOT の完了メッセージやフォーラム投稿に返信して `@ロボポリス 開始を20時に`'
     ].join('\n'),
     assistantConfig: [
@@ -97,6 +98,7 @@ const TEXT = {
       '・**Chat & Q&A**: `@RoboPolice What streams do you recommend?` (reply to the bot with a mention to continue)',
       '・**Scheduled events**: `@RoboPolice Community meetup on Nov 3 at 19:00` (needs `Manage Events` for you and the bot)',
       '・**Forum posts**: `@RoboPolice Post a recruitment thread in #lfg` (supports cropping, AI cover generation, and image edits)',
+      '・**Channel messages**: `@RoboPolice Write "Stream starts at 9pm" in #announcements` (moderators and above only)',
       '・**Edit after posting**: reply to the bot\'s confirmation or forum post with `@RoboPolice move start to 20:00`'
     ].join('\n'),
     assistantConfig: [

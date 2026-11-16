@@ -1,5 +1,6 @@
 const crypto = require('crypto')
 const { SUBMIT_FORUM_DECLARATION, IMAGE_INSTRUCTION_PROPERTY, toForumPost, imageUrlsOf, imageInstructionOf, MAX_IMAGE_CANDIDATES } = require('./forumPost')
+const { SUBMIT_CHANNEL_POST_DECLARATION, toChannelPost } = require('./channelPost')
 const { withoutCharCount } = require('../utils/textClean')
 const { wrap } = require('../utils/untrusted')
 const { urlsIn } = require('../utils/linkSafety')
@@ -67,7 +68,7 @@ const MAX_CHAT_REPLY = 12000
 
 const SUBMIT_CHAT_DECLARATION = {
   name: 'submit_chat_reply',
-  description: 'イベントやフォーラム投稿の作成・修正を頼まれていない話しかけ（あいさつ・雑談・質問・相談など）に返事をするとき、調べ終わったら必ず最後に1回だけ呼ぶ。',
+  description: 'イベント・フォーラム投稿・チャンネルへの書き込みの作成・修正を頼まれていない話しかけ（あいさつ・雑談・質問・相談など）に返事をするとき、調べ終わったら必ず最後に1回だけ呼ぶ。',
   parameters: {
     type: 'OBJECT',
     properties: {
@@ -77,7 +78,11 @@ const SUBMIT_CHAT_DECLARATION = {
   }
 }
 
-const SUBMIT_DECLARATIONS = [SUBMIT_EVENT_DECLARATION, SUBMIT_FORUM_DECLARATION, SUBMIT_CHAT_DECLARATION]
+const SUBMIT_DECLARATIONS = [SUBMIT_EVENT_DECLARATION, SUBMIT_FORUM_DECLARATION, SUBMIT_CHANNEL_POST_DECLARATION, SUBMIT_CHAT_DECLARATION]
+
+// The submit tool for each kind of thing the bot makes, which is the only one offered (with the
+// chat reply) when something it made is being changed.
+const SUBMIT_FOR_KIND = { event: SUBMIT_EVENT_DECLARATION, forum: SUBMIT_FORUM_DECLARATION, message: SUBMIT_CHANNEL_POST_DECLARATION }
 
 // How varied the answers are (GEMINI_TEMPERATURE, 0-2). Chat replies want some variety; drafts
 // are checked field by field (toScheduledEvent, toForumPost) whatever the model writes.
@@ -113,7 +118,7 @@ function formatNow (now) {
   }).format(now)
 }
 
-const EDIT_LABELS = { event: 'イベント', forum: 'フォーラム投稿' }
+const EDIT_LABELS = { event: 'イベント', forum: 'フォーラム投稿', message: 'チャンネルへの書き込み' }
 
 // How long replies are, set per server with /replylength. long is how replies were before they were
 // fitted to what was said, and the default. The rules go with each request (not the cached system
@@ -170,7 +175,7 @@ function buildPrompt ({ request, referenced, recent = [], channelName, channelID
   if (recent.length) lines.push('', '## 依頼されたチャンネルの最近の会話（依頼に関係しそうなものだけ。古い順）', wrap('recent', recent.join('\n')))
   if (forum) lines.push('', `## 投稿先に指定されたフォーラム\n${forum.id}: ${forum.name}（フォーラムに投稿する場合はここに投稿する）`)
   if (edit) {
-    const submit = edit.kind === 'event' ? SUBMIT_EVENT_DECLARATION.name : SUBMIT_FORUM_DECLARATION.name
+    const submit = SUBMIT_FOR_KIND[edit.kind].name
     lines.push('', `## 修正する${EDIT_LABELS[edit.kind]}（BOT が作成済み）`,
       `依頼は、すでに作成したこの${EDIT_LABELS[edit.kind]}の修正です。依頼された点だけを変え、それ以外の項目は下の現在の値のまま ${submit} で提出してください。`,
       '画像は依頼者がボタンで選ぶので、image_urls は依頼メッセージで新しい画像を指定されたときだけ入れてください。画像の変更や差し替えを指示されたときは image_instruction に入れてください。',
@@ -2278,6 +2283,7 @@ function toScheduledEvent (draft, guild, now, { keepStart = null } = {}) {
 }
 
 // Returns { kind: 'event', event, endGuessed }, { kind: 'forum', post, tagNames, truncated },
+// { kind: 'message', message, truncated } for a message written into a channel,
 // { kind: 'chat', text } for a reply to someone who was just talking, or { error } with a reason to
 // show the requester.
 // Every result carries `conversation`, which revise() continues.
@@ -2298,6 +2304,11 @@ async function check (conversation, { name, args, calls = [] }) {
     // A forum named in the request wins over whatever the model picked.
     const result = await toForumPost(forum ? { ...args, channel_id: forum.id } : args, guild, member)
     return { ...(result.error ? result : { kind: 'forum', ...result }), conversation }
+  }
+  if (name === SUBMIT_CHANNEL_POST_DECLARATION.name) {
+    // A message being changed stays in its channel.
+    const result = toChannelPost(args, guild, member, { keepChannel: edit?.kind === 'message' ? edit.current.channel_id : null })
+    return { ...(result.error ? result : { kind: 'message', ...result }), conversation }
   }
   if (name === null && !args.found) return { error: args.reason, conversation }
   const result = toScheduledEvent(args, guild, now, { keepStart: edit ? new Date(edit.current.start) : null })
@@ -2356,7 +2367,7 @@ async function draft ({ request, referenced, recent = [], channelName, channelID
     forum: edit?.kind === 'forum' ? { id: edit.current.channel_id } : forum,
     edit,
     submits: edit
-      ? [edit.kind === 'event' ? SUBMIT_EVENT_DECLARATION : SUBMIT_FORUM_DECLARATION, SUBMIT_CHAT_DECLARATION]
+      ? [SUBMIT_FOR_KIND[edit.kind], SUBMIT_CHAT_DECLARATION]
       : SUBMIT_DECLARATIONS,
     now
   }

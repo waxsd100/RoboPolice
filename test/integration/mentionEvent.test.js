@@ -22,7 +22,9 @@ const guild = createGuild({
     { id: '202', name: 'staff', type: 0, readers: ['BOT'] },
     { id: '204', name: 'ボイス', type: 2, readers: [REQUESTER, 'BOT'] },
     { id: '206', name: '募集', type: 15, posters: [REQUESTER, 'BOT'] },
-    { id: '207', name: '運営連絡', type: 15, posters: ['BOT'] }
+    { id: '207', name: '運営連絡', type: 15, posters: ['BOT'] },
+    { id: '208', name: 'お知らせ', type: 5, posters: [REQUESTER, 'BOT'] },
+    { id: '209', name: '運営室', type: 0, readers: [REQUESTER], posters: ['BOT'] }
   ]
 })
 // The role Discord creates for the bot, and an unrelated role.
@@ -342,6 +344,91 @@ describe('mention → event / forum post (integration)', () => {
     await done
     assert.equal(replies[0].state.content, '⚠️ **作成できませんでした**\n依頼者が <#207> に投稿する権限を持っていません。')
     assert.equal(discord.some(c => c.method === 'POST'), false)
+  })
+
+  describe('channel message: "#channel にこう書いて"', () => {
+    const MODERATOR = () => createMember({ id: REQUESTER, permissions: ['manageMessages'] })
+
+    test('a moderator gets a preview and the message is written with mentions disabled', async () => {
+      const { channel, replies } = createChannel()
+      const requests = installGemini([[call('submit_channel_message_draft', { found: true, channel_id: '208', content: '@everyone 今夜21時から配信します！' })]])
+      const done = mentionEvent.handle(mention(channel, '<@BOT> <#208> に「今夜21時から配信します！」って書いて', { member: MODERATOR() }))
+      const [reply] = replies
+      assert.deepEqual((await waitForButtons(reply, '書き込む')).map(b => b.label), ['書き込む', '内容を修正', '画像を指示で変更', 'キャンセル', '画像: AIで作成', '画像: なし'])
+      assert.ok(requests[0].body.tools[0].functionDeclarations.some(d => d.name === 'submit_channel_message_draft'))
+      const [preview] = reply.state.embeds
+      assert.equal(preview.title, 'チャンネルへの書き込み')
+      assert.equal(preview.description, '@everyone 今夜21時から配信します！')
+      assert.equal(preview.fields.find(f => f.name === '書き込み先').value, '<#208>')
+      assert.equal(preview.fields.find(f => f.name === '画像').value, 'なし')
+
+      await press(reply, '書き込む')
+      await done
+      const post = discord.find(c => c.method === 'POST')
+      assert.equal(post.url, '/channels/208/messages')
+      assert.deepEqual(post.body, { content: '@everyone 今夜21時から配信します！', allowed_mentions: { parse: [] } })
+      assert.equal(post.files, undefined)
+      assert.equal(reply.state.content, `<#208> に書き込みました: https://discord.com/channels/100/208/MSG1\n${EDIT_HINT}`)
+    })
+
+    test('someone below moderator is refused, even with Manage Events', async () => {
+      const { channel, replies } = createChannel()
+      installGemini([[call('submit_channel_message_draft', { found: true, channel_id: '208', content: 'こんにちは' })]])
+      await mentionEvent.handle(mention(channel, '<@BOT> <#208> にこんにちはって書いて'))
+      assert.match(replies[0].state.content, /^⚠️ \*\*作成できませんでした\*\*\n.*モデレーター以上/)
+      assert.equal(discord.some(c => c.method === 'POST'), false)
+    })
+
+    test('a channel the requester cannot write in is refused', async () => {
+      const { channel, replies } = createChannel()
+      installGemini([[call('submit_channel_message_draft', { found: true, channel_id: '209', content: '連絡です' })]])
+      await mentionEvent.handle(mention(channel, '<@BOT> <#209> に連絡ですって書いて', { member: MODERATOR() }))
+      assert.equal(replies[0].state.content, '⚠️ **作成できませんでした**\n依頼者が <#209> に書き込む権限を持っていません。')
+      assert.equal(discord.some(c => c.method === 'POST'), false)
+    })
+
+    test('replying to "書き込みました" edits the message in place; it stays in its channel', async () => {
+      MESSAGES['201/610'] = { content: `<#208> に書き込みました: https://discord.com/channels/100/208/611\n${EDIT_HINT}`, author: { id: 'BOT', username: 'bot' } }
+      MESSAGES['208/611'] = { content: '今夜21時から配信します！', author: { id: 'BOT', username: 'bot' } }
+      try {
+        const { channel, replies } = createChannel()
+        const requests = installGemini([body => {
+          assert.match(body.contents[0].parts[0].text, /## 修正するチャンネルへの書き込み（BOT が作成済み）[\s\S]*"content": "今夜21時から配信します！"/)
+          return [call('submit_channel_message_draft', { found: true, channel_id: '201', content: '今夜22時から配信します！' })]
+        }])
+        const done = mentionEvent.handle(mention(channel, '<@BOT> 22時に直して', { member: MODERATOR(), messageReference: { messageID: '610', channelID: '201' } }))
+        const [reply] = replies
+        await waitForButtons(reply, '更新する')
+        const declared = requests[0].body.tools[0].functionDeclarations.map(d => d.name)
+        assert.ok(declared.includes('submit_channel_message_draft') && !declared.includes('submit_event_draft'), 'only the same kind can be submitted')
+        const fields = reply.state.embeds[0].fields
+        assert.equal(fields.find(f => f.name === '書き込み先').value, '<#208>')
+        assert.equal(fields.find(f => f.name === '変更する項目').value, '本文')
+        await press(reply, '更新する')
+        await done
+        assert.equal(discord.filter(c => c.method === 'POST').length, 0, 'nothing new is written')
+        const patch = discord.find(c => c.method === 'PATCH')
+        assert.equal(patch.url, '/channels/208/messages/611')
+        assert.deepEqual(patch.body, { content: '今夜22時から配信します！', allowed_mentions: { parse: [] } })
+        assert.equal(reply.state.content, `書き込みを更新しました: https://discord.com/channels/100/208/611\n${EDIT_HINT}`)
+      } finally {
+        delete MESSAGES['201/610']
+        delete MESSAGES['208/611']
+      }
+    })
+
+    test('editing a written message is refused below moderator', async () => {
+      MESSAGES['201/610'] = { content: `<#208> に書き込みました: https://discord.com/channels/100/208/611\n${EDIT_HINT}`, author: { id: 'BOT', username: 'bot' } }
+      try {
+        const { channel, replies } = createChannel()
+        const requests = installGemini([])
+        await mentionEvent.handle(mention(channel, '<@BOT> 22時に直して', { messageReference: { messageID: '610', channelID: '201' } }))
+        assert.match(replies[0].state.content, /モデレーター以上/)
+        assert.equal(requests.length, 0)
+      } finally {
+        delete MESSAGES['201/610']
+      }
+    })
   })
 
   test('内容を修正: a typed correction goes back to the model and a new preview replaces the old one', async () => {
@@ -2010,7 +2097,7 @@ describe('mention → event / forum post (integration)', () => {
     test('asks for content when the mention is empty', async () => {
       const { channel, replies } = createChannel()
       await mentionEvent.handle(mention(channel, '<@!BOT>'))
-      assert.match(replies[0].state.content, /話したいことか、イベントやフォーラム投稿にしたい内容/)
+      assert.match(replies[0].state.content, /話したいことか、イベント・フォーラム投稿・チャンネルへの書き込みにしたい内容/)
     })
 
     test('logs the user request and bot response to mentionLogs store', async () => {

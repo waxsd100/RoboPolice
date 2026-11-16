@@ -70,6 +70,7 @@ function installBot ({ guilds = [], messages = {}, scheduledEvents = [], forums 
         if (method === 'GET' && forum) return { id: forum[1], type: 15, ...forums[forum[1]] }
         if (method === 'GET') return scheduledEvents
         if (url.endsWith('/threads')) return { id: 'THREAD1', ...body }
+        if (method === 'POST' && url.endsWith('/messages')) return { id: 'MSG1', ...body }
         return { id: 'EVENT1', ...body }
       }
     }
@@ -846,10 +847,10 @@ function installMentionLogStore (logs = []) {
     .slice()
     .reverse()
     .slice(0, limit)
-  store.findPostCreator = async (guildID, threadID) => {
-    if (!guildID || !threadID) return null
-    const needle = `/channels/${guildID}/${threadID}`
-    const hit = logs.find(r => r.guild_id === guildID && r.kind === 'forum' && String(r.response || '').includes(needle))
+  store.findPostCreator = async (guildID, path, kind = 'forum') => {
+    if (!guildID || !path) return null
+    const needle = `/channels/${guildID}/${path}`
+    const hit = logs.find(r => r.guild_id === guildID && r.kind === kind && String(r.response || '').includes(needle))
     return hit?.user_id || null
   }
   return logs

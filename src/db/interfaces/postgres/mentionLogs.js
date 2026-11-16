@@ -69,14 +69,16 @@ async function getMentionLogs (guildID, { limit = 50, userID = null } = {}) {
   return res.rows
 }
 
-async function findPostCreator (guildID, threadID) {
-  if (!guildID || !threadID) return null
+// Who asked the bot to make what is at `path` under /channels/<guild>/: a forum post's thread ID,
+// or "channelID/messageID" for a message it wrote into a channel (kind 'message').
+async function findPostCreator (guildID, path, kind = 'forum') {
+  if (!guildID || !path) return null
   try {
     const { rows } = await pool.query(
       `SELECT user_id FROM mention_logs
-       WHERE guild_id = $1 AND kind = 'forum' AND strpos(response, '/channels/' || $1 || '/' || $2) > 0
+       WHERE guild_id = $1 AND kind = $3 AND strpos(response, '/channels/' || $1 || '/' || $2) > 0
        ORDER BY id ASC LIMIT 1`,
-      [guildID, threadID]
+      [guildID, path, kind]
     )
     return rows[0]?.user_id || null
   } catch (e) {
