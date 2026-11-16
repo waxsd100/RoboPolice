@@ -1,7 +1,7 @@
 const Eris = require('eris')
 const { v4: uuidv4 } = require('uuid')
 const { draft, revise, isConfigured, isUncensoredUsable, isUncensoredDirective, rememberThreadModel, r18Route, STORY_REQUEST_PATTERN, ENTITY_TYPES } = require('./eventDrafter')
-const { createTools, describeServer, worthSearching, withServerEmojis, sharedOwnerEmojis, withServerChannels, channelTheme, SHORT_TOPIC_PROMPT, StopDrafting } = require('./eventTools')
+const { createTools, takeImageRequests, describeServer, worthSearching, withServerEmojis, sharedOwnerEmojis, withServerChannels, channelTheme, SHORT_TOPIC_PROMPT, StopDrafting } = require('./eventTools')
 const { embedQuery } = require('../utils/embeddings')
 const sokudan = require('../utils/sokudan')
 const { withLinkCards } = require('../utils/linkCards')
@@ -431,6 +431,12 @@ const KINDS = {
 
 // Edits the reply. With `files` ([{ filename, file }], or null to remove all) the edit goes through
 // the REST API directly: the pinned Eris cannot attach files when editing a message.
+function isAgeRestricted (channel, guild) {
+  if (channel?.nsfw) return true
+  const parent = channel?.parentID && (guild?.channels?.get(channel.parentID) || global.bot.getChannel?.(channel.parentID))
+  return [10, 11, 12].includes(channel?.type) && !!parent?.nsfw
+}
+
 const imageExtension = mimeType => ({ 'image/jpeg': 'jpg', 'image/webp': 'webp', 'image/gif': 'gif' })[mimeType] || 'png'
 
 async function editReply (reply, payload, files) {
@@ -634,6 +640,9 @@ async function handle (message) {
       const threadImages = edit ? [] : [...new Set([...attached, ...embedded, ...(referenced?.images || [])])]
       // What a picture asked for can be made from (generate_image).
       tools.sourceImages = threadImages
+      // Adult pictures only where the server allows the uncensored model and the channel (or the
+      // thread's channel) is age-restricted, as Discord requires of adult content.
+      tools.adultImages = allowUncensored && isAgeRestricted(message.channel, guild)
       const pictures = directR18
         ? await attachedPictures(threadImages).catch(() => [])
         : await picturesFor([request, referenced?.text], guild, threadImages, { extraEmojis }).catch(() => [])
@@ -652,6 +661,7 @@ async function handle (message) {
         thinking: replyThinking || null,
         tier: aiModels?.reply?.tier || null,
         decision,
+        adultImages: tools.adultImages,
         channelName: message.channel.name,
         channelID: message.channel.id,
         server,
@@ -677,6 +687,17 @@ async function handle (message) {
             // Rewritten to read less like AI-made Japanese (replyPolish.js), but not what the
             // stronger model or the uncensored fallback wrote.
             if (!result.conversation?.contents?.deep && !result.conversation?.contents?.uncensored) result = { ...result, text: await polish(result.text, { guildID: guild.id }) }
+            // The uncensored text model asks for pictures with a line in its reply (it has no tools
+            // on its short path): drawn by generate_image, as an adult picture.
+            if (result.conversation?.contents?.uncensored) {
+              const asked = takeImageRequests(result.text)
+              const notes = []
+              for (const tags of tools.adultImages ? asked.tags : []) {
+                const made = await tools.call('generate_image', { description: tags, tags_en: tags, adult: true })
+                if (made.error) notes.push(`（画像は作れませんでした: ${made.error}）`)
+              }
+              result = { ...result, text: [asked.text, ...notes].filter(Boolean).join('\n') }
+            }
             const { content, embeds } = await withLinkCards(withServerChannels(withServerEmojis(checkedLinks(result, guild), guild, extraEmojis), guild, message.member))
             outcome = { kind: 'chat', response: content }
             const chunks = splitChatMessages(content, debugFooter ? tokenFooter(usage) : '')

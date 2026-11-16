@@ -548,6 +548,112 @@ describe('mention → event / forum post (integration)', () => {
     assert.deepEqual(reply.state.files[0].file, made)
   })
 
+  test('image: adult pictures are drawn by the uncensored image model, only in age-restricted channels and never of a child', async (t) => {
+    t.mock.method(global.logger, 'info', () => {})
+    t.mock.method(global.logger, 'warn', () => {})
+    const { channel, replies } = createChannel()
+    const made = await sharp({ create: { width: 32, height: 32, channels: 3, background: '#cc3366' } }).png().toBuffer()
+    process.env.OWNER_GUILD_IDS = channel.guild.id
+    process.env.UNCENSORED_API_URL = 'https://gemma-heretic-12345-an.a.run.app/v1'
+    process.env.UNCENSORED_IMAGE_API_URL = 'https://imagegen-12345-an.a.run.app'
+    process.env.UNCENSORED_IMAGE_API_KEY = 'img-key'
+    t.after(() => {
+      for (const k of ['OWNER_GUILD_IDS', 'UNCENSORED_API_URL', 'UNCENSORED_IMAGE_API_URL', 'UNCENSORED_IMAGE_API_KEY']) delete process.env[k]
+      channel.nsfw = false
+    })
+    let turns = []
+    let uncensoredText = ''
+    const imageCalls = []
+    const geminiImage = []
+    global.fetch = async (url, init) => {
+      const body = JSON.parse(init.body)
+      if (/imagegen-12345/.test(url)) {
+        imageCalls.push({ url, body, headers: init.headers })
+        return { ok: true, json: async () => ({ images: [made.toString('base64')] }) }
+      }
+      if (/flash-image/.test(url)) {
+        geminiImage.push(body)
+        return { ok: true, json: async () => ({ promptFeedback: { blockReason: 'PROHIBITED_CONTENT' } }) }
+      }
+      if (/gemma-heretic/.test(url)) {
+        if (init.method === 'GET') return { ok: true, json: async () => ({ data: [] }) }
+        return { ok: true, json: async () => ({ choices: [{ message: { role: 'assistant', content: uncensoredText } }] }) }
+      }
+      const turn = turns.shift()
+      return { ok: true, json: async () => ({ candidates: [{ content: { role: 'model', parts: typeof turn === 'function' ? turn(body) : turn } }] }) }
+    }
+
+    // An age-restricted channel: the uncensored image model draws it, as an adult.
+    channel.nsfw = true
+    turns = [
+      [call('generate_image', { description: '大人の女性のセクシーなイラスト', tags_en: '1girl, adult woman, lingerie, bedroom', adult: true })],
+      [call('submit_chat_reply', { text: 'できたよ' })]
+    ]
+    await mentionEvent.handle(mention(channel, '<@BOT> セクシーな絵描いて'))
+    assert.equal(imageCalls.length, 1)
+    assert.match(imageCalls[0].url, /\/sdapi\/v1\/txt2img$/)
+    assert.equal(imageCalls[0].headers.Authorization, 'Bearer img-key')
+    assert.match(imageCalls[0].body.prompt, /^1girl, adult woman, lingerie, bedroom, adult, mature/)
+    assert.match(imageCalls[0].body.negative_prompt, /^child, children, kid, minor, underage, teen, loli, shota/)
+    assert.equal(replies.at(-1).state.content, 'できたよ')
+    assert.deepEqual(replies.at(-1).state.files.map(f => f.filename), ['image-1.png'])
+
+    // Gemini's image model refuses a picture: in an age-restricted channel, the uncensored one draws it.
+    turns = [
+      [call('generate_image', { description: '水着の大人の女性', tags_en: '1girl, adult woman, swimsuit, beach' })],
+      [call('submit_chat_reply', { text: '水着の絵だよ' })]
+    ]
+    await mentionEvent.handle(mention(channel, '<@BOT> 水着の絵描いて'))
+    assert.equal(geminiImage.length, 1)
+    assert.equal(imageCalls.length, 2)
+    assert.match(imageCalls[1].body.prompt, /^1girl, adult woman, swimsuit, beach/)
+    assert.equal(replies.at(-1).state.files.length, 1)
+
+    // Nobody who reads as a child, whatever is asked.
+    turns = [
+      [call('generate_image', { description: '女子高生のセクシーな絵', tags_en: '1girl, schoolgirl, lingerie', adult: true })],
+      body => {
+        assert.match(body.contents.at(-1).parts[0].functionResponse.response.error, /子ども・未成年に見える人物の成人向け画像は作れません/)
+        return [call('submit_chat_reply', { text: 'それは描けないよ' })]
+      }
+    ]
+    await mentionEvent.handle(mention(channel, '<@BOT> 女子高生の絵'))
+    assert.equal(imageCalls.length, 2, 'not asked')
+    assert.deepEqual(replies.at(-1).state.files, [])
+
+    // The uncensored text model asks for a picture with a line, which is taken out of the reply.
+    uncensoredText = 'いいよ、描いてみた！\n[[画像: 1girl, adult woman, long silver hair, night]]'
+    await mentionEvent.handle(mention(channel, '<@BOT> --2 銀髪のお姉さんの絵描いて'))
+    assert.equal(imageCalls.length, 3)
+    assert.match(imageCalls[2].body.prompt, /^1girl, adult woman, long silver hair, night, adult/)
+    assert.equal(replies.at(-1).state.content, 'いいよ、描いてみた！')
+    assert.equal(replies.at(-1).state.files.length, 1)
+    uncensoredText = 'ごめんね\n[[画像: loli, nude]]'
+    await mentionEvent.handle(mention(channel, '<@BOT> --2 描いて'))
+    assert.equal(imageCalls.length, 3, 'not asked')
+    assert.match(replies.at(-1).state.content, /^ごめんね\n（画像は作れませんでした: 子ども・未成年に見える人物の成人向け画像は作れません/)
+
+    // A channel without the age restriction: no adult pictures, and no fallback to the uncensored model.
+    channel.nsfw = false
+    turns = [
+      [call('generate_image', { description: '大人の女性のセクシーなイラスト', tags_en: '1girl, adult woman, lingerie', adult: true })],
+      body => {
+        assert.match(body.contents.at(-1).parts[0].functionResponse.response.error, /年齢制限のあるチャンネルでだけ作れます/)
+        return [call('generate_image', { description: '水着の大人の女性' })]
+      },
+      body => {
+        assert.match(body.contents.at(-1).parts[0].functionResponse.response.error, /画像のAIの制限で作れませんでした（PROHIBITED_CONTENT）/)
+        return [call('submit_chat_reply', { text: 'ここでは描けないよ' })]
+      }
+    ]
+    await mentionEvent.handle(mention(channel, '<@BOT> セクシーな絵描いて'))
+    assert.equal(imageCalls.length, 3, 'not asked')
+    uncensoredText = 'いいよ\n[[画像: 1girl, adult woman]]'
+    await mentionEvent.handle(mention(channel, '<@BOT> --2 描いて'))
+    assert.equal(imageCalls.length, 3, 'not asked')
+    assert.equal(replies.at(-1).state.content, 'いいよ', 'the line is taken out all the same')
+  })
+
   test('image: a chat reply without a picture made sends no files, and IMAGE_GENERATION=false offers no tool', async (t) => {
     const { channel, replies } = createChannel()
     process.env.IMAGE_GENERATION = 'false'

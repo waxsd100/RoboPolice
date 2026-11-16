@@ -20,6 +20,7 @@ const { wrap, reportInjectionAsync } = require('../utils/untrusted')
 const serverLore = require('./serverLore')
 const serverRules = require('./serverRules')
 const imageGen = require('./imageGen')
+const uncensoredImage = require('../utils/uncensoredImage')
 const loreStore = require('../../db/interfaces/postgres/serverLore')
 const embeddingStore = require('../../db/interfaces/postgres/embeddings')
 const { embeddableText } = require('../utils/messageNoise')
@@ -57,7 +58,9 @@ const GENERATE_IMAGE = tool('generate_image', {
   parameters: OBJECT({
     description: STRING,
     aspect_ratio: { type: 'STRING', enum: imageGen.CHAT_ASPECT_RATIOS },
-    use_source_images: { type: 'BOOLEAN' }
+    use_source_images: { type: 'BOOLEAN' },
+    adult: { type: 'BOOLEAN' },
+    tags_en: STRING
   }, ['description'])
 })
 const MAX_GENERATED_IMAGES = 2
@@ -185,7 +188,9 @@ function createTools ({ guild, member, ask, progress = () => {} }) {
   const sources = []
   let questions = 0
   // Pictures made for this request (generate_image): { buffer, mimeType, description }. The
-  // images it may start from are set once they are known (api.sourceImages: URLs).
+  // images it may start from are set once they are known (api.sourceImages: URLs), and so is
+  // whether adult pictures may be made here (api.adultImages: the uncensored image model is set
+  // up, the server allows the uncensored model, and the channel is age-restricted).
   const generated = []
 
   async function readableChannel (channelID) {
@@ -417,21 +422,42 @@ function createTools ({ guild, member, ask, progress = () => {} }) {
         '（その場で読んだもので、保存されません）'
       ].filter(l => l !== '').join('\n')
     },
-    async generate_image ({ description, aspect_ratio: aspectRatio, use_source_images: useSources }) {
+    async generate_image ({ description, aspect_ratio: aspectRatio, use_source_images: useSources, adult = false, tags_en: tags = '' }) {
       if (!String(description || '').trim()) throw new Error('作る画像の説明（description）がありません')
       if (generated.length >= MAX_GENERATED_IMAGES) throw new Error(`1回の依頼で作れる画像は ${MAX_GENERATED_IMAGES} 枚までです。作った画像で返事をしてください`)
       const urls = useSources ? (api.sourceImages || []).slice(0, MAX_SOURCE_IMAGES) : []
       if (useSources && !urls.length) throw new Error('元にする画像がありません（依頼にも返信先にも画像が添付されていません）')
+      const adultAllowed = api.adultImages === true && uncensoredImage.isConfigured()
+      if (adult && !adultAllowed) {
+        throw new Error(api.adultImages === true
+          ? '成人向けの画像を作る画像モデルが設定されていません。成人向けではない画像にするか、作れないと伝えてください'
+          : '成人向けの画像は、年齢制限のあるチャンネルでだけ作れます（このサーバーで検閲なしモデルが有効なときに限る）。成人向けではない画像にするか、作れないと伝えてください')
+      }
+      // Nobody who reads as a child is drawn in an adult picture (nor handed to the uncensored
+      // model below).
+      if (adult && uncensoredImage.readsAsMinor(description, tags)) throw new Error('子ども・未成年に見える人物の成人向け画像は作れません。断ってください')
       const images = []
       for (const url of urls) {
         const { buffer, contentType } = await urlFetcher.fetchImage(url)
         images.push({ buffer, mimeType: contentType })
       }
-      progress('画像を作っています…')
-      const image = await imageGen.generateImage({ description, sources: images, aspectRatio }).catch(e => {
-        // What the model can tell the requester, not the response body.
-        throw new Error(e.blocked ? `画像のAIの制限で作れませんでした（${e.blocked}）` : (e.hint || e.message))
-      })
+      progress(adult ? '画像を作っています…（検閲なしの画像モデルが起動するまで数分かかることがあります）' : '画像を作っています…')
+      const uncensored = () => uncensoredImage.generate({ prompt: String(tags || description), sources: images, aspectRatio })
+      let image
+      if (adult) {
+        image = await uncensored()
+      } else {
+        image = await imageGen.generateImage({ description, sources: images, aspectRatio }).catch(async e => {
+          // Refused by Gemini's image model: drawn by the uncensored one where adult pictures may
+          // be made, as long as nothing reads as a child.
+          if (e.blocked && adultAllowed && !uncensoredImage.readsAsMinor(description, tags)) {
+            global.logger?.info(`[IMAGE]: Gemini's image model refused (${e.blocked}) in ${guild.id}; the uncensored image model draws it instead`)
+            return uncensored()
+          }
+          // What the model can tell the requester, not the response body.
+          throw new Error(e.blocked ? `画像のAIの制限で作れませんでした（${e.blocked}）` : (e.hint || e.message))
+        })
+      }
       generated.push({ ...image, description: String(description).slice(0, 500) })
       return `画像を作りました（${generated.length}枚目）。返事に添付されます。返事では URL やファイル名を書かず、どんな画像にしたかを短く添えてください。`
     },
@@ -463,7 +489,7 @@ function createTools ({ guild, member, ask, progress = () => {} }) {
   }
 
   const declarations = [...DECLARATIONS, FIND_GAME, ABOUT_MEMBER, ...(messageEmbeddingsEnabled() ? [SEARCH_SERVER_MESSAGES] : []), ...(wikiKnowledge.searchable() ? [SEARCH_WIKI] : []), ...(imageGenerationEnabled() ? [GENERATE_IMAGE] : [])]
-  const api = { declarations, call, sources, generated, sourceImages: [], readMessage, readThread, progress }
+  const api = { declarations, call, sources, generated, sourceImages: [], adultImages: false, readMessage, readThread, progress }
   return api
 }
 
@@ -1326,4 +1352,13 @@ async function describeServer (guild, member, requestChannelID, { query = '', co
   return lines.join('\n')
 }
 
-module.exports = { worthSearching, createTools, formatMessage, formatVideo, inferVideoSort, describeServer, withServerEmojis, canUseExternalEmojis, sharedOwnerEmojis, withServerChannels, namedChannels, namedMembers, requestChannelInfo, channelTheme, SHORT_TOPIC_PROMPT, searchYouTube, searchTwitch, searchSteam, MESSAGE_LINK, CHANNEL_LINK, StopDrafting }
+// The pictures the uncensored text model asked for in its reply, one "[[画像: tags]]" line each
+// (prompts/chat/uncensored/rules.md): { text without those lines, tags: [English tags] }.
+const IMAGE_LINE = /^[ \t]*\[\[画像[:：]\s*([^\]\n]+?)\s*\]\][ \t]*(?:\n|$)/gm
+function takeImageRequests (text) {
+  const tags = []
+  const rest = String(text || '').replace(IMAGE_LINE, (line, t) => { tags.push(t.trim()); return '' }).trim()
+  return { text: rest, tags: tags.slice(0, MAX_GENERATED_IMAGES) }
+}
+
+module.exports = { takeImageRequests, worthSearching, createTools, formatMessage, formatVideo, inferVideoSort, describeServer, withServerEmojis, canUseExternalEmojis, sharedOwnerEmojis, withServerChannels, namedChannels, namedMembers, requestChannelInfo, channelTheme, SHORT_TOPIC_PROMPT, searchYouTube, searchTwitch, searchSteam, MESSAGE_LINK, CHANNEL_LINK, StopDrafting }
