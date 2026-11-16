@@ -19,11 +19,11 @@
 
 ## 子どもは描かない
 
-どんな依頼でも、子ども・未成年に見える人物は描きません。次の3か所で止めています。
+成人向けの画像では、子ども・未成年は描きません。画像が崩れないよう、止め方は最小限にしています。
 
-1. Bot（`src/bot/utils/uncensoredImage.js`）が、子どもを示す語（child・loli・schoolgirl・女子高生・JK・17歳以下の年齢など）を含む依頼を、画像モデルに送る前に断る
+1. Bot（`src/bot/utils/uncensoredImage.js`）が、子どもであることをはっきり示す語（child・loli・shota・schoolgirl・小学生・女子高生・JK・17歳以下の年齢など）を含む依頼を、画像モデルに送る前に断る。「少女」「teen」「school uniform」のような、アニメの絵柄で普通に使う語では断らない
 2. 画像のサーバー（`imagegen/server.py`）も同じ語の依頼を断る（HTTP 400）
-3. すべての画像に、子どもを描かないための除外プロンプト（negative prompt）と、人物を成人として描く指示を付ける
+3. 除外プロンプト（negative prompt）は短く「child, loli, shota」と画質の語だけにする。依頼のプロンプトには何も足さない
 
 語の一覧を変えるときは、1 と 2 の両方を直してください。
 

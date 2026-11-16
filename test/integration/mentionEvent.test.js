@@ -593,8 +593,8 @@ describe('mention → event / forum post (integration)', () => {
     assert.equal(imageCalls.length, 1)
     assert.match(imageCalls[0].url, /\/sdapi\/v1\/txt2img$/)
     assert.equal(imageCalls[0].headers.Authorization, 'Bearer img-key')
-    assert.match(imageCalls[0].body.prompt, /^1girl, adult woman, lingerie, bedroom, adult, mature/)
-    assert.match(imageCalls[0].body.negative_prompt, /^child, children, kid, minor, underage, teen, loli, shota/)
+    assert.equal(imageCalls[0].body.prompt, '1girl, adult woman, lingerie, bedroom')
+    assert.match(imageCalls[0].body.negative_prompt, /^child, loli, shota, /)
     assert.equal(replies.at(-1).state.content, 'できたよ')
     assert.deepEqual(replies.at(-1).state.files.map(f => f.filename), ['image-1.png'])
 
@@ -625,7 +625,7 @@ describe('mention → event / forum post (integration)', () => {
     uncensoredText = 'いいよ、描いてみた！\n[[画像: 1girl, adult woman, long silver hair, night]]'
     await mentionEvent.handle(mention(channel, '<@BOT> --2 銀髪のお姉さんの絵描いて'))
     assert.equal(imageCalls.length, 3)
-    assert.match(imageCalls[2].body.prompt, /^1girl, adult woman, long silver hair, night, adult/)
+    assert.equal(imageCalls[2].body.prompt, '1girl, adult woman, long silver hair, night')
     assert.equal(replies.at(-1).state.content, 'いいよ、描いてみた！')
     assert.equal(replies.at(-1).state.files.length, 1)
     uncensoredText = 'ごめんね\n[[画像: loli, nude]]'

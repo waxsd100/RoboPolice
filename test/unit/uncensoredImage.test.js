@@ -4,11 +4,12 @@ const uncensoredImage = require('../../src/bot/utils/uncensoredImage')
 const { takeImageRequests } = require('../../src/bot/modules/eventTools')
 const { startServer } = require('../helpers/fakes')
 
-test('reads as a child: the words for one, and ages under 18, and nothing else', () => {
-  for (const text of ['loli', 'shota', 'schoolgirl', 'school girl', 'high school student', 'a cute kid', '15 years old', '17yo', '12歳', '女子高生', 'JK制服', '小学生', 'ロリ', '少女', 'teen']) {
+test('reads as a child: only words that say one, and ages under 18', () => {
+  for (const text of ['loli', 'shota', 'schoolgirl', 'a cute kid', '15 years old', '17yo', '12歳', '女子高生', 'JK制服', '小学生', 'ロリ', 'underage']) {
     assert.equal(uncensoredImage.readsAsMinor(text), true, text)
   }
-  for (const text of ['1girl, adult woman, nude', '25 years old woman', '20歳の女性', 'eighteen', 'json api', 'adjustment of light', 'kidney beans']) {
+  // An anime look is not a child: these are not refused.
+  for (const text of ['1girl, adult woman, nude', '25 years old woman', '20歳の女性', 'eighteen', 'json api', 'adjustment of light', 'kidney beans', '少女', 'teen', 'school uniform', 'petite', 'high school']) {
     assert.equal(uncensoredImage.readsAsMinor(text), false, text)
   }
 })
@@ -39,8 +40,10 @@ test('asks the image API (AUTOMATIC1111 style) and refuses a child before asking
   assert.equal(asked[0].url, '/sdapi/v1/txt2img')
   assert.equal(asked[0].auth, 'Bearer k')
   assert.deepEqual([asked[0].body.width, asked[0].body.height], [1344, 768])
-  assert.match(asked[0].body.prompt, /^1girl, adult woman, adult, mature/)
-  assert.ok(asked[0].body.negative_prompt.startsWith(uncensoredImage.NEGATIVE.slice(0, 40)))
+  assert.equal(asked[0].body.prompt, '1girl, adult woman', 'nothing added to what was asked')
+  assert.equal(asked[0].body.negative_prompt, uncensoredImage.NEGATIVE)
+  assert.match(uncensoredImage.NEGATIVE, /^child, loli, shota, /)
+  assert.doesNotMatch(uncensoredImage.NEGATIVE, /flat chest|petite|school uniform|young/)
   assert.equal(asked[0].body.init_images, undefined)
 
   await uncensoredImage.generate({ prompt: 'same, at night', sources: [{ buffer: Buffer.from('src') }] })

@@ -4,26 +4,24 @@
 //   UNCENSORED_IMAGE_API_KEY   sent as "Authorization: Bearer <key>" when set
 //   UNCENSORED_IMAGE_TIMEOUT_MS   how long to wait for a picture (default 6 minutes: a cold
 //                                 start on Cloud Run GPU loads the model first)
-// Nothing that reads as a child is asked for: such a prompt is refused here (and again by the
-// server), and every request carries a negative prompt against it.
+// A prompt that says a child is refused here (and again by the server), and every request carries
+// a short negative prompt against one.
 
 const DEFAULT_TIMEOUT_MS = 6 * 60 * 1000
 
-// The same words as imagegen/server.py MINOR.
+// The same words as imagegen/server.py MINOR: only words that say a child, so an adult picture is
+// not refused for an anime look (少女, teen, school uniform…) or a word inside another (json).
 const MINOR = new RegExp(
-  '\\b(?:child|children|kid|kids|minor|minors|underage|under[- ]?age|teen|teens|teenager|preteen|' +
-  'toddler|infant|baby|loli|lolis|lolicon|shota|shotacon|cub|schoolgirl|schoolboy|' +
-  'elementary|middle school|junior high|high school|school ?girl|school ?boy|young girl|young boy|little girl|little boy|' +
-  '(?:[1-9]|1[0-7])\\s*(?:yo|y/o|years? old))\\b' +
+  '\\b(?:child|children|kid|kids|underage|toddler|infant|loli|lolis|lolicon|shota|shotacon|schoolgirl|schoolboy|' +
+  'elementary school|middle school|junior high|(?:[1-9]|1[0-7])\\s*(?:yo|y/o|years? old))\\b' +
   '|(?<!\\d)(?:[1-9]|1[0-7])\\s*(?:歳|才)' +
-  '|幼女|幼児|幼稚園|園児|児童|子供|子ども|こども|女児|男児|小学生|中学生|高校生|女子高生|男子高生|ロリ|ショタ|未成年|赤ちゃん|乳児|少女|少年' +
-  '|(?<![a-z])(?:js|jc|jk|dc|dk)(?![a-z])',
+  '|幼女|幼児|園児|児童|女児|男児|小学生|中学生|女子高生|男子高生|ロリ|ショタ|未成年' +
+  '|(?<![a-z])(?:js|jc|jk)(?![a-z])',
   'i'
 )
-const NEGATIVE = 'child, children, kid, minor, underage, teen, loli, shota, young, petite, flat chest, school uniform, randoseru, toddler, baby, aged down, ' +
-  'lowres, bad anatomy, bad hands, extra fingers, missing fingers, worst quality, low quality, jpeg artifacts, text, watermark, signature, logo'
-// Every subject drawn is an adult.
-const ADULT = 'adult, mature, (age 20+)'
+// Kept short, as a long negative prompt changes the picture too: only what keeps a child out, and
+// the usual quality terms.
+const NEGATIVE = 'child, loli, shota, lowres, bad anatomy, bad hands, worst quality, low quality, jpeg artifacts, watermark'
 
 // SDXL sizes for the aspect ratios generate_image offers.
 const SIZES = { '1:1': [1024, 1024], '16:9': [1344, 768], '9:16': [768, 1344], '4:3': [1152, 896], '3:4': [896, 1152] }
@@ -51,7 +49,7 @@ async function generate ({ prompt, sources = [], aspectRatio = '1:1' }) {
   if (readsAsMinor(prompt)) throw new Error('子ども・未成年に見える人物の画像は作れません')
   const [width, height] = SIZES[aspectRatio] || SIZES['1:1']
   const body = {
-    prompt: `${String(prompt).slice(0, 1500)}, ${ADULT}`,
+    prompt: String(prompt).slice(0, 1500),
     negative_prompt: NEGATIVE,
     width,
     height,

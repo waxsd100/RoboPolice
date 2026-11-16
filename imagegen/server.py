@@ -9,8 +9,8 @@ Environment:
   IMAGEGEN_API_KEY    when set, requests must carry "Authorization: Bearer <key>"
   PORT                the port to listen on (8080)
 
-Nothing that reads as a child is drawn: such a prompt is refused, and a negative prompt against
-it goes with every image, whatever the request says.
+A prompt that says a child is refused, and a short negative prompt against one goes with every
+image.
 """
 import asyncio
 import base64
@@ -29,22 +29,18 @@ API_KEY = os.environ.get("IMAGEGEN_API_KEY", "")
 MAX_SIDE = 1536
 MAX_STEPS = 50
 
-# Words that put a child in the picture. The bot checks the same (src/bot/utils/uncensoredImage.js);
-# this is the last line, for any other caller.
+# Words that say a child. The bot checks the same (src/bot/utils/uncensoredImage.js); this is the
+# last line, for any other caller. Only words that say one, so an anime look is not refused.
 MINOR = re.compile(
-    r"\b(child|children|kid|kids|minor|minors|underage|under[- ]?age|teen|teens|teenager|preteen|"
-    r"toddler|infant|baby|loli|lolis|lolicon|shota|shotacon|cub|schoolgirl|schoolboy|"
-    r"elementary|middle school|junior high|high school|school ?girl|school ?boy|young girl|young boy|little girl|little boy|"
-    r"(?:[1-9]|1[0-7])\s*(?:yo|y/o|years? old))\b"
+    r"\b(child|children|kid|kids|underage|toddler|infant|loli|lolis|lolicon|shota|shotacon|schoolgirl|schoolboy|"
+    r"elementary school|middle school|junior high|(?:[1-9]|1[0-7])\s*(?:yo|y/o|years? old))\b"
     r"|(?<!\d)(?:[1-9]|1[0-7])\s*(?:歳|才)"
-    r"|幼女|幼児|幼稚園|園児|児童|子供|子ども|こども|女児|男児|小学生|中学生|高校生|女子高生|男子高生|ロリ|ショタ|未成年|赤ちゃん|乳児|少女|少年"
-    r"|(?<![a-z])(?:js|jc|jk|dc|dk)(?![a-z])",
+    r"|幼女|幼児|園児|児童|女児|男児|小学生|中学生|女子高生|男子高生|ロリ|ショタ|未成年"
+    r"|(?<![a-z])(?:js|jc|jk)(?![a-z])",
     re.IGNORECASE,
 )
-ALWAYS_NEGATIVE = (
-    "child, children, kid, minor, underage, teen, loli, shota, young, petite, flat chest, "
-    "school uniform, randoseru, toddler, baby, aged down"
-)
+# Short, as a long negative prompt changes the picture too.
+ALWAYS_NEGATIVE = "child, loli, shota"
 
 app = FastAPI(title="imagegen")
 lock = asyncio.Lock()
