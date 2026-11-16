@@ -1,6 +1,6 @@
 const Eris = require('eris')
 const { v4: uuidv4 } = require('uuid')
-const { draft, revise, isConfigured, isUncensoredUsable, isUncensoredDirective, rememberThreadModel, isR18Text, STORY_REQUEST_PATTERN, ENTITY_TYPES } = require('./eventDrafter')
+const { draft, revise, isConfigured, isUncensoredUsable, isUncensoredDirective, rememberThreadModel, r18Route, STORY_REQUEST_PATTERN, ENTITY_TYPES } = require('./eventDrafter')
 const { createTools, describeServer, worthSearching, withServerEmojis, sharedOwnerEmojis, withServerChannels, channelTheme, SHORT_TOPIC_PROMPT, StopDrafting } = require('./eventTools')
 const { embedQuery } = require('../utils/embeddings')
 const sokudan = require('../utils/sokudan')
@@ -550,9 +550,10 @@ async function handle (message) {
       // /replylength, /persona, %debugfooter, %tokenlimit, %safety; without them (or the database) as by default.
       const { isOwnerGuild } = require('../utils/priority')
       const owner = isOwnerGuild(guild.id)
-      const { replyLength, streamerPersona, debugFooter, tokenLimits, replyModel, replyThinking, aiModels, assistantRules, safety = {}, safetyFilter = !owner, uncensoredR18 = owner } = await replySettingsStore.getReplySettings(guild.id)
-        .catch(() => ({ replyLength: null, streamerPersona: true, debugFooter: false, tokenLimits: {}, safety: {}, safetyFilter: !owner, uncensoredR18: owner }))
-      const allowUncensored = Boolean(uncensoredR18) && (!safetyFilter || safety?.uncensored === true)
+      const { replyLength, streamerPersona, debugFooter, tokenLimits, replyModel, replyThinking, aiModels, assistantRules, safetyFilter = !owner, uncensoredR18 = owner } = await replySettingsStore.getReplySettings(guild.id)
+        .catch(() => ({ replyLength: null, streamerPersona: true, debugFooter: false, tokenLimits: {}, safetyFilter: !owner, uncensoredR18: owner }))
+      // The same as draft: with the safety filter on, nothing goes to the uncensored model.
+      const allowUncensored = Boolean(uncensoredR18) && !safetyFilter
       // Per user across every server, in tokens, against this server's limits (mentionQuota.js). Near
       // a limit, every call goes to Flex inference: slower and half the price.
       const quota = await mentionQuota.take(message.author.id, guild.id, new Date(), { limits: tokenLimits })
@@ -599,7 +600,7 @@ async function handle (message) {
         ? await sokudan.classifyMentionRequest(request, referenced?.text, theme).catch(() => null)
         : null
       const asksForStory = typeof decision?.isStory === 'boolean' ? decision.isStory : STORY_REQUEST_PATTERN.test(request)
-      const directR18 = allowUncensored && isUncensoredUsable() && (isUncensoredDirective(request, referenced) || isR18Text(request, referenced?.text) || !!decision?.isR18)
+      const directR18 = allowUncensored && isUncensoredUsable() && (isUncensoredDirective(request, referenced) || r18Route({ request, referenced, decision }).route)
       let queryVecPromise = null
       const queryVector = () => {
         if (!worthSearching(request)) return Promise.resolve(null)

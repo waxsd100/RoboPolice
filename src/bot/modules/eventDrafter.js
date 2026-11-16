@@ -198,6 +198,8 @@ class GeminiError extends Error {
   }
 }
 
+// The blocks that may be about adult content, which the uncensored model can answer instead.
+const R18_BLOCKS = ['SAFETY', 'PROHIBITED_CONTENT', 'BLOCKLIST', 'IMAGE_SAFETY', 'IMAGE_PROHIBITED_CONTENT']
 const BLOCKING_FINISH_REASONS = ['SAFETY', 'PROHIBITED_CONTENT', 'BLOCKLIST', 'SPII', 'IMAGE_SAFETY', 'IMAGE_PROHIBITED_CONTENT', 'RECITATION']
 
 // fetch gives up on a response that has not started after 5 minutes (undici's headersTimeout and
@@ -1001,9 +1003,59 @@ function isR18Text (...texts) {
   return texts.some(t => typeof t === 'string' && R18_PATTERN.test(t))
 }
 
+// The words of R18_PATTERN that mean little else. The rest come up in ordinary talk too (絶頂期,
+// 全裸待機, 調教師, セックス・ピストルズ, 交尾期, news of a レイプ case, a ちんこ joke), so they count only
+// when sokudan also reads the request as one for adult writing.
+const EXPLICIT_R18_PATTERN = /(?:^|[^a-z0-9])(?:r-?18|nsfw)(?:$|[^a-z0-9])|18禁|成人向け|官能(?:小説|的)|エロ(?:小説|ss|話|画像|会話|台詞|セリフ|展開|描写|プレイ|動画|漫画|同人)|えっち(?:しよ|して|しよう)|エッチ(?:しよ|して|しよう)|濡れ場|性行為|性交|中出し|射精|オーガズム|オナニー|自慰|フェラ(?:チオ)?|パイズリ|手コキ|足コキ|素股|潮吹き|愛液|勃起|おまんこ|クリトリス|淫語|凌辱|輪姦|催眠エロ|触手(?:責め|プレイ)|服を脱が|下着を脱/i
+const isExplicitR18Text = (...texts) => texts.some(t => typeof t === 'string' && EXPLICIT_R18_PATTERN.test(t))
+
+// How sure sokudan has to be to send a request to the uncensored model on its own, without a word
+// of R18_PATTERN (SOKUDAN_R18_ROUTE_THRESHOLD, 0-1). Above the threshold that makes it say yes
+// (SOKUDAN_R18_THRESHOLD): that one also lets a word of R18_PATTERN count, and lets a refusal by
+// Gemini be handed over.
+const DEFAULT_R18_ROUTE_THRESHOLD = 0.7
+function r18RouteThreshold () {
+  const n = Number(process.env.SOKUDAN_R18_ROUTE_THRESHOLD)
+  return process.env.SOKUDAN_R18_ROUTE_THRESHOLD && n > 0 && n <= 1 ? n : DEFAULT_R18_ROUTE_THRESHOLD
+}
+
+// Whether a request goes to the uncensored model before Gemini sees it (`route`, with why), and
+// whether it may be handed over if Gemini refuses or is blocked (`maybe`). Going first is only a
+// shortcut: Gemini can still hand over itself (hand_over_r18), so this errs on the side of not.
+// `decision`: sokudan's reading of the request and the conversation it replies to, or null. The
+// replied-to conversation counts only together with the request: replying in a thread where
+// something R18 was once said does not make a question about a video one.
+function r18Route ({ request, referenced = null, decision = null }) {
+  const ref = typeof referenced === 'string' ? referenced : referenced?.text
+  const sokudanSays = !!decision?.isR18
+  const sure = Number.isFinite(decision?.r18Prob) && decision.r18Prob >= r18RouteThreshold()
+  let why = null
+  if (isExplicitR18Text(request)) why = 'R18 words in the request'
+  else if (sokudanSays && isR18Text(request, ref)) why = `R18 words and sokudan (p=${decision.r18Prob.toFixed(2)})`
+  else if (sure) why = `sokudan (p=${decision.r18Prob.toFixed(2)})`
+  // maybe: true when something says it is, false when sokudan read it and says not, null when
+  // nothing is known (no sokudan, no word): a block is then handed over as before.
+  const maybe = (!!why || sokudanSays || isR18Text(request) || (!decision && isExplicitR18Text(ref))) ? true : (decision ? false : null)
+  return { route: !!why, why, maybe }
+}
+
 const REFUSAL_REPLY_PATTERN = /(?:性的|成人向け|アダルト|r-?18|18禁|露骨な描写|不適切|ポリシー|ガイドライン|安全上の理由)[\s\S]{0,60}(?:お応えでき|答えられ|書けま|作成でき|対応でき|控えさせて|お断り)|(?:お応えでき|答えられ|書けま|作成でき|対応でき)(?:ません|かねます)[\s\S]{0,40}(?:性的|成人向け|アダルト|r-?18|18禁|露骨|ポリシー|ガイドライン)|(?:朝の光|朝日|翌朝)[\s\S]{0,80}乱れたシーツ|乱れたシーツ[\s\S]{0,80}(?:朝の光|朝日|翌朝)/i
 function isRefusalReply (text) {
   return typeof text === 'string' && REFUSAL_REPLY_PATTERN.test(text)
+}
+
+// A refusal on the grounds that the request is sexual, or a fade-out of what was asked for. The
+// other refusals of REFUSAL_REPLY_PATTERN (不適切, ポリシー, ガイドライン, 安全上の理由) are as often
+// about something dangerous or hateful.
+const SEXUAL_REFUSAL_PATTERN = /(?:性的|成人向け|アダルト|r-?18|18禁|露骨な描写)[\s\S]{0,60}(?:お応えでき|答えられ|書けま|作成でき|対応でき|控えさせて|お断り)|(?:お応えでき|答えられ|書けま|作成でき|対応でき)(?:ません|かねます)[\s\S]{0,40}(?:性的|成人向け|アダルト|r-?18|18禁|露骨)|(?:朝の光|朝日|翌朝)[\s\S]{0,80}乱れたシーツ|乱れたシーツ[\s\S]{0,80}(?:朝の光|朝日|翌朝)/i
+
+// What kind of refusal a reply is: 'sexual' (by SEXUAL_REFUSAL_PATTERN, or sokudan, whose question
+// asks only about that), 'other' (any other refusal of REFUSAL_REPLY_PATTERN), or null.
+async function refusalKind (text) {
+  if (typeof text !== 'string') return null
+  if (SEXUAL_REFUSAL_PATTERN.test(text)) return 'sexual'
+  if (sokudan.isUsable() && (await sokudan.detectRefusalReply(text)).refused) return 'sexual'
+  return isRefusalReply(text) ? 'other' : null
 }
 
 async function isRefusalReplyAsync (text) {
@@ -2125,7 +2177,9 @@ async function runAgent (contents, tools, submits = SUBMIT_DECLARATIONS) {
         step = -1
         continue
       }
-      if (allowUncensored && !contents.uncensored && e.blocked && isUncensoredConfigured() && !contents.uncensoredFailed) {
+      // Only a request that may be one for adult writing: a block for something else (copyright,
+      // personal data, dangerous content) is not answered by the uncensored model instead.
+      if (allowUncensored && !contents.uncensored && e.blocked && R18_BLOCKS.includes(e.blocked) && contents.r18Maybe !== false && isUncensoredConfigured() && !contents.uncensoredFailed) {
         const failed = contents.deep ? deepModel() : replyModel(contents)
         const notes = extractLookupNotes(contents.slice(start))
         if (notes) contents.lookupNotes = notes
@@ -2196,7 +2250,12 @@ async function runAgent (contents, tools, submits = SUBMIT_DECLARATIONS) {
     contents.push(content)
     const calls = content.parts.filter(p => p.functionCall).map(p => p.functionCall)
     const submitted = calls.find(c => submits.some(d => d.name === c.name))
-    if (submitted && allowUncensored && !contents.uncensored && isUncensoredConfigured() && !contents.uncensoredFailed && submitted.name === SUBMIT_CHAT_DECLARATION.name && await isRefusalReplyAsync(submitted.args?.text)) {
+    // A refusal is handed over when it was over sexual content, or, for another refusal, when the
+    // request is known to be one for adult writing: one turned down as dangerous or hateful stays so.
+    const refusal = submitted && allowUncensored && !contents.uncensored && isUncensoredConfigured() && !contents.uncensoredFailed && submitted.name === SUBMIT_CHAT_DECLARATION.name
+      ? await refusalKind(submitted.args?.text)
+      : null
+    if (refusal === 'sexual' || (refusal === 'other' && contents.r18Maybe === true)) {
       const fromModel = contents.deep ? deepModel() : replyModel(contents)
       const notes = extractLookupNotes(contents.slice(start))
       if (notes) contents.lookupNotes = notes
@@ -2371,39 +2430,27 @@ async function draft ({ request, referenced, recent = [], channelName, channelID
       : null
   }
   if (decision) conversation.contents.sokudanDecision = decision
+  const r18 = r18Route({ request, referenced, decision })
+  conversation.contents.r18Maybe = r18.maybe
   if (parsed.directive && applyModelDirective(conversation.contents, parsed.directive)) {
     const chosen = conversation.contents.uncensored
       ? uncensoredModel(conversation.contents)
       : (conversation.contents.deep ? deepModel() : replyModel(conversation.contents))
     global.logger?.info(`[GEMINI]: Explicit model directive "${parsed.directive}" in request; using ${chosen}`)
-  } else if (conversation.contents.uncensoredR18 && isUncensoredConfigured() && isR18Text(request)) {
+  } else if (conversation.contents.uncensoredR18 && isUncensoredConfigured() && r18.route) {
     conversation.contents.uncensored = true
     conversation.contents.directUncensored = true
     conversation.contents.uncensoredR18Mode = true
     const initial = replyModel(conversation.contents)
     const fallback = uncensoredModel(conversation.contents)
-    global.logger?.info(`[GEMINI]: R18 detected in request; ${fallback} answers instead of ${initial}`)
+    global.logger?.info(`[GEMINI]: R18 request (${r18.why}); ${fallback} answers instead of ${initial}`)
   } else if (threadDirective && applyModelDirective(conversation.contents, threadDirective, { inherited: true })) {
     const chosen = conversation.contents.uncensored
       ? uncensoredModel(conversation.contents)
       : (conversation.contents.deep ? deepModel() : replyModel(conversation.contents))
     global.logger?.info(`[GEMINI]: Inherited model directive "${threadDirective}" from reply thread; using ${chosen}`)
-  } else if (conversation.contents.uncensoredR18 && isUncensoredConfigured() && isR18Text(referenced?.text)) {
-    conversation.contents.uncensored = true
-    conversation.contents.directUncensored = true
-    conversation.contents.uncensoredR18Mode = true
-    const initial = replyModel(conversation.contents)
-    const fallback = uncensoredModel(conversation.contents)
-    global.logger?.info(`[GEMINI]: R18 detected in reply thread; ${fallback} answers instead of ${initial}`)
   } else if (decision) {
-    if (decision.isR18 && conversation.contents.uncensoredR18 && isUncensoredConfigured()) {
-      conversation.contents.uncensored = true
-      conversation.contents.directUncensored = true
-      conversation.contents.uncensoredR18Mode = true
-      const initial = replyModel(conversation.contents)
-      const fallback = uncensoredModel(conversation.contents)
-      global.logger?.info(`[SOKUDAN]: R18 intent detected in request (p=${decision.r18Prob.toFixed(2)}); ${fallback} answers instead of ${initial}`)
-    } else if (decision.needsDeep && deepModel() && !edit && decision.intent === 'chat') {
+    if (decision.needsDeep && deepModel() && !edit && decision.intent === 'chat') {
       conversation.contents.deep = true
       global.logger?.info(`[SOKUDAN]: Deep reasoning/creative request detected (p=${decision.deepProb.toFixed(2)}); routing directly to ${deepModel()}`)
       await tools?.progress?.(DEEP_PROGRESS)
@@ -2441,27 +2488,19 @@ async function revise (conversation, correction) {
       ? uncensoredModel(conversation.contents)
       : (conversation.contents.deep ? deepModel() : replyModel(conversation.contents))
     global.logger?.info(`[GEMINI]: Explicit model directive "${parsed.directive}" in revision; using ${chosen}`)
-  } else if (allowUncensored && !conversation.contents.uncensored && isUncensoredConfigured() && isR18Text(correction)) {
-    conversation.contents.deep = false
-    conversation.contents.uncensored = true
-    conversation.contents.directUncensored = true
-    conversation.contents.uncensoredR18Mode = true
-    const initial = replyModel(conversation.contents)
-    const fallback = uncensoredModel(conversation.contents)
-    global.logger?.info(`[GEMINI]: R18 detected in revision; ${fallback} answers instead of ${initial}`)
-  } else if (allowUncensored && !conversation.contents.uncensored && isUncensoredConfigured() && sokudan.isUsable()) {
-    const decision = await sokudan.classifyMentionRequest(correction)
-    if (decision) {
-      conversation.contents.sokudanDecision = decision
-      if (decision.isR18) {
-        conversation.contents.deep = false
-        conversation.contents.uncensored = true
-        conversation.contents.directUncensored = true
-        conversation.contents.uncensoredR18Mode = true
-        const initial = replyModel(conversation.contents)
-        const fallback = uncensoredModel(conversation.contents)
-        global.logger?.info(`[SOKUDAN]: R18 intent detected in revision (p=${decision.r18Prob.toFixed(2)}); ${fallback} answers instead of ${initial}`)
-      }
+  } else if (allowUncensored && !conversation.contents.uncensored && isUncensoredConfigured()) {
+    const decision = sokudan.isUsable() ? await sokudan.classifyMentionRequest(correction) : null
+    if (decision) conversation.contents.sokudanDecision = decision
+    const r18 = r18Route({ request: correction, decision })
+    if (r18.maybe) conversation.contents.r18Maybe = true
+    if (r18.route) {
+      conversation.contents.deep = false
+      conversation.contents.uncensored = true
+      conversation.contents.directUncensored = true
+      conversation.contents.uncensoredR18Mode = true
+      const initial = replyModel(conversation.contents)
+      const fallback = uncensoredModel(conversation.contents)
+      global.logger?.info(`[GEMINI]: R18 revision (${r18.why}); ${fallback} answers instead of ${initial}`)
     }
   }
   const nextGeminiModel = conversation.contents.uncensored
@@ -2473,4 +2512,4 @@ async function revise (conversation, correction) {
   return check(conversation, await runAgent(conversation.contents, conversation.tools, conversation.submits))
 }
 
-module.exports = { THINKING_LEVELS, SERVICE_TIERS, defaultTaskConfig, resolveTaskConfig, replyTimeoutMs, flexUsable, SAFETY_SETTINGS, STRICT_SAFETY_SETTINGS, withSafetySettings, THINK_DEEPER_DECLARATION, HAND_OVER_R18_DECLARATION, isR18Text, isRefusalReply, isRefusalReplyAsync, STORY_REQUEST_PATTERN, adaptiveThinkingLevel, compactContentsForWire, compressToolResult, deepModel, DEFAULT_UNCENSORED_MODEL, normalizeLocalModelId, uncensoredModel, uncensoredR18Model, parseModelDirective, extractReferencedDirective, rememberThreadModel, isUncensoredDirective, applyModelDirective, isLocalUncensoredUrl, uncensoredEndpoint, isUncensoredConfigured, isUncensoredUsable, checkUncensoredConnection, startUncensoredCheck, uncensoredState, ensureUncensoredModelLoaded, cleanUncensoredContent, compactUncensoredText, extractUncensoredAnswer, UNCENSORED_SAMPLING_PARAMS, readUncensoredResponse, callUncensored, REPLY_LENGTHS, DEFAULT_REPLY_LENGTH, PERSONAS, thinkingConfig, cachedPrefix, caches, purgedFor, promptVersion, lightModel, extractModel, DEFAULT_EXTRACT_MODEL, draft, revise, MAX_STEPS, isConfigured, toScheduledEvent, callGemini, geminiRequest, geminiSend, geminiStream, retryTimer, DEFAULT_GEMINI_MODEL, ENTITY_TYPES, GeminiError }
+module.exports = { THINKING_LEVELS, SERVICE_TIERS, defaultTaskConfig, resolveTaskConfig, replyTimeoutMs, flexUsable, SAFETY_SETTINGS, STRICT_SAFETY_SETTINGS, withSafetySettings, THINK_DEEPER_DECLARATION, HAND_OVER_R18_DECLARATION, isR18Text, isExplicitR18Text, r18Route, isRefusalReply, isRefusalReplyAsync, refusalKind, STORY_REQUEST_PATTERN, adaptiveThinkingLevel, compactContentsForWire, compressToolResult, deepModel, DEFAULT_UNCENSORED_MODEL, normalizeLocalModelId, uncensoredModel, uncensoredR18Model, parseModelDirective, extractReferencedDirective, rememberThreadModel, isUncensoredDirective, applyModelDirective, isLocalUncensoredUrl, uncensoredEndpoint, isUncensoredConfigured, isUncensoredUsable, checkUncensoredConnection, startUncensoredCheck, uncensoredState, ensureUncensoredModelLoaded, cleanUncensoredContent, compactUncensoredText, extractUncensoredAnswer, UNCENSORED_SAMPLING_PARAMS, readUncensoredResponse, callUncensored, REPLY_LENGTHS, DEFAULT_REPLY_LENGTH, PERSONAS, thinkingConfig, cachedPrefix, caches, purgedFor, promptVersion, lightModel, extractModel, DEFAULT_EXTRACT_MODEL, draft, revise, MAX_STEPS, isConfigured, toScheduledEvent, callGemini, geminiRequest, geminiSend, geminiStream, retryTimer, DEFAULT_GEMINI_MODEL, ENTITY_TYPES, GeminiError }

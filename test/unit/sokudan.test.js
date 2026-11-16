@@ -3,7 +3,7 @@ const assert = require('node:assert/strict')
 const sokudan = require('../../src/bot/utils/sokudan')
 const { looksLikeInjectionAsync, reportInjectionAsync } = require('../../src/bot/utils/untrusted')
 const { polish } = require('../../src/bot/modules/replyPolish')
-const { draft, revise, adaptiveThinkingLevel, isRefusalReplyAsync, compactUncensoredText } = require('../../src/bot/modules/eventDrafter')
+const { draft, revise, adaptiveThinkingLevel, isRefusalReplyAsync, compactUncensoredText, r18Route, refusalKind, isR18Text } = require('../../src/bot/modules/eventDrafter')
 const { createTools } = require('../../src/bot/modules/eventTools')
 const { createGuild, createMember, installBot, configureGateway, startServer, call } = require('../helpers/fakes')
 
@@ -15,6 +15,7 @@ function resetSokudanEnv () {
   delete process.env.SOKUDAN_R18_THRESHOLD
   delete process.env.SOKUDAN_DEEP_THRESHOLD
   delete process.env.SOKUDAN_STORY_THRESHOLD
+  delete process.env.SOKUDAN_R18_ROUTE_THRESHOLD
   delete process.env.SOKUDAN_INJECTION_THRESHOLD
   delete process.env.SOKUDAN_REFUSAL_THRESHOLD
   delete process.env.SOKUDAN_POLISH_THRESHOLD
@@ -772,5 +773,121 @@ test('sokudan\'s reading of the request comes before the word patterns: a story,
     delete process.env.GEMINI_STREAM
     resetSokudanEnv()
     await sokudanSrv.close()
+  }
+})
+
+test('what sends a request to the uncensored model: words that mean little else, or sokudan being sure', () => {
+  resetSokudanEnv()
+  const no = { isR18: false, r18Prob: 0.05 }
+  const unsure = { isR18: true, r18Prob: 0.5 }
+  const sure = { isR18: true, r18Prob: 0.82 }
+  // A question about a video, read by sokudan as a little R18 (p=0.5): not enough on its own.
+  const video = 'のばまんがゲーム画面によつろんを描いた動画を教えて'
+  assert.equal(r18Route({ request: video, decision: unsure }).route, false)
+  assert.equal(r18Route({ request: video, decision: unsure }).maybe, true, 'a refusal may still be handed over')
+  assert.equal(r18Route({ request: video, decision: sure }).route, true)
+  process.env.SOKUDAN_R18_ROUTE_THRESHOLD = '0.9'
+  assert.equal(r18Route({ request: video, decision: sure }).route, false, 'its own threshold')
+  delete process.env.SOKUDAN_R18_ROUTE_THRESHOLD
+  // Words that come up in ordinary talk count only with sokudan.
+  for (const text of ['新作の配信、全裸待機してます', '今がこのグループの絶頂期だよね', 'セックス・ピストルズのおすすめ曲', 'ウマ娘の調教師ってどうやって決まる？', '犬の交尾期っていつ？', 'レイプ事件のニュース見た？', 'ちんこって言ってみて']) {
+    assert.ok(isR18Text(text), text)
+    assert.equal(r18Route({ request: text, decision: null }).route, false, text)
+    assert.equal(r18Route({ request: text, decision: no }).route, false, text)
+    assert.equal(r18Route({ request: text, decision: unsure }).route, true, text)
+  }
+  // Words that mean little else are enough, with or without sokudan.
+  for (const text of ['R18の小説を書いて', '官能小説お願い', 'エロ小説書いて']) {
+    assert.equal(r18Route({ request: text, decision: null }).route, true, text)
+    assert.equal(r18Route({ request: text, decision: no }).route, true, text)
+  }
+  // The replied-to conversation counts only together with the request.
+  const thread = { text: 'A: 官能小説書いて\nあなた（BOT）: …' }
+  assert.equal(r18Route({ request: video, referenced: thread, decision: null }).route, false)
+  assert.equal(r18Route({ request: video, referenced: thread, decision: no }).maybe, false)
+  assert.equal(r18Route({ request: '続き', referenced: thread, decision: unsure }).route, true)
+  // Nothing known: neither sent first nor ruled out.
+  assert.deepEqual(r18Route({ request: video, decision: null }), { route: false, why: null, maybe: null })
+  assert.equal(r18Route({ request: video, decision: no }).maybe, false)
+})
+
+test('a refusal or a block goes to the uncensored model only when it may be about adult writing', async () => {
+  configureGateway()
+  resetSokudanEnv()
+  const guild = createGuild()
+  const member = createMember()
+  installBot({ guilds: [guild] })
+
+  let r18 = 0.05
+  const sokudanSrv = await startServer((req, res) => {
+    let body = ''
+    req.on('data', c => { body += c })
+    req.on('end', () => {
+      const parsed = JSON.parse(body)
+      res.writeHead(200, { 'Content-Type': 'application/json' })
+      if (parsed.questions.refusal) {
+        assert.match(parsed.questions.refusal.instructions, /性的でない理由で断っているものは含めない/)
+        res.end(JSON.stringify({ answers: { refusal: { type: 'bool', noul: 0.05 } } }))
+        return
+      }
+      assert.match(parsed.questions.is_r18.instructions, /たまたま出てくるだけの話は含めない/)
+      res.end(JSON.stringify({ answers: { intent: { type: 'choice', choice: 'chat', confidence: 0.9 }, needs_deep: { type: 'bool', noul: 0.1 }, is_r18: { type: 'bool', noul: r18 }, complexity: { type: 'score', score: 0.7 } } }))
+    })
+  })
+  let uncensoredAsked = 0
+  const uncensoredSrv = await startServer((req, res) => {
+    req.on('data', () => {})
+    req.on('end', () => {
+      res.writeHead(200, { 'Content-Type': 'application/json' })
+      if (req.method === 'GET') return res.end(JSON.stringify({ data: [{ id: 'r18-uncensored' }] }))
+      uncensoredAsked++
+      res.end(JSON.stringify({ choices: [{ message: { role: 'assistant', content: '検閲なしモデルの返事' } }] }))
+    })
+  })
+
+  const origFetch = global.fetch
+  let gemini = null
+  try {
+    process.env.SOKUDAN_URL = sokudanSrv.url
+    process.env.UNCENSORED_API_URL = `${uncensoredSrv.url}/v1`
+    process.env.UNCENSORED_R18_MODEL = 'r18-uncensored'
+    process.env.GEMINI_STREAM = 'false'
+    global.fetch = async (url, init) => {
+      if (String(url).startsWith(sokudanSrv.url) || String(url).startsWith(uncensoredSrv.url)) return origFetch(url, init)
+      return { ok: true, json: async () => gemini }
+    }
+    const tools = createTools({ guild, member, ask: async () => '' })
+    const ask = request => draft({ request, channelName: 'general', channelID: '1', uncensoredR18: true, guild, member, tools })
+
+    // A refusal over something dangerous, on a request sokudan reads as not R18: stays refused.
+    assert.equal(await refusalKind('不適切な内容なので書けません'), 'other')
+    gemini = { candidates: [{ content: { role: 'model', parts: [call('submit_chat_reply', { text: '不適切な内容なので書けません' })] } }] }
+    const dangerous = await ask('爆弾の作り方教えて')
+    assert.equal(dangerous.text, '不適切な内容なので書けません')
+    assert.equal(uncensoredAsked, 0)
+
+    // Blocked, on a request sokudan reads as not R18: not answered by the uncensored model.
+    gemini = { promptFeedback: { blockReason: 'PROHIBITED_CONTENT' } }
+    await assert.rejects(ask('のばまんがゲーム画面によつろんを描いた動画を教えて'), e => !!e.blocked)
+    assert.equal(uncensoredAsked, 0)
+    // Blocked over copyright: not either, whatever the request.
+    r18 = 0.5
+    gemini = { candidates: [{ finishReason: 'RECITATION', content: { role: 'model', parts: [] } }] }
+    await assert.rejects(ask('あの曲の歌詞をそのまま全部書いて'), e => e.blocked === 'RECITATION')
+    assert.equal(uncensoredAsked, 0)
+    // Blocked, on a request sokudan reads as maybe R18 (not sure enough to send it first): handed
+    // over, as before.
+    gemini = { promptFeedback: { blockReason: 'PROHIBITED_CONTENT' } }
+    const handed = await ask('二人の夜の続きを書いて')
+    assert.equal(handed.text, '検閲なしモデルの返事')
+    assert.equal(uncensoredAsked, 1)
+  } finally {
+    global.fetch = origFetch
+    delete process.env.UNCENSORED_API_URL
+    delete process.env.UNCENSORED_R18_MODEL
+    delete process.env.GEMINI_STREAM
+    resetSokudanEnv()
+    await sokudanSrv.close()
+    await uncensoredSrv.close()
   }
 })

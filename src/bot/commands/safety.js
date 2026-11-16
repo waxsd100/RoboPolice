@@ -37,7 +37,8 @@ function describe (guildID, { safety = {}, safetyFilter, uncensoredR18 }) {
   return [
     'このサーバーの AI セーフティ・R18 設定:',
     formatLine('Gemini セーフティフィルタ (`filter`)', safetyFilter, safety.filter, !owner, owner),
-    formatLine('R18・検閲なしモデル引き継ぎ (`r18`)', uncensoredR18, safety.uncensored, owner, owner),
+    formatLine('R18・検閲なしモデル引き継ぎ (`r18`)', uncensoredR18, safety.uncensored, owner, owner) +
+      (uncensoredR18 && safetyFilter ? '（セーフティフィルタがオンの間は使われません）' : ''),
     `\`${prefix}safety [filter|r18] <on|off|default>\` で個別に切り替えられます。`,
     `（対象省略時の \`${prefix}safety on\` は「フィルタ オン＋R18引き継ぎ オフ」、\`${prefix}safety off\` は「フィルタ オフ＋R18引き継ぎ オン」に一括変更します）`
   ].join('\n')
