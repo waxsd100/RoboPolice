@@ -36,7 +36,14 @@ BOT が Gemini（と検閲なしモデル・画像モデル）に渡すプロン
 | `stream/blurb.md` | 配信のイベント説明 |
 | `emoji/describe.md` | サーバー絵文字の説明 |
 | `image/*.md` | フォーラム投稿のカバー画像（英語） |
-| `tools/channel-message/*.md` | チャンネルへの書き込みの提出ツール（`submit_channel_message_draft`）とその引数の説明 |
+| `chat/pictures/*.md` | 依頼と一緒に見せる絵文字・添付画像の前置き |
+| `chat/tool-compress.md` | 長いツール結果を、依頼に要る事実だけに縮める |
+| `chat/uncensored/describe-images.md` | 検閲なしモデルへ引き継ぐ前の、添付画像の説明の依頼 |
+| `tools/<ツール名>.md` | AI が呼べるツール（調べ物・質問・下書きの提出など）の説明。最初の段落がツールの説明、`## 引数名` の節がその引数の説明（コードの `prompts.tool()`） |
+| `tools/shared/image-instruction.md` | 下書きの提出ツールに共通の `image_instruction` 引数の説明 |
+| `sokudan/*.md` | sokudan（軽い判定モデル）への質問。`## 質問名` の節ごとに本文が指示、`- キー: 説明` が選択肢、`1. 説明` が段階（コードの `prompts.questions()`） |
+| `game/official-page.md` | ゲームの公式ページ探し |
+| `rules/pick-channels.md` | ルールが書かれていそうなチャンネル選び |
 
 ## 書くときの決まり
 
@@ -49,3 +56,5 @@ BOT が Gemini（と検閲なしモデル・画像モデル）に渡すプロン
 
 - `chat/persona/*.md`・`chat/reply-length/*.md`・`chat/mature/*.md` は箇条書き（`- ` で始まる行。字下げした行も可）だけにしてください。BOT が欄ごと取り除くとき（検閲なしモデルに渡すとき）、箇条書きの終わりを欄の終わりとして見ています。
 - `chat/system.md` を変えると Gemini のプロンプトキャッシュが作り直されます（次の返事で一度だけ）。
+- `tools/*.md` の `## 引数名` はコードの引数名と同じにしてください。コードにない引数の節があるとエラーになります（書き間違いや消し忘れにすぐ気づけるように）。ツールの名前・引数の型・必須かどうかはコードが決めます。
+- `sokudan/*.md` の選択肢の並びと段階の数はコードと合わせてください（違うとエラーになります）。並びを変えると判定の精度が変わることがあるので、ファイル先頭のメモを読んでから直してください。

@@ -1,4 +1,5 @@
 const urlFetcher = require('../utils/urlFetcher')
+const prompts = require('../utils/prompts')
 const { describeForums } = require('./forumPost')
 const youtubeDB = require('../../db/interfaces/postgres/youtube')
 const twitchDB = require('../../db/interfaces/postgres/twitch')
@@ -36,140 +37,41 @@ const CHANNEL_LINK = /^https?:\/\/(?:(?:ptb|canary)\.)?discord(?:app)?\.com\/cha
 // All are read-only and scoped to what the requesting
 // member could see themselves, so a mention can't be used to read channels they have no access to.
 // Offered only when every stored message is embedded (MESSAGE_EMBEDDINGS=true).
-const SEARCH_SERVER_MESSAGES = {
-  name: 'search_server_messages',
-  description: 'このサーバーで依頼者が読めるすべてのチャンネルの保存済みメッセージから、query と意味が近いものを探す（言い回しが違っても見つかる）。どのチャンネルの話か分からないときや、サーバー全体の話題を調べるときに使う。',
-  parameters: { type: 'OBJECT', properties: { query: { type: 'STRING', description: '探したい内容（文章でよい）' } }, required: ['query'] }
-}
+// The descriptions are in prompts/tools/<name>.md.
+const { tool } = prompts
+const OBJECT = (properties, required) => ({ type: 'OBJECT', properties, ...(required ? { required } : {}) })
+const STRING = { type: 'STRING' }
 
-const ABOUT_MEMBER = {
-  name: 'about_member',
-  description: 'このサーバーのメンバーについて聞かれたときに使う。名前・ニックネーム・メンション（<@数字>）・ID でメンバーを探し、表示名・ロール・参加日と、（設定されていれば）依頼者が読めるチャンネルでの最近の発言を返す（その場で読むだけで保存しない）。',
-  parameters: { type: 'OBJECT', properties: { member: { type: 'STRING', description: '名前・ニックネーム・<@ID>・ID のどれか' } }, required: ['member'] }
-}
+const SEARCH_SERVER_MESSAGES = tool('search_server_messages', { parameters: OBJECT({ query: STRING }, ['query']) })
+
+const ABOUT_MEMBER = tool('about_member', { parameters: OBJECT({ member: STRING }, ['member']) })
 const MAX_MEMBER_MESSAGES = 30
 const MAX_MEMBER_MATCHES = 5
 
-const FIND_GAME = {
-  name: 'find_game',
-  description: 'ゲームの Discord のゲームメンション（返事に書くとゲームのプロフィールが表示される）と、ストアページ（Steam）または公式ページを調べる。返事やイベントの説明で特定のゲームに触れるときに使う。',
-  parameters: {
-    type: 'OBJECT',
-    properties: {
-      name: { type: 'STRING', description: 'ゲームの正式な名前' },
-      name_en: { type: 'STRING', description: '英語の正式名（分かれば）' }
-    },
-    required: ['name']
-  }
-}
+const FIND_GAME = tool('find_game', { parameters: OBJECT({ name: STRING, name_en: STRING }, ['name']) })
 
-const SEARCH_WIKI = {
-  name: 'search_wiki',
-  description: 'コミュニティの wiki（配信者のキャラクター・名言・台詞・ネタ・用語・基本情報など）と配信者本人の X（Twitter）のポストから、query と意味が近い記述を探す。キャラクターや名言・ネタ、配信者の最近の発言や告知について知りたいとき、配信者らしい言い回しを知りたいときに使う。',
-  parameters: { type: 'OBJECT', properties: { query: { type: 'STRING', description: '探したい内容（キャラクター名、名言の一部、話題など）' } }, required: ['query'] }
-}
+const SEARCH_WIKI = tool('search_wiki', { parameters: OBJECT({ query: STRING }, ['query']) })
 
 const DECLARATIONS = [
-  {
-    name: 'fetch_url',
-    description: 'Web ページの本文・タイトル・メタ情報・JSON-LD をテキストで取得する（YouTube 動画の URL なら正確な題名・公開日時・再生数・概要欄なども取得する）。Discord のメッセージリンクには使わず get_discord_message を使う。',
-    parameters: { type: 'OBJECT', properties: { url: { type: 'STRING' } }, required: ['url'] }
-  },
-  {
-    name: 'get_discord_message',
-    description: 'このサーバーの Discord メッセージリンク（https://discord.com/channels/サーバーID/チャンネルID/メッセージID）が指すメッセージを読む。チャンネルへのリンク（…/サーバーID/チャンネルID）なら、そのチャンネルの最近のメッセージを読む。',
-    parameters: { type: 'OBJECT', properties: { link: { type: 'STRING' } }, required: ['link'] }
-  },
-  {
-    name: 'get_recent_messages',
-    description: 'このサーバーのチャンネルの最近のメッセージを新しい順に読む。依頼が「このチャンネルで話していた内容」などを指すときに使う。',
-    parameters: {
-      type: 'OBJECT',
-      properties: {
-        channel_id: { type: 'STRING' },
-        limit: { type: 'INTEGER', description: `1〜${MAX_RECENT_MESSAGES}` }
-      },
-      required: ['channel_id']
-    }
-  },
-  {
-    name: 'summarize_youtube_video',
-    description: '公開されている YouTube 動画の中身（話している内容）を要約する。動画のリンクが貼られたときや、動画の内容が必要なときだけ使う（再生数・公開日・題名だけなら search_youtube や fetch_url で足りる）。一度要約した動画は保存済みの要約を返す。',
-    parameters: { type: 'OBJECT', properties: { url: { type: 'STRING', description: 'YouTube 動画の URL' } }, required: ['url'] }
-  },
-  {
-    name: 'search_channel_history',
-    description: 'このサーバーのチャンネルについて、BOT が保存しているこれまでのメッセージを新しい順に読む（get_recent_messages より長い期間を見られる）。「このチャンネルの内容をもとに」「これまでの話をまとめて」のような依頼で使う。query を指定するとその語をすべて含むもの（メッセージの意味検索が有効なら、意味が近いもの）に絞る。',
-    parameters: {
-      type: 'OBJECT',
-      properties: {
-        channel_id: { type: 'STRING' },
-        query: { type: 'STRING', description: '本文に含まれる語（空白区切りで AND）。省略可' }
-      },
-      required: ['channel_id']
-    }
-  },
-  {
-    name: 'list_channels',
-    description: 'このサーバーで依頼者が閲覧できるチャンネルの一覧（ID・名前・種類・カテゴリ・説明）を得る。どのチャンネルで何を話すか聞かれたとき、当てはまるチャンネルを探すとき、ボイス/ステージでイベントを行う場合のチャンネル選びに使う。'
-  },
-  {
-    name: 'get_server_rules',
-    description: 'このサーバーのルール・必読・はじめに等のチャンネルに書かれている内容を読む。サーバーのルール・禁止事項・決まりについて聞かれたとき、またはイベントやフォーラム投稿を作る前にルールを確認するときに使う。'
-  },
-  {
-    name: 'list_forums',
-    description: '依頼者とBOTの両方が投稿できるフォーラムチャンネルの一覧（ID・名前・付けられるタグ・投稿ガイドライン）を得る。フォーラムへの投稿を頼まれたら必ず使う。'
-  },
-  {
-    name: 'ask_user',
-    description: `候補が複数ある・日時や場所が曖昧など、依頼者に決めてもらう必要があるときに、選択肢をボタンで提示して1つ選んでもらう。選択肢は2〜${MAX_OPTIONS}個の短い文。自由記述が必要な質問には使わない。`,
-    parameters: {
-      type: 'OBJECT',
-      properties: {
-        question: { type: 'STRING' },
-        options: { type: 'ARRAY', items: { type: 'STRING' } }
-      },
-      required: ['question', 'options']
-    }
-  },
-  {
-    name: 'list_scheduled_events',
-    description: 'このサーバーに登録済みのスケジュールイベントの一覧を得る。サーバーの予定やイベントを聞かれたとき、イベント登録で重複を避けるときに使う。'
-  },
-  {
-    name: 'search_youtube',
-    description: 'このサーバーに設定された YouTube チャンネルについて保存している情報（チャンネル登録者数・概要、動画の題名・公開日・配信日時・長さ・再生数・高評価数・コメント数・保存済みの要約、配信予定・配信中）や、指定された YouTube 動画 URL の正確な情報を探す。動画の再生数や投稿日・配信日、一番再生されている動画・一番古い動画・最新の動画、おすすめの動画・名作・神回などを聞かれたときに必ず使う。',
-    parameters: {
-      type: 'OBJECT',
-      properties: {
-        query: { type: 'STRING', description: '探したい動画の題名・説明・要約・内容を表す語、または YouTube 動画の URL（空白区切り。意味が近い動画も探す。全動画から再生数順・新しい順・古い順で見たいときは省略可）' },
-        sort: { type: 'STRING', enum: ['relevance', 'newest', 'oldest', 'views'], description: '並び順。再生数が多い順・人気順は views、古い順・最初の動画は oldest、新しい順・最新の動画は newest、関連度順は relevance（省略時は自動判定）' }
-      }
-    }
-  },
-  {
-    name: 'search_twitch',
-    description: 'BOT が見ている Twitch チャンネルの過去の配信（アーカイブ）を探す。題名・配信日（日本時間）・長さ・再生数・リンクが分かる（中で話した内容は分からない）。Twitch の配信やアーカイブについての依頼で使う。',
-    parameters: {
-      type: 'OBJECT',
-      properties: {
-        query: { type: 'STRING', description: '題名・説明に含まれる語（空白区切りで AND）' },
-        sort: { type: 'STRING', enum: ['newest', 'oldest', 'views'], description: '並び順。再生数が多い順は views、古い順は oldest、新しい順は newest（省略時は自動判定）' }
-      }
-    }
-  },
-  {
-    name: 'search_steam',
-    description: 'BOT が見ている配信者の Steam アカウントについて保存している情報（プロフィール、所持・プレイ済みゲーム一覧とプレイ時間、最近遊んだゲーム、書いたレビュー、ウィッシュリスト）を探す。おすすめのゲームや好きなゲームを聞かれたとき、特定のゲームを遊んだことがあるか・どう思うか聞かれたとき、ゲームの話題に返すとき、Steam や所持ゲーム・プレイ時間・レビュー・ウィッシュリストについての依頼で使う。query を省くとおすすめレビュー・直近プレイ・プレイ時間順のゲームを返す。',
-    parameters: {
-      type: 'OBJECT',
-      properties: {
-        query: { type: 'STRING', description: '特定のゲーム名・英語名・ジャンル・レビュー本文に含まれる語（空白区切りで AND）。おすすめ全般やよく遊ぶゲームを知りたいときは省略する' },
-        section: { type: 'STRING', enum: ['all', 'games', 'reviews', 'wishlist'], description: '調べる対象（省略するとおすすめレビューと所持ゲームを中心に返す。ウィッシュリストを見たいときは wishlist）' }
-      }
-    }
-  }
+  tool('fetch_url', { parameters: OBJECT({ url: STRING }, ['url']) }),
+  tool('get_discord_message', { parameters: OBJECT({ link: STRING }, ['link']) }),
+  tool('get_recent_messages', {
+    view: { maxMessages: MAX_RECENT_MESSAGES },
+    parameters: OBJECT({ channel_id: STRING, limit: { type: 'INTEGER' } }, ['channel_id'])
+  }),
+  tool('summarize_youtube_video', { parameters: OBJECT({ url: STRING }, ['url']) }),
+  tool('search_channel_history', { parameters: OBJECT({ channel_id: STRING, query: STRING }, ['channel_id']) }),
+  tool('list_channels'),
+  tool('get_server_rules'),
+  tool('list_forums'),
+  tool('ask_user', {
+    view: { maxOptions: MAX_OPTIONS },
+    parameters: OBJECT({ question: STRING, options: { type: 'ARRAY', items: STRING } }, ['question', 'options'])
+  }),
+  tool('list_scheduled_events'),
+  tool('search_youtube', { parameters: OBJECT({ query: STRING, sort: { type: 'STRING', enum: ['relevance', 'newest', 'oldest', 'views'] } }) }),
+  tool('search_twitch', { parameters: OBJECT({ query: STRING, sort: { type: 'STRING', enum: ['newest', 'oldest', 'views'] } }) }),
+  tool('search_steam', { parameters: OBJECT({ query: STRING, section: { type: 'STRING', enum: ['all', 'games', 'reviews', 'wishlist'] } }) })
 ]
 
 // How much stored history one search reads, and how many matching messages it returns.

@@ -42,41 +42,33 @@ const DEFAULT_DURATION_MS = 60 * 60 * 1000
 
 // The model ends every draft by calling one of these, so its answer is always structured arguments
 // rather than free text that would need parsing.
-const SUBMIT_EVENT_DECLARATION = {
-  name: 'submit_event_draft',
-  description: 'イベントの登録を頼まれたとき、調べ終わったら必ず最後に1回だけ呼ぶ。登録するイベントの下書き、または作れない理由を提出する。',
+// The descriptions are in prompts/tools/submit_event_draft.md.
+const SUBMIT_EVENT_DECLARATION = prompts.tool('submit_event_draft', {
+  view: { maxImages: MAX_IMAGE_CANDIDATES },
   parameters: {
     type: 'OBJECT',
     properties: {
-      found: { type: 'BOOLEAN', description: 'イベントとして登録できる情報（少なくとも名前と開始日時）が読み取れたか' },
-      reason: { type: 'STRING', description: 'found が false のとき、何が足りないかを利用者向けに日本語で一文' },
-      name: { type: 'STRING', description: 'イベント名（100文字以内）' },
-      description: { type: 'STRING', description: 'イベントの説明（1000文字以内、日本語）。参照元のリンクがあれば末尾に含める' },
-      start: { type: 'STRING', description: '開始日時。タイムゾーンオフセット付き ISO 8601（例: 2026-11-03T19:00:00+09:00）' },
-      end: { type: 'STRING', description: '終了日時。同じ形式。分からなければ空文字' },
-      location_type: { type: 'STRING', enum: ['external', 'voice', 'stage'], description: 'Discord のボイス/ステージチャンネルで行うなら voice/stage、それ以外は external' },
-      location: { type: 'STRING', description: 'location_type が external のときの場所（会場名・住所・URL など、100文字以内）' },
-      image_urls: { type: 'ARRAY', items: { type: 'STRING' }, description: `カバー画像の候補 URL（良い順、最大${MAX_IMAGE_CANDIDATES}つ）。参照したページの og:image / twitter:image、メッセージの添付画像・埋め込み画像から、告知画像や会場写真など内容に合うものを選ぶ。ロゴやアイコンなど小さい画像、内容と関係ない画像は選ばない。なければ空` },
+      found: { type: 'BOOLEAN' },
+      reason: { type: 'STRING' },
+      name: { type: 'STRING' },
+      description: { type: 'STRING' },
+      start: { type: 'STRING' },
+      end: { type: 'STRING' },
+      location_type: { type: 'STRING', enum: ['external', 'voice', 'stage'] },
+      location: { type: 'STRING' },
+      image_urls: { type: 'ARRAY', items: { type: 'STRING' } },
       image_instruction: IMAGE_INSTRUCTION_PROPERTY,
-      channel_id: { type: 'STRING', description: 'location_type が voice/stage のときのチャンネル ID（list_channels で確認したもの）' }
+      channel_id: { type: 'STRING' }
     },
     required: ['found']
   }
-}
+})
 
 const MAX_CHAT_REPLY = 12000
 
-const SUBMIT_CHAT_DECLARATION = {
-  name: 'submit_chat_reply',
-  description: 'イベント・フォーラム投稿・チャンネルへの書き込みの作成・修正を頼まれていない話しかけ（あいさつ・雑談・質問・相談など）に返事をするとき、調べ終わったら必ず最後に1回だけ呼ぶ。',
-  parameters: {
-    type: 'OBJECT',
-    properties: {
-      text: { type: 'STRING', description: '返事の本文（日本語、Discord の Markdown 可）。長さは依頼の「返事の長さ」に従う' }
-    },
-    required: ['text']
-  }
-}
+const SUBMIT_CHAT_DECLARATION = prompts.tool('submit_chat_reply', {
+  parameters: { type: 'OBJECT', properties: { text: { type: 'STRING' } }, required: ['text'] }
+})
 
 const SUBMIT_DECLARATIONS = [SUBMIT_EVENT_DECLARATION, SUBMIT_FORUM_DECLARATION, SUBMIT_CHANNEL_POST_DECLARATION, SUBMIT_CHAT_DECLARATION]
 
@@ -707,11 +699,9 @@ const DEEP_PROGRESS = 'じっくり考えています…（強いモデルで考
 function deepModel () {
   return (process.env.GEMINI_DEEP_MODEL ?? DEFAULT_DEEP_MODEL).trim() || null
 }
-const THINK_DEEPER_DECLARATION = {
-  name: 'think_deeper',
-  description: '計算・推論が多い依頼や、長い文章（小説・物語・SS などの創作を含む）を頼まれたときだけ、ほかのツールより先に呼ぶ。呼ぶと、ここからはより強いモデル（時間がかかる）が調べ直して答える。あいさつ・雑談・短い質問では呼ばない。',
-  parameters: { type: 'OBJECT', properties: { reason: { type: 'STRING', description: 'なぜ強いモデルが要るか（短く）' } }, required: ['reason'] }
-}
+const THINK_DEEPER_DECLARATION = prompts.tool('think_deeper', {
+  parameters: { type: 'OBJECT', properties: { reason: { type: 'STRING' } }, required: ['reason'] }
+})
 
 // The model mention replies use: the server's own (contents.model, %replymodel), else GEMINI_MODEL.
 const replyModel = contents => contents?.model || process.env.GEMINI_MODEL || DEFAULT_GEMINI_MODEL
@@ -995,18 +985,16 @@ function applyModelDirective (contents, directive, { inherited = false } = {}) {
   return true
 }
 
-const HAND_OVER_R18_DECLARATION = {
-  name: 'hand_over_r18',
-  description: 'R18・成人向け・性的な描写や官能小説など、大人向けの内容を求められていて、そのままでは書けない（ぼかした版・フェードアウト・朝チュンにするしかない）と判断したときに呼ぶ。R18・成人向けの創作やその続きでは think_deeper ではなく必ずこちらを呼ぶ。登場人物や設定を調べる必要があるときは、先に検索ツール（search_wiki など）で調べてから呼ぶ。添付画像や返信先の画像があるときは、引き継ぎ先のモデルに画像の内容を伝えるため image_description に画像に写っている内容（人物・外見・髪型・服装・表情・ポーズ・状況・文字など）を詳しく書いて渡す。呼ぶと、ここからは検閲なしのモデルが引き継いで答える。',
+const HAND_OVER_R18_DECLARATION = prompts.tool('hand_over_r18', {
   parameters: {
     type: 'OBJECT',
     properties: {
-      reason: { type: 'STRING', description: 'なぜ引き継ぐか（短く）' },
-      image_description: { type: 'STRING', description: '添付画像や返信先の画像がある場合、そこに写っている内容（人物・外見・髪型・服装・表情・ポーズ・シチュエーション・文字など）の詳しい説明' }
+      reason: { type: 'STRING' },
+      image_description: { type: 'STRING' }
     },
     required: ['reason']
   }
-}
+})
 
 const R18_PATTERN = /(?:^|[^a-z0-9])(?:r-?18|nsfw)(?:$|[^a-z0-9])|18禁|成人向け|アダルト|官能(?:小説|的)?|エロ(?:小説|ss|話|ネタ|画像|会話|台詞|セリフ|展開|描写|プレイ|ゲー|動画|本|漫画|同人)|えっち(?:な|しよ|して|しよう)|エッチ(?:な|しよ|して|しよう)|濡れ場|セックス|性行為|性交|交尾|中出し|射精|絶頂|オーガズム|オナニー|自慰|フェラ(?:チオ)?|パイズリ|手コキ|足コキ|素股|潮吹き|愛液|勃起|ちんこ|ちんぽ|チンポ|まんこ|マンコ|おまんこ|クリトリス|アナル|淫語|喘ぎ(?:声)?|凌辱|調教|輪姦|レイプ|催眠エロ|触手(?:責め|プレイ)|全裸|裸に|服を脱が|下着を脱/i
 function isR18Text (...texts) {
@@ -1628,9 +1616,7 @@ async function describeImagesForUncensored (attachedPictures) {
   if (!Array.isArray(attachedPictures) || !attachedPictures.length || !isConfigured()) return null
   try {
     const parts = [
-      {
-        text: '添付された画像に何が写っているか、テキストのみのAIモデルが内容を正確に把握できるように日本語で詳しく客観的に説明してください（人物・キャラクターの人数・性別・髪型・髪色・目の色・表情・服装・ポーズ・構図・背景・状況・画像内の文字やセリフなど）。前置きは省き、視覚情報だけを簡潔かつ具体的に記述してください。'
-      },
+      { text: prompts.render('chat/uncensored/describe-images') },
       ...attachedPictures.flatMap(p => [
         { text: p.name || '添付画像' },
         { inlineData: { mimeType: p.mimeType, data: p.buffer.toString('base64') } }
@@ -1976,16 +1962,12 @@ async function compressToolResult (toolName, args, response, contents) {
   }
   const reqContext = String(contents?.requestText || '').slice(0, 500)
   const argSummary = args && Object.keys(args).length ? JSON.stringify(args).slice(0, 300) : 'なし'
-  const extractPrompt = [
-    '以下のツールの取得結果から、利用者の依頼に答えるために必要な事実・日時・数値・固有名詞・引用・URL・Discord ID（<#ID>、<@ID>、<a?:name:ID>）・画像URLだけを漏れなく抜き出して、簡潔にまとめてください。',
-    '- 推測や補足は一切書かず、資料に書かれている事実だけを残すこと。',
-    '- URL・日時・時刻・再生数・回数・人数・時間・金額・ID は1文字も変えず原文のまま残すこと。',
-    '- 広告・ナビゲーション・無関係な話題・重複は省き、1000文字以内に収めること。',
-    '',
-    `依頼: ${wrap('request', reqContext || '（依頼文なし）')}`,
-    `ツール: ${toolName} (${argSummary})`,
-    `取得結果:\n${wrap(toolName, inner)}`
-  ].join('\n')
+  const extractPrompt = prompts.render('chat/tool-compress', {
+    request: wrap('request', reqContext || '（依頼文なし）'),
+    tool: toolName,
+    args: argSummary,
+    result: wrap(toolName, inner)
+  })
   try {
     const model = extractModel()
     const extracted = await callGemini(
@@ -2342,19 +2324,15 @@ async function draft ({ request, referenced, recent = [], channelName, channelID
   const emojiPics = pictures.filter(p => !p.attachment)
   const combined = emojiPics.filter(p => p.combined)
   const foreign = emojiPics.filter(p => !p.combined)
-  const notes = [
-    ...(combined.length ? ['連結絵文字: 複数の絵文字を並べて1枚の絵にしたものです。並べた形のままつないだ画像を付けています。1つずつではなく、全体で何を表しているか読み取ってください。'] : []),
-    ...(foreign.length ? [`ほかのサーバーの絵文字（${foreign.map(p => `:${p.name}:`).join(' ')}）: このサーバーにない絵文字の画像です。このサーバーの絵文字ではないので、返事には使わないでください。`] : [])
-  ]
   const emojiShown = emojiPics.length
     ? [
-        { text: `## メッセージ中の絵文字の画像\n依頼メッセージや返信先に出てくる絵文字を画像で付けています。何を表しているか読み取って、話の意味をつかむのに使ってください。\n${notes.map(n => `- ${n}`).join('\n')}` },
+        { text: prompts.render('chat/pictures/emoji', { combined: combined.length > 0, foreign: foreign.map(p => `:${p.name}:`).join(' ') }) },
         ...emojiPics.flatMap(p => [{ text: p.combined ? `連結絵文字 ${p.name}` : `:${p.name}:` }, { inlineData: { mimeType: p.mimeType, data: p.buffer.toString('base64') } }])
       ]
     : []
   const attachedShown = attachedPics.length
     ? [
-        { text: '## 添付・返信先の画像\n依頼メッセージや返信先に付いている画像です。画像に何が写っているか（人物・キャラクター・表情・服装・ポーズ・構図・文字・状況など）を読み取って、返事や作成に活かしてください。' },
+        { text: prompts.render('chat/pictures/attached') },
         ...attachedPics.flatMap(p => [{ text: p.name || '添付画像' }, { inlineData: { mimeType: p.mimeType, data: p.buffer.toString('base64') } }])
       ]
     : []

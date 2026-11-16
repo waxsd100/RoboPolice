@@ -33,25 +33,22 @@ function canPostAsBot (member, guild) {
     isCreator(member.id)
 }
 
-// The descriptions are prompts, kept with the others as Markdown (prompts/tools/channel-message).
-const toolText = (name, view) => prompts.render(`tools/channel-message/${name}`, view)
-
-const SUBMIT_CHANNEL_POST_DECLARATION = {
-  name: 'submit_channel_message_draft',
-  description: toolText('description'),
+// The descriptions are in prompts/tools/submit_channel_message_draft.md.
+const SUBMIT_CHANNEL_POST_DECLARATION = prompts.tool('submit_channel_message_draft', {
+  view: { maxContent: MAX_CONTENT, maxImages: MAX_IMAGE_CANDIDATES },
   parameters: {
     type: 'OBJECT',
     properties: {
-      found: { type: 'BOOLEAN', description: toolText('found') },
-      reason: { type: 'STRING', description: toolText('reason') },
-      channel_id: { type: 'STRING', description: toolText('channel-id') },
-      content: { type: 'STRING', description: toolText('content', { maxContent: MAX_CONTENT }) },
-      image_urls: { type: 'ARRAY', items: { type: 'STRING' }, description: toolText('image-urls', { maxImages: MAX_IMAGE_CANDIDATES }) },
+      found: { type: 'BOOLEAN' },
+      reason: { type: 'STRING' },
+      channel_id: { type: 'STRING' },
+      content: { type: 'STRING' },
+      image_urls: { type: 'ARRAY', items: { type: 'STRING' } },
       image_instruction: IMAGE_INSTRUCTION_PROPERTY
     },
     required: ['found']
   }
-}
+})
 
 function isThread (channel) {
   return THREAD_TYPES.includes(channel?.type)
