@@ -18,7 +18,8 @@ const { relatedRecent } = require('./recentTopics')
 const mentionQuota = require('../utils/mentionQuota')
 const { SIZES } = require('../utils/imageCrop')
 const { CoverImage, MODES } = require('./coverImage')
-const { FORUM_TYPES } = require('./forumPost')
+const { FORUM_TYPES, safePermissionsOf } = require('./forumPost')
+const { canPostAsBot, canWrite, NO_POST_PERMISSION } = require('./channelPost')
 const postedEdit = require('./postedEdit')
 const replySettingsStore = require('../../db/interfaces/postgres/replySettings')
 const mentionLogsStore = require('../../db/interfaces/postgres/mentionLogs')
@@ -170,6 +171,9 @@ function checkedDraft (result, guild) {
       }
     }
   }
+  if (result.kind === 'message' && result.message?.content) {
+    return { ...result, message: { ...result.message, content: checkedText(result.message.content, result, guild) } }
+  }
   if (result.kind === 'forum' && result.post?.message?.content) {
     return {
       ...result,
@@ -198,7 +202,8 @@ function missingSettings () {
 
 // Anyone can talk with the bot. What a request makes is checked when it is made: an event needs
 // Manage Events (or the owner, an administrator, staff, or a CREATOR_IDS user), a forum post needs permission to post
-// in that forum (checked in forumPost.js).
+// in that forum (checked in forumPost.js), and a message the bot writes into a channel needs a
+// moderator or above (channelPost.js).
 const NO_EVENT_PERMISSION = 'イベントを登録・変更するには「イベントの管理」権限が必要です。'
 
 function canManageEvents (member, guild) {
@@ -340,6 +345,24 @@ function forumPreview ({ post, tagNames, truncated }, sources, requester, cover,
   }
 }
 
+function messagePreview ({ message, truncated }, sources, requester, cover, { confirmLabel, changed }) {
+  const image = coverParts(cover)
+  return {
+    title: 'チャンネルへの書き込み',
+    description: message.content,
+    color: EMBED_COLORS.YELLOW_ORANGE,
+    fields: [
+      { name: '書き込み先', value: `<#${message.channelID}>`, inline: true },
+      ...(truncated ? [{ name: '注意', value: '本文が2000文字を超えたため、超えた分は切り捨てます。' }] : []),
+      ...changesField(changed),
+      ...image.fields,
+      ...sourcesField(sources)
+    ],
+    image: image.image,
+    footer: { text: `${requester.username} さんの依頼 ・ この内容でよければ「${confirmLabel}」を押してください` }
+  }
+}
+
 // What each kind of draft looks like and how it is created once the requester confirms.
 const KINDS = {
   event: {
@@ -377,6 +400,31 @@ const KINDS = {
         reason: `Requested by ${author.username} (${author.id})`
       }, files)
       return `フォーラムに投稿しました: https://discord.com/channels/${guild.id}/${thread.id}\n${EDIT_HINT}`
+    }
+  },
+  message: {
+    preview: messagePreview,
+    confirmLabel: '書き込む',
+    revisePrompt: '書き込む内容（本文・書き込み先）で直したいことを入力してください。画像は「画像」のボタンで変えられます（例: 最後に「よろしくお願いします」を足して、書き込み先は #雑談）',
+    size: SIZES.forumImage,
+    text: ({ message }) => ({ title: message.content.split('\n')[0].slice(0, 100), summary: message.content }),
+    async create (result, guild, author, cover, member) {
+      const { channelID, ...body } = result.message
+      // Checked again at the moment of writing: roles and channel permissions may have changed
+      // while the preview was open.
+      if (!canPostAsBot(member, guild)) return NO_POST_PERMISSION
+      const channel = guild.channels.get(channelID)
+      if (!channel) return '書き込み先のチャンネルが見つかりませんでした。'
+      if (!isCreator(member.id) && !canWrite(channel, member)) return `<#${channelID}> に書き込む権限がないため、書き込めませんでした。`
+      if (!canWrite(channel, global.bot.user.id)) return `BOTが <#${channelID}> に書き込む権限を持っていないため、書き込めませんでした。`
+      if (cover.buffer && !safePermissionsOf(channel, global.bot.user.id)?.has('attachFiles')) {
+        return `BOTに <#${channelID}> で「ファイルを添付」する権限がないため、画像つきでは書き込めませんでした。画像を「なし」にして、もう一度依頼してください。`
+      }
+      const files = cover.buffer ? [{ name: 'files[0]', file: cover.buffer }] : undefined
+      if (files) body.attachments = [{ id: 0, filename: 'image.jpg' }]
+      const posted = await global.bot.requestHandler.request('POST', `/channels/${channelID}/messages`, true, body, files)
+      global.logger.info(`Wrote a message into ${channelID} in ${guild.id} as requested by ${author.username} (${author.id})`)
+      return `<#${channelID}> に書き込みました: https://discord.com/channels/${guild.id}/${channelID}/${posted.id}\n${EDIT_HINT}`
     }
   }
 }
@@ -485,7 +533,7 @@ async function handle (message) {
   const embedded = embeddedImages(message)
   const repliedTo = message.messageReference?.messageID
   if (!request && !repliedTo && !attached.length && !embedded.length) {
-    return message.channel.createMessage({ content: '話したいことか、イベントやフォーラム投稿にしたい内容（文章・URL・メッセージリンク）を添えるか、元のメッセージに返信する形でメンションしてください。', allowedMentions: NO_MENTIONS, ...reference }).catch(() => {})
+    return message.channel.createMessage({ content: '話したいことか、イベント・フォーラム投稿・チャンネルへの書き込みにしたい内容（文章・URL・メッセージリンク）を添えるか、元のメッセージに返信する形でメンションしてください。', allowedMentions: NO_MENTIONS, ...reference }).catch(() => {})
   }
   if (inProgress.has(message.author.id)) {
     return message.channel.createMessage({ content: '前の依頼を処理中です。終わってからもう一度お試しください。', allowedMentions: NO_MENTIONS, ...reference }).catch(() => {})
@@ -529,6 +577,7 @@ async function handle (message) {
       // An image attached to the reply is what the image is to be replaced with.
       if (editTarget && !request) request = '画像を添付の画像に差し替えて'
       if (editTarget?.kind === 'event' && !canManageEvents(message.member, guild)) throw new StopDrafting(failure(NO_EVENT_PERMISSION))
+      if (editTarget?.kind === 'message' && !canPostAsBot(message.member, guild)) throw new StopDrafting(failure(NO_POST_PERMISSION))
       const edit = editTarget && await postedEdit.load(guild, editTarget, message.member)
       // A mention sent as a reply ("@bot これをイベントにして") is about the replied-to message.
       // Following the replies back makes a reply to the bot's answer continue that conversation.
@@ -653,6 +702,9 @@ async function handle (message) {
         if (!result.error && result.kind === 'event' && !canManageEvents(message.member, guild)) {
           result = { ...result, error: NO_EVENT_PERMISSION }
         }
+        if (!result.error && result.kind === 'message' && !canPostAsBot(message.member, guild)) {
+          result = { ...result, error: NO_POST_PERMISSION }
+        }
         if (result.error) {
           const errContent = failure(checkedText(String(result.error), result, guild).slice(0, 1900))
           outcome = { kind: 'error', response: errContent }
@@ -737,7 +789,7 @@ async function handle (message) {
         if (action === 'create') {
           const done = edit
             ? await postedEdit.update(guild, edit, result, cover, message.author)
-            : await kind.create(result, guild, message.author, cover)
+            : await kind.create(result, guild, message.author, cover, message.member)
           outcome = { kind: result.kind, response: done }
           await interaction.editOriginalMessage({ content: done, components: [] })
           return

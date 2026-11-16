@@ -180,7 +180,7 @@ describe('draft', () => {
     assert.equal(headers['cf-aig-authorization'], 'Bearer gw-token')
     assert.equal(body.toolConfig.functionCallingConfig.mode, 'ANY')
     assert.equal(requests[0].dispatcher, undefined, 'ordinary calls keep fetch\'s default limits')
-    assert.deepEqual(body.tools[0].functionDeclarations.map(d => d.name), ['lookup', 'think_deeper', 'submit_event_draft', 'submit_forum_post_draft', 'submit_chat_reply'])
+    assert.deepEqual(body.tools[0].functionDeclarations.map(d => d.name), ['lookup', 'think_deeper', 'submit_event_draft', 'submit_forum_post_draft', 'submit_channel_message_draft', 'submit_chat_reply'])
     assert.equal(body.serviceTier, undefined, 'the standard tier')
     assert.deepEqual(body.safetySettings, [
       { category: 'HARM_CATEGORY_HARASSMENT', threshold: 'OFF' },
@@ -588,7 +588,7 @@ describe('draft', () => {
     assert.equal(toolCalls.length, MAX_STEPS - 1)
     assert.equal(requests[MAX_STEPS - 2].body.toolConfig.functionCallingConfig.allowedFunctionNames, undefined)
     const last = requests[MAX_STEPS - 1].body
-    assert.deepEqual(last.toolConfig.functionCallingConfig.allowedFunctionNames, ['submit_event_draft', 'submit_forum_post_draft', 'submit_chat_reply'])
+    assert.deepEqual(last.toolConfig.functionCallingConfig.allowedFunctionNames, ['submit_event_draft', 'submit_forum_post_draft', 'submit_channel_message_draft', 'submit_chat_reply'])
     assert.match(last.contents.at(-1).parts.at(-1).text, /これ以上ツールで調べず/)
   })
 

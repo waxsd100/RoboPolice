@@ -13,6 +13,7 @@
 // are often posted by a bot), up to MAX_RULES_CHARS in all, read again at most every CACHE_MS.
 const crypto = require('crypto')
 const aiCache = require('../utils/aiCache')
+const prompts = require('../utils/prompts')
 
 const RULES_MESSAGES = 20
 const MAX_RULES_CHARS = 3000
@@ -65,15 +66,7 @@ async function askModel (guild, channels) {
     contents: [{
       role: 'user',
       parts: [{
-        text: [
-          `Discord サーバー「${guild.name || ''}」のチャンネル一覧です。この中から、サーバーのルール・必読事項・はじめに読むこと・禁止事項・運営からのお願いが書かれていそうなチャンネルを、可能性の高い順に最大${MAX_CHANNELS}つ選んでください。`,
-          '雑談・告知・ゲーム・募集など、ルールが書かれていないチャンネルは選ばないでください。当てはまるものがなければ「なし」とだけ答えてください。',
-          'チャンネル ID だけを、カンマ区切りで答えてください。',
-          '',
-          '<channels>',
-          list,
-          '</channels>'
-        ].join('\n')
+        text: prompts.render('rules/pick-channels', { guild: guild.name || '', max: MAX_CHANNELS, channels: list })
       }]
     }],
     generationConfig: { temperature: 0, ...thinking }

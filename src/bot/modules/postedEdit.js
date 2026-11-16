@@ -1,16 +1,19 @@
-// Changing something the bot made earlier from a mention: a scheduled event it registered, or a
-// forum post it started. The mention says which by replying to the bot's "登録しました / 投稿しました"
-// message, or (for a forum post) to the post itself. Only what the bot made can be changed this
+// Changing something the bot made earlier from a mention: a scheduled event it registered, a
+// forum post it started, or a message it wrote into a channel. The mention says which by replying
+// to the bot's "登録しました / 投稿しました / 書き込みました" message, or (for a forum post or a
+// message) to the post itself. Only what the bot made can be changed this
 // way, and with the same permissions it took to make it.
 const urlFetcher = require('../utils/urlFetcher')
 const { ENTITY_TYPES } = require('./eventDrafter')
 const { FORUM_TYPES, canPost } = require('./forumPost')
+const { POSTABLE_TYPES, canWrite } = require('./channelPost')
 const { isCreator } = require('../utils/creatorIds')
 const { hasStaffAccess } = require('../utils/staffAccess')
 const mentionLogsStore = require('../../db/interfaces/postgres/mentionLogs')
 
 const EVENT_LINK = /https:\/\/discord\.com\/events\/(\d+)\/(\d+)/
-const POST_LINK = /https:\/\/discord\.com\/channels\/(\d+)\/(\d+)(?!\/)/
+const MESSAGE_LINK = /https:\/\/discord\.com\/channels\/(\d+)\/(\d+)\/(\d+)/
+const POST_LINK = /https:\/\/discord\.com\/channels\/(\d+)\/(\d+)(?![\d/])/
 const ACTIVE_EVENT_STATUSES = [1, 2] // SCHEDULED, ACTIVE; finished or cancelled ones can't change
 const LOCATION_TYPES = { [ENTITY_TYPES.stage]: 'stage', [ENTITY_TYPES.voice]: 'voice', [ENTITY_TYPES.external]: 'external' }
 
@@ -45,11 +48,23 @@ async function findTarget (guild, channelID, messageID) {
   if (!replied || replied.author?.id !== global.bot.user.id) return null
   // A forum post's first message has the thread's ID; load() checks it really is a forum post.
   if (messageID === channelID) return { kind: 'forum', id: channelID }
+  // A message the bot wrote into a channel from a mention, replied to directly: the mention logs
+  // tell it from the bot's other messages (chat replies, logs).
+  if (await postedBy(guild.id, `${channelID}/${messageID}`, 'message')) return { kind: 'message', channelID, id: messageID }
   const event = replied.content.match(EVENT_LINK)
   if (event && event[1] === guild.id) return { kind: 'event', id: event[2] }
+  const written = replied.content.match(MESSAGE_LINK)
+  if (written && written[1] === guild.id) return { kind: 'message', channelID: written[2], id: written[3] }
   const post = replied.content.match(POST_LINK)
   if (post && post[1] === guild.id) return { kind: 'forum', id: post[2] }
   return null
+}
+
+// Who asked for what the bot made at `path` ("threadID" or "channelID/messageID"), from the
+// mention logs; null when unknown.
+function postedBy (guildID, path, kind) {
+  if (typeof mentionLogsStore.findPostCreator !== 'function') return Promise.resolve(null)
+  return mentionLogsStore.findPostCreator(guildID, path, kind).catch(() => null)
 }
 
 // Downloads an existing image for the preview. The image stays even if this fails.
@@ -85,6 +100,8 @@ async function load (guild, target, member = null) {
     }
   }
 
+  if (target.kind === 'message') return loadMessage(guild, target, member)
+
   const thread = await request('GET', `/channels/${target.id}`).catch(() => null)
   const starter = thread && await global.bot.getMessage(target.id, target.id).catch(() => null)
   if (!starter || starter.author?.id !== global.bot.user.id || thread.guild_id !== guild.id) {
@@ -100,9 +117,7 @@ async function load (guild, target, member = null) {
     if (thread.thread_metadata?.locked && !isCreator(member.id) && !safePermissionsOf(forumChannel, member)?.has('manageThreads')) {
       throw new EditRefused('ロックされたスレッドは編集できません')
     }
-    const creatorID = typeof mentionLogsStore.findPostCreator === 'function'
-      ? await mentionLogsStore.findPostCreator(guild.id, thread.id).catch(() => null)
-      : null
+    const creatorID = await postedBy(guild.id, thread.id, 'forum')
     if (creatorID && creatorID !== member.id && !isCreator(member.id) && !hasStaffAccess(member.roles, guild) && !safePermissionsOf(forumChannel, member)?.has('manageThreads')) {
       throw new EditRefused('他のメンバーが作成したフォーラム投稿は編集できません')
     }
@@ -119,6 +134,26 @@ async function load (guild, target, member = null) {
       content: starter.content,
       tags: (thread.applied_tags || []).map(id => tagNames.get(id)).filter(Boolean)
     },
+    image: await currentImage(attached?.url)
+  }
+}
+
+// A message the bot wrote into a channel. Only moderators may ask (checked in mentionEvent.js);
+// they must still be able to write in that channel.
+async function loadMessage (guild, target, member) {
+  const channel = guild.channels?.get?.(target.channelID)
+  const written = channel && POSTABLE_TYPES.includes(channel.type) && await global.bot.getMessage(target.channelID, target.id).catch(() => null)
+  if (!written || written.author?.id !== global.bot.user.id || written.webhookID) {
+    throw new EditRefused('BOT が書き込んだメッセージではないため、直せません。')
+  }
+  if (member && !isCreator(member.id) && !canWrite(channel, member)) {
+    throw new EditRefused('このチャンネルに書き込む権限がないため編集できません')
+  }
+  const attached = (written.attachments || []).find(a => /^image\//.test(a.content_type || '') || /\.(jpe?g|png|webp|gif)$/i.test(a.filename || ''))
+  return {
+    ...target,
+    link: `https://discord.com/channels/${guild.id}/${target.channelID}/${target.id}`,
+    current: { found: true, channel_id: target.channelID, content: written.content },
     image: await currentImage(attached?.url)
   }
 }
@@ -163,10 +198,22 @@ async function updateForumPost (guild, target, { post }, cover, author) {
   return `フォーラムの投稿を更新しました: ${target.link}\n${EDIT_HINT}`
 }
 
+async function updateMessage (guild, target, { message }, cover) {
+  const { channelID, ...body } = message
+  const image = imageChange(cover)
+  const files = image.buffer ? [{ name: 'files[0]', file: image.buffer }] : undefined
+  await request('PATCH', `/channels/${target.channelID}/messages/${target.id}`, {
+    ...body,
+    // Listing attachments replaces the old ones; leaving the list out keeps them.
+    ...(image.keep ? {} : { attachments: image.buffer ? [{ id: 0, filename: 'image.jpg' }] : [] })
+  }, files)
+  return `書き込みを更新しました: ${target.link}\n${EDIT_HINT}`
+}
+
 function update (guild, target, result, cover, author) {
-  return target.kind === 'event'
-    ? updateEvent(guild, target, result, cover, author)
-    : updateForumPost(guild, target, result, cover, author)
+  if (target.kind === 'event') return updateEvent(guild, target, result, cover, author)
+  if (target.kind === 'message') return updateMessage(guild, target, result, cover)
+  return updateForumPost(guild, target, result, cover, author)
 }
 
 // What the draft changes, by name, so the requester can see nothing else is touched.
@@ -189,6 +236,10 @@ function changes (target, result) {
       nextEnd !== prevEnd && '終了',
       location !== wasLocation && '場所'
     ].filter(Boolean)
+  }
+  if (target.kind === 'message') {
+    if (!result.message) return []
+    return [result.message.content !== was.content && '本文'].filter(Boolean)
   }
   const { post, tagNames = [] } = result
   if (!post) return []

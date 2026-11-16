@@ -55,3 +55,38 @@ test('keeps the reply length rules as lines', () => {
   assert.equal(lines.length, 2)
   assert.ok(lines.every(l => l.startsWith('- ')))
 })
+
+test('a tool takes its description and each parameter description from its file', () => {
+  const declaration = prompts.tool('submit_forum_post_draft', {
+    view: { maxTitle: 100, maxContent: 2000, maxTags: 5, maxImages: 4 },
+    parameters: { type: 'OBJECT', properties: { title: { type: 'STRING' }, found: { type: 'BOOLEAN' }, channel_id: { type: 'STRING' }, content: { type: 'STRING' }, tags: { type: 'ARRAY' }, image_urls: { type: 'ARRAY' }, reason: { type: 'STRING' }, image_instruction: { type: 'STRING', description: 'shared' } }, required: ['found'] }
+  })
+  assert.equal(declaration.name, 'submit_forum_post_draft')
+  assert.match(declaration.description, /^フォーラムへの投稿を頼まれたとき/)
+  assert.doesNotMatch(declaration.description, /##/)
+  assert.equal(declaration.parameters.properties.title.description, '投稿の題名（100文字以内）')
+  assert.equal(declaration.parameters.properties.image_instruction.description, 'shared', 'a description already given is kept')
+  assert.deepEqual(declaration.parameters.required, ['found'])
+  // Without parameters there is no `parameters` at all: Gemini rejects an empty OBJECT schema.
+  assert.deepEqual(Object.keys(prompts.tool('list_channels')), ['name', 'description'])
+})
+
+test('a tool file describing a parameter the tool does not have is refused', () => {
+  assert.throws(() => prompts.tool('submit_chat_reply', { parameters: { type: 'OBJECT', properties: { body: { type: 'STRING' } } } }), /section\(s\) for nothing: text/)
+})
+
+test('sokudan questions: instructions, choices in the given order, and score levels', () => {
+  const q = prompts.questions('mention', {
+    intent: { type: 'choice', choices: ['event', 'chat', 'forum'] },
+    needs_deep: { type: 'noul' },
+    is_r18: { type: 'noul' },
+    is_story: { type: 'noul' },
+    complexity: { type: 'score', levels: 3 }
+  })
+  assert.equal(q.intent.instructions, 'この依頼メッセージがBOTに何を求めているか選んでください。')
+  assert.deepEqual(Object.keys(q.intent.criteria), ['event', 'chat', 'forum'])
+  assert.equal(q.needs_deep.criteria, undefined)
+  assert.equal(q.complexity.criteria.length, 3)
+  assert.throws(() => prompts.questions('mention', { intent: { type: 'choice', choices: ['chat', 'event', 'forum'] }, needs_deep: { type: 'noul' }, is_r18: { type: 'noul' }, is_story: { type: 'noul' }, complexity: { type: 'score', levels: 3 } }), /must list "intent" choices as chat, event, forum/)
+  assert.throws(() => prompts.questions('refusal', { refusal: { type: 'noul' }, other: { type: 'noul' } }), /no "## other" section/)
+})

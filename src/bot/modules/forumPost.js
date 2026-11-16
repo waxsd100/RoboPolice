@@ -6,6 +6,7 @@
 
 const { withoutCharCount } = require('../utils/textClean')
 const { isCreator } = require('../utils/creatorIds')
+const prompts = require('../utils/prompts')
 
 const FORUM_TYPES = [15, 16] // GUILD_FORUM, GUILD_MEDIA
 const REQUIRE_TAG = 1 << 4
@@ -15,30 +16,30 @@ const MAX_CONTENT = 2000
 const MAX_IMAGE_CANDIDATES = 4
 const MAX_IMAGE_INSTRUCTION = 500
 
-// Shared by both submit tools: what the requester said about the image itself.
+// Shared by the submit tools: what the requester said about the image itself.
 const IMAGE_INSTRUCTION_PROPERTY = {
   type: 'STRING',
-  description: '依頼者が画像について指示したときだけ、その指示を依頼者の言葉どおりに入れる（例:「背景を夜空にして」「もっと明るく」「この画像に差し替えて https://…」）。差し替える画像の URL があれば含める。指示がなければ空'
+  description: prompts.render('tools/shared/image-instruction')
 }
 
-const SUBMIT_FORUM_DECLARATION = {
-  name: 'submit_forum_post_draft',
-  description: 'フォーラムへの投稿を頼まれたとき、調べ終わったら必ず最後に1回だけ呼ぶ。投稿の下書き、または作れない理由を提出する。',
+// The descriptions are in prompts/tools/submit_forum_post_draft.md.
+const SUBMIT_FORUM_DECLARATION = prompts.tool('submit_forum_post_draft', {
+  view: { maxTitle: MAX_TITLE, maxContent: MAX_CONTENT, maxTags: MAX_TAGS, maxImages: MAX_IMAGE_CANDIDATES },
   parameters: {
     type: 'OBJECT',
     properties: {
-      found: { type: 'BOOLEAN', description: '投稿先と、投稿の題名・本文を決められたか' },
-      reason: { type: 'STRING', description: 'found が false のとき、何が足りないかを利用者向けに日本語で一文' },
-      channel_id: { type: 'STRING', description: '投稿先のフォーラムの ID（list_forums で確認したもの）' },
-      title: { type: 'STRING', description: `投稿の題名（${MAX_TITLE}文字以内）` },
-      content: { type: 'STRING', description: `投稿の本文（${MAX_CONTENT}文字以内、Discord の Markdown 可）。参照元のリンクがあれば末尾に含める` },
-      tags: { type: 'ARRAY', items: { type: 'STRING' }, description: `付けるタグの名前（list_forums に出たものから最大${MAX_TAGS}個）` },
-      image_urls: { type: 'ARRAY', items: { type: 'STRING' }, description: `投稿に添える画像の候補 URL（良い順、最大${MAX_IMAGE_CANDIDATES}つ）。参照したページの og:image / twitter:image、メッセージの添付画像・埋め込み画像から内容に合うものを選ぶ。ロゴやアイコンなど小さい画像は選ばない。なければ空` },
+      found: { type: 'BOOLEAN' },
+      reason: { type: 'STRING' },
+      channel_id: { type: 'STRING' },
+      title: { type: 'STRING' },
+      content: { type: 'STRING' },
+      tags: { type: 'ARRAY', items: { type: 'STRING' } },
+      image_urls: { type: 'ARRAY', items: { type: 'STRING' } },
       image_instruction: IMAGE_INSTRUCTION_PROPERTY
     },
     required: ['found']
   }
-}
+})
 
 // The image candidates the model picked, best first: plain http(s) URLs only, without duplicates.
 // Fetching them later goes through the same address checks as any other URL. A single image_url

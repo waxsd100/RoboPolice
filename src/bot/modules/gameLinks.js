@@ -5,6 +5,7 @@
 const urlFetcher = require('../utils/urlFetcher')
 const aiCache = require('../utils/aiCache')
 const { callGemini, resolveTaskConfig } = require('./eventDrafter')
+const prompts = require('../utils/prompts')
 
 const STEAM_SEARCH = 'https://store.steampowered.com/api/storesearch/'
 const TIMEOUT_MS = 15 * 1000
@@ -36,7 +37,7 @@ async function officialPage (name, { guildID = null } = {}) {
   const content = await callGemini(m, {
     contents: [{
       role: 'user',
-      parts: [{ text: `ゲーム「${name}」の公式サイト、または公式のストアページ（PlayStation Store、Nintendo、Xbox、App Store、Google Play など）の URL を1つだけ、URL のみで答えてください。見つからなければ「なし」とだけ答えてください。` }]
+      parts: [{ text: prompts.render('game/official-page', { name }) }]
     }],
     tools: [{ google_search: {} }],
     generationConfig: { temperature: 0, ...thinking }

@@ -47,4 +47,72 @@ function render (name, view = {}) {
 // A prompt's lines, for prompts used as lists of rules (the reply lengths).
 const lines = (name, view) => render(name, view).split('\n')
 
-module.exports = { render, lines, PROMPTS_DIR }
+// A prompt split at its "## " headings: the text before the first one (`head`) and each section's
+// text by its heading. For prompts that fill a structure rather than being sent whole.
+function sections (name, view = {}) {
+  const [head, ...parts] = render(name, view).split(/^## /m)
+  const bodies = new Map()
+  for (const part of parts) {
+    const end = part.indexOf('\n')
+    const heading = (end === -1 ? part : part.slice(0, end)).trim()
+    if (bodies.has(heading)) throw new Error(`Prompt ${name} has two "## ${heading}" sections`)
+    bodies.set(heading, end === -1 ? '' : part.slice(end + 1).trim())
+  }
+  return { head: head.trim(), bodies }
+}
+
+function unknownHeadings (name, bodies, known) {
+  const unknown = [...bodies.keys()].filter(key => !known.includes(key))
+  if (unknown.length) throw new Error(`Prompt ${name} has section(s) for nothing: ${unknown.join(', ')}`)
+}
+
+// A tool the model can call, with its descriptions from prompts/tools/<name>.md: the text before the
+// first "## " heading describes the tool, and each "## <parameter>" section describes that
+// parameter. `parameters` is the schema without those descriptions; a parameter with no section is
+// left without one, and a section naming no parameter is an error (a misspelt or stale heading).
+// A property that already has a description (one shared by several tools) keeps it.
+function tool (name, { parameters, view = {} } = {}) {
+  const file = `tools/${name}`
+  const { head, bodies } = sections(file, view)
+  const properties = parameters?.properties || {}
+  unknownHeadings(file, bodies, Object.keys(properties))
+  const declaration = { name, description: head }
+  if (parameters) {
+    declaration.parameters = {
+      ...parameters,
+      properties: Object.fromEntries(Object.entries(properties).map(([key, schema]) =>
+        [key, bodies.has(key) && !schema.description ? { ...schema, description: bodies.get(key) } : { ...schema }]))
+    }
+  }
+  return declaration
+}
+
+// The questions for sokudan (prompts/sokudan/<name>.md), one "## <question>" section each: its text
+// is the instructions; a `choice` question lists its options as "- key: description" lines, a
+// `score` question its levels as "1. description" lines (lowest first). `spec` gives each question's
+// type, and for a choice its keys in the order they are offered (the order matters to sokudan, so
+// the file must list them in that order).
+function questions (name, spec) {
+  const file = `sokudan/${name}`
+  const { bodies } = sections(file)
+  unknownHeadings(file, bodies, Object.keys(spec))
+  return Object.fromEntries(Object.entries(spec).map(([key, { type, choices, levels }]) => {
+    if (!bodies.has(key)) throw new Error(`Prompt ${file} has no "## ${key}" section`)
+    const lines = bodies.get(key).split('\n')
+    const listed = lines.filter(l => /^(- |\d+\. )/.test(l))
+    const instructions = lines.filter(l => !listed.includes(l)).join('\n').trim()
+    const question = { type, instructions }
+    if (type === 'choice') {
+      const options = listed.map(l => l.match(/^- ([^:]+):\s*(.+)$/)).filter(Boolean).map(m => [m[1].trim(), m[2].trim()])
+      if (options.map(o => o[0]).join(',') !== choices.join(',')) throw new Error(`Prompt ${file} must list "${key}" choices as ${choices.join(', ')}`)
+      question.criteria = Object.fromEntries(options)
+    } else if (type === 'score') {
+      const steps = listed.map(l => l.match(/^\d+\. (.+)$/)).filter(Boolean).map(m => m[1].trim())
+      if (steps.length !== levels) throw new Error(`Prompt ${file} must list ${levels} levels for "${key}"`)
+      question.criteria = steps
+    }
+    return [key, question]
+  }))
+}
+
+module.exports = { render, lines, sections, tool, questions, PROMPTS_DIR }
