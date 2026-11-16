@@ -42,4 +42,25 @@ function editCover ({ title, summary, instruction, source, size }) {
   return callImageModel(buildEditPrompt({ title, summary, instruction, hasSource: !!source }), source, size)
 }
 
-module.exports = { generateCover, editCover, buildPrompt, buildEditPrompt }
+// The aspect ratios a picture asked for in chat may have (generate_image in eventTools.js).
+const CHAT_ASPECT_RATIOS = ['1:1', '16:9', '9:16', '4:3', '3:4']
+
+// A picture asked for in chat, as the model described it, made from `sources` (images to base it
+// on or edit, as JPEG or PNG buffers) when there are any. Resolves to { buffer, mimeType }, as
+// the image model made it (not cropped).
+async function generateImage ({ description, sources = [], aspectRatio = '1:1' }) {
+  const parts = [{ text: prompts.render('image/chat', { description: String(description).slice(0, 2000), hasSource: sources.length !== 0 }) }]
+  for (const source of sources) parts.push({ inlineData: { mimeType: source.mimeType || 'image/png', data: source.buffer.toString('base64') } })
+  const content = await callGemini(process.env.GEMINI_IMAGE_MODEL || DEFAULT_IMAGE_MODEL, {
+    contents: [{ role: 'user', parts }],
+    generationConfig: {
+      responseModalities: ['IMAGE'],
+      imageConfig: { aspectRatio: CHAT_ASPECT_RATIOS.includes(aspectRatio) ? aspectRatio : '1:1' }
+    }
+  }, { purpose: 'image' })
+  const image = content.parts.map(p => p.inlineData || p.inline_data).find(d => /^image\//.test(d?.mimeType || d?.mime_type || ''))
+  if (!image) throw new GeminiError(`Gemini returned no image: ${JSON.stringify(content).slice(0, 500)}`, 'AI が画像を作れませんでした')
+  return { buffer: Buffer.from(image.data, 'base64'), mimeType: image.mimeType || image.mime_type }
+}
+
+module.exports = { generateCover, editCover, generateImage, buildPrompt, buildEditPrompt, CHAT_ASPECT_RATIOS }

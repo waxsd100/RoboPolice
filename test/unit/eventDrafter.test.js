@@ -397,10 +397,11 @@ describe('draft', () => {
     assert.match(chat, /^## 話し方（このサーバーの設定）\n[^\n]+\n\n## 返事の長さ（このサーバーの設定）\n/)
     assert.doesNotMatch(chat, /※執筆時の注意/)
     assert.doesNotMatch(chat, /\n{3,}|<untrusted/)
+    // An R18 request is not a story for that alone: a chat reply keeps the reply length.
+    assert.match(compactUncensoredText(await promptOf('やあ'), { r18Mode: true }), /## 返事の長さ（このサーバーの設定）/)
     for (const text of [
       compactUncensoredText(await promptOf('小説を書いて')),
-      compactUncensoredText(await promptOf('もっと', { text: 'あなた（BOT）: 物語の一節', count: 1 })),
-      compactUncensoredText(await promptOf('やあ'), { r18Mode: true })
+      compactUncensoredText(await promptOf('もっと', { text: 'あなた（BOT）: 物語の一節', count: 1 }))
     ]) {
       assert.doesNotMatch(text, /## 話し方|## 返事の長さ/)
       assert.match(text, /\n\n※執筆時の注意: [^\n]+$/)
@@ -1189,6 +1190,16 @@ describe('explicit cache and thinking', () => {
     assert.match(cloudRunBody.messages[0].content, /省略・ぼかし・フェードアウト（朝チュンなど）をせず/)
     assert.match(cloudRunBody.messages[0].content, /未成年（に見える人物）を性的に扱うものは一切書かない/)
     assert.doesNotMatch(cloudRunBody.messages.at(-1).content, /<untrusted/)
+    assert.match(cloudRunBody.messages[0].content, /## 小説・描写のルール（この依頼は小説・物語の創作）[\s\S]*文字数の上限はありません/)
+
+    // 1b. The same R18 model, but not asked for a story: the server's reply length holds, and
+    // nothing says to write long.
+    await draft({ request: 'R18 --2 今日どうだった？', channelName: 'general', replyLength: 'short', guild, tools: quietTools, now: NOW })
+    assert.equal(cloudRunBody.model, 'gemma-4-31B-it-The-DECKARD-HERETIC-UNCENSORED-Thinking.Q4_K_M')
+    assert.match(cloudRunBody.messages[0].content, /## 返事の長さ（この依頼は小説ではない）\n- [^\n]*「返事の長さ」（サーバーの設定）に従い、それより長く書かない/)
+    assert.doesNotMatch(cloudRunBody.messages[0].content, /文字数の上限はありません|長編で書き切る|地の文は常体/)
+    assert.match(cloudRunBody.messages.at(-1).content, /## 返事の長さ（このサーバーの設定）\n- 創作以外の返事: できるだけ短く。/)
+    assert.doesNotMatch(cloudRunBody.messages.at(-1).content, /※執筆時の注意/)
 
     // 2. Normal Gemini block fallback uses Model 1 (UNCENSORED_MODEL)
     let blockedFallbackModel = null

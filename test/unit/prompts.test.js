@@ -38,8 +38,8 @@ test('fills in values as they are, and keeps sections only when set', () => {
   assert.ok(withPersona.endsWith('\n\n## 運営者が設定したキャラクター\nござる口調'))
   assert.ok(withPersona.startsWith(`${system}\n\n`))
 
-  const r18 = prompts.render('chat/uncensored/rules', { r18Mode: true, compact: false })
-  const plain = prompts.render('chat/uncensored/rules', { r18Mode: false, compact: false })
+  const r18 = prompts.render('chat/uncensored/rules', { r18Mode: true, compact: false, images: false, story: false })
+  const plain = prompts.render('chat/uncensored/rules', { r18Mode: false, compact: false, images: false, story: false })
   assert.match(r18, /依頼者は成人向け・R18 モードを指定しています/)
   assert.doesNotMatch(plain, /依頼者は成人向け・R18 モードを指定しています/)
   assert.equal(r18.split('\n').length, plain.split('\n').length + 1)
