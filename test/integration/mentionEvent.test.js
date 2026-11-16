@@ -511,6 +511,58 @@ describe('mention → event / forum post (integration)', () => {
     assert.equal(replies[0].state.content, '時間内に入力がなかったため、作成を取りやめました。')
   })
 
+  test('image: a picture asked for in chat is made and attached to the reply, from an attached image when asked', async () => {
+    const { channel, replies } = createChannel()
+    const made = await sharp({ create: { width: 64, height: 64, channels: 3, background: '#3366cc' } }).png().toBuffer()
+    const requests = installGemini([
+      body => {
+        assert.ok(body.tools[0].functionDeclarations.some(d => d.name === 'generate_image'))
+        return [call('generate_image', { description: '青い空の下で笑うよつろん、水彩画', aspect_ratio: '16:9' })]
+      },
+      [{ inlineData: { mimeType: 'image/png', data: made.toString('base64') } }],
+      body => {
+        assert.match(lastToolResponses(body)[0].response.result, /画像を作りました（1枚目）。返事に添付されます/)
+        return [call('generate_image', { description: '添付の写真を夜空にした版', use_source_images: true })]
+      },
+      body => {
+        const [prompt, source] = body.contents[0].parts
+        assert.match(prompt.text, /Using the attached image\(s\) as the base[\s\S]*添付の写真を夜空にした版/)
+        assert.equal(source.inlineData.mimeType, 'image/png')
+        return [{ inlineData: { mimeType: 'image/png', data: made.toString('base64') } }]
+      },
+      [call('generate_image', { description: '3枚目' })],
+      body => {
+        assert.match(lastToolResponses(body)[0].response.error, /2 枚まで/)
+        return [call('submit_chat_reply', { text: 'よつろんの絵を2枚作ったよ！' })]
+      }
+    ])
+    await mentionEvent.handle(mention(channel, '<@BOT> よつろんの画像作って', { attachments: [{ url: `${site.url}/poster.png`, filename: 'poster.png', content_type: 'image/png' }] }))
+    const imageCalls = requests.filter(r => /flash-image/.test(r.url))
+    assert.equal(imageCalls.length, 2)
+    assert.deepEqual(imageCalls[0].body.generationConfig, { responseModalities: ['IMAGE'], imageConfig: { aspectRatio: '16:9' } })
+    assert.match(imageCalls[0].body.contents[0].parts[0].text, /^Make the picture described below\.\nDescription \(may be in Japanese\): 青い空の下で笑うよつろん、水彩画\nDo not add any text/)
+    assert.equal(imageCalls[0].body.contents[0].parts.length, 1, 'no source image unless asked')
+    const [reply] = replies
+    assert.equal(reply.state.content, 'よつろんの絵を2枚作ったよ！')
+    assert.deepEqual(reply.state.files.map(f => f.filename), ['image-1.png', 'image-2.png'])
+    assert.deepEqual(reply.state.files[0].file, made)
+  })
+
+  test('image: a chat reply without a picture made sends no files, and IMAGE_GENERATION=false offers no tool', async (t) => {
+    const { channel, replies } = createChannel()
+    process.env.IMAGE_GENERATION = 'false'
+    t.after(() => { delete process.env.IMAGE_GENERATION })
+    installGemini([
+      body => {
+        assert.ok(!body.tools[0].functionDeclarations.some(d => d.name === 'generate_image'))
+        return [call('submit_chat_reply', { text: 'やあ' })]
+      }
+    ])
+    await mentionEvent.handle(mention(channel, '<@BOT> やあ'))
+    assert.equal(replies[0].state.content, 'やあ')
+    assert.deepEqual(replies[0].state.files || [], [])
+  })
+
   test('image: a poster from og:image is shown whole on a blurred background, and the preview shows the real result', async () => {
     const { channel, replies } = createChannel()
     installGemini([

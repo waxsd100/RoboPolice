@@ -19,6 +19,7 @@ const { messageEmbeddingsEnabled } = require('./embeddingIndexer')
 const { wrap, reportInjectionAsync } = require('../utils/untrusted')
 const serverLore = require('./serverLore')
 const serverRules = require('./serverRules')
+const imageGen = require('./imageGen')
 const loreStore = require('../../db/interfaces/postgres/serverLore')
 const embeddingStore = require('../../db/interfaces/postgres/embeddings')
 const { embeddableText } = require('../utils/messageNoise')
@@ -49,6 +50,19 @@ const MAX_MEMBER_MESSAGES = 30
 const MAX_MEMBER_MATCHES = 5
 
 const FIND_GAME = tool('find_game', { parameters: OBJECT({ name: STRING, name_en: STRING }, ['name']) })
+
+// A picture asked for in chat (imageGen.generateImage), attached to the reply (mentionEvent.js).
+// IMAGE_GENERATION=false turns it off. At most MAX_GENERATED_IMAGES a request.
+const GENERATE_IMAGE = tool('generate_image', {
+  parameters: OBJECT({
+    description: STRING,
+    aspect_ratio: { type: 'STRING', enum: imageGen.CHAT_ASPECT_RATIOS },
+    use_source_images: { type: 'BOOLEAN' }
+  }, ['description'])
+})
+const MAX_GENERATED_IMAGES = 2
+const MAX_SOURCE_IMAGES = 3
+const imageGenerationEnabled = () => process.env.IMAGE_GENERATION !== 'false'
 
 const SEARCH_WIKI = tool('search_wiki', { parameters: OBJECT({ query: STRING }, ['query']) })
 
@@ -170,6 +184,9 @@ class StopDrafting extends Error {}
 function createTools ({ guild, member, ask, progress = () => {} }) {
   const sources = []
   let questions = 0
+  // Pictures made for this request (generate_image): { buffer, mimeType, description }. The
+  // images it may start from are set once they are known (api.sourceImages: URLs).
+  const generated = []
 
   async function readableChannel (channelID) {
     const channel = global.bot.getChannel(channelID)
@@ -400,6 +417,24 @@ function createTools ({ guild, member, ask, progress = () => {} }) {
         '（その場で読んだもので、保存されません）'
       ].filter(l => l !== '').join('\n')
     },
+    async generate_image ({ description, aspect_ratio: aspectRatio, use_source_images: useSources }) {
+      if (!String(description || '').trim()) throw new Error('作る画像の説明（description）がありません')
+      if (generated.length >= MAX_GENERATED_IMAGES) throw new Error(`1回の依頼で作れる画像は ${MAX_GENERATED_IMAGES} 枚までです。作った画像で返事をしてください`)
+      const urls = useSources ? (api.sourceImages || []).slice(0, MAX_SOURCE_IMAGES) : []
+      if (useSources && !urls.length) throw new Error('元にする画像がありません（依頼にも返信先にも画像が添付されていません）')
+      const images = []
+      for (const url of urls) {
+        const { buffer, contentType } = await urlFetcher.fetchImage(url)
+        images.push({ buffer, mimeType: contentType })
+      }
+      progress('画像を作っています…')
+      const image = await imageGen.generateImage({ description, sources: images, aspectRatio }).catch(e => {
+        // What the model can tell the requester, not the response body.
+        throw new Error(e.blocked ? `画像のAIの制限で作れませんでした（${e.blocked}）` : (e.hint || e.message))
+      })
+      generated.push({ ...image, description: String(description).slice(0, 500) })
+      return `画像を作りました（${generated.length}枚目）。返事に添付されます。返事では URL やファイル名を書かず、どんな画像にしたかを短く添えてください。`
+    },
     async summarize_youtube_video ({ url }) {
       const { videoID, summary, cached } = await videoSummary.summarizeVideo(guild.id, url, {
         onStart: timeoutMs => progress(`動画の内容を読み取っています…（長い動画は数分かかります。最大 ${Math.round(timeoutMs / 60000)} 分）`)
@@ -427,8 +462,9 @@ function createTools ({ guild, member, ask, progress = () => {} }) {
     }
   }
 
-  const declarations = [...DECLARATIONS, FIND_GAME, ABOUT_MEMBER, ...(messageEmbeddingsEnabled() ? [SEARCH_SERVER_MESSAGES] : []), ...(wikiKnowledge.searchable() ? [SEARCH_WIKI] : [])]
-  return { declarations, call, sources, readMessage, readThread, progress }
+  const declarations = [...DECLARATIONS, FIND_GAME, ABOUT_MEMBER, ...(messageEmbeddingsEnabled() ? [SEARCH_SERVER_MESSAGES] : []), ...(wikiKnowledge.searchable() ? [SEARCH_WIKI] : []), ...(imageGenerationEnabled() ? [GENERATE_IMAGE] : [])]
+  const api = { declarations, call, sources, generated, sourceImages: [], readMessage, readThread, progress }
+  return api
 }
 
 async function scheduledEvents (guild) {

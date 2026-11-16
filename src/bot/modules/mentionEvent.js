@@ -431,6 +431,8 @@ const KINDS = {
 
 // Edits the reply. With `files` ([{ filename, file }], or null to remove all) the edit goes through
 // the REST API directly: the pinned Eris cannot attach files when editing a message.
+const imageExtension = mimeType => ({ 'image/jpeg': 'jpg', 'image/webp': 'webp', 'image/gif': 'gif' })[mimeType] || 'png'
+
 async function editReply (reply, payload, files) {
   if (files === undefined) return reply.edit({ allowedMentions: NO_MENTIONS, ...payload })
   const list = files || []
@@ -630,6 +632,8 @@ async function handle (message) {
       // Combined emojis, other servers' emojis, and attached/replied-to images in what was said are
       // shown to the model as images, for this request only.
       const threadImages = edit ? [] : [...new Set([...attached, ...embedded, ...(referenced?.images || [])])]
+      // What a picture asked for can be made from (generate_image).
+      tools.sourceImages = threadImages
       const pictures = directR18
         ? await attachedPictures(threadImages).catch(() => [])
         : await picturesFor([request, referenced?.text], guild, threadImages, { extraEmojis }).catch(() => [])
@@ -676,7 +680,9 @@ async function handle (message) {
             const { content, embeds } = await withLinkCards(withServerChannels(withServerEmojis(checkedLinks(result, guild), guild, extraEmojis), guild, message.member))
             outcome = { kind: 'chat', response: content }
             const chunks = splitChatMessages(content, debugFooter ? tokenFooter(usage) : '')
-            await reply.edit({ content: chunks[0], embeds: chunks.length === 1 ? embeds : [], components: [], allowedMentions: NO_MENTIONS })
+            // Pictures the model made for the request (generate_image) go with the first message.
+            const madeImages = tools.generated.map((image, i) => ({ filename: `image-${i + 1}.${imageExtension(image.mimeType)}`, file: image.buffer }))
+            await editReply(reply, { content: chunks[0], embeds: chunks.length === 1 ? embeds : [], components: [], allowedMentions: NO_MENTIONS }, madeImages.length ? madeImages : undefined)
             const sentIds = [message.id, reply?.id]
             let prevId = reply?.id || message.id
             for (let i = 1; i < chunks.length; i++) {
