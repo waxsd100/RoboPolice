@@ -6,6 +6,7 @@
 // requester and the bot must also both be able to write in the channel.
 
 const { withoutCharCount } = require('../utils/textClean')
+const prompts = require('../utils/prompts')
 const { isCreator } = require('../utils/creatorIds')
 const { hasStaffAccess } = require('../utils/staffAccess')
 const { IMAGE_INSTRUCTION_PROPERTY, imageUrlsOf, imageInstructionOf, safePermissionsOf, MAX_IMAGE_CANDIDATES } = require('./forumPost')
@@ -32,17 +33,20 @@ function canPostAsBot (member, guild) {
     isCreator(member.id)
 }
 
+// The descriptions are prompts, kept with the others as Markdown (prompts/tools/channel-message).
+const toolText = (name, view) => prompts.render(`tools/channel-message/${name}`, view)
+
 const SUBMIT_CHANNEL_POST_DECLARATION = {
   name: 'submit_channel_message_draft',
-  description: 'BOT として特定のチャンネルにメッセージを書き込む（「#お知らせ に〇〇と書いて」「〇〇チャンネルにこれを投稿して」など）よう頼まれたとき、調べ終わったら必ず最後に1回だけ呼ぶ。書き込む内容の下書き、または作れない理由を提出する。フォーラムへの投稿は submit_forum_post_draft を使う。',
+  description: toolText('description'),
   parameters: {
     type: 'OBJECT',
     properties: {
-      found: { type: 'BOOLEAN', description: '書き込み先のチャンネルと、書き込む本文を決められたか' },
-      reason: { type: 'STRING', description: 'found が false のとき、何が足りないかを利用者向けに日本語で一文' },
-      channel_id: { type: 'STRING', description: '書き込み先のチャンネルの ID（依頼の <#ID>、または list_channels で確認したもの。テキスト・アナウンス・スレッドのみ）' },
-      content: { type: 'STRING', description: `書き込む本文（${MAX_CONTENT}文字以内、Discord の Markdown 可）。依頼者が文面を指定したときはその文面を変えずにそのまま入れる。指定がなく内容だけ頼まれたときは、その内容で文面を作る` },
-      image_urls: { type: 'ARRAY', items: { type: 'STRING' }, description: `添える画像の候補 URL（良い順、最大${MAX_IMAGE_CANDIDATES}つ）。依頼者が画像を添えるよう頼んだとき、または添付・参照した画像を一緒に載せるべきときだけ。なければ空` },
+      found: { type: 'BOOLEAN', description: toolText('found') },
+      reason: { type: 'STRING', description: toolText('reason') },
+      channel_id: { type: 'STRING', description: toolText('channel-id') },
+      content: { type: 'STRING', description: toolText('content', { maxContent: MAX_CONTENT }) },
+      image_urls: { type: 'ARRAY', items: { type: 'STRING' }, description: toolText('image-urls', { maxImages: MAX_IMAGE_CANDIDATES }) },
       image_instruction: IMAGE_INSTRUCTION_PROPERTY
     },
     required: ['found']

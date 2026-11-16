@@ -22,7 +22,7 @@ BOT が Gemini（と検閲なしモデル・画像モデル）に渡すプロン
 
 | ファイル | 使うところ |
 | --- | --- |
-| `chat/system.md` | メンションへの返事・イベントやフォーラムの下書きのシステム指示 |
+| `chat/system.md` | メンションへの返事・イベント・フォーラム・チャンネルへの書き込みの下書きのシステム指示 |
 | `chat/persona/*.md` | `/persona` の設定（依頼の「話し方」の欄） |
 | `chat/reply-length/*.md` | `/replylength` の設定（依頼の「返事の長さ」の欄） |
 | `chat/mature/open.md`、`chat/mature/filtered.md` | 下ネタ・大人向けの依頼の方針（依頼の「下ネタ・大人向けの依頼」の欄）。ふつうは `open`、セーフティフィルタが有効なサーバーでは `filtered` |
@@ -36,6 +36,7 @@ BOT が Gemini（と検閲なしモデル・画像モデル）に渡すプロン
 | `stream/blurb.md` | 配信のイベント説明 |
 | `emoji/describe.md` | サーバー絵文字の説明 |
 | `image/*.md` | フォーラム投稿のカバー画像（英語） |
+| `tools/channel-message/*.md` | チャンネルへの書き込みの提出ツール（`submit_channel_message_draft`）とその引数の説明 |
 
 ## 書くときの決まり
 
