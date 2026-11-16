@@ -1068,8 +1068,9 @@ async function isRefusalReplyAsync (text) {
 const STORY_REQUEST_PATTERN = /小説|ss|物語|お話|ストーリー|シナリオ|脚本|創作|ライトノベル|ラノベ|地の文|官能|濡れ場|えっち|エッチ|続き|書いて|執筆/i
 
 // images: adult pictures may be made here (the request's adultImages), asked for with a line in the reply.
-function uncensoredSystemInstruction ({ compact = false, r18Mode = false, images = false } = {}) {
-  const rules = prompts.render('chat/uncensored/rules', { r18Mode, compact, images })
+// story: a story was asked for (isStoryRequest); otherwise the rules are those of a chat reply.
+function uncensoredSystemInstruction ({ compact = false, r18Mode = false, images = false, story = false } = {}) {
+  const rules = prompts.render('chat/uncensored/rules', { r18Mode, compact, images, story })
   if (compact) {
     const persona = (process.env.CHAT_PERSONA || '').trim()
     return [
@@ -1101,10 +1102,17 @@ function askedIn (text) {
   return (at === -1 ? text : text.slice(at)).split('\n').filter(line => !line.startsWith('## ')).join('\n')
 }
 
-function compactUncensoredText (text, { r18Mode = false, story = null } = {}) {
+// Whether the uncensored model is to write a story: as sokudan read the request (`story`), or
+// else by the words of the request and the conversation it replies to. Not because the request is
+// R18 or the model is the R18 one: a chat reply keeps the server's reply length.
+function isStoryRequest (text, story = null) {
+  return typeof story === 'boolean' ? story : STORY_REQUEST_PATTERN.test(askedIn(String(text || '')))
+}
+
+function compactUncensoredText (text, { story = null } = {}) {
   if (typeof text !== 'string') return ''
   const hasConversation = /<untrusted source="conversation">/.test(text)
-  const storyMode = r18Mode || (typeof story === 'boolean' ? story : STORY_REQUEST_PATTERN.test(askedIn(text)))
+  const storyMode = isStoryRequest(text, story)
   let out = text
     .replace(/\n## このサーバーの情報（最新）\n<untrusted source="server">[\s\S]*?<\/untrusted>/, '')
     .replace(/\n## 依頼や会話に出てくるチャンネル[\s\S]*?(?=\n## |\n依頼されたチャンネル:)/, '')
@@ -1387,7 +1395,7 @@ function toOpenAIMessages (system, contents, { compact = false, r18Mode = false 
         })
       } else {
         const joined = withoutMatureSection(other.filter(p => typeof p.text === 'string').map(p => p.text).join('\n'))
-        const baseText = compact ? compactUncensoredText(joined, { r18Mode, story: asksForStory(contents) }) : joined
+        const baseText = compact ? compactUncensoredText(joined, { story: asksForStory(contents) }) : joined
         let finalContent = baseText
         if (contents.imageDescription && !appendedImageDesc && !finalContent.includes('## 添付・返信先画像の内容（視覚情報）')) {
           finalContent = `${finalContent}\n\n## 添付・返信先画像の内容（視覚情報）\n${contents.imageDescription}`
@@ -1711,7 +1719,8 @@ async function callUncensored (contents, declarations, allowed = null, { timeout
     if (desc) contents.imageDescription = desc
   }
   const r18Mode = !!contents?.uncensoredR18Mode || isR18Text(model) || /deckard|r-?18|uncensored-thinking/i.test(model)
-  const messages = toOpenAIMessages(uncensoredSystemInstruction({ compact: useCompact, r18Mode, images: !!contents?.adultImages }), contents, { compact: useCompact, r18Mode })
+  const story = isStoryRequest(contents?.[0]?.parts?.[0]?.text, asksForStory(contents))
+  const messages = toOpenAIMessages(uncensoredSystemInstruction({ compact: useCompact, r18Mode, images: !!contents?.adultImages, story }), contents, { compact: useCompact, r18Mode })
   const replyCacheKey = useCompact ? `uncensored-reply:${hashOf(JSON.stringify({ model, messages }))}` : null
   if (replyCacheKey) {
     const cachedReply = await aiCache.getJson(replyCacheKey)
@@ -1780,7 +1789,7 @@ async function callUncensored (contents, declarations, allowed = null, { timeout
     }
   }
   const buildMinimalBody = () => {
-    const compactMsgs = toOpenAIMessages(uncensoredSystemInstruction({ compact: true, r18Mode, images: !!contents?.adultImages }), contents, { compact: true, r18Mode })
+    const compactMsgs = toOpenAIMessages(uncensoredSystemInstruction({ compact: true, r18Mode, images: !!contents?.adultImages, story }), contents, { compact: true, r18Mode })
       .map(m => m.role === 'user' && typeof m.content === 'string' && m.content.length > 2800
         ? { ...m, content: `${m.content.slice(0, 500)}\n\n${m.content.slice(-2300)}` }
         : m)

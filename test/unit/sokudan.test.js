@@ -749,7 +749,7 @@ test('sokudan\'s reading of the request comes before the word patterns: a story,
     assert.doesNotMatch(compactUncensoredText(prompt, { story: false }), /※執筆時の注意/)
     assert.match(compactUncensoredText(prompt, { story: true }), /※執筆時の注意/)
     assert.match(compactUncensoredText(prompt), /※執筆時の注意/, 'without an answer, the words decide (書いて)')
-    assert.match(compactUncensoredText(prompt, { story: false, r18Mode: true }), /※執筆時の注意/, 'R18 mode is always a story')
+    assert.doesNotMatch(compactUncensoredText(prompt, { story: false, r18Mode: true }), /※執筆時の注意/, 'R18 is not a story for that alone')
 
     // How much to think: sokudan's level before the patterns ("書いて" alone would make it high).
     assert.equal(bodies.at(-1).generationConfig.thinkingConfig.thinkingLevel, 'minimal')
