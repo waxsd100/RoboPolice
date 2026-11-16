@@ -15,11 +15,15 @@ const DEFAULT_RETRY_INTERVAL_MS = 30 * 1000
 // GeneLab/sokudan-ja-310m under-predicts P(true) on `noul` (mean ~0.20 vs 0.30 base rate while
 // AUROC is ~0.88-0.91); 0.35 gives strong recall without sacrificing precision.
 const DEFAULT_BOOL_THRESHOLD = 0.35
+const DEFAULT_R18_THRESHOLD = 0.55
+const DEFAULT_REFUSAL_THRESHOLD = 0.65
 const DEFAULT_POLISH_SCORE_THRESHOLD = 1.0
 const MAX_STATE_CHARS = 1200
 const MAX_REFERENCE_CONTEXT_CHARS = 400
 const MIN_INJECTION_CHECK_CHARS = 12
 const MIN_REFUSAL_CHECK_CHARS = 10
+const ADULT_CHANNEL_LABEL_PATTERN = /(?:^|[^a-z0-9])(?:r-?18|nsfw)(?:$|[^a-z0-9])|18禁|成人向け|アダルト|えっち|エッチ|エロ|官能|下ネタ|年齢制限/i
+const CONTEXT_DEPENDENT_REQUEST_PATTERN = /続き|続編|その後|その先|それ|これ|あれ|さっき|前の|今の|もっと|さらに|そのまま|書き直|変えて/i
 
 const sokudanState = {
   usable: null,
@@ -34,13 +38,13 @@ function timeoutMs () {
   return Number.isFinite(n) && n > 0 ? n : DEFAULT_TIMEOUT_MS
 }
 
-function boolThreshold (envName = null) {
+function boolThreshold (envName = null, fallback = DEFAULT_BOOL_THRESHOLD) {
   if (envName && process.env[envName]) {
     const custom = Number(process.env[envName])
     if (Number.isFinite(custom) && custom > 0 && custom < 1) return custom
   }
   const n = Number(process.env.SOKUDAN_BOOL_THRESHOLD)
-  return Number.isFinite(n) && n > 0 && n < 1 ? n : DEFAULT_BOOL_THRESHOLD
+  return Number.isFinite(n) && n > 0 && n < 1 ? n : fallback
 }
 
 function polishScoreThreshold () {
@@ -211,8 +215,10 @@ async function classifyMentionRequest (request, referencedText = '', channelCont
   if (!isUsable()) return null
   const reqClean = cleanState(request, 900)
   if (!reqClean) return null
-  const chanClean = cleanState(channelContext, 120)
-  const rawRef = cleanState(referencedText, Number.MAX_SAFE_INTEGER)
+  const rawChan = cleanState(channelContext, 120)
+  const chanClean = ADULT_CHANNEL_LABEL_PATTERN.test(rawChan) ? '' : rawChan
+  const includeRef = referencedText && ([...reqClean].length <= 40 || CONTEXT_DEPENDENT_REQUEST_PATTERN.test(reqClean))
+  const rawRef = includeRef ? cleanState(referencedText, Number.MAX_SAFE_INTEGER) : ''
   const refBudget = Math.max(120, Math.min(MAX_REFERENCE_CONTEXT_CHARS, MAX_STATE_CHARS - reqClean.length - chanClean.length - 40))
   const refClean = rawRef.length > refBudget ? rawRef.slice(-refBudget).trimStart() : rawRef
   const sections = [
@@ -241,7 +247,7 @@ async function classifyMentionRequest (request, referencedText = '', channelCont
   const storyProb = Number.isFinite(storyAns?.noul) ? storyAns.noul : null
   const complexityScore = Number.isFinite(compAns?.score) ? compAns.score : null
 
-  const r18Thresh = boolThreshold('SOKUDAN_R18_THRESHOLD')
+  const r18Thresh = boolThreshold('SOKUDAN_R18_THRESHOLD', DEFAULT_R18_THRESHOLD)
   const deepThresh = boolThreshold('SOKUDAN_DEEP_THRESHOLD')
 
   return {
@@ -279,14 +285,19 @@ async function detectInjection (text) {
 
 // Use Case 2b: Screens a chat reply from Gemini to detect soft refusals or fade-to-morning
 // ("朝チュン") evasions on R18 requests when paraphrased wording evades regex.
-async function detectRefusalReply (text) {
+async function detectRefusalReply (text, requestText = '') {
   if (!isUsable()) return { refused: false, probability: 0 }
   const cleaned = cleanState(text, MAX_STATE_CHARS)
   if ([...cleaned].length < MIN_REFUSAL_CHECK_CHARS) return { refused: false, probability: 0 }
+  const reqClean = cleanState(requestText, 300)
+  const replyClean = reqClean ? cleanState(text, MAX_STATE_CHARS - reqClean.length - 30) : cleaned
+  const state = reqClean
+    ? `依頼メッセージ:\n${reqClean}\n\nBOTの返事:\n${replyClean}`
+    : cleaned
 
-  const data = await systemOne(cleaned, REFUSAL_QUESTIONS())
+  const data = await systemOne(state, REFUSAL_QUESTIONS())
   const prob = Number.isFinite(data?.answers?.refusal?.noul) ? data.answers.refusal.noul : 0
-  const threshold = boolThreshold('SOKUDAN_REFUSAL_THRESHOLD')
+  const threshold = boolThreshold('SOKUDAN_REFUSAL_THRESHOLD', DEFAULT_REFUSAL_THRESHOLD)
   return {
     refused: prob >= threshold,
     probability: prob
