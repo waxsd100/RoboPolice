@@ -830,7 +830,7 @@ async function handle (message) {
       if (e.blocked) {
         global.logger.info(`[GEMINI]: A mention in ${guild.id} was refused by Google (${e.blocked})`)
         const content = 'ごめん、その内容は AI（Google）の制限で答えられなかった…！言い方や中身を変えてもう一回どうぞ。'
-        outcome = { kind: 'refused', response: content }
+        outcome = { kind: 'refused', response: content, blockReason: e.blocked }
         if (reply) await editReply(reply, { content, embeds: [], components: [], allowedMentions: NO_MENTIONS }, null).catch(() => {})
         else await message.channel.createMessage({ content, allowedMentions: NO_MENTIONS, ...reference }).catch(() => {})
         return
@@ -867,7 +867,10 @@ async function handle (message) {
           cachedTokens: usage.tokens?.cached || 0,
           outputTokens: usage.tokens?.output || 0,
           thinkingTokens: usage.tokens?.thoughts || 0,
-          geminiCalls: usage.requests || 0
+          geminiCalls: usage.requests || 0,
+          blockReason: outcome.blockReason || null,
+          fallbacks: usage.fallbacks?.length ? usage.fallbacks.join('; ') : null,
+          context: usage.context?.length ? usage.context.join('; ') : null
         }).catch(err => global.logger.warn(`Could not save mention log in ${guild.id}: ${err.message}`))
       }
       global.logger.info(`Mention drafting in ${guild.id}: ${usage.requests} Gemini request(s), ${usage.retries} retried after HTTP 429`)

@@ -11,7 +11,7 @@ const geminiLoad = require('../utils/geminiLoad')
 const aiCache = require('../utils/aiCache')
 const sokudan = require('../utils/sokudan')
 const prompts = require('../utils/prompts')
-const { currentUsage, recordTokens, addTokens, addModel, addFallback } = require('../utils/geminiUsage')
+const { currentUsage, recordTokens, addTokens, addModel, addFallback, addContext } = require('../utils/geminiUsage')
 
 // A fixed model, not an alias such as gemini-flash-latest: an explicit cache (below) is made for one
 // model, and a change of model should be a choice, not a surprise.
@@ -2532,7 +2532,10 @@ async function withoutBlockRisks ({ server, recent = [], referenced, where = '' 
   if (sectionRisks.some(Boolean)) dropped.push(`server ${sectionRisks.filter(Boolean).length}/${sections.length}`)
   if (recentRisks.some(Boolean)) dropped.push(`recent ${recentRisks.filter(Boolean).length}/${recent.length}`)
   if (referencedRisk) dropped.push('conversation')
-  if (dropped.length) global.logger?.info(`[SOKUDAN]: Left out what Google may refuse in ${where}: ${dropped.join(', ')}`)
+  if (dropped.length) {
+    global.logger?.info(`[SOKUDAN]: Left out what Google may refuse in ${where}: ${dropped.join(', ')}`)
+    addContext(`left out by sokudan: ${dropped.join(', ')}`)
+  }
   return {
     server: typeof server === 'string' ? sections.filter((_, i) => !sectionRisks[i]).join('\n') || null : server,
     recent: recent.filter((_, i) => !recentRisks[i]),
@@ -2583,6 +2586,10 @@ async function draft ({ request, referenced, recent = [], channelName, channelID
       : SUBMIT_DECLARATIONS,
     now
   }
+  // What went with the request, for the mention log: why Google refused can be looked for there.
+  const firstText = conversation.contents[0].parts[0].text
+  const sources = [...firstText.matchAll(/<untrusted source="([^"]+)">/g)].map(m => m[1]).filter(name => name !== 'request')
+  addContext(`sent: ${[...sources, ...(shown.length ? [`pictures ${emojiPics.length + attachedPics.length}`] : [])].join(', ') || 'request only'}`)
   // Kept with the conversation, so a correction (revise) uses them too.
   conversation.contents.model = model
   conversation.contents.thinking = THINKING_LEVELS.includes(thinking) ? thinking : null

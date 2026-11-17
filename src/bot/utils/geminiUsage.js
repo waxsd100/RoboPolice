@@ -9,7 +9,7 @@ const storage = new AsyncLocalStorage()
 // tokens: what the calls used, from Gemini's usageMetadata (shown under a chat reply); cost: the
 // same weighted by model, as counted against the user's limits (mentionQuota.js).
 function trackUsage (fn) {
-  const usage = { requests: 0, retries: 0, onWait: () => {}, tokens: { prompt: 0, cached: 0, output: 0, thoughts: 0 }, cost: 0, models: [], fallbacks: [] }
+  const usage = { requests: 0, retries: 0, onWait: () => {}, tokens: { prompt: 0, cached: 0, output: 0, thoughts: 0 }, cost: 0, models: [], fallbacks: [], context: [] }
   return storage.run(usage, () => fn(usage))
 }
 
@@ -40,6 +40,12 @@ function addModel (model, { flex = false } = {}) {
 }
 
 // Something that went another way than asked (a model refused, Flex was full), to show under the reply.
+// What went with the request to Gemini, for the mention log (notes such as "server", "recent 3").
+function addContext (note) {
+  const usage = currentUsage()
+  if (usage?.context && !usage.context.includes(note)) usage.context.push(note)
+}
+
 function addFallback (note) {
   const usage = currentUsage()
   if (usage?.fallbacks && !usage.fallbacks.includes(note)) usage.fallbacks.push(note)
@@ -94,4 +100,4 @@ function logTokens () {
   tokens.clear()
 }
 
-module.exports = { trackUsage, currentUsage, addTokens, addModel, addFallback, tokenFooter, recordTokens, tokenCounts, logTokens }
+module.exports = { addContext, trackUsage, currentUsage, addTokens, addModel, addFallback, tokenFooter, recordTokens, tokenCounts, logTokens }
