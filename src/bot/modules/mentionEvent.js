@@ -585,54 +585,58 @@ async function handle (message) {
       referenced = repliedTo && !edit
         ? await tools.readThread(message.messageReference.channelID || message.channel.id, repliedTo).catch(e => ({ text: `（読めませんでした: ${e.message}）`, count: 1 }))
         : null
-      // Attempts to take over the model are only logged: the prompt marks all of this as data.
-      await reportInjectionAsync(`a mention by ${message.author.id} in ${guild.id}`, request)
-      if (referenced) await reportInjectionAsync(`the conversation a mention in ${guild.id} replies to`, referenced.text)
+      // Attempts to take over the model are only logged (the prompt marks all of this as data), so
+      // nothing waits for them.
+      reportInjectionAsync(`a mention by ${message.author.id} in ${guild.id}`, request).catch(() => {})
+      if (referenced) reportInjectionAsync(`the conversation a mention in ${guild.id} replies to`, referenced.text).catch(() => {})
       // Fetched fresh for every request. Without it the draft still works, just with less context.
       // Knowledge is looked up by what the members said, not the bot's own earlier replies.
       // What was just being talked about in the channel, as far as it bears on the request
       // (recentTopics.js); not when something the bot made is being changed.
       // The server's rules and what its moderators asked of the assistant (serverRules.js).
       const theme = channelTheme(message.channel.id, guild, message.channel.name)
-      // How sokudan reads the request, asked once here and passed on to draft; null when it is not
-      // set up or gave no answer, and the patterns decide instead.
-      const decision = sokudan.isUsable()
-        ? await sokudan.classifyMentionRequest(request, referenced?.text, theme).catch(() => null)
-        : null
-      const asksForStory = typeof decision?.isStory === 'boolean' ? decision.isStory : STORY_REQUEST_PATTERN.test(request)
-      const directR18 = allowUncensored && isUncensoredUsable() && (isUncensoredDirective(request, referenced, decision) || r18Route({ request, referenced, decision }).route)
       let queryVecPromise = null
       const queryVector = () => {
         if (!worthSearching(request)) return Promise.resolve(null)
         if (!queryVecPromise) queryVecPromise = embedQuery(request)
         return queryVecPromise
       }
+      // Started together, as none needs another: what was just said in the channel, the emojis
+      // shared from the owner's servers, and how sokudan reads the request (asked once here and
+      // passed on to draft; null when it is not set up or gave no answer, and the patterns decide).
+      const recentPromise = (edit || referenced)
+        ? Promise.resolve([])
+        : relatedRecent(message, request, { queryVector }).catch(e => {
+          global.logger.warn(`Could not read the recent talk in ${message.channel.id}: ${e.message}`)
+          return []
+        })
+      const emojisPromise = sharedOwnerEmojis(guild, message.channel).catch(() => [])
+      const decision = sokudan.isUsable()
+        ? await sokudan.classifyMentionRequest(request, referenced?.text, theme).catch(() => null)
+        : null
+      const asksForStory = typeof decision?.isStory === 'boolean' ? decision.isStory : STORY_REQUEST_PATTERN.test(request)
+      const directR18 = allowUncensored && isUncensoredUsable() && (isUncensoredDirective(request, referenced, decision) || r18Route({ request, referenced, decision }).route)
       const combinedQuery = [request, referenced?.othersText].filter(Boolean).join('\n')
       const communityKeyword = /サーバー|チャンネル|配信|動画|youtube|twitch|steam|ゲーム|イベント|フォーラム|ルール|wiki|メンバー|キャラ|名言|<#\d+>|<@!?\d+>/i
       const slimProfile = Boolean(edit) ||
         (!worthSearching(combinedQuery) && !attached.length && !embedded.length && !(theme && SHORT_TOPIC_PROMPT.test(request))) ||
         (asksForStory && !communityKeyword.test([combinedQuery, theme].filter(Boolean).join('\n')))
-      const extraEmojis = await sharedOwnerEmojis(guild, message.channel).catch(() => [])
-      const [server, recent] = await Promise.all([
+      const extraEmojis = await emojisPromise
+      // Combined emojis, other servers' emojis, and attached/replied-to images in what was said are
+      // shown to the model as images, for this request only. Fetched alongside the server's profile.
+      const threadImages = edit ? [] : [...new Set([...attached, ...embedded, ...(referenced?.images || [])])]
+      const [server, recent, pictures] = await Promise.all([
         directR18
           ? null
           : describeServer(guild, member, message.channel.id, { query: request, context: referenced?.othersText, queryVector, slim: slimProfile, extraEmojis }).catch(e => {
             global.logger.warn(`Could not describe server ${guild.id}: ${e.message}`)
             return null
           }),
-        (edit || referenced)
-          ? []
-          : relatedRecent(message, request, { queryVector }).catch(e => {
-            global.logger.warn(`Could not read the recent talk in ${message.channel.id}: ${e.message}`)
-            return []
-          })
+        recentPromise,
+        directR18
+          ? attachedPictures(threadImages).catch(() => [])
+          : picturesFor([request, referenced?.text], guild, threadImages, { extraEmojis }).catch(() => [])
       ])
-      // Combined emojis, other servers' emojis, and attached/replied-to images in what was said are
-      // shown to the model as images, for this request only.
-      const threadImages = edit ? [] : [...new Set([...attached, ...embedded, ...(referenced?.images || [])])]
-      const pictures = directR18
-        ? await attachedPictures(threadImages).catch(() => [])
-        : await picturesFor([request, referenced?.text], guild, threadImages, { extraEmojis }).catch(() => [])
       // A reply brings its conversation in (`referenced`); otherwise only what was just said in the
       // channel that bears on the request (`recent`), never the bot's own earlier replies.
       let result = await draft({
