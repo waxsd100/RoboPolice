@@ -80,6 +80,7 @@ SOKUDAN_URL=http://${{sokudan.RAILWAY_PRIVATE_DOMAIN}}:${{sokudan.PORT}}
 | `SOKUDAN_STORY_THRESHOLD` | `SOKUDAN_BOOL_THRESHOLD` | 用途1: 小説・物語などの創作の依頼かどうか（検閲なしモデルへの書かせ方・考える深さ・サーバー情報を省くかの判定）の閾値だけ個別に変えたい場合 |
 | `SOKUDAN_INJECTION_THRESHOLD` | `SOKUDAN_BOOL_THRESHOLD` | 用途2a: プロンプトインジェクション警告の閾値 |
 | `SOKUDAN_REFUSAL_THRESHOLD` | `0.65` | 用途2b: 創作・R18 候補への返事に対する R18 ソフト拒否／朝チュン検知の閾値 |
+| `SOKUDAN_BLOCK_RISK_THRESHOLD` | `0.5` | Gemini に送る前に、サーバーの情報・チャンネルの最近の会話・返信先の会話のうち、Google にブロックされそうな部分を外す閾値 |
 | `SOKUDAN_POLISH_THRESHOLD` | `SOKUDAN_BOOL_THRESHOLD` | 用途3: `replyPolish` で書き直しを実行する `noul` 閾値 |
 | `SOKUDAN_POLISH_SCORE_THRESHOLD` | `1.0` | 用途3: `replyPolish` で書き直しを実行する硬さスコア閾値（`0`〜`2`） |
 

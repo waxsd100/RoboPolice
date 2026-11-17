@@ -2226,6 +2226,24 @@ function cloneContentsWithoutThoughts (contents) {
   return stripped
 }
 
+// What the bot gathered around a request, written by other people: the server's information
+// (knowledge, the server's running jokes and how it talks), the channels and members it names,
+// what was just said in the channel, and the conversation it replies to. Google can block a whole
+// request for something in these, however harmless the request itself.
+const GATHERED_SECTION = /\n## [^\n]*\n<untrusted source="(server|channels|members|recent|conversation)">[\s\S]*?<\/untrusted>/g
+
+// The first turn of a conversation without what was gathered around the request (GATHERED_SECTION)
+// and without the pictures shown with it; null when it has none of them. `dropped`: which.
+function withRequestAlone (turn) {
+  const text = turn?.parts?.[0]?.text
+  if (turn?.role !== 'user' || typeof text !== 'string') return null
+  const dropped = [...text.matchAll(GATHERED_SECTION)].map(m => m[1])
+  const pictures = turn.parts.length > 1
+  if (!dropped.length && !pictures) return null
+  if (pictures) dropped.push('pictures')
+  return { turn: { role: 'user', parts: [{ text: text.replace(GATHERED_SECTION, '') }] }, dropped }
+}
+
 async function runAgent (contents, tools, submits = SUBMIT_DECLARATIONS) {
   const allowUncensored = contents.uncensoredR18 !== false && !contents.safetyFilter
   // Not offered again once the stronger model or the uncensored fallback took over this conversation.
@@ -2277,6 +2295,22 @@ async function runAgent (contents, tools, submits = SUBMIT_DECLARATIONS) {
         contents.deepRefused = true
         contents.uncensoredError = e
         offered.length = 0
+        step = -1
+        continue
+      }
+      // Blocked by Google: once more with the request alone, without what was gathered around it
+      // (other people's messages, the server's knowledge, pictures), which a block is most often
+      // about. Only once, and only for the first request (not a correction of a draft).
+      // Not for the stronger model (Flash answers instead, below), nor for a request that may itself
+      // be one for adult writing (the uncensored model answers instead, below).
+      const alone = e.blocked && !contents.uncensored && !contents.deep && contents.r18Maybe !== true && !contents.requestAlone && start === 1 && !contents.isRevision ? withRequestAlone(contents[0]) : null
+      if (alone) {
+        const failed = contents.deep ? deepModel() : replyModel(contents)
+        global.logger?.warn(`[GEMINI]: ${failed} refused (${e.blocked}) with ${alone.dropped.join(', ')} in the request; asking again with the request alone`)
+        addFallback(`${failed} refused (${e.blocked}) → without ${alone.dropped.join(', ')}`)
+        contents.splice(start)
+        contents[0] = alone.turn
+        contents.requestAlone = true
         step = -1
         continue
       }
@@ -2471,6 +2505,36 @@ async function check (conversation, { name, args, calls = [] }) {
 const eventTools = () => require('./eventTools')
 
 // model, thinking, tier: the server's own model, thinking level and tier (%replymodel); null for the default.
+// What was gathered around a request (other people's words), without the parts sokudan reads as
+// likely to make Google refuse the whole request (sokudan.blockRisk): the server's information by
+// its "### " sections, the channel's recent messages one by one, and the replied-to conversation
+// as a whole. As it was when sokudan is not set up or gives no answer; and a block that comes all
+// the same is asked again with the request alone (withRequestAlone in runAgent).
+async function withoutBlockRisks ({ server, recent = [], referenced, where = '' }) {
+  if (!sokudan.isUsable()) return { server, recent, referenced }
+  const threshold = sokudan.blockRiskThreshold()
+  const risky = async text => {
+    const p = await sokudan.blockRisk(text).catch(() => null)
+    return Number.isFinite(p) && p >= threshold
+  }
+  const sections = typeof server === 'string' ? server.split(/\n(?=### )/) : []
+  const [sectionRisks, recentRisks, referencedRisk] = await Promise.all([
+    Promise.all(sections.map(risky)),
+    Promise.all(recent.map(risky)),
+    referenced?.text ? risky(referenced.text) : false
+  ])
+  const dropped = []
+  if (sectionRisks.some(Boolean)) dropped.push(`server ${sectionRisks.filter(Boolean).length}/${sections.length}`)
+  if (recentRisks.some(Boolean)) dropped.push(`recent ${recentRisks.filter(Boolean).length}/${recent.length}`)
+  if (referencedRisk) dropped.push('conversation')
+  if (dropped.length) global.logger?.info(`[SOKUDAN]: Left out what Google may refuse in ${where}: ${dropped.join(', ')}`)
+  return {
+    server: typeof server === 'string' ? sections.filter((_, i) => !sectionRisks[i]).join('\n') || null : server,
+    recent: recent.filter((_, i) => !recentRisks[i]),
+    referenced: referencedRisk ? null : referenced
+  }
+}
+
 async function draft ({ request, referenced, recent = [], channelName, channelID, server, forum = null, images = [], pictures = [], edit = null, replyLength = null, streamerPersona = true, safetyFilter = false, uncensoredR18 = true, rules = null, model = null, thinking = null, tier = null, decision, guild, member, tools, now = new Date() }) {
   const parsed = parseModelDirective(request)
   const attachedPics = pictures.filter(p => p.attachment)
@@ -2501,8 +2565,9 @@ async function draft ({ request, referenced, recent = [], channelName, channelID
       ]
     : []
   const shown = [...emojiShown, ...attachedShown]
+  const sent = await withoutBlockRisks({ server, recent, referenced, where: guild?.id })
   const conversation = {
-    contents: [{ role: 'user', parts: [{ text: buildPrompt({ request, referenced, recent, channelName, channelID, channelInfo: channelID ? eventTools().requestChannelInfo(channelID, guild) : null, server, forum, images, edit, channels: member ? eventTools().namedChannels([request, referenced?.text], guild, member) : [], people: member ? eventTools().namedMembers([request, referenced?.text], guild, member) : [], replyLength, streamerPersona, safetyFilter, rules, now }) }, ...shown] }],
+    contents: [{ role: 'user', parts: [{ text: buildPrompt({ request, referenced: sent.referenced, recent: sent.recent, channelName, channelID, channelInfo: channelID ? eventTools().requestChannelInfo(channelID, guild) : null, server: sent.server, forum, images, edit, channels: member ? eventTools().namedChannels([request, referenced?.text], guild, member) : [], people: member ? eventTools().namedMembers([request, referenced?.text], guild, member) : [], replyLength, streamerPersona, safetyFilter, rules, now }) }, ...shown] }],
     guild,
     member,
     tools,
