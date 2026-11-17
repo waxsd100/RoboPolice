@@ -797,7 +797,7 @@ test('what sends a request to the uncensored model: explicit adult story request
     assert.deepEqual(r18Route({ request: lookup, decision: unsure }), { route: false, why: null, maybe: false, disallowHandover: true }, lookup)
     assert.deepEqual(r18Route({ request: lookup, decision: sure }), { route: false, why: null, maybe: false, disallowHandover: true }, lookup)
   }
-  // Image generation requests stay on Gemini so generate_image is called instead of the text novel writer.
+  // Requests for a picture stay on Gemini, not the text novel writer.
   for (const imgAsk of ['セクシーな絵描いて', 'エロ画像作って']) {
     assert.equal(r18Route({ request: imgAsk, decision: sure }).route, false, imgAsk)
   }

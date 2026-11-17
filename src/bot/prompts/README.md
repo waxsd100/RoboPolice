@@ -36,7 +36,6 @@ BOT が Gemini（と検閲なしモデル・画像モデル）に渡すプロン
 | `stream/blurb.md` | 配信のイベント説明 |
 | `emoji/describe.md` | サーバー絵文字の説明 |
 | `image/cover.md`、`image/edit.md` | イベント・フォーラム投稿のカバー画像（英語） |
-| `image/chat.md` | 会話で頼まれた画像（`generate_image`。英語） |
 | `chat/pictures/*.md` | 依頼と一緒に見せる絵文字・添付画像の前置き |
 | `chat/tool-compress.md` | 長いツール結果を、依頼に要る事実だけに縮める |
 | `chat/uncensored/describe-images.md` | 検閲なしモデルへ引き継ぐ前の、添付画像の説明の依頼 |
