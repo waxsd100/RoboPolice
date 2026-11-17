@@ -13,3 +13,5 @@ infra/cloudflare/.terraform/
 infra/cloudflare/*.tfstate
 infra/cloudflare/*.tfstate.*
 infra/cloudflare/terraform.tfvars
+__pycache__/
+*.pyc

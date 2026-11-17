@@ -1,5 +1,5 @@
 const Eris = require('eris')
-const { v4: uuidv4 } = require('uuid')
+const { randomUUID: uuidv4 } = require('crypto')
 const update = require('../../db/interfaces/postgres/update')
 const replySettings = require('../../db/interfaces/postgres/replySettings')
 const youtubeDB = require('../../db/interfaces/postgres/youtube')

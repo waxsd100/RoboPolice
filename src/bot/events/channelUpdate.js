@@ -40,6 +40,9 @@ const canUseExternal = guild => {
   return !!guild.roles?.get?.(guild.id)?.permissions?.json?.useExternalEmojis
 }
 
+// How old an audit log entry may be and still be taken as the cause of the update just received.
+const AUDIT_LOG_FRESH_MS = 10000
+
 module.exports = {
   name: 'channelUpdate',
   type: 'on',
@@ -87,7 +90,10 @@ module.exports = {
 
     const logs = await getAuditLogSafe(channel.guild, { limit: 5, actionType: auditLogId })
     const entries = Array.isArray(logs?.entries) ? logs.entries : []
-    const log = entries.find(e => e.targetID === channel.id)
+    // A recent entry only: without the age check, a change the audit log does not record (or
+    // records late) was pinned on whoever last changed this channel, with that older change's
+    // before/after shown as this one's.
+    const log = entries.find(e => e.targetID === channel.id && Date.now() - ((e.id / 4194304) + 1420070400000) < AUDIT_LOG_FRESH_MS)
     const user = log?.user
     if (user?.bot && !guildSettings?.isLogBots?.()) return
 
@@ -117,11 +123,11 @@ module.exports = {
           const newTopic = rawNewTopic ? escape(rawNewTopic.replace(/~/g, '\\~'), ['angle brackets']) : '<トピック未設定>'
           const oldTopic = rawOldTopic ? escape(rawOldTopic.replace(/~/g, '\\~'), ['angle brackets']) : '<トピック未設定>'
           if (newTopic.length + oldTopic.length > 950) {
-            channelUpdateEvent.embeds[0].description += `\n\n**__New topic__**\n\`${newTopic}\`\n\n**__Old topic__**\n\`${oldTopic}\``
+            channelUpdateEvent.embeds[0].description += `\n\n**__変更後のトピック__**\n\`${newTopic}\`\n\n**__変更前のトピック__**\n\`${oldTopic}\``
           } else {
             channelUpdateEvent.embeds[0].fields.push({
               name: 'トピック',
-              value: `Now: \`${newTopic}\`\nWas: \`${oldTopic}\``
+              value: `変更後: \`${newTopic}\`\n変更前: \`${oldTopic}\``
             })
           }
           // using `` to surround topic because topic can be just spaces
@@ -131,7 +137,7 @@ module.exports = {
         const changes = transformAuditLogEntry(changedKey, beforeMap[changedKey], afterMap[changedKey])
         channelUpdateEvent.embeds[0].fields.push({
           name: toTitleCase(changedKey),
-          value: `Now: ${changes.after}\nWas: ${changes.before}`
+          value: `変更後: ${changes.after}\n変更前: ${changes.before}`
         })
       }
     } else {
@@ -232,7 +238,7 @@ module.exports = {
       }
     }
 
-    if (channelUpdateEvent.embeds[0].fields.length === 1 && !channelUpdateEvent.embeds[0].description.includes('**__New topic__**')) {
+    if (channelUpdateEvent.embeds[0].fields.length === 1 && !channelUpdateEvent.embeds[0].description.includes('**__変更後のトピック__**')) {
       return
     }
 
