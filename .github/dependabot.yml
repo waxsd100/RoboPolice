@@ -1,0 +1,25 @@
+# Weekly dependency updates, one pull request per ecosystem: security fixes arrive without anyone
+# having to run `npm audit` by hand. The test workflow runs on each of them.
+version: 2
+updates:
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+      time: '06:00'
+      timezone: Asia/Tokyo
+    open-pull-requests-limit: 5
+    groups:
+      npm-minor-and-patch:
+        update-types: [minor, patch]
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+      time: '06:00'
+      timezone: Asia/Tokyo
+    groups:
+      actions:
+        patterns: ['*']

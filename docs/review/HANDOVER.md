@@ -26,9 +26,9 @@
 | コマンド基盤（commandhandler、staffAccess、creatorIds） | 読了・問題なし（slashcommands 各ファイルは未読） |
 | ログイベント（src/bot/events、webhooksender、bulkqueue、guildWebhookCacher） | 対応済み（guildMemberUpdate / guildUpdate / voice 系 / guildMemberAdd・Remove は未読） |
 | DB（clients、migrate、messageBatcher、create/read/update/delete、prune） | 読了・問題なし（youtube / steam / wiki / embeddings 等の interfaces とマイグレーション SQL は未読） |
-| AI 系（aiGateway、mentionEvent、eventTools/Drafter、sokudan） | 未着手 |
+| AI 系（mentionEvent、eventTools/Drafter、sokudan） | 未読（untrusted / linkSafety / mentionQuota / uncensoredImage は読了・問題なし） |
 | imagegen（Python） | 対応済み |
-| infra（terraform） | 未着手 |
+| infra（terraform） | 未読 |
 
 ## 対応済み
 
@@ -50,7 +50,19 @@
 - `guildRoleCreate.js`: 監査ログの理由が「種類」欄を上書きしていた。「理由」欄を別に追加
 - ログ文言の日英混在を解消（`Now:/Was:` → `変更後:/変更前:`、`A role が…`、`Deleted Image`、`See below`、`__Now__/__Previously__`、ロールのプロパティ名・権限名を日本語ラベルに）
 - 上記イベントのテスト: `test/unit/auditLogEvents.test.js`
+- `.github/dependabot.yml` を追加（npm と GitHub Actions を週 1 回、まとめて 1 PR）。push 時に GitHub が default ブランチの脆弱性 43 件を警告していたため、今後は自動で追従できるようにした。不要なら削除してよい
 
 ## 見つけたが未対応（要判断・大きすぎる等）
 
-（なし）
+- `replySettings.js` の `EMBED_COLUMNS[which]` などはプレーンオブジェクト引きなので、`which` に `toString` 等が来ると列名に関数が入り SQL エラーになる（注入にはならない。呼び出し側が値を絞っているので実害なし）。`Object.hasOwn` で引くとより堅い
+- `messageCreate.js` は `message.member` が無いと即 return するので DM ではコマンドが動かない。`commandhandler.js` の DM 向け分岐は実質到達しない（仕様なら分岐を消せる）
+- `webhooklogger.js` の `custom()` は `timestamp` を embed の外に置いているため Discord に無視されている（表示上の小さな問題）
+
+## まだ読んでいないところ（続きをやるならここから）
+
+- `src/bot/modules/eventDrafter.js`（2,600 行）、`eventTools.js`（1,360 行）、`mentionEvent.js`（900 行）: AI 返信の中核。テストは厚い（integration 84 件）
+- `src/bot/slashcommands/*`（特に `setup.js` 1,160 行）
+- `src/bot/modules/` の同期系: `youtubeSync` / `twitchSync` / `steamSync` / `liveWatcher` / `videoSummary` / `summaryBatch` / `embeddingIndexer` / `historyBackfill`
+- `src/db/interfaces/postgres/` の `youtube` / `steam` / `wiki` / `embeddings` ほか、`src/db/migrations/*.sql`
+- `src/bot/events/` の `guildMemberUpdate` / `guildMemberAdd` / `guildMemberRemove` / voice 系 / `interactionCreate`
+- `infra/terraform`、`infra/cloudflare`、`docs/deploy/*`、README の記述とコードの突き合わせ
