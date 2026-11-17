@@ -27,7 +27,7 @@
 | ログイベント（src/bot/events、webhooksender、bulkqueue、guildWebhookCacher） | 対応済み（guildMemberUpdate / guildUpdate / voice 系 / guildMemberAdd・Remove は未読） |
 | DB（clients、migrate、messageBatcher、create/read/update/delete、prune） | 読了・問題なし（youtube / steam / wiki / embeddings 等の interfaces とマイグレーション SQL は未読） |
 | AI 系（mentionEvent、eventTools/Drafter、sokudan） | 未読（untrusted / linkSafety / mentionQuota / uncensoredImage は読了・問題なし） |
-| imagegen（Python） | 対応済み |
+| imagegen（Python） | master の #195 で削除済み |
 | infra（terraform） | 未読 |
 
 ## 対応済み
@@ -39,11 +39,7 @@
   - package-lock.json は元が CRLF なので CRLF のまま保っている
 - 誤ってコミットされていた `imagegen/__pycache__/*.pyc` を削除し `.gitignore` に追加
 - `.env.example` に、コードは読んでいるのに README にも `.env.example` にも載っていなかった設定 17 個を「Advanced tuning」として追記（既定値はコードから転記）
-- `imagegen/server.py`
-  - API キー比較を `hmac.compare_digest`（定数時間）に変更
-  - 子ども判定（`check_prompt`）を GPU ロックの前に移動（拒否が生成待ちの後ろに並ばない）
-  - img2img の壊れた base64／画像で 500 ではなく 400 を返す
-  - ※ ローカルに PIL / torch が無いので `py_compile` のみ確認。実機での動作確認は未実施
+- （`imagegen/server.py` の修正は、master の #195 で画像生成サーバーごと削除されたため取り下げ。master 取り込み時に削除側を採用）
 - `guildWebhookCacher.js`: Webhook 一覧の取得が**一時的なエラー（タイムアウト・5xx・レート制限・権限変更直後）で失敗しただけで、そのチャンネルのログ設定を DB から消していた**。Unknown Channel (10003) のときだけ消すように変更。設定キャッシュが無いと TypeError になる箇所も修正。テスト: `test/unit/guildWebhookCacher.test.js`
 - `channelUpdate.js`: 監査ログの照合に時刻の条件が無く、監査ログに残らない更新が「最後にそのチャンネルを変更した人」の操作として（古い before/after 付きで）記録されていた。10 秒以内のエントリだけ採用
 - `guildRoleUpdate.js`: 監査ログの照合に `targetID` が無く、同時刻の別ロール更新の実行者を表示していた。対象ロールで絞るように修正

@@ -408,6 +408,20 @@ describe('draft', () => {
     }
   })
 
+  test('nothing sent to Gemini names minors: Google blocks a whole request for that alone', async () => {
+    const minors = /未成年|子ども|子供|幼/
+    for (const safetyFilter of [false, true]) {
+      const requests = installGemini([[call('submit_chat_reply', { text: 'やあ' })]])
+      await draft({ request: 'こんにちは', channelName: 'general', safetyFilter, guild, tools, now: NOW })
+      const body = requests[0].body
+      assert.doesNotMatch(body.systemInstruction.parts[0].text, minors)
+      assert.doesNotMatch(body.contents[0].parts[0].text, minors)
+      assert.doesNotMatch(JSON.stringify(body.tools), minors)
+    }
+    const { createTools } = require('../../src/bot/modules/eventTools')
+    assert.doesNotMatch(JSON.stringify(createTools({ guild, member: { id: '1' }, ask: async () => '' }).declarations), minors)
+  })
+
   test('adds the operator\'s character notes from CHAT_PERSONA', async () => {
     process.env.CHAT_PERSONA = '語尾は「〜だぜ」'
     try {
