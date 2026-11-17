@@ -4,7 +4,7 @@
 // server events (/youtube liveevents). Also displays current /assistantrules, detected server rules
 // channels, and Manage Events permission readiness. Needs Manage Server, like the commands it gathers.
 const Eris = require('eris')
-const { v4: uuidv4 } = require('uuid')
+const { randomUUID: uuidv4 } = require('crypto')
 const replySettings = require('../../db/interfaces/postgres/replySettings')
 const youtubeDB = require('../../db/interfaces/postgres/youtube')
 const { DEFAULT_REPLY_LENGTH } = require('./eventDrafter')

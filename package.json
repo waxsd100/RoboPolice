@@ -36,10 +36,9 @@
     "pg": "^8.11.3",
     "pg-format": "^1.0.4",
     "redlock": "^4.2.0",
-    "sharp": "^0.34.5",
+    "sharp": "^0.35.5",
     "superagent": "^8.1.2",
-    "undici": "^6.23.0",
-    "uuid": "^9.0.1"
+    "undici": "^6.23.0"
   },
   "devDependencies": {
     "eslint": "^8.53.0",

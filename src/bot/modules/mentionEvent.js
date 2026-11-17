@@ -1,5 +1,5 @@
 const Eris = require('eris')
-const { v4: uuidv4 } = require('uuid')
+const { randomUUID: uuidv4 } = require('crypto')
 const { draft, revise, isConfigured, isUncensoredUsable, isUncensoredDirective, rememberThreadModel, r18Route, STORY_REQUEST_PATTERN, ENTITY_TYPES } = require('./eventDrafter')
 const { createTools, takeImageRequests, describeServer, worthSearching, withServerEmojis, sharedOwnerEmojis, withServerChannels, channelTheme, SHORT_TOPIC_PROMPT, StopDrafting } = require('./eventTools')
 const { embedQuery } = require('../utils/embeddings')

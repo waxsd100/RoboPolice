@@ -1,5 +1,5 @@
 const Eris = require('eris')
-const { v4: uuidv4 } = require('uuid')
+const { randomUUID: uuidv4 } = require('crypto')
 const { EMBED_COLORS, ALL_EVENTS, EVENT_HELP, EVENT_HELP_EN, LEGAL_LINKS, SUPPORT_SERVER_URL } = require('../utils/constants')
 const { getEmbedFooter, getAuthorField } = require('../utils/embeds')
 const { retentionWindowClause } = require('../utils/retention')
