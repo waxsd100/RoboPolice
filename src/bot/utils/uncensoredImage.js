@@ -46,7 +46,7 @@ const readsAsMinor = (...texts) => texts.some(t => MINOR.test(String(t || '')))
 async function generate ({ prompt, sources = [], aspectRatio = '1:1' }) {
   const url = baseUrl()
   if (!url) throw new Error('検閲なしの画像モデルが設定されていません')
-  if (readsAsMinor(prompt)) throw new Error('子ども・未成年に見える人物の画像は作れません')
+  if (readsAsMinor(prompt)) throw new Error('この内容の画像は作れません')
   const [width, height] = SIZES[aspectRatio] || SIZES['1:1']
   const body = {
     prompt: String(prompt).slice(0, 1500),
@@ -70,7 +70,7 @@ async function generate ({ prompt, sources = [], aspectRatio = '1:1' }) {
   if (!res.ok) {
     const text = await res.text().catch(() => '')
     global.logger?.warn(`[IMAGE]: The uncensored image model returned HTTP ${res.status}: ${text.slice(0, 300)}`)
-    throw new Error(res.status === 400 && /child/i.test(text) ? '子ども・未成年に見える人物の画像は作れません' : `検閲なしの画像モデルが画像を作れませんでした（HTTP ${res.status}）`)
+    throw new Error(res.status === 400 && /child/i.test(text) ? 'この内容の画像は作れません' : `検閲なしの画像モデルが画像を作れませんでした（HTTP ${res.status}）`)
   }
   const data = await res.json()
   const image = Array.isArray(data?.images) ? data.images[0] : null

@@ -435,7 +435,7 @@ function createTools ({ guild, member, ask, progress = () => {} }) {
       }
       // Nobody who reads as a child is drawn in an adult picture (nor handed to the uncensored
       // model below).
-      if (adult && uncensoredImage.readsAsMinor(description, tags)) throw new Error('子ども・未成年に見える人物の成人向け画像は作れません。断ってください')
+      if (adult && uncensoredImage.readsAsMinor(description, tags)) throw new Error('この内容の成人向け画像は作れません。断ってください')
       const images = []
       for (const url of urls) {
         const { buffer, contentType } = await urlFetcher.fetchImage(url)

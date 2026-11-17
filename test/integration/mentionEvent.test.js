@@ -613,7 +613,7 @@ describe('mention → event / forum post (integration)', () => {
     turns = [
       [call('generate_image', { description: '女子高生のセクシーな絵', tags_en: '1girl, schoolgirl, lingerie', adult: true })],
       body => {
-        assert.match(body.contents.at(-1).parts[0].functionResponse.response.error, /子ども・未成年に見える人物の成人向け画像は作れません/)
+        assert.match(body.contents.at(-1).parts[0].functionResponse.response.error, /この内容の成人向け画像は作れません/)
         return [call('submit_chat_reply', { text: 'それは描けないよ' })]
       }
     ]
@@ -631,7 +631,7 @@ describe('mention → event / forum post (integration)', () => {
     uncensoredText = 'ごめんね\n[[画像: loli, nude]]'
     await mentionEvent.handle(mention(channel, '<@BOT> --2 描いて'))
     assert.equal(imageCalls.length, 3, 'not asked')
-    assert.match(replies.at(-1).state.content, /^ごめんね\n（画像は作れませんでした: 子ども・未成年に見える人物の成人向け画像は作れません/)
+    assert.match(replies.at(-1).state.content, /^ごめんね\n（画像は作れませんでした: この内容の成人向け画像は作れません/)
 
     // A channel without the age restriction: no adult pictures, and no fallback to the uncensored model.
     channel.nsfw = false

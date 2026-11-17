@@ -50,9 +50,9 @@ test('asks the image API (AUTOMATIC1111 style) and refuses a child before asking
   assert.equal(asked[1].url, '/sdapi/v1/img2img')
   assert.deepEqual(asked[1].body.init_images, [Buffer.from('src').toString('base64')])
 
-  await assert.rejects(uncensoredImage.generate({ prompt: 'loli, nude' }), /子ども・未成年に見える人物の画像は作れません/)
+  await assert.rejects(uncensoredImage.generate({ prompt: 'loli, nude' }), /この内容の画像は作れません/)
   assert.equal(asked.length, 2, 'not asked')
-  await assert.rejects(uncensoredImage.generate({ prompt: 'something the server refuses' }), /子ども・未成年に見える人物の画像は作れません/)
+  await assert.rejects(uncensoredImage.generate({ prompt: 'something the server refuses' }), /この内容の画像は作れません/)
 })
 
 test('takes the picture lines out of an uncensored reply, two at most', () => {
