@@ -14,6 +14,8 @@ image.
 """
 import asyncio
 import base64
+import binascii
+import hmac
 import io
 import os
 import re
@@ -64,7 +66,8 @@ def startup():
 
 
 def check_key(authorization):
-    if API_KEY and authorization != f"Bearer {API_KEY}":
+    # Constant-time, so how much of the key matched cannot be read from how long the check took.
+    if API_KEY and not hmac.compare_digest(authorization.encode(), f"Bearer {API_KEY}".encode()):
         raise HTTPException(status_code=401, detail="bad or missing API key")
 
 
@@ -99,7 +102,6 @@ def encode(image):
 
 
 def run(kind, req, **extra):
-    check_prompt(req.prompt)
     generator = None
     if req.seed >= 0:
         generator = torch.Generator(device=pipes[kind].device).manual_seed(req.seed)
@@ -122,6 +124,8 @@ def health():
 @app.post("/sdapi/v1/txt2img")
 async def txt2img(req: Txt2Img, authorization: str = Header(default="")):
     check_key(authorization)
+    # Before the lock, so a refused prompt is answered at once instead of after the pictures queued ahead.
+    check_prompt(req.prompt)
     async with lock:
         return await asyncio.to_thread(run, "txt2img", req, width=fit(req.width), height=fit(req.height))
 
@@ -129,9 +133,14 @@ async def txt2img(req: Txt2Img, authorization: str = Header(default="")):
 @app.post("/sdapi/v1/img2img")
 async def img2img(req: Img2Img, authorization: str = Header(default="")):
     check_key(authorization)
+    check_prompt(req.prompt)
     if not req.init_images:
         raise HTTPException(status_code=400, detail="init_images is empty")
-    source = Image.open(io.BytesIO(base64.b64decode(req.init_images[0].split(",")[-1]))).convert("RGB")
+    try:
+        source = Image.open(io.BytesIO(base64.b64decode(req.init_images[0].split(",")[-1]))).convert("RGB")
+    except (binascii.Error, ValueError, OSError, Image.DecompressionBombError):
+        # Not an image (or one too large to open): the caller's mistake, not a server error.
+        raise HTTPException(status_code=400, detail="init_images[0] is not a readable image")
     source = source.resize((fit(req.width), fit(req.height)))
     async with lock:
         return await asyncio.to_thread(run, "img2img", req, image=source, strength=max(0.05, min(1.0, req.denoising_strength)))
