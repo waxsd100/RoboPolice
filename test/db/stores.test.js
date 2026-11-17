@@ -713,6 +713,23 @@ describe('stores', { skip: !database.available && 'needs PGHOST' }, () => {
       })
       assert.ok(id2)
 
+      const refusedID = await store.saveMentionLog({
+        guildID: 'g1',
+        channelID: 'c1',
+        messageID: 'm100',
+        userID: 'u3',
+        kind: 'refused',
+        request: '30分睡眠配信はどう思いますか？',
+        response: 'ごめん',
+        blockReason: 'PROHIBITED_CONTENT',
+        fallbacks: 'gemini-3.8-flash refused (PROHIBITED_CONTENT) → without server',
+        context: 'sent: server, members'
+      })
+      const [refused] = (await store.getMentionLogs('g1', { userID: 'u3' }))
+      assert.equal(refused.id, refusedID)
+      assert.deepEqual([refused.block_reason, refused.fallbacks, refused.context], ['PROHIBITED_CONTENT', 'gemini-3.8-flash refused (PROHIBITED_CONTENT) → without server', 'sent: server, members'])
+      await require('../../src/db/interfaces/postgres/delete').deleteMessage('m100')
+
       const all = await store.getMentionLogs('g1')
       assert.equal(all.length, 2)
       assert.equal(all[0].message_id, 'm102')

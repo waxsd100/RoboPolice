@@ -837,6 +837,9 @@ function installMentionLogStore (logs = []) {
       output_tokens: entry.outputTokens || 0,
       thinking_tokens: entry.thinkingTokens || 0,
       gemini_calls: entry.geminiCalls || 0,
+      block_reason: entry.blockReason ?? null,
+      fallbacks: entry.fallbacks ?? null,
+      context: entry.context ?? null,
       created_at: new Date()
     }
     logs.push(row)
