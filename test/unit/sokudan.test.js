@@ -571,6 +571,8 @@ test('Use Case 2a (E2E): eventTools.call() screens tool output with Sokudan repo
     const tools = createTools({ guild, member, ask: async () => '' })
     const out = await tools.call('get_recent_messages', { channel_id: '10', limit: 5 })
     assert.ok(out.result.includes('<untrusted source="get_recent_messages">'))
+    // Only logged, in the background: the result does not wait for it.
+    for (let i = 0; i < 200 && !warnings.some(w => w.includes('[INJECTION]')); i++) await new Promise(resolve => setTimeout(resolve, 10))
     assert.equal(injectionChecked, true)
     assert.ok(warnings.some(w => w.includes('[INJECTION]: Possible prompt injection (sokudan p=0.78)')))
   } finally {

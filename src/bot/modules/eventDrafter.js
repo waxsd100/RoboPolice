@@ -2518,9 +2518,14 @@ async function withoutBlockRisks ({ server, recent = [], referenced, where = '' 
     return Number.isFinite(p) && p >= threshold
   }
   const sections = typeof server === 'string' ? server.split(/\n(?=### )/) : []
+  // Each kind is read whole first (a few calls), and only a kind that reads as risky is read part
+  // by part to find which: most requests carry nothing of the sort.
+  const partsRisky = async parts => parts.length && await risky(parts.join('\n'))
+    ? Promise.all(parts.map(risky))
+    : parts.map(() => false)
   const [sectionRisks, recentRisks, referencedRisk] = await Promise.all([
-    Promise.all(sections.map(risky)),
-    Promise.all(recent.map(risky)),
+    partsRisky(sections),
+    partsRisky(recent),
     referenced?.text ? risky(referenced.text) : false
   ])
   const dropped = []
