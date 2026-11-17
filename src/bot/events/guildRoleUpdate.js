@@ -1,4 +1,9 @@
 const send = require('../modules/webhooksender')
+const { formatPermission } = require('../utils/displayLabels')
+
+// What a changed property of a role is called in the log.
+const PROP_LABELS = { name: '名前', color: '色', hoist: 'メンバーを別枠で表示', mentionable: 'メンション可能', icon: 'アイコン', unicodeEmoji: '絵文字', managed: '連携による管理' }
+const labelOf = prop => PROP_LABELS[prop] || toTitleCase(prop)
 
 module.exports = {
   name: 'guildRoleUpdate',
@@ -10,7 +15,7 @@ module.exports = {
       eventName: 'guildRoleUpdate',
       who: null,
       embeds: [{
-        description: `A role が更新されました (${role.name})`,
+        description: `ロールが更新されました (${role.name})`,
         fields: [],
         color: role.color ? role.color : 3553599
       }]
@@ -20,13 +25,13 @@ module.exports = {
       if (role[prop] !== oldRole[prop] && prop !== 'position' && prop !== 'permissions' && prop !== 'tags') {
         if (prop === 'color') {
           guildRoleUpdateEvent.embeds[0].fields.unshift({
-            name: toTitleCase(prop),
-            value: `Now: ${intToHex(role[prop])}\nWas: ${intToHex(oldRole[prop])}`
+            name: labelOf(prop),
+            value: `変更後: ${intToHex(role[prop])}\n変更前: ${intToHex(oldRole[prop])}`
           })
         } else {
           guildRoleUpdateEvent.embeds[0].fields.unshift({
-            name: toTitleCase(prop),
-            value: `Now: ${role[prop]}\nWas: ${oldRole[prop]}`
+            name: labelOf(prop),
+            value: `変更後: ${role[prop]}\n変更前: ${oldRole[prop]}`
           })
         }
       }
@@ -46,18 +51,18 @@ module.exports = {
         const hasOld = Object.prototype.hasOwnProperty.call(oldJson, perm)
         if (hasNew && hasOld) {
           if (newJson[perm] === true && oldJson[perm] === false) {
-            field.value += `\n+ ${perm}`
+            field.value += `\n+ ${formatPermission(perm, 'ja')}`
           } else if (newJson[perm] === false && oldJson[perm] === true) {
-            field.value += `\n− ${perm}`
+            field.value += `\n− ${formatPermission(perm, 'ja')}`
           }
         } else if (hasNew && !hasOld) {
           if (newJson[perm]) {
-            field.value += `\n+ ${perm}`
+            field.value += `\n+ ${formatPermission(perm, 'ja')}`
           } else {
-            field.value += `\n− ${perm}`
+            field.value += `\n− ${formatPermission(perm, 'ja')}`
           }
         } else if (!hasNew && hasOld) {
-          field.value += `\n− ${perm}`
+          field.value += `\n− ${formatPermission(perm, 'ja')}`
         }
       })
       if (field.value) guildRoleUpdateEvent.embeds[0].fields.push(field)
@@ -68,7 +73,9 @@ module.exports = {
         ? await guild.getAuditLog({ limit: 5, actionType: 31 }).catch(() => ({ entries: [], users: [] }))
         : { entries: [], users: [] }
       const entries = Array.isArray(logs?.entries) ? logs.entries : []
-      const log = entries.find(e => Date.now() - ((e.id / 4194304) + 1420070400000) < 3000)
+      // Of this role: another role updated in the same seconds used to be taken for this one,
+      // naming the wrong person.
+      const log = entries.find(e => e.targetID === role.id && Date.now() - ((e.id / 4194304) + 1420070400000) < 3000)
       if (log && log.user) {
         guildRoleUpdateEvent.embeds[0].fields.push({
           name: 'ID',

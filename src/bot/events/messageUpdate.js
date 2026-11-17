@@ -80,13 +80,13 @@ module.exports = {
         messageUpdateEvent.embeds[0].fields.splice(1) // nuke all fields but essential message info
         secondMessageUpdatePayload = JSON.parse(JSON.stringify(messageUpdateEvent)) // deep copy initial payload
         messageUpdateEvent.embeds[0].description = clampStr(
-          `${messageUpdateEvent.embeds[0].description}\n\n**__Now__**:\n${escapedNewContents}`,
+          `${messageUpdateEvent.embeds[0].description}\n\n**__変更後__**:\n${escapedNewContents}`,
           4096
         )
         messageUpdateEvent.embeds[0].fields = []
         delete secondMessageUpdatePayload.embeds[0].author
         secondMessageUpdatePayload.embeds[0].description = clampStr(
-          `**__Previously__**:\n${rawOldContent || '<本文なし>'}`,
+          `**__変更前__**:\n${rawOldContent || '<本文なし>'}`,
           4096
         )
         secondMessageUpdatePayload.embeds[0].fields.push({
@@ -138,8 +138,8 @@ module.exports = {
             }
           })
           messageUpdateEvent.embeds[0].fields.push({
-            name: `Deleted Image${removedImageUrls.length > 1 ? 's' : ''}`,
-            value: 'See below'
+            name: '削除された画像',
+            value: '下に表示'
           })
         }
       }

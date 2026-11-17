@@ -23,8 +23,9 @@
 | --- | --- |
 | ルート（index/primary/replica、Docker、CI） | 読了・問題なし |
 | セキュリティ系（eval、urlFetcher、linkSafety、websub、aes、redact） | 読了・問題なし |
-| コマンド基盤（commandhandler、slash、staffAccess） | 未着手 |
-| DB（clients、interfaces、migrate、messageBatcher） | 未着手 |
+| コマンド基盤（commandhandler、staffAccess、creatorIds） | 読了・問題なし（slashcommands 各ファイルは未読） |
+| ログイベント（src/bot/events、webhooksender、bulkqueue、guildWebhookCacher） | 対応済み（guildMemberUpdate / guildUpdate / voice 系 / guildMemberAdd・Remove は未読） |
+| DB（clients、migrate、messageBatcher、create/read/update/delete、prune） | 読了・問題なし（youtube / steam / wiki / embeddings 等の interfaces とマイグレーション SQL は未読） |
 | AI 系（aiGateway、mentionEvent、eventTools/Drafter、sokudan） | 未着手 |
 | imagegen（Python） | 対応済み |
 | infra（terraform） | 未着手 |
@@ -43,6 +44,12 @@
   - 子ども判定（`check_prompt`）を GPU ロックの前に移動（拒否が生成待ちの後ろに並ばない）
   - img2img の壊れた base64／画像で 500 ではなく 400 を返す
   - ※ ローカルに PIL / torch が無いので `py_compile` のみ確認。実機での動作確認は未実施
+- `guildWebhookCacher.js`: Webhook 一覧の取得が**一時的なエラー（タイムアウト・5xx・レート制限・権限変更直後）で失敗しただけで、そのチャンネルのログ設定を DB から消していた**。Unknown Channel (10003) のときだけ消すように変更。設定キャッシュが無いと TypeError になる箇所も修正。テスト: `test/unit/guildWebhookCacher.test.js`
+- `channelUpdate.js`: 監査ログの照合に時刻の条件が無く、監査ログに残らない更新が「最後にそのチャンネルを変更した人」の操作として（古い before/after 付きで）記録されていた。10 秒以内のエントリだけ採用
+- `guildRoleUpdate.js`: 監査ログの照合に `targetID` が無く、同時刻の別ロール更新の実行者を表示していた。対象ロールで絞るように修正
+- `guildRoleCreate.js`: 監査ログの理由が「種類」欄を上書きしていた。「理由」欄を別に追加
+- ログ文言の日英混在を解消（`Now:/Was:` → `変更後:/変更前:`、`A role が…`、`Deleted Image`、`See below`、`__Now__/__Previously__`、ロールのプロパティ名・権限名を日本語ラベルに）
+- 上記イベントのテスト: `test/unit/auditLogEvents.test.js`
 
 ## 見つけたが未対応（要判断・大きすぎる等）
 

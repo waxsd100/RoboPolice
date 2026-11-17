@@ -19,7 +19,7 @@ module.exports = {
             value: 'なし'
           }, {
             name: 'ID',
-            value: `\`\`\`ini\nロール = ${role.id}\n実行者 = Deletion upon member leaving\`\`\``
+            value: `\`\`\`ini\nロール = ${role.id}\n実行者 = 不明\`\`\``
           }],
         color: role.color ? role.color : 3553599
       }]
