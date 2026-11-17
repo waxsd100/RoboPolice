@@ -408,6 +408,46 @@ describe('draft', () => {
     }
   })
 
+  test('blocked by Google, asks once more with the request alone, without what was gathered around it', async (t) => {
+    t.mock.method(global.logger, 'warn', () => {})
+    const bodies = []
+    let blockFirst = 1
+    global.fetch = async (url, init) => {
+      const body = JSON.parse(init.body)
+      bodies.push(body)
+      if (bodies.length <= blockFirst) return { ok: true, json: async () => ({ promptFeedback: { blockReason: 'PROHIBITED_CONTENT' } }) }
+      return { ok: true, json: async () => ({ candidates: [{ content: { role: 'model', parts: [call('submit_chat_reply', { text: 'いいと思う！' })] } }] }) }
+    }
+    const ask = () => draft({
+      request: '30分睡眠配信はどう思いますか？',
+      referenced: { text: 'A: 返信先の会話', count: 1 },
+      recent: ['B: さっきの会話'],
+      server: 'サーバー名: T\n### このサーバーのノリ\nいろいろ',
+      pictures: [{ name: 'smile', buffer: Buffer.from('x'), mimeType: 'image/png' }],
+      channelName: 'general',
+      uncensoredR18: false,
+      guild,
+      tools,
+      now: NOW
+    })
+    const result = await ask()
+    assert.equal(result.text, 'いいと思う！')
+    assert.equal(bodies.length, 2)
+    const first = bodies[0].contents[0].parts[0].text
+    assert.match(first, /<untrusted source="server">[\s\S]*<untrusted source="recent">[\s\S]*<untrusted source="conversation">/)
+    const again = bodies[1].contents[0]
+    assert.equal(again.parts.length, 1, 'no pictures')
+    assert.doesNotMatch(again.parts[0].text, /<untrusted source="(server|recent|conversation|members|channels)">|このサーバーのノリ|さっきの会話|返信先の会話/)
+    assert.match(again.parts[0].text, /## 返事の長さ（このサーバーの設定）[\s\S]*## 依頼メッセージ（\d+文字）\n<untrusted source="request">\n30分睡眠配信はどう思いますか？/)
+    assert.ok(global.logger.warn.mock.calls.some(c => /refused \(PROHIBITED_CONTENT\) with server, recent, conversation, pictures in the request; asking again with the request alone/.test(c.arguments[0])))
+
+    // Blocked again with the request alone: refused, without a third try.
+    bodies.length = 0
+    blockFirst = 2
+    await assert.rejects(ask(), e => e.blocked === 'PROHIBITED_CONTENT')
+    assert.equal(bodies.length, 2)
+  })
+
   test('nothing sent to Gemini names minors: Google blocks a whole request for that alone', async () => {
     const minors = /未成年|子ども|子供|幼/
     for (const safetyFilter of [false, true]) {

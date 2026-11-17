@@ -200,6 +200,7 @@ const MENTION_QUESTIONS = () => prompts.questions('mention', {
 })
 const INJECTION_QUESTIONS = () => prompts.questions('injection', { injection: { type: 'noul' } })
 const REFUSAL_QUESTIONS = () => prompts.questions('refusal', { refusal: { type: 'noul' } })
+const BLOCK_RISK_QUESTIONS = () => prompts.questions('block-risk', { block_risk: { type: 'noul' } })
 const STIFFNESS_QUESTIONS = () => prompts.questions('stiffness', {
   stiffness: { type: 'score', levels: 3 },
   needs_rewrite: { type: 'noul' }
@@ -331,6 +332,25 @@ async function detectStiffAiReply (text) {
   }
 }
 
+// How likely Google is to refuse a request that carries `text` (other people's words gathered
+// around a request), from 0 to 1; null when sokudan gave no answer. Read in parts of at most
+// MAX_STATE_CHARS, and the likeliest part counts.
+const DEFAULT_BLOCK_RISK_THRESHOLD = 0.5
+function blockRiskThreshold () {
+  const n = Number(process.env.SOKUDAN_BLOCK_RISK_THRESHOLD)
+  return process.env.SOKUDAN_BLOCK_RISK_THRESHOLD && n > 0 && n <= 1 ? n : DEFAULT_BLOCK_RISK_THRESHOLD
+}
+async function blockRisk (text) {
+  if (!isUsable()) return null
+  const cleaned = cleanState(text, Number.MAX_SAFE_INTEGER)
+  if (!cleaned) return 0
+  const parts = []
+  for (let i = 0; i < cleaned.length; i += MAX_STATE_CHARS) parts.push(cleaned.slice(i, i + MAX_STATE_CHARS))
+  const answers = await Promise.all(parts.map(part => systemOne(part, BLOCK_RISK_QUESTIONS())))
+  const probs = answers.map(a => a?.answers?.block_risk?.noul).filter(Number.isFinite)
+  return probs.length ? Math.max(...probs) : null
+}
+
 module.exports = {
   sokudanEndpoint,
   isConfigured,
@@ -346,5 +366,7 @@ module.exports = {
   classifyMentionRequest,
   detectInjection,
   detectRefusalReply,
+  blockRisk,
+  blockRiskThreshold,
   detectStiffAiReply
 }
