@@ -1182,7 +1182,10 @@ describe('mention → event / forum post (integration)', () => {
 
     // Non-owner server by default: strict safety settings sent, and blocked requests are NOT handed over to the uncensored model.
     await mentionEvent.handle(mention(channel, '<@BOT> きわどいネタお願い'))
-    assert.equal(requests.length, 1, 'non-owner server does not call uncensored model when blocked')
+    assert.equal(requests.length, 2, 'non-owner server does not call uncensored model when blocked; Gemini is asked once more with the request alone')
+    assert.ok(requests.every(r => /google-ai-studio/.test(r.url)))
+    assert.match(requests[0].body.contents[0].parts[0].text, /<untrusted source="server">/)
+    assert.doesNotMatch(requests[1].body.contents[0].parts[0].text, /<untrusted source="server">/)
     assert.equal(requests[0].body.safetySettings[0].threshold, 'BLOCK_LOW_AND_ABOVE')
     assert.match(replies[0].state.content, /AI（Google）の制限で答えられなかった/)
 
@@ -1191,10 +1194,10 @@ describe('mention → event / forum post (integration)', () => {
     replies.length = 0
     process.env.OWNER_GUILD_IDS = channel.guild.id
     await mentionEvent.handle(mention(channel, '<@BOT> きわどいネタお願い'))
-    assert.equal(requests.length, 2, '1 blocked Gemini call + 1 uncensored call (no Gemini polish call)')
+    assert.equal(requests.length, 3, '2 blocked Gemini calls (the second with the request alone) + 1 uncensored call (no Gemini polish call)')
     const [text, footer] = replies[0].state.content.split('\n')
     assert.equal(text, 'これは検閲なしモデルがそのまま返した、40文字以上のしっかりした長い返事だよ！そのまま届くよ。')
-    assert.match(footer, /^-# model: gemini-3\.8-flash → xtools-at\/DeepSeek-V4-Pro-Qwen3\.5-9B-UNCENSORED-heretic · tokens: in 400 \(cached 0\) · out 40 · 2 Gemini calls · fallback: gemini-3\.8-flash refused \(PROHIBITED_CONTENT\) → xtools-at\/DeepSeek-V4-Pro-Qwen3\.5-9B-UNCENSORED-heretic$/)
+    assert.match(footer, /^-# model: gemini-3\.8-flash → xtools-at\/DeepSeek-V4-Pro-Qwen3\.5-9B-UNCENSORED-heretic · tokens: in 500 \(cached 0\) · out 40 · 3 Gemini calls · fallback: gemini-3\.8-flash refused \(PROHIBITED_CONTENT\) → without server, members; gemini-3\.8-flash refused \(PROHIBITED_CONTENT\) → xtools-at\/DeepSeek-V4-Pro-Qwen3\.5-9B-UNCENSORED-heretic$/)
   })
 
   test('chat: Cloud Run thinking model streams SSE replies without leaking thoughts, records timings in %debugfooter, and falls back to Model 1 on cold-start reply threads', async (t) => {
