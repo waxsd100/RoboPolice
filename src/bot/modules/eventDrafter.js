@@ -1161,10 +1161,9 @@ async function isRefusalReplyAsync (text, requestText = '') {
 
 const STORY_REQUEST_PATTERN = /小説|ss|物語|お話|ストーリー|シナリオ|脚本|創作|ライトノベル|ラノベ|地の文|官能|濡れ場|えっち|エッチ|続き|書いて|執筆/i
 
-// images: adult pictures may be made here (the request's adultImages), asked for with a line in the reply.
 // story: a story was asked for (isStoryRequest); otherwise the rules are those of a chat reply.
-function uncensoredSystemInstruction ({ compact = false, r18Mode = false, images = false, story = false } = {}) {
-  const rules = prompts.render('chat/uncensored/rules', { r18Mode, compact, images, story })
+function uncensoredSystemInstruction ({ compact = false, r18Mode = false, story = false } = {}) {
+  const rules = prompts.render('chat/uncensored/rules', { r18Mode, compact, story })
   if (compact) {
     const persona = (process.env.CHAT_PERSONA || '').trim()
     return [
@@ -1814,7 +1813,7 @@ async function callUncensored (contents, declarations, allowed = null, { timeout
   }
   const r18Mode = !!contents?.uncensoredR18Mode || isR18Text(model) || /deckard|r-?18|uncensored-thinking/i.test(model)
   const story = isStoryRequest(contents?.[0]?.parts?.[0]?.text, asksForStory(contents))
-  const messages = toOpenAIMessages(uncensoredSystemInstruction({ compact: useCompact, r18Mode, images: !!contents?.adultImages, story }), contents, { compact: useCompact, r18Mode })
+  const messages = toOpenAIMessages(uncensoredSystemInstruction({ compact: useCompact, r18Mode, story }), contents, { compact: useCompact, r18Mode })
   const replyCacheKey = useCompact ? `uncensored-reply:${hashOf(JSON.stringify({ model, messages }))}` : null
   if (replyCacheKey) {
     const cachedReply = await aiCache.getJson(replyCacheKey)
@@ -1883,7 +1882,7 @@ async function callUncensored (contents, declarations, allowed = null, { timeout
     }
   }
   const buildMinimalBody = () => {
-    const compactMsgs = toOpenAIMessages(uncensoredSystemInstruction({ compact: true, r18Mode, images: !!contents?.adultImages, story }), contents, { compact: true, r18Mode })
+    const compactMsgs = toOpenAIMessages(uncensoredSystemInstruction({ compact: true, r18Mode, story }), contents, { compact: true, r18Mode })
       .map(m => m.role === 'user' && typeof m.content === 'string' && m.content.length > 2800
         ? { ...m, content: `${m.content.slice(0, 500)}\n\n${m.content.slice(-2300)}` }
         : m)
@@ -2472,7 +2471,7 @@ async function check (conversation, { name, args, calls = [] }) {
 const eventTools = () => require('./eventTools')
 
 // model, thinking, tier: the server's own model, thinking level and tier (%replymodel); null for the default.
-async function draft ({ request, referenced, recent = [], channelName, channelID, server, forum = null, images = [], pictures = [], edit = null, replyLength = null, streamerPersona = true, safetyFilter = false, uncensoredR18 = true, rules = null, model = null, thinking = null, tier = null, decision, adultImages = false, guild, member, tools, now = new Date() }) {
+async function draft ({ request, referenced, recent = [], channelName, channelID, server, forum = null, images = [], pictures = [], edit = null, replyLength = null, streamerPersona = true, safetyFilter = false, uncensoredR18 = true, rules = null, model = null, thinking = null, tier = null, decision, guild, member, tools, now = new Date() }) {
   const parsed = parseModelDirective(request)
   const attachedPics = pictures.filter(p => p.attachment)
   if (parsed.directive) {
@@ -2520,9 +2519,6 @@ async function draft ({ request, referenced, recent = [], channelName, channelID
   conversation.contents.tier = SERVICE_TIERS.includes(tier) ? tier : null
   conversation.contents.safetyFilter = !!safetyFilter
   conversation.contents.uncensoredR18 = uncensoredR18 !== false && !safetyFilter
-  // Adult pictures may be made here (mentionEvent: an age-restricted channel, the uncensored image
-  // model set up): the uncensored text model is told how to ask for them.
-  conversation.contents.adultImages = !!adultImages && conversation.contents.uncensoredR18
   conversation.contents.onProgress = tools?.progress || null
   conversation.contents.requestText = request
   conversation.contents.isEdit = !!edit
