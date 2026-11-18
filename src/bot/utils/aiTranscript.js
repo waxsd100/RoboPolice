@@ -57,6 +57,12 @@ function transcript () {
   return usage.transcript
 }
 
+// Tells the mention being handled that a call was recorded (usage.onRecord), so its log is written
+// as it goes.
+function recorded () {
+  try { currentUsage()?.onRecord?.() } catch (_) {}
+}
+
 // What is new in `turns` since the turns of the call before for the same purpose: { fromTurn, turns }.
 function delta (t, purpose, turns) {
   const serialized = turns.map(turn => JSON.stringify(turn))
@@ -119,6 +125,7 @@ function recordGemini ({ model, purpose = '', attempts = 1, body = {}, system = 
       : null,
     error: error ? String(error.message || error).slice(0, 2000) : null
   })
+  recorded()
 }
 
 // A call to the uncensored model (OpenAI-style messages): the body as sent, and the response (the
@@ -148,6 +155,7 @@ function recordUncensored ({ model, attempts = 1, body = {}, response = null, er
       : null,
     error: error ? String(error.message || error).slice(0, 2000) : null
   })
+  recorded()
 }
 
 // The settings an uncensored request was sent with (all but its model, messages and tools).

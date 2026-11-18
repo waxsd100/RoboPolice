@@ -78,6 +78,10 @@ const DECLARATIONS = [
 const HISTORY_SCAN = 1000
 const MAX_HISTORY_RESULTS = 40
 const MAX_HISTORY_TEXT = 500
+// search_server_messages: how many conversations at most, and how much of the messages around
+// each found one is shown.
+const MAX_SERVER_CONVERSATIONS = 5
+const MAX_CONTEXT_TEXT = 200
 const MAX_TOPIC = 100
 const MAX_PROFILE_EMOJIS = 8
 const MAX_YOUTUBE_RESULTS = 15
@@ -311,14 +315,15 @@ function createTools ({ guild, member, ask, progress = () => {} }) {
     async search_server_messages ({ query }) {
       if (!String(query || '').trim()) throw new Error('query を指定してください')
       const channels = [...guild.channels.values()].filter(c => canRead(c, member) && canRead(c, global.bot.user.id))
-      const found = await semanticSearch.searchMessages(guild.id, channels.map(c => c.id), String(query), { limit: MAX_HISTORY_RESULTS })
+      const found = await semanticSearch.searchConversations(guild.id, channels.map(c => c.id), String(query), { limit: MAX_SERVER_CONVERSATIONS })
       const name = id => guild.members.get(id)?.username || id
       if (found.length === 0) return '意味の近いメッセージは見つかりませんでした（メッセージの埋め込みがまだ作られていない可能性があります）'
-      for (const id of new Set(found.map(m => m.channel_id))) sources.push(`<#${id}>`)
+      for (const id of new Set(found.map(c => c.hit.channel_id))) sources.push(`<#${id}>`)
+      const line = (m, hit) => `${m.id === hit.id ? '▶ ' : ''}[${new Date(m.ts).toISOString()}] ${name(m.author_id)}: ${(m.content || '').replace(/\s+/g, ' ').slice(0, m.id === hit.id ? MAX_HISTORY_TEXT : MAX_CONTEXT_TEXT)}`
       return [
-        `「${query}」に意味が近いメッセージ（近い順、依頼者が読めるチャンネルのみ）:`,
-        ...found.map(r => `[${new Date(r.ts).toISOString()}] <#${r.channel_id}> ${name(r.author_id)}: ${(r.content || '').replace(/\s+/g, ' ').slice(0, MAX_HISTORY_TEXT)}`)
-      ].join('\n')
+        `「${query}」に意味が近い発言 ${found.length} 件と、その前後の会話（近い順、依頼者が読めるチャンネルのみ。▶ が見つかった発言）:`,
+        ...found.map(({ hit, messages }) => [`### <#${hit.channel_id}>`, ...messages.map(m => line(m, hit))].join('\n'))
+      ].join('\n\n')
     },
     async list_channels () {
       const all = [...guild.channels.values()]

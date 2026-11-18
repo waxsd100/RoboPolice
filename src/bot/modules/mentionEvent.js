@@ -462,11 +462,13 @@ function buttonRows (buttons, ids) {
 }
 
 // Shows `buttons` on the reply and waits for the requester to press one. Resolves to the pressed
-// button's index and its interaction, or null if nobody pressed within the timeout.
-async function choose (reply, requesterID, message, buttons, files) {
+// button's index and its interaction, or null if nobody pressed within the timeout. log: the
+// mention's log (mentionLog), which says it is waiting meanwhile.
+async function choose (reply, requesterID, message, buttons, files, log = null) {
   const { awaitCustomID, cancelCustomID } = require('../events/interactionCreate')
   const ids = buttons.map(() => uuidv4())
   await editReply(reply, { allowedMentions: NO_MENTIONS, ...message, components: buttonRows(buttons, ids) }, files)
+  log?.status('waiting')
   try {
     const interaction = await Promise.race(ids.map(id => awaitCustomID(id, requesterID, ANSWER_TIMEOUT_MS)))
     return { index: ids.indexOf(interaction.data.custom_id), interaction }
@@ -474,14 +476,16 @@ async function choose (reply, requesterID, message, buttons, files) {
     return null
   } finally {
     ids.forEach(cancelCustomID)
+    log?.status('generating')
   }
 }
 
 // Asks the requester to type their answer as their next message in the channel. Resolves to the
 // text, or with `withImages` to { text, images }.
-async function typedAnswer (reply, channelID, requesterID, prompt, { withImages = false } = {}) {
+async function typedAnswer (reply, channelID, requesterID, prompt, { withImages = false, log = null } = {}) {
   await reply.edit({ content: `${prompt}（5分以内にこのチャンネルへ書き込んでください）`, embeds: [], components: [], allowedMentions: NO_MENTIONS })
-  const answer = await awaitReply(channelID, requesterID, { withImages })
+  log?.status('waiting')
+  const answer = await awaitReply(channelID, requesterID, { withImages }).finally(() => log?.status('generating'))
   if (answer === null) throw new StopDrafting('時間内に入力がなかったため、作成を取りやめました。')
   return withImages ? answer : answer.text
 }
@@ -491,7 +495,7 @@ const IMAGE_PROMPT = '画像をどう変えるか入力してください。画�
 const MAX_IMAGE_INSTRUCTIONS = 5
 
 // The ask_user tool: the model's question as buttons, a way to answer in words, and a way out.
-function asker (reply, channelID, requesterID) {
+function asker (reply, channelID, requesterID, log = null) {
   return async (question, options) => {
     const picked = await choose(reply, requesterID, {
       content: '',
@@ -501,14 +505,79 @@ function asker (reply, channelID, requesterID) {
       ...options.map(label => ({ label, style: PRIMARY })),
       { label: 'その他（文字で入力）', style: SECONDARY },
       { label: 'やめる', style: SECONDARY }
-    ])
+    ], undefined, log)
     if (!picked) throw new StopDrafting('時間内に回答がなかったため、作成を取りやめました。')
     if (picked.index === options.length + 1) throw new StopDrafting('作成をやめました。')
     const answer = picked.index === options.length
-      ? await typedAnswer(reply, channelID, requesterID, `「${question}」への答えを入力してください`)
+      ? await typedAnswer(reply, channelID, requesterID, `「${question}」への答えを入力してください`, { log })
       : options[picked.index]
     await reply.edit({ content: `「${answer.slice(0, 100)}」で続けます…`, embeds: [], components: [], allowedMentions: NO_MENTIONS })
     return answer
+  }
+}
+
+// What a mention's usage says for its log: what was sent to the AI, what it cost, and each AI call.
+function usageFields (usage) {
+  return {
+    prompt: usage.prompt || null,
+    model: usage.models?.length ? usage.models.join(' → ') : null,
+    promptTokens: usage.tokens?.prompt || 0,
+    cachedTokens: usage.tokens?.cached || 0,
+    outputTokens: usage.tokens?.output || 0,
+    thinkingTokens: usage.tokens?.thoughts || 0,
+    geminiCalls: usage.requests || 0,
+    fallbacks: usage.fallbacks?.length ? [...usage.fallbacks] : undefined,
+    context: usage.context?.length ? usage.context.join('; ') : null,
+    aiTranscript: aiTranscript.forLog(usage)
+  }
+}
+
+// A mention's log (mention_logs), made the moment the mention arrives and brought up to date as it
+// is handled: its status (received, generating, waiting, then done, or failed for an error), each
+// AI call as it is made, and in the end what came of it. The writes go one after another, in the order they were asked for, and
+// nothing waits for them but `done`; without the database there is no log, and the mention is
+// handled all the same.
+function mentionLog (message, guild, request, repliedTo) {
+  const warn = e => global.logger.warn(`Could not save mention log in ${guild.id}: ${e.message}`)
+  let chain = mentionLogsStore.startMentionLog({
+    guildID: guild.id,
+    channelID: message.channel.id,
+    messageID: message.id,
+    userID: message.author.id,
+    userName: message.author.username || null,
+    request: request || '',
+    repliedToMessageID: repliedTo || null
+  }).catch(e => {
+    warn(e)
+    return null
+  })
+  let current = 'received'
+  const write = fields => {
+    chain = chain.then(async id => {
+      if (id !== null) await mentionLogsStore.updateMentionLog(id, fields).catch(warn)
+      return id
+    })
+  }
+  return {
+    set: write,
+    status (next) {
+      if (current === 'ended' || next === current) return
+      current = next
+      write({ status: next })
+    },
+    progress: usage => { if (current !== 'ended') write(usageFields(usage)) },
+    finish (outcome, usage = null) {
+      current = 'ended'
+      write({
+        ...(usage ? usageFields(usage) : {}),
+        status: outcome.kind === 'error' ? 'failed' : 'done',
+        kind: outcome.kind,
+        response: outcome.response ?? null,
+        ...(outcome.blockReason ? { blockReason: outcome.blockReason } : {}),
+        ...(outcome.followUpMessageIDs ? { followUpMessageIDs: outcome.followUpMessageIDs } : {})
+      })
+      return chain
+    }
   }
 }
 
@@ -517,6 +586,17 @@ async function handle (message) {
   if (!isAddressed(message)) return
   const guild = message.channel.guild
   const reference = { messageReference: { messageID: message.id, failIfNotExists: false } }
+  let request = extractRequest(message)
+  const attached = attachedImages(message)
+  const embedded = embeddedImages(message)
+  const repliedTo = message.messageReference?.messageID
+  // Logged from the moment it arrives, whatever comes of it.
+  const log = mentionLog(message, guild, request, repliedTo)
+  // Turned down before anything is asked of the AI: said in a line (or not at all), and logged.
+  const turnDown = async content => {
+    if (content) await message.channel.createMessage({ content, allowedMentions: NO_MENTIONS, ...reference }).catch(() => {})
+    await log.finish({ kind: 'refused', response: content || null })
+  }
 
   if (!isConfigured()) {
     // Say why nothing happens, but only to staff: for everyone else the feature simply isn't there.
@@ -525,19 +605,14 @@ async function handle (message) {
       warnedUnconfigured = true
       global.logger.warn(`Mention drafting is disabled: ${missing.join(', ')} not set`)
     }
-    if (!canManageEvents(message.member, guild)) return
-    return message.channel.createMessage({ content: `メンション機能が設定されていないため使えません（未設定: ${missing.join(', ')}）。`, allowedMentions: NO_MENTIONS, ...reference }).catch(() => {})
+    return turnDown(canManageEvents(message.member, guild) ? `メンション機能が設定されていないため使えません（未設定: ${missing.join(', ')}）。` : null)
   }
 
-  let request = extractRequest(message)
-  const attached = attachedImages(message)
-  const embedded = embeddedImages(message)
-  const repliedTo = message.messageReference?.messageID
   if (!request && !repliedTo && !attached.length && !embedded.length) {
-    return message.channel.createMessage({ content: '話したいことか、イベント・フォーラム投稿・チャンネルへの書き込みにしたい内容（文章・URL・メッセージリンク）を添えるか、元のメッセージに返信する形でメンションしてください。', allowedMentions: NO_MENTIONS, ...reference }).catch(() => {})
+    return turnDown('話したいことか、イベント・フォーラム投稿・チャンネルへの書き込みにしたい内容（文章・URL・メッセージリンク）を添えるか、元のメッセージに返信する形でメンションしてください。')
   }
   if (inProgress.has(message.author.id)) {
-    return message.channel.createMessage({ content: '前の依頼を処理中です。終わってからもう一度お試しください。', allowedMentions: NO_MENTIONS, ...reference }).catch(() => {})
+    return turnDown('前の依頼を処理中です。終わってからもう一度お試しください。')
   }
 
   inProgress.add(message.author.id)
@@ -546,8 +621,12 @@ async function handle (message) {
     let reply
     let referenced = null
     let outcome = null
+    // Each AI call is written to the log as it is made.
+    usage.onRecord = () => log.progress(usage)
+    log.status('generating')
     try {
       reply = await message.channel.createMessage({ content: '内容を読み取っています…', allowedMentions: NO_MENTIONS, ...reference })
+      log.set({ replyMessageID: reply.id })
       // /replylength, /persona, %debugfooter, %tokenlimit, %safety; without them (or the database) as by default.
       const { isOwnerGuild } = require('../utils/priority')
       const owner = isOwnerGuild(guild.id)
@@ -568,7 +647,7 @@ async function handle (message) {
       const tools = createTools({
         guild,
         member,
-        ask: asker(reply, message.channel.id, message.author.id),
+        ask: asker(reply, message.channel.id, message.author.id, log),
         progress: text => reply.edit({ content: text, allowedMentions: NO_MENTIONS }).catch(() => {})
       })
       // Replying to something the bot made (or to the message saying it did) is a request to change it.
@@ -695,7 +774,7 @@ async function handle (message) {
                 prevId = followUp.id
               }
             }
-            // A reply to any of them continues this mention's conversation (mention_logs.follow_up_message_ids).
+            // A reply to any of them continues this mention's conversation (mention_log_follow_ups).
             outcome.followUpMessageIDs = sentIds.slice(2)
             rememberThreadModel(sentIds, result.conversation?.contents)
             return
@@ -778,7 +857,7 @@ async function handle (message) {
           content: [note.slice(0, 1500), canRevise ? '' : `内容の修正は${MAX_REVISIONS}回までです。`].filter(Boolean).join('\n\n'),
           allowedMentions: NO_MENTIONS,
           embeds: [embed, ...candidatesEmbed(cover)]
-        }, buttons, previewFiles(cover))
+        }, buttons, previewFiles(cover), log)
         if (!picked) {
           const timeoutContent = '時間内に確認されなかったため、取りやめました。'
           outcome = { kind: 'cancelled', response: timeoutContent }
@@ -807,13 +886,13 @@ async function handle (message) {
           continue
         }
         if (action === 'instruct') {
-          const answer = await typedAnswer(reply, message.channel.id, message.author.id, IMAGE_PROMPT, { withImages: true })
+          const answer = await typedAnswer(reply, message.channel.id, message.author.id, IMAGE_PROMPT, { withImages: true, log })
           imageInstructions++
           await reply.edit({ content: '画像を変更しています…', allowedMentions: NO_MENTIONS })
           await cover.instruct(answer)
           continue
         }
-        const correction = await typedAnswer(reply, message.channel.id, message.author.id, kind.revisePrompt)
+        const correction = await typedAnswer(reply, message.channel.id, message.author.id, kind.revisePrompt, { log })
         await reply.edit({ content: '修正を反映しています…', allowedMentions: NO_MENTIONS })
         previous = result
         note = ''
@@ -852,32 +931,9 @@ async function handle (message) {
       inProgress.delete(message.author.id)
       // Whatever it ended in, the tokens it used count against the user's limits.
       await mentionQuota.record(message.author.id, usage.cost)
-      if (outcome) {
-        await mentionLogsStore.saveMentionLog({
-          guildID: guild.id,
-          channelID: message.channel.id,
-          messageID: message.id,
-          replyMessageID: reply?.id || null,
-          followUpMessageIDs: outcome.followUpMessageIDs || null,
-          userID: message.author.id,
-          userName: message.author.username || null,
-          kind: outcome.kind,
-          request: request || '',
-          prompt: usage.prompt || null,
-          response: outcome.response,
-          model: usage.models?.length ? usage.models.join(' → ') : null,
-          promptTokens: usage.tokens?.prompt || 0,
-          cachedTokens: usage.tokens?.cached || 0,
-          outputTokens: usage.tokens?.output || 0,
-          thinkingTokens: usage.tokens?.thoughts || 0,
-          geminiCalls: usage.requests || 0,
-          blockReason: outcome.blockReason || null,
-          fallbacks: usage.fallbacks?.length ? usage.fallbacks.join('; ') : null,
-          context: usage.context?.length ? usage.context.join('; ') : null,
-          aiTranscript: aiTranscript.forLog(usage),
-          repliedToMessageID: repliedTo || null
-        }).catch(err => global.logger.warn(`Could not save mention log in ${guild.id}: ${err.message}`))
-      }
+      // The request as it was answered (a reply with only an image is asked as replacing the image).
+      log.set({ request: request || '' })
+      await log.finish(outcome || { kind: 'error', response: null }, usage)
       global.logger.info(`Mention drafting in ${guild.id}: ${usage.requests} Gemini request(s), ${usage.retries} retried after HTTP 429`)
     }
   })

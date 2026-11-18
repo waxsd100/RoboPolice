@@ -144,7 +144,7 @@ describe('migrations', { skip: !database.available && 'needs PGHOST' }, () => {
       assert.equal((await q('SELECT to_regclass($1) AS t', [old]))[0].t, null, old)
     }
     const tableCount = (await q("SELECT count(*)::int AS n FROM pg_tables WHERE schemaname = 'public'"))[0].n
-    assert.equal(tableCount, 30)
+    assert.equal(tableCount, 33)
   })
 
   test('lists in columns become rows, in order; names are kept once; IDs refer to their rows', async () => {
@@ -338,7 +338,7 @@ describe('migrations', { skip: !database.available && 'needs PGHOST' }, () => {
     assert.deepEqual(views, [
       'v_discord_channels', 'v_discord_posts', 'v_gemini_batches', 'v_guild_ai_models',
       'v_guild_emojis', 'v_guild_lore', 'v_guilds', 'v_knowledge_facts',
-      'v_knowledge_sections', 'v_mention_ai_calls', 'v_mention_ai_messages', 'v_mention_logs', 'v_mention_threads', 'v_messages', 'v_steam_games',
+      'v_knowledge_sections', 'v_mention_ai_calls', 'v_mention_ai_messages', 'v_mention_log_events', 'v_mention_logs', 'v_mention_threads', 'v_messages', 'v_steam_games',
       'v_twitch_videos', 'v_youtube_live_events', 'v_youtube_videos'
     ])
     for (const view of views) {

@@ -463,6 +463,32 @@ describe('draft', () => {
     assert.equal(bodies.length, 2)
   })
 
+  test('blocked by Google after a tool was used: the same step once more with the tool results put away, only a submit allowed', async (t) => {
+    t.mock.method(global.logger, 'warn', () => {})
+    const bodies = []
+    global.fetch = async (url, init) => {
+      const body = JSON.parse(init.body)
+      bodies.push(body)
+      if (bodies.length === 1) return { ok: true, json: async () => ({ candidates: [{ content: { role: 'model', parts: [call('list_channels')] } }] }) }
+      if (bodies.length === 2) return { ok: true, json: async () => ({ candidates: [{ finishReason: 'SAFETY', safetyRatings: [{ category: 'HARM_CATEGORY_HARASSMENT', probability: 'MEDIUM' }] }] }) }
+      return { ok: true, json: async () => ({ candidates: [{ content: { role: 'model', parts: [call('submit_chat_reply', { text: '児童のこと？' })] } }] }) }
+    }
+    const listing = { declarations: [{ name: 'list_channels', description: 'チャンネル一覧' }], call: async () => ({ result: '<untrusted source="list_channels">\n他のメンバーの発言\n</untrusted>' }) }
+    const result = await draft({ request: '児童', channelName: 'general', uncensoredR18: false, guild, tools: listing, now: NOW })
+    assert.equal(result.text, '児童のこと？')
+    assert.equal(bodies.length, 3, 'no tool is read again, and the request is not asked again from the start')
+    const again = bodies[2]
+    const responses = again.contents.flatMap(c => c.parts).filter(p => p.functionResponse)
+    assert.equal(responses.length, 1)
+    assert.match(responses[0].functionResponse.response.result, /Google の制限に触れたため渡せません/)
+    assert.doesNotMatch(JSON.stringify(again.contents), /他のメンバーの発言/)
+    assert.deepEqual(again.toolConfig.functionCallingConfig.allowedFunctionNames, ['submit_event_draft', 'submit_forum_post_draft', 'submit_channel_message_draft', 'submit_chat_reply'])
+    assert.ok(global.logger.warn.mock.calls.some(c => /refused \(SAFETY\) after 1 tool result\(s\); asking again without them/.test(c.arguments[0])))
+    // A correction may use tools again.
+    await revise(result.conversation, 'もっと短く')
+    assert.equal(bodies[3].toolConfig.functionCallingConfig.allowedFunctionNames, undefined)
+  })
+
   test('nothing sent to Gemini names minors: Google blocks a whole request for that alone', async () => {
     const minors = /未成年|子ども|子供|幼/
     for (const safetyFilter of [false, true]) {

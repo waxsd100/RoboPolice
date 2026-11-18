@@ -199,6 +199,18 @@ describe('stores', { skip: !database.available && 'needs PGHOST' }, () => {
       assert.deepEqual(nearest.map(r => [r.message_id, Math.round(r.score * 100) / 100]), [['m8', 1], ['m6', 0]], 'nearest first, only model A, only stored messages')
       assert.deepEqual(await store.nearestMessages('g1', ['c2'], axis(0), { model: modelA }), [], 'only the asked channels')
       assert.deepEqual((await store.nearestMessages('g1', ['c1'], axis(0), { model: modelA, limit: 1 })).map(r => r.message_id), ['m8'])
+      // What was said around a message: the ones just before and after it, in its channel, within the time asked.
+      const day = 24 * 60 * 60
+      assert.deepEqual((await store.messagesAround('c1', '2026-10-07T00:00:00Z', { before: 1, after: 1, withinSeconds: 2 * day })).map(m => m.id), ['m5', 'm7'])
+      assert.deepEqual((await store.messagesAround('c1', '2026-10-07T00:00:00Z', { before: 2, after: 2, withinSeconds: 60 * 60 })).map(m => m.id), [], 'not what was said hours apart')
+      // Keyword matches, the vectors as stored, and the reply links.
+      assert.deepEqual((await store.keywordMessages('g1', ['c1'], ['TEXT 7'])).map(r => r.message_id), ['m7'], 'case aside')
+      assert.deepEqual(await store.keywordMessages('g1', ['c1'], ['%']), [], '% is not a wildcard')
+      const vectors = await store.messageVectors(['m8', 'm6', 'm7'], modelA)
+      assert.deepEqual([...vectors.keys()].sort(), ['m6', 'm8'], 'only those made by the model asked')
+      assert.equal(vectors.get('m8')[0], 127)
+      await q("INSERT INTO message_replies (message_id, reply_to) VALUES ('m7', 'm6')")
+      assert.deepEqual((await store.replyLinks(['m6'])).map(r => [r.message_id, r.reply_to]), [['m7', 'm6']])
       await assert.rejects(store.saveEmbeddingBatch('batches/bad', 'unknown-model', []), /invalid input value for enum embedding_model/)
       const indexes = (await q("SELECT indexname FROM pg_indexes WHERE indexdef LIKE '%hnsw%' ORDER BY indexname")).map(r => r.indexname)
       assert.deepEqual(indexes, ['messages_embedding_hnsw'])
@@ -799,6 +811,37 @@ describe('stores', { skip: !database.available && 'needs PGHOST' }, () => {
       assert.deepEqual((await store.getThread(other)).map(r => [r.depth, r.parent_id]), [[0, null]], 'a reply to something not logged starts its own thread')
       const purge = require('../../src/db/interfaces/postgres/delete')
       for (const id of ['t1', 't2', 't3', 't4', 't5']) await purge.deleteMessage(id)
+
+      // A mention is logged when it arrives, and brought up to date as it is handled.
+      const live = await store.startMentionLog({ guildID: 'g1', channelID: 'c1', messageID: 's1', userID: 'u5', userName: 'eve', request: '児童' })
+      const status = async () => (await pool.query('SELECT status, kind, response, finished_at, gemini_calls FROM v_mention_logs WHERE id = $1', [live])).rows[0]
+      assert.deepEqual(await status(), { status: 'received', kind: null, response: null, finished_at: null, gemini_calls: 0 })
+      const transcript = { systems: { h9: 'SYS9' }, calls: [{ model: 'm', purpose: 'mention', system: 'h9', turns: [{ role: 'user', parts: [{ text: '依頼' }] }] }] }
+      await store.updateMentionLog(live, { status: 'generating', replyMessageID: 'sr1', aiTranscript: transcript })
+      transcript.calls.push({ model: 'm', purpose: 'mention', system: 'h9', fromTurn: 1, turns: [{ role: 'model', parts: [{ text: '答え' }] }] })
+      await store.updateMentionLog(live, { status: 'waiting', geminiCalls: 2, aiTranscript: transcript })
+      assert.equal((await status()).status, 'waiting')
+      await store.updateMentionLog(live, { status: 'done', kind: 'chat', response: 'やあ', aiTranscript: transcript })
+      const done = await status()
+      assert.deepEqual([done.status, done.kind, done.response, done.gemini_calls, done.finished_at !== null], ['done', 'chat', 'やあ', 2, true])
+      assert.deepEqual((await store.getAiCalls(live)).map(c => [c.seq, c.messages.length]), [[0, 1], [1, 1]], 'each call saved once, though the transcript was given three times')
+      // One left unfinished with nothing recorded for 30 minutes reads as interrupted.
+      const stuck = await store.startMentionLog({ guildID: 'g1', channelID: 'c1', messageID: 's2', userID: 'u5' })
+      await pool.query("UPDATE mention_logs SET status = 'generating', created_at = now() - INTERVAL '40 minutes' WHERE id = $1", [stuck])
+      await pool.query("UPDATE mention_log_events SET at = now() - INTERVAL '40 minutes' WHERE mention_log_id = $1", [stuck])
+      assert.equal((await pool.query('SELECT status FROM v_mention_logs WHERE id = $1', [stuck])).rows[0].status, 'interrupted')
+      // Its history, and one that ended in an error.
+      assert.deepEqual((await store.getEvents(live)).map(e => [e.event, e.detail]), [['status', 'received'], ['status', 'generating'], ['status', 'waiting'], ['status', 'done']])
+      const failed = await store.saveMentionLog({ guildID: 'g1', channelID: 'c1', messageID: 's4', userID: 'u5', kind: 'error', request: 'x', response: '⚠️', fallbacks: 'a → b; b → c', blockReason: 'SAFETY' })
+      const [f] = (await pool.query('SELECT status, kind, block_reason, fallbacks, follow_up_message_ids, parent_id FROM v_mention_logs WHERE id = $1', [failed])).rows
+      assert.deepEqual(f, { status: 'failed', kind: 'error', block_reason: 'SAFETY', fallbacks: 'a → b; b → c', follow_up_message_ids: null, parent_id: null })
+      assert.deepEqual((await store.getEvents(failed)).map(e => e.event), ['status', 'status', 'fallback', 'fallback', 'refused'])
+      for (const id of ['s4']) await purge.deleteMessage(id)
+      // Deleting the second part of a split answer deletes its log, as deleting the first does.
+      const split = await store.saveMentionLog({ guildID: 'g1', channelID: 'c1', messageID: 's3', replyMessageID: 'sr3', followUpMessageIDs: ['sr3b'], userID: 'u5', kind: 'chat', request: 'x', response: 'y' })
+      await purge.deleteMessage('sr3b')
+      assert.equal((await pool.query('SELECT count(*)::int AS n FROM mention_logs WHERE id = $1', [split])).rows[0].n, 0)
+      for (const id of ['s1', 's2']) await purge.deleteMessage(id)
 
       const del = require('../../src/db/interfaces/postgres/delete')
       await del.deleteMessage('m101')

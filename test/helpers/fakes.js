@@ -143,6 +143,27 @@ function installEmbeddingStore ({ videos = {}, messages = [], pending = [] } = {
     .slice(0, limit)
   store.getMessages = async ids => messages.filter(m => ids.includes(m.message_id))
     .map(m => ({ id: m.message_id, author_id: m.author_id, channel_id: m.channel_id, ts: m.ts, content: m.content }))
+  store.keywordMessages = async (guildID, channelIDs, words, { limit = 60 } = {}) => words.length
+    ? messages
+      .filter(m => m.guild_id === guildID && channelIDs.includes(m.channel_id) && words.every(w => String(m.content).toLowerCase().includes(w)))
+      .sort((a, b) => new Date(b.ts) - new Date(a.ts))
+      .slice(0, limit)
+      .map(m => ({ message_id: m.message_id }))
+    : []
+  store.messageVectors = async ids => new Map(messages.filter(m => ids.includes(m.message_id) && m.embedding).map(m => [m.message_id, fromBase64(m.embedding)]))
+  // `reply_to` on a message: the one it replied to.
+  store.replyLinks = async ids => messages
+    .filter(m => m.reply_to && (ids.includes(m.message_id) || ids.includes(m.reply_to)))
+    .map(m => ({ message_id: m.message_id, reply_to: m.reply_to }))
+  store.messagesAround = async (channelID, ts, { before = 1, after = 2, withinSeconds = 30 * 60 } = {}) => {
+    const at = new Date(ts).getTime()
+    const inChannel = messages.filter(m => m.channel_id === channelID && Math.abs(new Date(m.ts).getTime() - at) <= withinSeconds * 1000)
+      .sort((a, b) => new Date(a.ts) - new Date(b.ts))
+      .map(m => ({ id: m.message_id, author_id: m.author_id, channel_id: m.channel_id, ts: m.ts, content: m.content }))
+    const earlier = inChannel.filter(m => new Date(m.ts).getTime() < at).slice(-before)
+    const later = inChannel.filter(m => new Date(m.ts).getTime() > at).slice(0, after)
+    return [...earlier, ...later]
+  }
   return saved
 }
 
@@ -815,37 +836,76 @@ function installEmbeddingModel () {
   return batches
 }
 
-// The mention log store (mentionLogs.js), in memory: logs [{ id, guild_id, ... }].
+// The mention log store (mentionLogs.js), in memory: logs [{ id, guild_id, ... }]. Each row also
+// keeps `statuses`, every status it was given in order.
 function installMentionLogStore (logs = []) {
   const store = require('../../src/db/interfaces/postgres/mentionLogs')
-  store.saveMentionLog = async entry => {
+  const COLUMNS = {
+    status: 'status',
+    kind: 'kind',
+    request: 'request',
+    prompt: 'prompt',
+    response: 'response',
+    replyMessageID: 'reply_message_id',
+    followUpMessageIDs: 'follow_up_message_ids',
+    model: 'model',
+    promptTokens: 'prompt_tokens',
+    cachedTokens: 'cached_tokens',
+    outputTokens: 'output_tokens',
+    thinkingTokens: 'thinking_tokens',
+    geminiCalls: 'gemini_calls',
+    blockReason: 'block_reason',
+    fallbacks: 'fallbacks',
+    context: 'context',
+    aiTranscript: 'ai_transcript'
+  }
+  store.startMentionLog = async entry => {
     const row = {
       id: String(logs.length + 1),
       guild_id: entry.guildID,
       channel_id: entry.channelID,
       message_id: entry.messageID,
-      reply_message_id: entry.replyMessageID ?? null,
-      follow_up_message_ids: entry.followUpMessageIDs ?? null,
+      reply_message_id: null,
+      follow_up_message_ids: null,
       user_id: entry.userID,
       user_name: entry.userName ?? null,
-      kind: entry.kind,
+      status: 'received',
+      statuses: ['received'],
+      kind: null,
       request: entry.request ?? '',
-      prompt: entry.prompt ?? null,
-      response: entry.response ?? '',
-      model: entry.model ?? null,
-      prompt_tokens: entry.promptTokens || 0,
-      cached_tokens: entry.cachedTokens || 0,
-      output_tokens: entry.outputTokens || 0,
-      thinking_tokens: entry.thinkingTokens || 0,
-      gemini_calls: entry.geminiCalls || 0,
-      block_reason: entry.blockReason ?? null,
-      fallbacks: entry.fallbacks ?? null,
-      context: entry.context ?? null,
-      ai_transcript: entry.aiTranscript ?? null,
-      created_at: new Date()
+      prompt: null,
+      response: null,
+      model: null,
+      prompt_tokens: 0,
+      cached_tokens: 0,
+      output_tokens: 0,
+      thinking_tokens: 0,
+      gemini_calls: 0,
+      block_reason: null,
+      fallbacks: null,
+      context: null,
+      ai_transcript: null,
+      replied_to_message_id: entry.repliedToMessageID ?? null,
+      created_at: new Date(),
+      finished_at: null
     }
     logs.push(row)
     return row.id
+  }
+  store.updateMentionLog = async (id, fields = {}) => {
+    const row = logs.find(r => r.id === id)
+    for (const [key, column] of Object.entries(COLUMNS)) {
+      if (fields[key] !== undefined) row[column] = fields[key]
+    }
+    // As v_mention_logs shows them: the fallbacks joined, and the further messages as a list.
+    if (Array.isArray(fields.fallbacks)) row.fallbacks = fields.fallbacks.join('; ')
+    if (fields.status) row.statuses.push(fields.status)
+    if (['done', 'failed'].includes(fields.status)) row.finished_at = new Date()
+  }
+  store.saveMentionLog = async ({ kind, response, ...entry }) => {
+    const id = await store.startMentionLog(entry)
+    await store.updateMentionLog(id, { ...entry, status: kind === 'error' ? 'failed' : 'done', kind, response: response ?? null })
+    return id
   }
   store.getMentionLogs = async (guildID, { limit = 50, userID = null } = {}) => logs
     .filter(r => r.guild_id === guildID && (!userID || r.user_id === userID))

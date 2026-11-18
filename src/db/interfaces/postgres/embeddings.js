@@ -6,7 +6,7 @@
 // when there was nothing to embed), so finding new messages uses a small partial index.
 // Videos have one vector each, on their row too.
 const pool = require('../../clients/postgres')
-const { toVectorLiteral } = require('../../../bot/utils/embeddings')
+const { toVectorLiteral, quantize } = require('../../../bot/utils/embeddings')
 const { ownerGuildIDs } = require('../../../bot/utils/priority')
 
 // Messages not handled yet and not in a running batch, in servers with message embeddings enabled
@@ -180,6 +180,53 @@ async function getMessages (ids) {
   return rows.rows
 }
 
+// The stored messages of a server in `channelIDs` that contain every one of `words` (as written,
+// case aside), newest first: [{ message_id }]. The keyword side of a search, fused with the
+// nearest by meaning (semanticSearch).
+async function keywordMessages (guildID, channelIDs, words, { limit = 60 } = {}) {
+  if (!words.length) return []
+  const patterns = words.map(w => `%${w.replace(/[\\%_]/g, c => `\\${c}`)}%`)
+  const rows = await pool.query(
+    `SELECT id AS message_id FROM messages
+     WHERE guild_id = $1 AND channel_id = ANY($2) AND content ILIKE ALL($3)
+     ORDER BY ts DESC LIMIT $4`,
+    [guildID, channelIDs, patterns, limit])
+  return rows.rows
+}
+
+// The embeddings made by `model` of the messages `ids`, as quantized vectors: Map(id → Int8Array).
+// A message without one is left out.
+async function messageVectors (ids, model) {
+  if (!ids.length) return new Map()
+  const rows = await pool.query(
+    'SELECT id, embedding::text AS embedding FROM messages WHERE id = ANY($1) AND embedding_model = $2 AND embedding IS NOT NULL',
+    [ids, model])
+  return new Map(rows.rows.map(r => [r.id, quantize(JSON.parse(r.embedding))]))
+}
+
+// The replies among the messages `ids` and to them (message_replies): [{ message_id, reply_to }].
+async function replyLinks (ids) {
+  if (!ids.length) return []
+  const rows = await pool.query('SELECT message_id, reply_to FROM message_replies WHERE message_id = ANY($1) OR reply_to = ANY($1)', [ids])
+  return rows.rows
+}
+
+// The messages of `channelID` just before and after `ts` (at most `before` and `after` of them,
+// within `withinSeconds`), oldest first: what was being said around a message.
+async function messagesAround (channelID, ts, { before = 1, after = 2, withinSeconds = 30 * 60 } = {}) {
+  const rows = await pool.query(
+    `(SELECT id, author_id, channel_id, ts, content FROM messages
+      WHERE channel_id = $1 AND ts < $2 AND ts >= $2::timestamptz - ($3 * INTERVAL '1 second')
+      ORDER BY ts DESC LIMIT $4)
+     UNION ALL
+     (SELECT id, author_id, channel_id, ts, content FROM messages
+      WHERE channel_id = $1 AND ts > $2 AND ts <= $2::timestamptz + ($3 * INTERVAL '1 second')
+      ORDER BY ts LIMIT $5)`,
+    [channelID, ts, withinSeconds, before, after]
+  )
+  return rows.rows.sort((a, b) => new Date(a.ts) - new Date(b.ts))
+}
+
 // Every stored video with what its embedding is made from, newest first:
 // [{ video_id, title, description, summary, text_hash }].
 async function videosForEmbedding () {
@@ -217,4 +264,4 @@ async function videoScores (guildID, query, model) {
   return Object.fromEntries(rows.rows.map(r => [r.video_id, Number(r.score)]))
 }
 
-module.exports = { noteEmbeddingBatch, saveEmbeddingBatch, runningEmbeddingBatches, deleteEmbeddingBatch, pendingMessages, saveMessageEmbeddings, embeddedMessagesAfter, dropMessageEmbeddings, resetStaleMessageEmbeddings, invalidateMessage, nearestMessages, getMessages, videosForEmbedding, saveVideoEmbedding, hasVideoEmbeddings, videoScores }
+module.exports = { noteEmbeddingBatch, saveEmbeddingBatch, runningEmbeddingBatches, deleteEmbeddingBatch, pendingMessages, saveMessageEmbeddings, embeddedMessagesAfter, dropMessageEmbeddings, resetStaleMessageEmbeddings, invalidateMessage, nearestMessages, keywordMessages, messageVectors, replyLinks, getMessages, messagesAround, videosForEmbedding, saveVideoEmbedding, hasVideoEmbeddings, videoScores }
