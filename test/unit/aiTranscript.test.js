@@ -55,4 +55,5 @@ test('turns the transcript into rows for the tables: one call row each, one mess
     ['received', 'assistant', 'text', null, 'こんにちは']
   ])
   assert.equal(aiTranscript.toRows(null), null)
+  assert.ok(!Number.isNaN(Date.parse(aiTranscript.toRows({ systems: {}, calls: [{ model: 'm' }] }).calls[0].calledAt)), 'a call without a time is saved at the time it is saved')
 })

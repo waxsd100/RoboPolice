@@ -156,7 +156,7 @@ function toRows (log) {
     const received = answer ? messageRows(answer).map(row => ({ ...row, direction: 'received', turn: null })) : []
     return {
       seq,
-      calledAt: call.at,
+      calledAt: call.at || new Date().toISOString(),
       model: call.model || null,
       purpose: call.purpose || null,
       systemHash: call.system || null,
