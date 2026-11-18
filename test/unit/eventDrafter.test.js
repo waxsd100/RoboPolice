@@ -395,11 +395,10 @@ describe('draft', () => {
     // The server's settings name stories too (the reply lengths), and the heading of a replied-to
     // conversation says 続き: neither makes a greeting a story.
     const chat = compactUncensoredText(await promptOf('やあ', { text: 'A: おはよう', count: 2 }))
-    assert.match(chat, /^## 話し方（このサーバーの設定）\n[^\n]+\n\n## 返事の長さ（このサーバーの設定）\n/)
     assert.doesNotMatch(chat, /※執筆時の注意/)
-    assert.doesNotMatch(chat, /\n{3,}|<untrusted/)
-    // An R18 request is not a story for that alone: a chat reply keeps the reply length.
-    assert.match(compactUncensoredText(await promptOf('やあ'), { r18Mode: true }), /## 返事の長さ（このサーバーの設定）/)
+    assert.doesNotMatch(chat, /\n{3,}|<untrusted|## 話し方|## 返事の長さ/)
+    // An R18 request is not a story for that alone.
+    assert.doesNotMatch(compactUncensoredText(await promptOf('やあ'), { r18Mode: true }), /※執筆時の注意/)
     for (const text of [
       compactUncensoredText(await promptOf('小説を書いて')),
       compactUncensoredText(await promptOf('もっと', { text: 'あなた（BOT）: 物語の一節', count: 1 }))
@@ -439,7 +438,8 @@ describe('draft', () => {
     const again = bodies[1].contents[0]
     assert.equal(again.parts.length, 1, 'no pictures')
     assert.doesNotMatch(again.parts[0].text, /<untrusted source="(server|recent|conversation|members|channels)">|このサーバーのノリ|さっきの会話|返信先の会話/)
-    assert.match(again.parts[0].text, /## 返事の長さ（このサーバーの設定）[\s\S]*## 依頼メッセージ（\d+文字）\n<untrusted source="request">\n30分睡眠配信はどう思いますか？/)
+    assert.match(again.parts[0].text, /^依頼されたチャンネル: [\s\S]*## 依頼メッセージ（\d+文字）\n<untrusted source="request">\n30分睡眠配信はどう思いますか？/)
+    assert.doesNotMatch(again.parts[0].text, /\n{3,}/)
     assert.ok(global.logger.warn.mock.calls.some(c => /refused \(PROHIBITED_CONTENT\) with server, recent, conversation, pictures in the request; asking again with the request alone/.test(c.arguments[0])))
 
     // Blocked again with the request alone: refused, without a third try.
@@ -517,12 +517,14 @@ describe('draft', () => {
     assert.match(prompt, /依頼されたチャンネル: #general/)
     assert.match(prompt, /## 依頼メッセージ（\d+文字）\n<untrusted source="request">\n交流会/)
     assert.match(prompt, /## 依頼メッセージ（3文字）/, 'its length, to choose how long to answer')
-    assert.match(requests[0].body.systemInstruction.parts[0].text, /返事の長さは、依頼に書いてある「返事の長さ」（サーバーの設定）に従う/)
-    assert.match(prompt, /## 返事の長さ（このサーバーの設定）\n- 創作以外の返事: 長くても500文字程度。\n- 小説・物語・SS・脚本などの創作: 文字数の上限を設けず/, 'long by default')
+    const system = requests[0].body.systemInstruction.parts[0].text
+    assert.match(system, /返事の長さは、「返事の長さ（このサーバーの設定）」に従う/)
+    assert.match(system, /## 返事の長さ（このサーバーの設定）\n- 創作以外の返事: 長くても500文字程度。\n- 小説・物語・SS・脚本などの創作: 文字数の上限を設けず/, 'long by default')
+    assert.doesNotMatch(prompt, /## 話し方|## 返事の長さ/, 'the server\'s settings are not in the request')
     assert.match(prompt, /## 依頼メッセージの返信先\n<untrusted source="conversation">\n告知文/)
   })
 
-  test('the reply length set for the server goes with the request; the system instructions stay the same', async () => {
+  test('the reply length set for the server goes in the system instructions, not the request', async () => {
     const { REPLY_LENGTHS } = require('../../src/bot/modules/eventDrafter')
     const prompts = []
     const systems = []
@@ -532,23 +534,24 @@ describe('draft', () => {
       prompts.push(requests[0].body.contents[0].parts[0].text)
       systems.push(requests[0].body.systemInstruction.parts[0].text)
     }
-    assert.ok(prompts[0].includes(REPLY_LENGTHS.short.join('\n')))
-    assert.ok(prompts[1].includes(REPLY_LENGTHS.normal.join('\n')))
-    for (const p of prompts.slice(2)) assert.ok(p.includes(REPLY_LENGTHS.long.join('\n')), 'long, also for an unknown or no setting')
-    assert.equal(new Set(systems).size, 1, 'one cache for every server')
+    assert.ok(systems[0].includes(`## 返事の長さ（このサーバーの設定）\n${REPLY_LENGTHS.short.join('\n')}\n`))
+    assert.ok(systems[1].includes(REPLY_LENGTHS.normal.join('\n')))
+    for (const s of systems.slice(2)) assert.ok(s.includes(REPLY_LENGTHS.long.join('\n')), 'long, also for an unknown or no setting')
+    assert.equal(new Set(systems).size, 3, 'one version of the instructions (and one cache) for each setting')
+    for (const p of prompts) assert.doesNotMatch(p, /## 返事の長さ/)
   })
 
   test('what changes least comes first and the request last, so a prompt cache covers more', async () => {
     const requests = installGemini([[call('submit_chat_reply', { text: 'x' })]])
     await draft({ request: 'やあ', referenced: { text: '前の話', count: 1 }, channelName: 'general', server: 'サーバーの説明', guild, tools, now: NOW })
     const prompt = requests[0].body.contents[0].parts[0].text
-    const order = ['## 話し方', '## 返事の長さ', '## このサーバーの情報', '依頼されたチャンネル:', '## 依頼メッセージの返信先', '現在日時:', '## 依頼メッセージ（'].map(h => prompt.indexOf(h))
+    const order = ['## このサーバーの情報', '依頼されたチャンネル:', '## 依頼メッセージの返信先', '現在日時:', '## 依頼メッセージ（'].map(h => prompt.indexOf(h))
     assert.ok(order.every(i => i >= 0), 'every part is there')
     assert.deepEqual(order, [...order].sort((a, b) => a - b))
     assert.ok(prompt.trimEnd().endsWith('</untrusted>'), 'the request is last')
   })
 
-  test('whether replies speak as the streamer goes with the request; the system instructions describe both ways', async () => {
+  test('whether replies speak as the streamer goes in the system instructions, which describe both ways', async () => {
     const { PERSONAS } = require('../../src/bot/modules/eventDrafter')
     const prompts = []
     const systems = []
@@ -558,10 +561,10 @@ describe('draft', () => {
       prompts.push(requests[0].body.contents[0].parts[0].text)
       systems.push(requests[0].body.systemInstruction.parts[0].text)
     }
-    assert.ok(prompts[0].startsWith(`## 話し方（このサーバーの設定）\n${PERSONAS.streamer}\n`))
-    assert.ok(prompts[1].startsWith(`## 話し方（このサーバーの設定）\n${PERSONAS.bot}\n`))
-    assert.ok(prompts[2].includes(PERSONAS.streamer), 'the streamer by default')
-    assert.equal(new Set(systems).size, 1, 'one cache for every server')
+    assert.ok(systems[0].includes(`## 話し方（このサーバーの設定）\n${PERSONAS.streamer}\n`))
+    assert.ok(systems[1].includes(`## 話し方（このサーバーの設定）\n${PERSONAS.bot}\n`))
+    assert.equal(systems[2], systems[0], 'the streamer by default')
+    for (const p of prompts) assert.doesNotMatch(p, /## 話し方/)
     assert.match(systems[0], /「配信者として」のとき: あなたはそのチャンネルの配信者本人になりきって/)
     assert.match(systems[0], /「BOT として」のとき: あなたは配信者本人ではなく、このサーバーの BOT として[\s\S]*配信者を名乗ったり/)
   })
@@ -1251,9 +1254,10 @@ describe('explicit cache and thinking', () => {
     // nothing says to write long.
     await draft({ request: '--2 R18 今日どうだった？', channelName: 'general', replyLength: 'short', guild, tools: quietTools, now: NOW })
     assert.equal(cloudRunBody.model, 'gemma-4-31B-it-The-DECKARD-HERETIC-UNCENSORED-Thinking.Q4_K_M')
-    assert.match(cloudRunBody.messages[0].content, /## 返事の長さ（この依頼は小説ではない）\n- [^\n]*「返事の長さ」（サーバーの設定）に従い、それより長く書かない/)
+    assert.match(cloudRunBody.messages[0].content, /## 返事の長さ（この依頼は小説ではない）\n- [^\n]*「返事の長さ」（このサーバーの設定）に従い、それより長く書かない/)
     assert.doesNotMatch(cloudRunBody.messages[0].content, /文字数の上限はありません|長編で書き切る|地の文は常体/)
-    assert.match(cloudRunBody.messages.at(-1).content, /## 返事の長さ（このサーバーの設定）\n- 創作以外の返事: できるだけ短く。/)
+    assert.match(cloudRunBody.messages[0].content, /## 返事の長さ（このサーバーの設定）\n- 創作以外の返事: できるだけ短く。/)
+    assert.doesNotMatch(cloudRunBody.messages.at(-1).content, /## 返事の長さ/)
     assert.doesNotMatch(cloudRunBody.messages.at(-1).content, /※執筆時の注意/)
 
     // 2. Normal Gemini block fallback uses Model 1 (UNCENSORED_MODEL)

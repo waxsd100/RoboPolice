@@ -992,7 +992,8 @@ describe('mention → event / forum post (integration)', () => {
     try {
       const requests = installGemini([[call('submit_chat_reply', { text: 'やあ' })]])
       await mentionEvent.handle(mention(channel, '<@BOT> やあ'))
-      assert.ok(requests[0].body.contents[0].parts[0].text.includes(`## 返事の長さ（このサーバーの設定）\n${REPLY_LENGTHS.short.join('\n')}`))
+      assert.ok(requests[0].body.systemInstruction.parts[0].text.includes(`## 返事の長さ（このサーバーの設定）\n${REPLY_LENGTHS.short.join('\n')}`))
+      assert.doesNotMatch(requests[0].body.contents[0].parts[0].text, /## 返事の長さ/)
     } finally {
       installReplyLengthStore()
     }
@@ -1064,7 +1065,8 @@ describe('mention → event / forum post (integration)', () => {
     try {
       const requests = installGemini([[call('submit_chat_reply', { text: 'やあ' })]])
       await mentionEvent.handle(mention(channel, '<@BOT> やあ'))
-      assert.ok(requests[0].body.contents[0].parts[0].text.startsWith(`## 話し方（このサーバーの設定）\n${PERSONAS.bot}\n`))
+      assert.ok(requests[0].body.systemInstruction.parts[0].text.includes(`## 話し方（このサーバーの設定）\n${PERSONAS.bot}\n`))
+      assert.doesNotMatch(requests[0].body.contents[0].parts[0].text, /## 話し方/)
     } finally {
       installReplyLengthStore()
     }

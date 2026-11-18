@@ -99,12 +99,24 @@ function modelName () {
 // whole request. Two versions of these instructions, so two caches.
 // uncensored: for the uncensored model, whose own rules say how far adult requests go
 // (prompts/chat/uncensored/rules.md) in place of this.
-function systemInstruction ({ uncensored = false, safetyFilter = false } = {}) {
+// settings: the server's way of speaking and reply length (serverSettings), also in these
+// instructions and never in the request; '' to leave them out (a story by the uncensored model).
+function systemInstruction ({ uncensored = false, safetyFilter = false, settings = '' } = {}) {
   return prompts.render('chat/system', {
     modelName: modelName(),
     persona: (process.env.CHAT_PERSONA || '').trim(),
     uncensored,
-    mature: uncensored ? '' : prompts.render(safetyFilter ? 'chat/mature/filtered' : 'chat/mature/open')
+    mature: uncensored ? '' : prompts.render(safetyFilter ? 'chat/mature/filtered' : 'chat/mature/open'),
+    settings
+  })
+}
+
+// The server's way of speaking (/persona) and reply length (/replylength), for the system
+// instructions (prompts/chat/settings.md). There are a few of them, so a few caches.
+function serverSettings ({ streamerPersona = true, replyLength = null } = {}) {
+  return prompts.render('chat/settings', {
+    speaker: streamerPersona === false ? PERSONAS.bot : PERSONAS.streamer,
+    replyLength: REPLY_LENGTHS[replyLengthOf(replyLength)].join('\n')
   })
 }
 
@@ -131,7 +143,7 @@ const REPLY_LENGTHS = {
 const DEFAULT_REPLY_LENGTH = 'long'
 
 // Who the replies speak as, set per server with /persona: the streamer (the default) or the bot.
-// Both ways are described in the system instructions; the request says which.
+// Both ways are described in the system instructions, and so is which (serverSettings).
 const PERSONAS = {
   streamer: prompts.render('chat/persona/streamer'),
   bot: prompts.render('chat/persona/bot')
@@ -145,22 +157,16 @@ const replyLengthOf = length => REPLY_LENGTHS[length] ? length : DEFAULT_REPLY_L
 // rules: { moderators, channels } (serverRules.js): what the server's moderators asked of the
 // assistant (/assistantrules) and its rules channels' text ([{ channelID, text }]); either may be
 // missing.
-function buildPrompt ({ request, referenced, recent = [], channelName, channelID, channelInfo = null, server, forum, images, edit, channels = [], people = [], replyLength = null, streamerPersona = true, safetyFilter = false, rules = null, now }) {
-  const lines = [
-    '## 話し方（このサーバーの設定）',
-    streamerPersona === false ? PERSONAS.bot : PERSONAS.streamer,
-    '',
-    '## 返事の長さ（このサーバーの設定）',
-    ...REPLY_LENGTHS[replyLengthOf(replyLength)]
-  ]
+function buildPrompt ({ request, referenced, recent = [], channelName, channelID, channelInfo = null, server, forum, images, edit, channels = [], people = [], rules = null, now }) {
+  const lines = []
   if (rules?.moderators || rules?.channels?.length) {
-    lines.push('', '## このサーバーのルールとモデレーターからのお願い（返事・下書きはこれに従う）')
+    lines.push('## このサーバーのルールとモデレーターからのお願い（返事・下書きはこれに従う）')
     if (rules.moderators) lines.push('### モデレーターから AI へのお願い', wrap('rules', rules.moderators))
     for (const channel of rules.channels || []) lines.push(`### サーバーのルール（<#${channel.channelID}> より）`, wrap('rules', channel.text))
   }
-  if (server) lines.push('', '## このサーバーの情報（最新）', wrap('server', server))
-  if (channels.length) lines.push('', '## 依頼や会話に出てくるチャンネル', wrap('channels', channels.join('\n')))
-  lines.push('', `依頼されたチャンネル: ${channelInfo || `#${channelName}${channelID ? `（ID: ${channelID}）` : ''}`}`)
+  if (server) lines.push(...(lines.length ? [''] : []), '## このサーバーの情報（最新）', wrap('server', server))
+  if (channels.length) lines.push(...(lines.length ? [''] : []), '## 依頼や会話に出てくるチャンネル', wrap('channels', channels.join('\n')))
+  lines.push(...(lines.length ? [''] : []), `依頼されたチャンネル: ${channelInfo || `#${channelName}${channelID ? `（ID: ${channelID}）` : ''}`}`)
   // Who asked and who the request names, so the reply knows who is who (names are the members' own).
   if (people.length) lines.push('', '## 依頼した人と、依頼や会話に出てくるメンバー（<@ID> は Discord のメンション）', wrap('members', people.join('\n')))
   // What was just being talked about in the channel, as far as it bears on the request (recentTopics.js).
@@ -1162,18 +1168,22 @@ async function isRefusalReplyAsync (text, requestText = '') {
 const STORY_REQUEST_PATTERN = /小説|ss|物語|お話|ストーリー|シナリオ|脚本|創作|ライトノベル|ラノベ|地の文|官能|濡れ場|えっち|エッチ|続き|書いて|執筆/i
 
 // story: a story was asked for (isStoryRequest); otherwise the rules are those of a chat reply.
-function uncensoredSystemInstruction ({ compact = false, r18Mode = false, story = false } = {}) {
+// settings: the server's way of speaking and reply length (serverSettings), left out for a story,
+// which goes by the uncensored model's own rules for style and length.
+function uncensoredSystemInstruction ({ compact = false, r18Mode = false, story = false, settings = '' } = {}) {
   const rules = prompts.render('chat/uncensored/rules', { r18Mode, compact, story })
+  const chat = story ? '' : settings
   if (compact) {
     const persona = (process.env.CHAT_PERSONA || '').trim()
     return [
       prompts.render('chat/uncensored/role'),
       ...(persona ? ['', '## 運営者が設定したキャラクター', persona] : []),
+      ...(chat ? ['', chat] : []),
       '',
       rules
     ].join('\n')
   }
-  return [systemInstruction({ uncensored: true }), '', rules].join('\n')
+  return [systemInstruction({ uncensored: true, settings: chat }), '', rules].join('\n')
 }
 
 const MAX_UNCENSORED_CONVERSATION_CHARS = 1800
@@ -1213,11 +1223,6 @@ function compactUncensoredText (text, { story = null } = {}) {
     .replace(/(<untrusted source="members">\n?)([\s\S]*?)(\n?<\/untrusted>)/, (whole, open, body, close) =>
       body.length > MAX_UNCENSORED_MEMBERS_CHARS ? `${open}${body.slice(0, MAX_UNCENSORED_MEMBERS_CHARS)}${close}` : whole
     )
-  // A story is written by the uncensored model's own rules for style and length (in its system
-  // instructions, and once more after the request), not as a chat reply.
-  if (storyMode) {
-    out = out.replace(/## 話し方（このサーバーの設定）\n[\s\S]*?\n\n## 返事の長さ（このサーバーの設定）\n(?:\s*- [^\n]+\n?)+/, '')
-  }
   if (hasConversation) {
     out = out
       .replace(/\n## 依頼されたチャンネルの最近の会話[\s\S]*?<\/untrusted>/, '')
@@ -1813,7 +1818,7 @@ async function callUncensored (contents, declarations, allowed = null, { timeout
   }
   const r18Mode = !!contents?.uncensoredR18Mode || isR18Text(model) || /deckard|r-?18|uncensored-thinking/i.test(model)
   const story = isStoryRequest(contents?.[0]?.parts?.[0]?.text, asksForStory(contents))
-  const messages = toOpenAIMessages(uncensoredSystemInstruction({ compact: useCompact, r18Mode, story }), contents, { compact: useCompact, r18Mode })
+  const messages = toOpenAIMessages(uncensoredSystemInstruction({ compact: useCompact, r18Mode, story, settings: serverSettings(contents) }), contents, { compact: useCompact, r18Mode })
   const replyCacheKey = useCompact ? `uncensored-reply:${hashOf(JSON.stringify({ model, messages }))}` : null
   if (replyCacheKey) {
     const cachedReply = await aiCache.getJson(replyCacheKey)
@@ -1882,7 +1887,7 @@ async function callUncensored (contents, declarations, allowed = null, { timeout
     }
   }
   const buildMinimalBody = () => {
-    const compactMsgs = toOpenAIMessages(uncensoredSystemInstruction({ compact: true, r18Mode, story }), contents, { compact: true, r18Mode })
+    const compactMsgs = toOpenAIMessages(uncensoredSystemInstruction({ compact: true, r18Mode, story, settings: serverSettings(contents) }), contents, { compact: true, r18Mode })
       .map(m => m.role === 'user' && typeof m.content === 'string' && m.content.length > 2800
         ? { ...m, content: `${m.content.slice(0, 500)}\n\n${m.content.slice(-2300)}` }
         : m)
@@ -2158,7 +2163,7 @@ async function generate (contents, declarations, allowed = null, { deep = false,
   const model = deep ? deepModel() : replyModel(contents)
   const strictSafety = !!contents.safetyFilter
   const prefix = {
-    systemInstruction: { parts: [{ text: systemInstruction({ safetyFilter: !!contents.safetyFilter }) }] },
+    systemInstruction: { parts: [{ text: systemInstruction({ safetyFilter: !!contents.safetyFilter, settings: serverSettings(contents) }) }] },
     tools: [{ functionDeclarations: declarations }],
     // ANY: every turn must be a tool call, so the loop always ends in a submit_* call.
     toolConfig: { functionCallingConfig: { mode: 'ANY', ...(allowed ? { allowedFunctionNames: allowed } : {}) } }
@@ -2230,7 +2235,7 @@ function cloneContentsWithoutThoughts (contents) {
 // (knowledge, the server's running jokes and how it talks), the channels and members it names,
 // what was just said in the channel, and the conversation it replies to. Google can block a whole
 // request for something in these, however harmless the request itself.
-const GATHERED_SECTION = /\n## [^\n]*\n<untrusted source="(server|channels|members|recent|conversation)">[\s\S]*?<\/untrusted>/g
+const GATHERED_SECTION = /(?:^|\n)## [^\n]*\n<untrusted source="(server|channels|members|recent|conversation)">[\s\S]*?<\/untrusted>/g
 
 // The first turn of a conversation without what was gathered around the request (GATHERED_SECTION)
 // and without the pictures shown with it; null when it has none of them. `dropped`: which.
@@ -2241,7 +2246,7 @@ function withRequestAlone (turn) {
   const pictures = turn.parts.length > 1
   if (!dropped.length && !pictures) return null
   if (pictures) dropped.push('pictures')
-  return { turn: { role: 'user', parts: [{ text: text.replace(GATHERED_SECTION, '') }] }, dropped }
+  return { turn: { role: 'user', parts: [{ text: text.replace(GATHERED_SECTION, '').replace(/\n{3,}/g, '\n\n').replace(/^\n+/, '') }] }, dropped }
 }
 
 async function runAgent (contents, tools, submits = SUBMIT_DECLARATIONS) {
@@ -2575,7 +2580,7 @@ async function draft ({ request, referenced, recent = [], channelName, channelID
   const shown = [...emojiShown, ...attachedShown]
   const sent = await withoutBlockRisks({ server, recent, referenced, where: guild?.id })
   const conversation = {
-    contents: [{ role: 'user', parts: [{ text: buildPrompt({ request, referenced: sent.referenced, recent: sent.recent, channelName, channelID, channelInfo: channelID ? eventTools().requestChannelInfo(channelID, guild) : null, server: sent.server, forum, images, edit, channels: member ? eventTools().namedChannels([request, referenced?.text], guild, member) : [], people: member ? eventTools().namedMembers([request, referenced?.text], guild, member) : [], replyLength, streamerPersona, safetyFilter, rules, now }) }, ...shown] }],
+    contents: [{ role: 'user', parts: [{ text: buildPrompt({ request, referenced: sent.referenced, recent: sent.recent, channelName, channelID, channelInfo: channelID ? eventTools().requestChannelInfo(channelID, guild) : null, server: sent.server, forum, images, edit, channels: member ? eventTools().namedChannels([request, referenced?.text], guild, member) : [], people: member ? eventTools().namedMembers([request, referenced?.text], guild, member) : [], rules, now }) }, ...shown] }],
     guild,
     member,
     tools,
@@ -2595,6 +2600,9 @@ async function draft ({ request, referenced, recent = [], channelName, channelID
   conversation.contents.thinking = THINKING_LEVELS.includes(thinking) ? thinking : null
   conversation.contents.tier = SERVICE_TIERS.includes(tier) ? tier : null
   conversation.contents.safetyFilter = !!safetyFilter
+  // The server's settings, for the system instructions (serverSettings), kept for corrections too.
+  conversation.contents.streamerPersona = streamerPersona !== false
+  conversation.contents.replyLength = replyLength
   conversation.contents.uncensoredR18 = uncensoredR18 !== false && !safetyFilter
   conversation.contents.onProgress = tools?.progress || null
   conversation.contents.requestText = request
