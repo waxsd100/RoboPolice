@@ -171,7 +171,9 @@ describe('searching messages by meaning (MESSAGE_EMBEDDINGS=true)', () => {
       { message_id: 'h1', guild_id: '100', channel_id: '201', ts: new Date('2026-10-01T00:00:00Z'), author_id: '2', content: 'ホラーゲームやろう', embedding: toBase64(horror) },
       { message_id: 'm1', guild_id: '100', channel_id: '201', ts: new Date('2026-10-02T00:00:00Z'), author_id: '2', content: 'マイクラで城', embedding: toBase64(minecraft) },
       { message_id: 's1', guild_id: '100', channel_id: '202', ts: new Date('2026-10-03T00:00:00Z'), author_id: '3', content: '怖い話（運営だけ）', embedding: toBase64(horror) },
-      { message_id: 'g1', guild_id: '100', channel_id: '203', ts: new Date('2026-10-04T00:00:00Z'), author_id: '3', content: 'こわいゲームの配信', embedding: toBase64(horror) }
+      { message_id: 'g1', guild_id: '100', channel_id: '203', ts: new Date('2026-10-04T00:00:00Z'), author_id: '3', content: 'こわいゲームの配信', embedding: toBase64(horror) },
+      // The reply to h1, a few minutes later.
+      { message_id: 'h2', guild_id: '100', channel_id: '201', ts: new Date('2026-10-01T00:04:00Z'), author_id: '3', content: 'いいね、何やる？', embedding: toBase64(minecraft) }
     ]
     installEmbeddingStore({ messages: stored })
   })
@@ -190,6 +192,7 @@ describe('searching messages by meaning (MESSAGE_EMBEDDINGS=true)', () => {
       '<#201> の保存済みメッセージから「怖い」に意味が近いもの（近い順）:',
       '[2026-10-01T00:00:00.000Z] alice: ホラーゲームやろう',
       '[2026-10-02T00:00:00.000Z] alice: マイクラで城',
+      '[2026-10-01T00:04:00.000Z] 3: いいね、何やる？',
       '',
       '語を含む最近のメッセージ:',
       '[2026-10-30T00:00:00.000Z] alice: 怖いの新着'
@@ -199,10 +202,17 @@ describe('searching messages by meaning (MESSAGE_EMBEDDINGS=true)', () => {
   test('search_server_messages searches every channel the requester can read', async () => {
     const tl = tools()
     assert.ok(tl.declarations.some(d => d.name === 'search_server_messages'))
-    const text = (await tl.call('search_server_messages', { query: 'こわいゲーム' })).result
-    assert.match(text, /^「こわいゲーム」に意味が近いメッセージ（近い順、依頼者が読めるチャンネルのみ）:\n\[2026-10-04T00:00:00\.000Z\] <#203> 3: こわいゲームの配信\n\[2026-10-01T00:00:00\.000Z\] <#201> alice: ホラーゲームやろう/)
-    assert.doesNotMatch(text, /運営だけ/, 'not from a channel the requester cannot read')
-    assert.deepEqual(tl.sources.sort(), ['<#201>', '<#203>'])
+    const text = (await tl.call('search_server_messages', { query: 'ホラーゲーム' })).result
+    // The message found, with the reply that followed it, as a conversation.
+    assert.equal(text, [
+      '「ホラーゲーム」に意味が近い発言 1 件と、その前後の会話（近い順、依頼者が読めるチャンネルのみ。▶ が見つかった発言）:',
+      '',
+      '### <#201>\n▶ [2026-10-01T00:00:00.000Z] alice: ホラーゲームやろう\n[2026-10-01T00:04:00.000Z] 3: いいね、何やる？'
+    ].join('\n'))
+    assert.deepEqual(tl.sources, ['<#201>'])
+    const loose = (await tl.call('search_server_messages', { query: '恐怖' })).result
+    assert.doesNotMatch(loose, /運営だけ/, 'not from a channel the requester cannot read')
+    assert.doesNotMatch(loose, /▶ \[2026-10-01T00:04/, 'a message shown around one found is not shown again')
   })
 
   test('is not offered when message embeddings are off', () => {

@@ -30,6 +30,33 @@ async function searchMessages (guildID, channelIDs, query, { limit = 30 } = {}) 
     .slice(0, limit)
 }
 
+// The conversations of `channelIDs` that come closest to `query`, best first: each the message
+// found and what was said just before and after it in its channel, so it is read as it was meant,
+// not as a word out of its talk. Only the messages that come about as close as the best one
+// (within SCORE_WINDOW), and at most `limit`: a long list of loose matches says little, and a list
+// of short phrases close to one word reads as something else entirely (Google refused one).
+// A message found that is already part of a closer one's conversation is not shown again.
+// [{ hit: { id, author_id, channel_id, ts, content, score }, messages: [same, oldest first] }]
+const SCORE_WINDOW = 0.08
+async function searchConversations (guildID, channelIDs, query, { limit = 5, before = 1, after = 2 } = {}) {
+  const found = await searchMessages(guildID, channelIDs, query, { limit: limit * 3 })
+  if (!found.length) return []
+  const close = found.filter(m => m.score >= found[0].score - SCORE_WINDOW)
+  const shown = new Set()
+  const conversations = []
+  for (const hit of close) {
+    if (conversations.length >= limit) break
+    if (shown.has(hit.id)) continue
+    const around = (await store.messagesAround(hit.channel_id, hit.ts, { before, after }))
+      .map(m => ({ ...m, content: fromStoredContent(m.content) }))
+      .filter(m => m.id === hit.id || embeddableText(m.content))
+    const messages = around.some(m => m.id === hit.id) ? around : [...around, hit].sort((a, b) => new Date(a.ts) - new Date(b.ts))
+    for (const m of messages) shown.add(m.id)
+    conversations.push({ hit, messages })
+  }
+  return conversations
+}
+
 // `videos` ordered by closeness to `query`, or null when the server's videos have no embeddings
 // yet (the caller then falls back to keywords).
 async function rankVideos (guildID, videos, query) {
@@ -48,4 +75,4 @@ async function rankVideos (guildID, videos, query) {
     .map(r => r.video)
 }
 
-module.exports = { searchMessages, rankVideos, KEYWORD_BONUS }
+module.exports = { searchMessages, searchConversations, rankVideos, KEYWORD_BONUS, SCORE_WINDOW }

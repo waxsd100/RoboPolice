@@ -199,6 +199,10 @@ describe('stores', { skip: !database.available && 'needs PGHOST' }, () => {
       assert.deepEqual(nearest.map(r => [r.message_id, Math.round(r.score * 100) / 100]), [['m8', 1], ['m6', 0]], 'nearest first, only model A, only stored messages')
       assert.deepEqual(await store.nearestMessages('g1', ['c2'], axis(0), { model: modelA }), [], 'only the asked channels')
       assert.deepEqual((await store.nearestMessages('g1', ['c1'], axis(0), { model: modelA, limit: 1 })).map(r => r.message_id), ['m8'])
+      // What was said around a message: the ones just before and after it, in its channel, within the time asked.
+      const day = 24 * 60 * 60
+      assert.deepEqual((await store.messagesAround('c1', '2026-10-07T00:00:00Z', { before: 1, after: 1, withinSeconds: 2 * day })).map(m => m.id), ['m5', 'm7'])
+      assert.deepEqual((await store.messagesAround('c1', '2026-10-07T00:00:00Z', { before: 2, after: 2, withinSeconds: 60 * 60 })).map(m => m.id), [], 'not what was said hours apart')
       await assert.rejects(store.saveEmbeddingBatch('batches/bad', 'unknown-model', []), /invalid input value for enum embedding_model/)
       const indexes = (await q("SELECT indexname FROM pg_indexes WHERE indexdef LIKE '%hnsw%' ORDER BY indexname")).map(r => r.indexname)
       assert.deepEqual(indexes, ['messages_embedding_hnsw'])

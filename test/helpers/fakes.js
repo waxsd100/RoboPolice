@@ -143,6 +143,15 @@ function installEmbeddingStore ({ videos = {}, messages = [], pending = [] } = {
     .slice(0, limit)
   store.getMessages = async ids => messages.filter(m => ids.includes(m.message_id))
     .map(m => ({ id: m.message_id, author_id: m.author_id, channel_id: m.channel_id, ts: m.ts, content: m.content }))
+  store.messagesAround = async (channelID, ts, { before = 1, after = 2, withinSeconds = 30 * 60 } = {}) => {
+    const at = new Date(ts).getTime()
+    const inChannel = messages.filter(m => m.channel_id === channelID && Math.abs(new Date(m.ts).getTime() - at) <= withinSeconds * 1000)
+      .sort((a, b) => new Date(a.ts) - new Date(b.ts))
+      .map(m => ({ id: m.message_id, author_id: m.author_id, channel_id: m.channel_id, ts: m.ts, content: m.content }))
+    const earlier = inChannel.filter(m => new Date(m.ts).getTime() < at).slice(-before)
+    const later = inChannel.filter(m => new Date(m.ts).getTime() > at).slice(0, after)
+    return [...earlier, ...later]
+  }
   return saved
 }
 

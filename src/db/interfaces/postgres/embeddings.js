@@ -180,6 +180,22 @@ async function getMessages (ids) {
   return rows.rows
 }
 
+// The messages of `channelID` just before and after `ts` (at most `before` and `after` of them,
+// within `withinSeconds`), oldest first: what was being said around a message.
+async function messagesAround (channelID, ts, { before = 1, after = 2, withinSeconds = 30 * 60 } = {}) {
+  const rows = await pool.query(
+    `(SELECT id, author_id, channel_id, ts, content FROM messages
+      WHERE channel_id = $1 AND ts < $2 AND ts >= $2::timestamptz - ($3 * INTERVAL '1 second')
+      ORDER BY ts DESC LIMIT $4)
+     UNION ALL
+     (SELECT id, author_id, channel_id, ts, content FROM messages
+      WHERE channel_id = $1 AND ts > $2 AND ts <= $2::timestamptz + ($3 * INTERVAL '1 second')
+      ORDER BY ts LIMIT $5)`,
+    [channelID, ts, withinSeconds, before, after]
+  )
+  return rows.rows.sort((a, b) => new Date(a.ts) - new Date(b.ts))
+}
+
 // Every stored video with what its embedding is made from, newest first:
 // [{ video_id, title, description, summary, text_hash }].
 async function videosForEmbedding () {
@@ -217,4 +233,4 @@ async function videoScores (guildID, query, model) {
   return Object.fromEntries(rows.rows.map(r => [r.video_id, Number(r.score)]))
 }
 
-module.exports = { noteEmbeddingBatch, saveEmbeddingBatch, runningEmbeddingBatches, deleteEmbeddingBatch, pendingMessages, saveMessageEmbeddings, embeddedMessagesAfter, dropMessageEmbeddings, resetStaleMessageEmbeddings, invalidateMessage, nearestMessages, getMessages, videosForEmbedding, saveVideoEmbedding, hasVideoEmbeddings, videoScores }
+module.exports = { noteEmbeddingBatch, saveEmbeddingBatch, runningEmbeddingBatches, deleteEmbeddingBatch, pendingMessages, saveMessageEmbeddings, embeddedMessagesAfter, dropMessageEmbeddings, resetStaleMessageEmbeddings, invalidateMessage, nearestMessages, getMessages, messagesAround, videosForEmbedding, saveVideoEmbedding, hasVideoEmbeddings, videoScores }

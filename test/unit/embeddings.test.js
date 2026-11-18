@@ -352,6 +352,27 @@ describe('semanticSearch', () => {
     assert.equal(found[0].content, '怖いのは苦手')
   })
 
+  test('conversations: only those about as close as the best, at most `limit`, each with what was said around it', async (t) => {
+    installEmbeddingModel()
+    installEmbeddingStore()
+    const store = require('../../src/db/interfaces/postgres/embeddings')
+    // Forty loose matches of one word, as for 「児童」: the best two are close, the rest much less so.
+    const scores = Array.from({ length: 40 }, (_, i) => ({ message_id: `m${i}`, score: i < 2 ? 0.9 - i * 0.01 : 0.7 - i * 0.001 }))
+    t.mock.method(store, 'nearestMessages', async (g, c, q, { limit }) => scores.slice(0, limit))
+    t.mock.method(store, 'getMessages', async ids => ids.map(id => ({ id, author_id: '2', channel_id: '201', ts: new Date(Number(id.slice(1)) * 3600 * 1000), content: `ゲームの話をしている発言 ${id}` })))
+    t.mock.method(store, 'messagesAround', async (channelID, ts) => [
+      { id: `before-${+ts}`, author_id: '3', channel_id: channelID, ts: new Date(+ts - 60000), content: 'その前に話していたこと' },
+      { id: `after-${+ts}`, author_id: '3', channel_id: channelID, ts: new Date(+ts + 60000), content: 'それへの返信の言葉' }
+    ])
+    const found = await semanticSearch.searchConversations('100', ['201'], '児童', { limit: 5 })
+    assert.deepEqual(found.map(c => c.hit.id), ['m0', 'm1'], 'not the loose matches, however many')
+    assert.deepEqual(found[0].messages.map(m => m.content), ['その前に話していたこと', 'ゲームの話をしている発言 m0', 'それへの返信の言葉'])
+    // At most `limit`, even when many are as close.
+    scores.forEach((r, i) => { r.score = 0.9 - i * 0.0001 })
+    assert.equal((await semanticSearch.searchConversations('100', ['201'], '児童', { limit: 5 })).length, 5)
+    assert.ok(semanticSearch.SCORE_WINDOW > 0)
+  })
+
   test('ranks videos by meaning, or says there is nothing to rank by', async () => {
     installEmbeddingModel()
     const [horror, minecraft] = await embed(['ホラー', 'マイクラ'])
