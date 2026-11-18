@@ -211,12 +211,13 @@ describe('draft', () => {
     const strictDraft = installGemini([[call('submit_chat_reply', { text: 'お断りします' })]])
     await draft({ request: 'A', channelName: 'general', safetyFilter: true, guild, tools, now: NOW })
     assert.deepEqual(strictDraft[0].body.safetySettings, STRICT_SAFETY_SETTINGS)
-    // The server's setting is the one thing said about adult requests: with the filter, only that
-    // they are turned down, with nothing that allows them said first and taken back.
-    const strictPrompt = strictDraft[0].body.contents[0].parts[0].text
-    assert.match(strictPrompt, /## 下ネタ・大人向けの依頼（このサーバーの設定）\n- このサーバーではセーフティフィルタが有効です。[^\n]*応じない。[^\n]*丁寧に断る。\n\n/)
-    assert.doesNotMatch(strictPrompt, /普通にノって返す|ぼかした版を代わりに書く|hand_over_r18/)
-    assert.doesNotMatch(strictDraft[0].body.systemInstruction.parts[0].text, /普通にノって返す|ぼかした版|年齢制限|朝チュン|優先してください/)
+    // The server's setting is the one thing said about adult requests, in the system instructions:
+    // with the filter, only that they are turned down, with nothing that allows them said first and
+    // taken back. Nothing of it goes in the request.
+    const strictSystem = strictDraft[0].body.systemInstruction.parts[0].text
+    assert.match(strictSystem, /## 下ネタ・大人向けの依頼（このサーバーの設定）\n- このサーバーではセーフティフィルタが有効です。[^\n]*応じない。[^\n]*丁寧に断る。\n\n## 返事の書き方/)
+    assert.doesNotMatch(strictSystem, /普通にノって返す|ぼかした版を代わりに書く|hand_over_r18|優先してください/)
+    assert.doesNotMatch(strictDraft[0].body.contents[0].parts[0].text, /下ネタ|セーフティフィルタ|成人向け/)
   })
 
   test('think_deeper hands the request over to the stronger model on Flex, from the start', async () => {
@@ -371,17 +372,17 @@ describe('draft', () => {
     assert.match(instruction, /think_deeper（呼べるときだけ。ほかのツールより先に呼ぶ）: [^\n]*小説・物語・SS・脚本・歌詞・ポエムなどの創作（長さの指定がなくても長い文章として扱う/)
     // Asked what model it is, it gives the bot's own name.
     assert.match(instruction, /使っている AI・モデルの名前を聞かれたら「nobaman llm 3\.9 Flash」と答える。/)
-    // How far dirty jokes and adult requests go is the server's setting, said once, with the
-    // request: played along with, explicit only in an age-restricted channel, and what cannot be
-    // written as asked is written toned down (or handed over), not just refused.
-    assert.match(instruction, /## 下ネタ・大人向けの依頼\n[^\n]*依頼に書いてある「下ネタ・大人向けの依頼」（サーバーの設定）に従う。\n\n## 返事の書き方/)
-    assert.doesNotMatch(instruction, /普通にノって返す|ぼかした版|年齢制限|朝チュン/)
-    const prompt = requests[0].body.contents[0].parts[0].text
-    assert.match(prompt, /## 下ネタ・大人向けの依頼（このサーバーの設定）\n- 下ネタ・エロネタ・下品なボケには、断ったり、注意したり、話をそらしたりせず、普通にノって返す/)
-    assert.match(prompt, /露骨な描写を書くのは、依頼されたチャンネルが「年齢制限あり」のときだけ/)
-    assert.match(prompt, /断るだけで終わらせない。hand_over_r18 が呼べるなら呼び、呼べないなら、その部分をぼかした版を代わりに書く/)
-    assert.match(prompt, /ぼかしたこと・書き直したこと・方向を変えたことには触れず、作品だけを出す/, 'no note that it was toned down')
-    assert.doesNotMatch(prompt, /セーフティフィルタ/)
+    // How far dirty jokes and adult requests go is the server's setting, said once, in the system
+    // instructions: played along with, explicit only in an age-restricted channel, and what cannot
+    // be written as asked is written toned down (or handed over), not just refused.
+    assert.match(instruction, /## 下ネタ・大人向けの依頼（このサーバーの設定）\n- 下ネタ・エロネタ・下品なボケには、断ったり、注意したり、話をそらしたりせず、普通にノって返す/)
+    assert.match(instruction, /露骨な描写を書くのは、依頼されたチャンネルが「年齢制限あり」のときだけ/)
+    assert.match(instruction, /断るだけで終わらせない。hand_over_r18 が呼べるなら呼び、呼べないなら、その部分をぼかした版を代わりに書く/)
+    assert.match(instruction, /ぼかしたこと・書き直したこと・方向を変えたことには触れず、作品だけを出す/, 'no note that it was toned down')
+    assert.doesNotMatch(instruction, /セーフティフィルタ/)
+    // The request carries none of it: next to a word of the request such as 児童, Google would
+    // block the whole request.
+    assert.doesNotMatch(requests[0].body.contents[0].parts[0].text, /下ネタ|エロ|官能|濡れ場|性行為|露骨/)
   })
 
   test('for the uncensored model, only a request for a story is written as one', async () => {
@@ -541,7 +542,7 @@ describe('draft', () => {
     const requests = installGemini([[call('submit_chat_reply', { text: 'x' })]])
     await draft({ request: 'やあ', referenced: { text: '前の話', count: 1 }, channelName: 'general', server: 'サーバーの説明', guild, tools, now: NOW })
     const prompt = requests[0].body.contents[0].parts[0].text
-    const order = ['## 話し方', '## 返事の長さ', '## 下ネタ・大人向けの依頼', '## このサーバーの情報', '依頼されたチャンネル:', '## 依頼メッセージの返信先', '現在日時:', '## 依頼メッセージ（'].map(h => prompt.indexOf(h))
+    const order = ['## 話し方', '## 返事の長さ', '## このサーバーの情報', '依頼されたチャンネル:', '## 依頼メッセージの返信先', '現在日時:', '## 依頼メッセージ（'].map(h => prompt.indexOf(h))
     assert.ok(order.every(i => i >= 0), 'every part is there')
     assert.deepEqual(order, [...order].sort((a, b) => a - b))
     assert.ok(prompt.trimEnd().endsWith('</untrusted>'), 'the request is last')

@@ -94,10 +94,18 @@ function modelName () {
 
 // The system instructions for chat replies and drafts (prompts/chat/system.md), with extra
 // character notes from the operator (CHAT_PERSONA), e.g. a catchphrase or how to address members.
+// How far dirty jokes and adult requests go is said here, by the server's safety filter (open or
+// filtered), and never in the request: next to words of a request such as 児童, Google blocks the
+// whole request. Two versions of these instructions, so two caches.
 // uncensored: for the uncensored model, whose own rules say how far adult requests go
-// (prompts/chat/uncensored/rules.md) in place of the server's setting in the request.
-function systemInstruction ({ uncensored = false } = {}) {
-  return prompts.render('chat/system', { modelName: modelName(), persona: (process.env.CHAT_PERSONA || '').trim(), uncensored })
+// (prompts/chat/uncensored/rules.md) in place of this.
+function systemInstruction ({ uncensored = false, safetyFilter = false } = {}) {
+  return prompts.render('chat/system', {
+    modelName: modelName(),
+    persona: (process.env.CHAT_PERSONA || '').trim(),
+    uncensored,
+    mature: uncensored ? '' : prompts.render(safetyFilter ? 'chat/mature/filtered' : 'chat/mature/open')
+  })
 }
 
 function isConfigured () {
@@ -128,11 +136,6 @@ const PERSONAS = {
   streamer: prompts.render('chat/persona/streamer'),
   bot: prompts.render('chat/persona/bot')
 }
-// How far dirty jokes and adult requests go, by the server's safety filter. The uncensored model
-// is not given this part of the request (withoutMatureSection).
-const MATURE_HEADING = '## 下ネタ・大人向けの依頼（このサーバーの設定）'
-const MATURE_SECTION = new RegExp(`\\n${MATURE_HEADING}\\n(?:[ \\t]*- [^\\n]+(?:\\n|$))+`)
-const withoutMatureSection = text => String(text).replace(MATURE_SECTION, '')
 const replyLengthOf = length => REPLY_LENGTHS[length] ? length : DEFAULT_REPLY_LENGTH
 
 // The request as the model gets it, the parts that change least first and the request itself last:
@@ -150,9 +153,6 @@ function buildPrompt ({ request, referenced, recent = [], channelName, channelID
     '## 返事の長さ（このサーバーの設定）',
     ...REPLY_LENGTHS[replyLengthOf(replyLength)]
   ]
-  // One of the two, never both: the system instructions leave this to the server's setting, so
-  // nothing said there has to be taken back here.
-  lines.push('', MATURE_HEADING, prompts.render(safetyFilter ? 'chat/mature/filtered' : 'chat/mature/open'))
   if (rules?.moderators || rules?.channels?.length) {
     lines.push('', '## このサーバーのルールとモデレーターからのお願い（返事・下書きはこれに従う）')
     if (rules.moderators) lines.push('### モデレーターから AI へのお願い', wrap('rules', rules.moderators))
@@ -1473,7 +1473,7 @@ function toOpenAIMessages (system, contents, { compact = false, r18Mode = false 
       if (hasImages) {
         const contentParts = other.map(p => p.inlineData
           ? { type: 'image_url', image_url: { url: `data:${p.inlineData.mimeType};base64,${p.inlineData.data}` } }
-          : { type: 'text', text: withoutMatureSection(p.text || '') })
+          : { type: 'text', text: String(p.text || '') })
         if (contents.imageDescription && !appendedImageDesc && !contentParts.some(p => p.type === 'text' && p.text.includes('## 添付・返信先画像の内容（視覚情報）'))) {
           contentParts.push({ type: 'text', text: `## 添付・返信先画像の内容（視覚情報）\n${contents.imageDescription}` })
           appendedImageDesc = true
@@ -1487,7 +1487,7 @@ function toOpenAIMessages (system, contents, { compact = false, r18Mode = false 
           content: contentParts
         })
       } else {
-        const joined = withoutMatureSection(other.filter(p => typeof p.text === 'string').map(p => p.text).join('\n'))
+        const joined = other.filter(p => typeof p.text === 'string').map(p => p.text).join('\n')
         const baseText = compact ? compactUncensoredText(joined, { story: asksForStory(contents) }) : joined
         let finalContent = baseText
         if (contents.imageDescription && !appendedImageDesc && !finalContent.includes('## 添付・返信先画像の内容（視覚情報）')) {
@@ -2158,7 +2158,7 @@ async function generate (contents, declarations, allowed = null, { deep = false,
   const model = deep ? deepModel() : replyModel(contents)
   const strictSafety = !!contents.safetyFilter
   const prefix = {
-    systemInstruction: { parts: [{ text: systemInstruction() }] },
+    systemInstruction: { parts: [{ text: systemInstruction({ safetyFilter: !!contents.safetyFilter }) }] },
     tools: [{ functionDeclarations: declarations }],
     // ANY: every turn must be a tool call, so the loop always ends in a submit_* call.
     toolConfig: { functionCallingConfig: { mode: 'ANY', ...(allowed ? { allowedFunctionNames: allowed } : {}) } }
