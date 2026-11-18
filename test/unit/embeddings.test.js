@@ -352,25 +352,83 @@ describe('semanticSearch', () => {
     assert.equal(found[0].content, '怖いのは苦手')
   })
 
-  test('conversations: only those about as close as the best, at most `limit`, each with what was said around it', async (t) => {
+  test('conversations: found by meaning and keyword, each with its reply chain, ranked as a whole, as many as the scores say, for variety', async (t) => {
     installEmbeddingModel()
     installEmbeddingStore()
     const store = require('../../src/db/interfaces/postgres/embeddings')
-    // Forty loose matches of one word, as for 「児童」: the best two are close, the rest much less so.
-    const scores = Array.from({ length: 40 }, (_, i) => ({ message_id: `m${i}`, score: i < 2 ? 0.9 - i * 0.01 : 0.7 - i * 0.001 }))
-    t.mock.method(store, 'nearestMessages', async (g, c, q, { limit }) => scores.slice(0, limit))
-    t.mock.method(store, 'getMessages', async ids => ids.map(id => ({ id, author_id: '2', channel_id: '201', ts: new Date(Number(id.slice(1)) * 3600 * 1000), content: `ゲームの話をしている発言 ${id}` })))
-    t.mock.method(store, 'messagesAround', async (channelID, ts) => [
-      { id: `before-${+ts}`, author_id: '3', channel_id: channelID, ts: new Date(+ts - 60000), content: 'その前に話していたこと' },
-      { id: `after-${+ts}`, author_id: '3', channel_id: channelID, ts: new Date(+ts + 60000), content: 'それへの返信の言葉' }
-    ])
+    const embeddings = require('../../src/bot/utils/embeddings')
+    const { blend, similarity, quantize } = embeddings
+    const axis = i => quantize(Array.from({ length: 512 }, (_, d) => d === i ? 1 : 0))
+    const [q, o1, o2] = [axis(0), axis(1), axis(2)]
+    t.mock.method(embeddings, 'embedQuery', async () => q)
+    // Close to the query by `t` (1: the query itself), turned towards `other`.
+    const toward = (other, t) => blend([q, other], [t, 1 - t])
+    const at = h => new Date(Date.UTC(2026, 9, 1, h))
+    const rows = [
+      // m1 and its reply, and m3 saying much the same; m4 about as close, but about something else.
+      { id: 'm1', ts: at(1), content: '児童向けの番組の話をしてたんだけど', vector: toward(o1, 0.85) },
+      { id: 'r1', ts: at(9), content: 'それ見てた、懐かしいね本当に', vector: toward(o1, 0.85), replyTo: 'm1' },
+      { id: 'm2', ts: at(2), content: 'こども', vector: q },
+      { id: 'm3', ts: at(3), content: '児童向けの番組の話の続きなんだけど', vector: toward(o1, 0.84) },
+      { id: 'm4', ts: at(4), content: '学校の行事の話を少ししようか', vector: toward(o2, 0.83) },
+      { id: 'm5', ts: at(5), content: 'ぜんぜん関係ない晩ごはんの話', vector: toward(o1, 0.2) },
+      { id: 'k1', ts: at(6), content: '児童館に行ってきたよ今日は', vector: toward(o2, 0.7) }
+    ]
+    const byID = new Map(rows.map(r => [r.id, r]))
+    const row = r => ({ id: r.id, author_id: '2', channel_id: '201', ts: r.ts, content: r.content })
+    t.mock.method(store, 'nearestMessages', async (g, c, query, { limit }) => rows.filter(r => r.id !== 'k1')
+      .map(r => ({ message_id: r.id, score: similarity(query, r.vector) })).sort((x, y) => y.score - x.score).slice(0, limit))
+    // Only k1 holds the word as written; it is far down by meaning.
+    t.mock.method(store, 'keywordMessages', async (g, c, words) => words.includes('児童館') ? [{ message_id: 'k1' }] : [])
+    t.mock.method(store, 'getMessages', async ids => ids.filter(id => byID.has(id)).map(id => row(byID.get(id))))
+    t.mock.method(store, 'messagesAround', async () => [])
+    t.mock.method(store, 'replyLinks', async ids => rows.filter(r => r.replyTo && (ids.includes(r.id) || ids.includes(r.replyTo))).map(r => ({ message_id: r.id, reply_to: r.replyTo })))
+    t.mock.method(store, 'messageVectors', async ids => new Map(ids.filter(id => byID.has(id)).map(id => [id, byID.get(id).vector])))
+
     const found = await semanticSearch.searchConversations('100', ['201'], '児童', { limit: 5 })
-    assert.deepEqual(found.map(c => c.hit.id), ['m0', 'm1'], 'not the loose matches, however many')
-    assert.deepEqual(found[0].messages.map(m => m.content), ['その前に話していたこと', 'ゲームの話をしている発言 m0', 'それへの返信の言葉'])
-    // At most `limit`, even when many are as close.
-    scores.forEach((r, i) => { r.score = 0.9 - i * 0.0001 })
-    assert.equal((await semanticSearch.searchConversations('100', ['201'], '児童', { limit: 5 })).length, 5)
-    assert.ok(semanticSearch.SCORE_WINDOW > 0)
+    const ids = found.map(c => c.hit.id)
+    assert.equal(ids[0], 'm1')
+    assert.deepEqual(found[0].messages.map(m => m.id), ['m1', 'r1'], 'with the reply to it, though hours later')
+    assert.ok(!ids.includes('m2'), 'a short phrase alone is ranked down')
+    assert.ok(!ids.includes('m5'), 'not what is far from the best')
+    assert.ok(!ids.includes('k1'), 'nor what comes after a sharp drop')
+    // Picked for variety: with two, the second is not the one saying the same as the first.
+    const two = (await semanticSearch.searchConversations('100', ['201'], '児童', { limit: 2 })).map(c => c.hit.id)
+    assert.deepEqual(two, ['m1', 'm4'])
+    assert.ok(ids.includes('m3'), 'though it is kept when there is room')
+    // Found by keyword alone, it is among the candidates.
+    const keyword = await semanticSearch.searchMessages('100', ['201'], '児童館', { limit: 10 })
+    assert.ok(keyword.some(m => m.id === 'k1'))
+  })
+
+  test('conversations: a sharp drop in the scores ends the list', async (t) => {
+    installEmbeddingModel()
+    installEmbeddingStore()
+    const store = require('../../src/db/interfaces/postgres/embeddings')
+    const embeddings = require('../../src/bot/utils/embeddings')
+    const { blend, similarity, quantize } = embeddings
+    const axis = i => quantize(Array.from({ length: 512 }, (_, d) => d === i ? 1 : 0))
+    const [q, o] = [axis(0), axis(1)]
+    t.mock.method(embeddings, 'embedQuery', async () => q)
+    // One close, then a drop of more than CLIFF, though still within SCORE_WINDOW of it.
+    const close = q
+    // About 0.95 of the best: under the best by more than CLIFF, within SCORE_WINDOW.
+    const lower = blend([q, o], [0.75, 0.25])
+    assert.ok(similarity(q, close) - similarity(q, lower) >= semanticSearch.CLIFF)
+    assert.ok(similarity(q, close) - similarity(q, lower) < semanticSearch.SCORE_WINDOW)
+    const rows = [
+      { id: 'a', content: '児童向けの番組の話をしてたんだけど', vector: close },
+      { id: 'b', content: '学校の行事の話を少ししようかなと', vector: lower },
+      { id: 'c', content: '学校の行事の話をもう少しだけしよう', vector: lower }
+    ]
+    const byID = new Map(rows.map(r => [r.id, r]))
+    t.mock.method(store, 'nearestMessages', async (g, c, query) => rows.map(r => ({ message_id: r.id, score: similarity(query, r.vector) })))
+    t.mock.method(store, 'keywordMessages', async () => [])
+    t.mock.method(store, 'getMessages', async ids => ids.map(id => ({ id, author_id: '2', channel_id: '201', ts: new Date(0), content: byID.get(id).content })))
+    t.mock.method(store, 'messagesAround', async () => [])
+    t.mock.method(store, 'replyLinks', async () => [])
+    t.mock.method(store, 'messageVectors', async ids => new Map(ids.map(id => [id, byID.get(id).vector])))
+    assert.deepEqual((await semanticSearch.searchConversations('100', ['201'], '児童', { limit: 5 })).map(c => c.hit.id), ['a'])
   })
 
   test('ranks videos by meaning, or says there is nothing to rank by', async () => {

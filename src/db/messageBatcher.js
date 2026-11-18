@@ -20,7 +20,7 @@ async function addItem (messageAsArray) {
   }
 }
 
-// A batch row: [id, author_id, content, [image URLs], ts, channel_id, guild_id]
+// A batch row: [id, author_id, content, [image URLs], ts, channel_id, guild_id, reply_to (or none)]
 async function submitBatch (batchSize) {
   const toSubmit = batch.splice(0, batchSize)
   if (toSubmit.length === 0) return 0
@@ -39,6 +39,16 @@ async function submitBatch (batchSize) {
          WHERE v.guild_id IS NULL OR EXISTS (SELECT 1 FROM guilds g WHERE g.id = v.guild_id)
          ON CONFLICT DO NOTHING`,
         activeRows.map(([id, author, content, , ts, channel, guild]) => [id, author, content, ts, channel, guild])))
+      // Which message each replied to (most reply to none).
+      const replies = activeRows.filter(row => row[7]).map(row => [row[0], row[7]])
+      if (replies.length) {
+        await poolClient.query(format(
+          `INSERT INTO message_replies (message_id, reply_to)
+           SELECT v.message_id, v.reply_to FROM (VALUES %L) v(message_id, reply_to)
+           WHERE EXISTS (SELECT 1 FROM messages m WHERE m.id = v.message_id)
+           ON CONFLICT DO NOTHING`,
+          replies))
+      }
       const attachments = activeRows.flatMap(row => row[3].map((url, position) => [row[0], position, url]))
       if (attachments.length) {
         await poolClient.query(format(

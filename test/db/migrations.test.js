@@ -144,7 +144,7 @@ describe('migrations', { skip: !database.available && 'needs PGHOST' }, () => {
       assert.equal((await q('SELECT to_regclass($1) AS t', [old]))[0].t, null, old)
     }
     const tableCount = (await q("SELECT count(*)::int AS n FROM pg_tables WHERE schemaname = 'public'"))[0].n
-    assert.equal(tableCount, 32)
+    assert.equal(tableCount, 33)
   })
 
   test('lists in columns become rows, in order; names are kept once; IDs refer to their rows', async () => {

@@ -38,7 +38,7 @@ async function saveBackfill (guildID, channelID, { beforeID = null, done = false
     [channelID, guildID, beforeID, done, readCount, reachedStart, limitStart, limitMax])
 }
 
-// Stores messages read from history: [{ id, authorID, content, imageUrls, ts, channelID, guildID }]
+// Stores messages read from history: [{ id, authorID, content, imageUrls, ts, channelID, guildID, replyTo }]
 // (content in the stored form, create.toStoredContent). A message already stored (received live,
 // perhaps edited since) is left as it is. Resolves to how many were new.
 async function saveHistory (rows) {
@@ -53,6 +53,14 @@ async function saveHistory (rows) {
        ON CONFLICT DO NOTHING RETURNING id`,
       rows.map(r => [r.id, r.authorID, r.content, r.ts, r.channelID, r.guildID])))
     const fresh = new Set(inserted.rows.map(r => r.id))
+    const replies = rows.filter(r => fresh.has(r.id) && r.replyTo).map(r => [r.id, r.replyTo])
+    if (replies.length) {
+      await client.query(format(
+        `INSERT INTO message_replies (message_id, reply_to)
+         SELECT v.message_id, v.reply_to FROM (VALUES %L) v(message_id, reply_to)
+         ON CONFLICT DO NOTHING`,
+        replies))
+    }
     const attachments = rows.filter(r => fresh.has(r.id)).flatMap(r => r.imageUrls.map((url, position) => [r.id, position, url]))
     if (attachments.length) {
       await client.query(format(

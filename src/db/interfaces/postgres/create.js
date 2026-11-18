@@ -28,7 +28,9 @@ async function cacheMessage (message) {
   const content = toStoredContent(message.content)
   // Image URLs in order, without repeats.
   const imageUrls = [...new Set(message.attachments.filter(a => a.content_type?.startsWith('image')).map(a => a.url))].slice(0, MAX_IMAGES)
-  await batchHandler.addItem([message.id, message.author.id, content, imageUrls, new Date().toISOString(), message.channel.id, message.channel.guild?.id || null])
+  // The message it replies to, if any (message_replies).
+  const replyTo = message.messageReference?.messageID || null
+  await batchHandler.addItem([message.id, message.author.id, content, imageUrls, new Date().toISOString(), message.channel.id, message.channel.guild?.id || null, replyTo])
 }
 
 // The text as the user wrote it, from toStoredContent's form: markdown-escape put a backslash before

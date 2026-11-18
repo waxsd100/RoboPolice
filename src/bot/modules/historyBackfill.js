@@ -89,7 +89,8 @@ function toRow (message, guild, channel) {
     imageUrls,
     ts: new Date(message.timestamp).toISOString(),
     channelID: channel.id,
-    guildID: guild.id
+    guildID: guild.id,
+    replyTo: message.message_reference?.message_id || null
   }
 }
 

@@ -203,6 +203,14 @@ describe('stores', { skip: !database.available && 'needs PGHOST' }, () => {
       const day = 24 * 60 * 60
       assert.deepEqual((await store.messagesAround('c1', '2026-10-07T00:00:00Z', { before: 1, after: 1, withinSeconds: 2 * day })).map(m => m.id), ['m5', 'm7'])
       assert.deepEqual((await store.messagesAround('c1', '2026-10-07T00:00:00Z', { before: 2, after: 2, withinSeconds: 60 * 60 })).map(m => m.id), [], 'not what was said hours apart')
+      // Keyword matches, the vectors as stored, and the reply links.
+      assert.deepEqual((await store.keywordMessages('g1', ['c1'], ['TEXT 7'])).map(r => r.message_id), ['m7'], 'case aside')
+      assert.deepEqual(await store.keywordMessages('g1', ['c1'], ['%']), [], '% is not a wildcard')
+      const vectors = await store.messageVectors(['m8', 'm6', 'm7'], modelA)
+      assert.deepEqual([...vectors.keys()].sort(), ['m6', 'm8'], 'only those made by the model asked')
+      assert.equal(vectors.get('m8')[0], 127)
+      await q("INSERT INTO message_replies (message_id, reply_to) VALUES ('m7', 'm6')")
+      assert.deepEqual((await store.replyLinks(['m6'])).map(r => [r.message_id, r.reply_to]), [['m7', 'm6']])
       await assert.rejects(store.saveEmbeddingBatch('batches/bad', 'unknown-model', []), /invalid input value for enum embedding_model/)
       const indexes = (await q("SELECT indexname FROM pg_indexes WHERE indexdef LIKE '%hnsw%' ORDER BY indexname")).map(r => r.indexname)
       assert.deepEqual(indexes, ['messages_embedding_hnsw'])

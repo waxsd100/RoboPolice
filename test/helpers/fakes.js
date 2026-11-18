@@ -143,6 +143,18 @@ function installEmbeddingStore ({ videos = {}, messages = [], pending = [] } = {
     .slice(0, limit)
   store.getMessages = async ids => messages.filter(m => ids.includes(m.message_id))
     .map(m => ({ id: m.message_id, author_id: m.author_id, channel_id: m.channel_id, ts: m.ts, content: m.content }))
+  store.keywordMessages = async (guildID, channelIDs, words, { limit = 60 } = {}) => words.length
+    ? messages
+      .filter(m => m.guild_id === guildID && channelIDs.includes(m.channel_id) && words.every(w => String(m.content).toLowerCase().includes(w)))
+      .sort((a, b) => new Date(b.ts) - new Date(a.ts))
+      .slice(0, limit)
+      .map(m => ({ message_id: m.message_id }))
+    : []
+  store.messageVectors = async ids => new Map(messages.filter(m => ids.includes(m.message_id) && m.embedding).map(m => [m.message_id, fromBase64(m.embedding)]))
+  // `reply_to` on a message: the one it replied to.
+  store.replyLinks = async ids => messages
+    .filter(m => m.reply_to && (ids.includes(m.message_id) || ids.includes(m.reply_to)))
+    .map(m => ({ message_id: m.message_id, reply_to: m.reply_to }))
   store.messagesAround = async (channelID, ts, { before = 1, after = 2, withinSeconds = 30 * 60 } = {}) => {
     const at = new Date(ts).getTime()
     const inChannel = messages.filter(m => m.channel_id === channelID && Math.abs(new Date(m.ts).getTime() - at) <= withinSeconds * 1000)

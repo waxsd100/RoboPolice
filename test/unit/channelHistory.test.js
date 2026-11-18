@@ -29,8 +29,12 @@ describe('stored messages carry their channel and server', () => {
       id: 'm', content: 'hello', attachments: [], author: { id: '1' }, channel: { id: '201', guild: { id: '100' } }
     })
     const row = added.mock.calls[0].arguments[0]
-    assert.deepEqual(row.slice(5), ['201', '100'])
+    assert.deepEqual(row.slice(5), ['201', '100', null], 'not a reply')
     assert.equal(row[2], 'hello')
+    await require('../../src/db/interfaces/postgres/create').cacheMessage({
+      id: 'r', content: 'それな', attachments: [], author: { id: '1' }, channel: { id: '201', guild: { id: '100' } }, messageReference: { messageID: 'm' }
+    })
+    assert.equal(added.mock.calls[1].arguments[0][7], 'm', 'the message it replied to')
   })
 
   test('cacheMessage keeps each image URL once, in order', async (t) => {
@@ -205,14 +209,17 @@ describe('searching messages by meaning (MESSAGE_EMBEDDINGS=true)', () => {
     const text = (await tl.call('search_server_messages', { query: 'ホラーゲーム' })).result
     // The message found, with the reply that followed it, as a conversation.
     assert.equal(text, [
-      '「ホラーゲーム」に意味が近い発言 1 件と、その前後の会話（近い順、依頼者が読めるチャンネルのみ。▶ が見つかった発言）:',
+      '「ホラーゲーム」に意味が近い発言 2 件と、その前後の会話（近い順、依頼者が読めるチャンネルのみ。▶ が見つかった発言）:',
       '',
-      '### <#201>\n▶ [2026-10-01T00:00:00.000Z] alice: ホラーゲームやろう\n[2026-10-01T00:04:00.000Z] 3: いいね、何やる？'
+      '### <#201>\n▶ [2026-10-01T00:00:00.000Z] alice: ホラーゲームやろう\n[2026-10-01T00:04:00.000Z] 3: いいね、何やる？',
+      '',
+      '### <#203>\n▶ [2026-10-04T00:00:00.000Z] 3: こわいゲームの配信'
     ].join('\n'))
-    assert.deepEqual(tl.sources, ['<#201>'])
+    assert.deepEqual(tl.sources.sort(), ['<#201>', '<#203>'])
     const loose = (await tl.call('search_server_messages', { query: '恐怖' })).result
     assert.doesNotMatch(loose, /運営だけ/, 'not from a channel the requester cannot read')
-    assert.doesNotMatch(loose, /▶ \[2026-10-01T00:04/, 'a message shown around one found is not shown again')
+    const shown = loose.split('\n').filter(l => /\[\d{4}-/.test(l)).map(l => l.replace(/^▶ /, ''))
+    assert.equal(new Set(shown).size, shown.length, 'no message is shown twice')
   })
 
   test('is not offered when message embeddings are off', () => {
