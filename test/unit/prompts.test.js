@@ -101,3 +101,14 @@ test('the way of speaking chosen (streamer or BOT) decides the first person, ton
   assert.doesNotMatch(style, /BOT がこのサーバーに合わせて話す/)
   assert.match(style, /BOT がどう話すべきか・BOT への接し方/)
 })
+
+test('tools are called only when what they give is needed for the request', () => {
+  const system = prompts.render('chat/system', { modelName: 'A', persona: '', uncensored: false, mature: '- M', settings: 'S' })
+  assert.match(system, /ツールは、依頼に答えるのにその情報が要るときだけ、要るものだけを呼ぶ/)
+  assert.match(system, /口調を確かめるためだけにツールを呼ばない/)
+  assert.match(system, /動画や配信のことを聞いていない依頼では、テーマのチャンネルでも調べない/)
+  assert.doesNotMatch(system, /必ず search_youtube/)
+  const wiki = prompts.render('tools/search_wiki')
+  assert.doesNotMatch(wiki, /配信者らしい言い回しを知りたいとき/)
+  assert.match(wiki, /関係のない依頼や、口調を確かめるためには使わない/)
+})

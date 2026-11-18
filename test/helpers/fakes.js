@@ -819,6 +819,8 @@ module.exports = {
 const TOPICS = [['ホラー', '怖い', 'こわい'], ['マイクラ', 'minecraft', '建築'], ['歌', 'カラオケ', 'singing']]
 function installEmbeddingModel () {
   const batches = []
+  // A new model for the test: no query embedded by an earlier one is reused.
+  require('../../src/bot/utils/embeddings').embedQuery.clearCache()
   global.fetch = async (url, init) => {
     if (!String(url).endsWith(':batchEmbedContents')) throw new Error(`unexpected request ${url}`)
     const body = JSON.parse(init.body)

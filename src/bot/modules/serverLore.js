@@ -25,6 +25,7 @@ const { looksLikeInjection } = require('../utils/untrusted')
 const { publicChannels } = require('./discordKnowledge')
 const { fromStoredContent } = require('../../db/interfaces/postgres/create')
 const store = require('../../db/interfaces/postgres/serverLore')
+const { relevant } = require('../utils/relevance')
 
 const DEFAULT_WEEKS = 8
 const MIN_MESSAGES = 15 // a quieter week says little
@@ -288,7 +289,8 @@ async function relatedLore (guildID, vectorOf, { limit = 5, random = Math.random
   const vector = await store.hasFacts(guildID).catch(() => false) ? await vectorOf() : null
   const near = vector ? await store.nearestFacts(guildID, vector, model(), limit * 3).catch(() => []) : []
   const { weightedSample } = require('./wikiKnowledge')
-  const close = near.filter(f => f.score >= MIN_RELATED_SCORE)
+  // Drawn from those close enough (relevance.js), not from all above MIN_RELATED_SCORE.
+  const close = relevant(near, { min: MIN_RELATED_SCORE })
   const facts = weightedSample(close, limit, f => f.score - MIN_RELATED_SCORE + 0.05, random)
     .map(f => `- [${KIND_LABELS[f.kind]}] ${f.name}: ${f.content}（${f.week} の週）`)
   return { facts, style: style?.style || null }

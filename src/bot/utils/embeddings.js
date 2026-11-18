@@ -59,9 +59,25 @@ async function embed (texts, taskType = 'RETRIEVAL_DOCUMENT') {
   return vectors
 }
 
-async function embedQuery (text) {
-  return (await embed([text], 'RETRIEVAL_QUERY'))[0]
+// A query's embedding, kept for a while: one mention searches the wiki, the videos and the
+// messages with the same words, and the next one often asks about the same. Asked once even when
+// several want it at the same time; a failed one is asked again next time.
+const QUERY_CACHE_MS = 10 * 60 * 1000
+const MAX_QUERY_CACHE = 500
+const queryCache = new Map()
+function embedQuery (text) {
+  const key = `${model()}\n${text}`
+  const now = Date.now()
+  const known = queryCache.get(key)
+  if (known && now - known.at < QUERY_CACHE_MS) return known.vector
+  const vector = embed([text], 'RETRIEVAL_QUERY').then(([v]) => v)
+  vector.catch(() => queryCache.delete(key))
+  queryCache.delete(key)
+  if (queryCache.size >= MAX_QUERY_CACHE) queryCache.delete(queryCache.keys().next().value)
+  queryCache.set(key, { at: now, vector })
+  return vector
 }
+embedQuery.clearCache = () => queryCache.clear()
 
 // One vector for several texts' vectors, each counting `weights[i]` (e.g. a conversation counting
 // more than the message that continues it): their weighted sum, normalized.

@@ -77,7 +77,7 @@ describe('searchWiki', () => {
     configureGateway()
     installEmbeddingModel()
     t.mock.method(store, 'hasSections', async () => true)
-    t.mock.method(store, 'nearestFacts', async () => [{ kind: 'quote', name: '〇〇だぜ', aliases: [], content: '配信の締めに言う', url: `${ROOT}d/q`, title: '名言集', heading: '締め' }])
+    t.mock.method(store, 'nearestFacts', async () => [{ kind: 'quote', name: '〇〇だぜ', aliases: [], content: '配信の締めに言う', url: `${ROOT}d/q`, title: '名言集', heading: '締め', score: 0.9 }])
     const nearest = t.mock.method(store, 'nearestSections', async () => [{ url: `${ROOT}d/q`, title: '名言集', heading: '締め', text: '有名な台詞。', score: 0.9 }])
     const xStore = require('../../src/db/interfaces/postgres/xKnowledge')
     t.mock.method(xStore, 'hasSections', async () => false)
@@ -114,9 +114,9 @@ describe('searchWiki', () => {
       { kind: 'term', name: '遠い', aliases: [], content: 'x', score: 0.2 }
     ])
     t.mock.method(xStore, 'nearestFacts', async () => [])
+    // ご安心を is far below the best (0.7 against 0.9): not close enough to bring along.
     assert.deepEqual(await wiki.relatedKnowledge('よつろんって何色？', [1]), [
-      '- [キャラクター] よつろん（yotsuron）: 頭に大きな四葉',
-      '- [名言・台詞] ご安心を: 決まり文句'
+      '- [キャラクター] よつろん（yotsuron）: 頭に大きな四葉'
     ])
     process.env.WIKI_URLS = ''
     assert.deepEqual(await wiki.relatedKnowledge('よつろん', [1]), [], 'nothing without a wiki')
@@ -129,13 +129,35 @@ describe('searchWiki', () => {
     const asked = []
     t.mock.method(store, 'nearestFacts', async (vector, model, limit) => {
       asked.push(limit)
-      return ['A', 'B', 'C', 'D'].map((name, i) => ({ kind: 'term', name, aliases: [], content: name, score: 0.9 - i * 0.1 }))
+      // All about as close: drawn among them.
+      return ['A', 'B', 'C', 'D'].map((name, i) => ({ kind: 'term', name, aliases: [], content: name, score: 0.9 - i * 0.01 }))
     })
     t.mock.method(xStore, 'nearestFacts', async () => [])
     const names = lines => lines.map(l => l.match(/\] (\w)/)[1])
     assert.deepEqual(names(await wiki.relatedKnowledge('話', [1], { limit: 2, random: () => 0 })), ['A', 'B'])
     assert.deepEqual(names(await wiki.relatedKnowledge('話', [1], { limit: 2, random: () => 0.999 })), ['D', 'C'])
     assert.equal(asked[0], 6, 'several times as many candidates as are used')
+  })
+
+  test('the wiki search returns only what is close to the query, not the closest whatever they are', async (t) => {
+    process.env.WIKI_URLS = ROOT
+    configureGateway()
+    installEmbeddingModel()
+    t.mock.method(store, 'hasSections', async () => true)
+    const xStore = require('../../src/db/interfaces/postgres/xKnowledge')
+    t.mock.method(xStore, 'hasSections', async () => false)
+    // As for 「児童」: one character about it, then a bot and a ship's captain, far below.
+    t.mock.method(store, 'nearestFacts', async () => [
+      { kind: 'character', name: 'のばまん', aliases: [], content: '子供の頃の話', title: 't', heading: 'h', score: 0.82 },
+      { kind: 'term', name: 'MEE6', aliases: [], content: 'Discord の BOT', title: 't', heading: 'h', score: 0.61 },
+      { kind: 'character', name: 'クリーム', aliases: [], content: '船長役', title: 't', heading: 'h', score: 0.6 },
+      { kind: 'term', name: '遠い', aliases: [], content: 'x', title: 't', heading: 'h', score: 0.3 }
+    ])
+    t.mock.method(store, 'nearestSections', async () => [{ url: `${ROOT}d/w`, title: 'ゴミのば', heading: 'ゴミのば', text: '荒らしにより白紙化', score: 0.5 }])
+    const text = await wiki.searchWiki('児童')
+    assert.match(text, /のばまん: 子供の頃の話/)
+    assert.doesNotMatch(text, /MEE6|クリーム|遠い/)
+    assert.doesNotMatch(text, /本文:|白紙化/, 'no part of a page under the minimum')
   })
 
   test('weightedSample draws without repeats, by weight', () => {

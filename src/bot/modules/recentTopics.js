@@ -12,6 +12,7 @@
 const crypto = require('crypto')
 const { embed, embedQuery, model, similarity, toBase64, fromBase64 } = require('../utils/embeddings')
 const { embeddableText } = require('../utils/messageNoise')
+const { relevant } = require('../utils/relevance')
 const aiCache = require('../utils/aiCache')
 
 const DEFAULT_MESSAGES = 50
@@ -108,11 +109,8 @@ async function relatedRecent (message, request, {
   }
   const vectors = candidates.map(c => cachedVector(`${currentModel}\n${c.text}`))
   const guild = message.channel.guild
-  return candidates
-    .map((c, i) => ({ ...c, score: similarity(query, vectors[i]) }))
-    .filter(c => c.score >= MIN_SCORE)
-    .sort((a, b) => b.score - a.score)
-    .slice(0, MAX_TOPICS)
+  // Only those close enough to the request (relevance.js), then in the order they were said.
+  return relevant(candidates.map((c, i) => ({ ...c, score: similarity(query, vectors[i]) })), { min: MIN_SCORE, limit: MAX_TOPICS })
     .sort((a, b) => a.m.timestamp - b.m.timestamp)
     .map(({ m }) => {
       const at = new Intl.DateTimeFormat('ja-JP', { timeZone: 'Asia/Tokyo', hour: '2-digit', minute: '2-digit' }).format(new Date(m.timestamp))

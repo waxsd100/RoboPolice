@@ -66,7 +66,7 @@ test('reuses cached embeddings of recent messages across mentions, embedding onl
   batches.length = 0
   const fromRedis = await relatedRecent(mention, '怖いゲームある？', { now: NOW, getMessages })
   assert.deepEqual(fromRedis, ['- [21:00] くらじー（<@10>）: ホラーゲームもやりたい'])
-  assert.deepEqual(batches.map(b => b.requests.map(r => r.content.parts[0].text)), [['怖いゲームある？']], 'loaded from Redis without re-embedding messages')
+  assert.deepEqual(batches.map(b => b.requests.map(r => r.content.parts[0].text)), [], 'loaded from Redis without re-embedding messages, and the same query not embedded again')
 })
 
 test('nothing when nothing is close, the request says nothing, or it is turned off', async () => {
