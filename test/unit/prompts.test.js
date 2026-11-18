@@ -90,3 +90,14 @@ test('sokudan questions: instructions, choices in the given order, and score lev
   assert.throws(() => prompts.questions('mention', { intent: { type: 'choice', choices: ['chat', 'event', 'forum'] }, needs_deep: { type: 'noul' }, is_r18: { type: 'noul' }, is_story: { type: 'noul' }, complexity: { type: 'score', levels: 3 } }), /must list "intent" choices as chat, event, forum/)
   assert.throws(() => prompts.questions('refusal', { refusal: { type: 'noul' }, other: { type: 'noul' } }), /no "## other" section/)
 })
+
+test('the way of speaking chosen (streamer or BOT) decides the first person, tone and endings; the server\'s mood does not', () => {
+  const system = prompts.render('chat/system', { modelName: 'A', persona: '', uncensored: false, mature: '- M', settings: 'S' })
+  assert.match(system, /一人称・口調・語尾・口ぐせは、ここで決まる話し方だけで決めます/)
+  assert.match(system, /メンバーの言い回しや語尾をまねない/)
+  assert.doesNotMatch(system, /言い回し・語尾・ツッコミの温度感をこのサーバーに合わせる/, 'nothing later says to take the members\' endings')
+  // The server's mood is a description of how members talk, not how the BOT should.
+  const style = prompts.render('lore/style', { conversation: 'x' })
+  assert.doesNotMatch(style, /BOT がこのサーバーに合わせて話す/)
+  assert.match(style, /BOT がどう話すべきか・BOT への接し方/)
+})

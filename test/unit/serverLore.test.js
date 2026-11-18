@@ -92,6 +92,52 @@ describe('refreshGuild', () => {
     assert.deepEqual(await lore.refreshGuild(guild(), { now: NOW, log: () => {} }), { extracted: 0, removed: 0 })
   })
 
+  test('a style made with an earlier prompt is made again at once; with the same prompt, not until a week has passed', async () => {
+    const messages = many('c1', 20, '2026-11-03T10:00:00+09:00')
+    // Saved before (source_hash without this prompt's version).
+    const saved = installLoreStore({ messages, styles: { [GUILD]: 'BOT にも人間と同じノリで話しかけて問題ありません' } })
+    const requests = installGemini([[{ text: '[]' }], [{ text: 'ゆるくて、ツッコミが多い' }]])
+    await lore.refreshGuild(guild(), { now: NOW, log: () => {} })
+    assert.equal(saved.styles[GUILD], 'ゆるくて、ツッコミが多い')
+    assert.match(requests[1].body.contents[0].parts[0].text, /メンバー同士がどんなノリで話しているか/)
+    // A message more, the same prompt, the same day: kept as it is.
+    messages.push(...many('c1', 1, '2026-11-03T12:00:00+09:00'))
+    const again = installGemini([[{ text: '[]' }]])
+    await lore.refreshGuild(guild(), { now: NOW, log: () => {} })
+    assert.ok(again.every(r => !/どんなノリで話しているか/.test(r.body.contents[0].parts[0].text)))
+    assert.equal(saved.styles[GUILD], 'ゆるくて、ツッコミが多い')
+  })
+
+  test('a server that stores no messages has its style made from its latest public messages, read from Discord and not kept', async () => {
+    const saved = installLoreStore({ messages: [] })
+    const g = guild()
+    g.channels.get('c1').lastMessageID = '900'
+    g.channels.get('c2').lastMessageID = '999' // not public: not read
+    const asked = []
+    const live = Array.from({ length: 20 }, (_, i) => ({ author: { id: i % 2 ? 'u1' : 'b1' }, content: `ライブの発言${i}`, timestamp: Date.parse('2026-11-04T10:00:00+09:00') + i * 60000 }))
+    live.push({ author: { id: 'u2' }, content: '昔の発言', timestamp: Date.parse('2025-01-01T00:00:00+09:00') })
+    for (let i = 0; i < 10; i++) live.push({ author: { id: 'u2' }, content: `もうひとつ${i}`, timestamp: Date.parse('2026-11-04T11:00:00+09:00') + i * 60000 })
+    const getMessages = async (id, options) => {
+      asked.push([id, options.limit])
+      return live
+    }
+    const requests = installGemini([[{ text: 'ゆるい' }]])
+    await lore.refreshGuild(g, { now: NOW, log: () => {}, getMessages })
+    assert.deepEqual(asked, [['c1', 100]], 'only the public channel')
+    assert.equal(saved.styles[GUILD], 'ゆるい')
+    const prompt = requests[0].body.contents[0].parts[0].text
+    assert.match(prompt, /#雑談 \[[^\]]+\] たろう: ライブの発言1/)
+    assert.doesNotMatch(prompt, /ライブの発言0/, 'not a bot')
+    assert.doesNotMatch(prompt, /昔の発言/, 'not older than the window')
+    assert.deepEqual(saved.chunks[GUILD] || {}, {}, 'nothing of it is kept but the style')
+    // The next day: not read again.
+    asked.length = 0
+    installGemini([])
+    await lore.refreshGuild(g, { now: NOW, log: () => {}, getMessages })
+    assert.deepEqual(asked, [])
+    assert.equal(saved.styles[GUILD], 'ゆるい')
+  })
+
   test('a chunk whose messages changed is read again; one out of the window goes', async () => {
     const messages = many('c1', 20, '2026-11-03T10:00:00+09:00')
     const saved = installLoreStore({ messages, styles: { [GUILD]: '前のノリ' } })

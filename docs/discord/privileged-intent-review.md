@@ -499,7 +499,7 @@ BOT導入前や停止中のメッセージ）まで出すと、古い削除の�
 | 何を | どこで |
 |---|---|
 | `@everyone` が読めるテキスト・アナウンスチャンネルの保存済みメッセージを、チャンネル×週ごとに Gemini に送り、身内ネタ・用語・出来事・話題を取り出して保存（個人情報・特定の人への評価は除くよう指示） | `serverLore.js` `refreshGuild` / `extractFacts`、`guild_lore_chunks` / `guild_lore_facts` |
-| 最近のメッセージから、サーバー全体の話し方（雰囲気・言い回し）の短い説明を作って保存（個人については書かない） | `serverLore.js` `describeStyle`、`guilds.lore_style` |
+| 最近のメッセージから、サーバー全体の話し方（雰囲気・言い回し）の短い説明を作って保存（個人については書かない）。メッセージを保存していないサーバー（ログ設定なし）でも、`@everyone` が読めるチャンネルのうち最近書き込みのあったもの最大8つの最新メッセージ（各100件まで）を Discord から読んで作る。読んだメッセージは要約に使うだけで保存しない | `serverLore.js` `describeStyle` / `liveLines`、`guilds.lore_style` |
 | 保存は直近 `SERVER_LORE_WEEKS` 週（既定8）だけ。メッセージが編集・削除・`/clearmydata` で変われば取り出し直し、期間外は削除。サーバーから抜ければすべて削除（外部キー） | `refreshGuild` / `deleteChunksExcept`、`migrations/022_server_lore.sql`, `migrations/052_consolidate_tables.sql` |
 | メンバーについて聞かれたときだけ、そのメンバーの最近の保存済みメッセージ（依頼者と BOT が読めるチャンネルのもの、最大30件）を読んで Gemini に渡す。保存しない | `eventTools.js` `about_member` |
 

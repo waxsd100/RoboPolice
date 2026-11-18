@@ -1,7 +1,9 @@
 // What each server is like, so the mention assistant talks as one of its own: its running jokes,
 // words and happenings, and how its members talk. Taken by Gemini out of the messages the bot
-// already stores for the server's logs (so only servers with a message log), only in text and
-// announcement channels everyone (@everyone) can read, and only the last SERVER_LORE_WEEKS weeks.
+// already stores for the server's logs, only in text and announcement channels everyone
+// (@everyone) can read, and only the last SERVER_LORE_WEEKS weeks. How its members talk (the
+// style) is described for every server: one that stores too few messages (no message log) has the
+// latest messages of its busiest public channels read from Discord for it, used once and not kept.
 //
 // Each channel's messages of a week are one chunk. A chunk is read again only when its messages
 // changed (new, edited, deleted, or removed with /clearmydata), and chunks out of the window go, so
@@ -29,6 +31,10 @@ const MIN_MESSAGES = 15 // a quieter week says little
 const MAX_LINE = 300
 const MAX_CHUNK_CHARS = 24000
 const MAX_STYLE_LINES = 400
+// A server without enough stored messages: how many of its public channels (the most recently
+// active) are read for its style, and how many messages of each.
+const LIVE_CHANNELS = 8
+const LIVE_PER_CHANNEL = 100
 const STYLE_REFRESH_MS = 7 * 24 * 60 * 60 * 1000
 const MAX_EXTRACTIONS_PER_RUN = 20
 const RUN_EVERY_MS = 24 * 60 * 60 * 1000
@@ -82,6 +88,29 @@ function fit (lines, max) {
   if (total <= max) return lines
   const keep = Math.max(1, Math.floor(lines.length * max / total))
   return Array.from({ length: keep }, (_, i) => lines[Math.floor(i * lines.length / keep)])
+}
+
+// The latest messages of the server's busiest public channels, read from Discord (not stored), as
+// lines like chunksOf's: for the style of a server that stores too few. Bots are left out, and so
+// is anything older than the window.
+async function liveLines (guild, now = new Date(), getMessages = (id, options) => global.bot.getMessages(id, options)) {
+  const since = new Date(now - weeks() * 7 * 24 * 60 * 60 * 1000)
+  const channels = publicChannels(guild)
+    .filter(c => c.lastMessageID)
+    .sort((a, b) => (BigInt(b.lastMessageID) > BigInt(a.lastMessageID) ? 1 : -1))
+    .slice(0, LIVE_CHANNELS)
+  const all = []
+  for (const channel of channels) {
+    const messages = await getMessages(channel.id, { limit: LIVE_PER_CHANNEL }).catch(() => [])
+    for (const m of messages) {
+      const ts = new Date(m.timestamp)
+      if (!m.author || ts < since) continue
+      const name = nameOf(guild, m.author.id)
+      const text = String(m.content || '').replace(/\s+/g, ' ').trim()
+      if (name && text) all.push({ ts, line: `#${channel.name} [${timeOf(ts)}] ${name}: ${text.slice(0, MAX_LINE)}` })
+    }
+  }
+  return all.sort((a, b) => a.ts - b.ts).map(l => l.line)
 }
 
 // The server's chunks in the window: [{ channel, week, lines }], and every line, oldest first.
@@ -147,7 +176,7 @@ async function describeStyle (lines, guildID = null) {
 }
 
 // Brings the server's knowledge up to date with its stored messages. Resolves to { extracted, removed }.
-async function refreshGuild (guild, { log = m => global.logger.warn(m), now = new Date() } = {}) {
+async function refreshGuild (guild, { log = m => global.logger.warn(m), now = new Date(), getMessages } = {}) {
   const { chunks, lines } = await chunksOf(guild, now)
   const known = await store.chunkHashes(guild.id)
   let extracted = 0
@@ -168,21 +197,36 @@ async function refreshGuild (guild, { log = m => global.logger.warn(m), now = ne
   // Chunks out of the window, of channels no longer public, or that became too quiet.
   const removed = await store.deleteChunksExcept(guild.id, chunks.map(c => `${c.channel.id}|${c.week}`))
 
-  const sample = lines.slice(-MAX_STYLE_LINES)
+  await refreshStyle(guild, lines, { log, now, getMessages })
+  return { extracted, removed }
+}
+
+// How the server's members talk (the style), from its stored messages, or for a server that
+// stores too few, from its latest messages read from Discord. Made again at once when the prompt
+// changed; when the messages changed, at most once a week (and a server's own messages are read
+// from Discord only then). Gone when there are too few messages either way.
+async function refreshStyle (guild, lines, { log, now, getMessages }) {
+  const style = await store.getStyle(guild.id)
+  // The prompt's version, then the messages it was made from.
+  const prompt = hashOf(prompts.render('lore/style', { conversation: '' })).slice(0, 8)
+  const promptChanged = !String(style?.source_hash || '').startsWith(`${prompt}:`)
+  const weekOld = style && now - new Date(style.updated_at) > STYLE_REFRESH_MS
+  let sample = lines.slice(-MAX_STYLE_LINES)
   if (sample.length < MIN_MESSAGES) {
-    await store.deleteStyle(guild.id)
-  } else {
-    const style = await store.getStyle(guild.id)
-    const hash = hashOf(sample.join('\n'))
-    if (!style || (style.source_hash !== hash && now - new Date(style.updated_at) > STYLE_REFRESH_MS)) {
-      try {
-        await store.saveStyle(guild.id, await describeStyle(fit(sample, MAX_CHUNK_CHARS), guild.id), hash)
-      } catch (e) {
-        log(`[LORE]: Could not describe how ${guild.id} talks: ${e.message}`)
-      }
+    if (style && !promptChanged && !weekOld) return
+    sample = (await liveLines(guild, now, getMessages)).slice(-MAX_STYLE_LINES)
+    if (sample.length < MIN_MESSAGES) {
+      await store.deleteStyle(guild.id)
+      return
     }
   }
-  return { extracted, removed }
+  const hash = `${prompt}:${hashOf(sample.join('\n'))}`
+  if (style && !promptChanged && (style.source_hash === hash || !weekOld)) return
+  try {
+    await store.saveStyle(guild.id, await describeStyle(fit(sample, MAX_CHUNK_CHARS), guild.id), hash)
+  } catch (e) {
+    log(`[LORE]: Could not describe how ${guild.id} talks: ${e.message}`)
+  }
 }
 
 const factText = f => `${KIND_LABELS[f.kind]}: ${f.name}\n${f.content}`
@@ -250,4 +294,4 @@ async function relatedLore (guildID, vectorOf, { limit = 5, random = Math.random
   return { facts, style: style?.style || null }
 }
 
-module.exports = { startServerLore, runDue, refreshGuild, extractFacts, relatedLore, embedPending, enabled, weekOf, fit, KIND_LABELS }
+module.exports = { startServerLore, runDue, refreshGuild, extractFacts, relatedLore, embedPending, enabled, weekOf, fit, liveLines, KIND_LABELS }
