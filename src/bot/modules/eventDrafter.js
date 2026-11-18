@@ -1217,20 +1217,29 @@ const STORY_REQUEST_PATTERN = /小説|ss|物語|お話|ストーリー|シナリ
 // story: a story was asked for (isStoryRequest); otherwise the rules are those of a chat reply.
 // settings: the server's way of speaking and reply length (serverSettings), left out for a story,
 // which goes by the uncensored model's own rules for style and length.
-function uncensoredSystemInstruction ({ compact = false, r18Mode = false, story = false, settings = '' } = {}) {
+// style: the streamer's synthesized speaking-style profile and compact exemplars (streamerStyle),
+// included for non-story streamerPersona chat replies even when compact mode strips server info.
+function uncensoredSystemInstruction ({ compact = false, r18Mode = false, story = false, settings = '', style = '' } = {}) {
   const rules = prompts.render('chat/uncensored/rules', { r18Mode, compact, story })
   const chat = story ? '' : settings
+  const personaStyle = story ? '' : style
   if (compact) {
     const persona = (process.env.CHAT_PERSONA || '').trim()
     return [
       prompts.render('chat/uncensored/role'),
       ...(persona ? ['', '## 運営者が設定したキャラクター', persona] : []),
       ...(chat ? ['', chat] : []),
+      ...(personaStyle ? ['', personaStyle] : []),
       '',
       rules
     ].join('\n')
   }
-  return [systemInstruction({ uncensored: true, settings: chat }), '', rules].join('\n')
+  return [
+    systemInstruction({ uncensored: true, settings: chat }),
+    ...(personaStyle ? ['', personaStyle] : []),
+    '',
+    rules
+  ].join('\n')
 }
 
 const MAX_UNCENSORED_CONVERSATION_CHARS = 1800
@@ -1864,8 +1873,20 @@ async function callUncensored (contents, declarations, allowed = null, { timeout
     if (desc) contents.imageDescription = desc
   }
   const r18Mode = !!contents?.uncensoredR18Mode || isR18Text(model) || /deckard|r-?18|uncensored-thinking/i.test(model)
-  const story = isStoryRequest(contents?.[0]?.parts?.[0]?.text, asksForStory(contents))
-  const messages = toOpenAIMessages(uncensoredSystemInstruction({ compact: useCompact, r18Mode, story, settings: serverSettings(contents) }), contents, { compact: useCompact, r18Mode })
+  const firstUserText = String(contents?.[0]?.parts?.[0]?.text || '')
+  const story = isStoryRequest(firstUserText, asksForStory(contents))
+  const styleLines = (!story && contents?.streamerPersona !== false)
+    ? await require('./streamerStyle').sectionForPrompt({ slim: true, query: askedIn(firstUserText) }).catch(() => [])
+    : []
+  const style = styleLines.length ? styleLines.join('\n') : ''
+  const alreadyHasStyleInUser = !useCompact && firstUserText.includes('### 配信者本人の話し方')
+  const messages = toOpenAIMessages(uncensoredSystemInstruction({
+    compact: useCompact,
+    r18Mode,
+    story,
+    settings: serverSettings(contents),
+    style: alreadyHasStyleInUser ? '' : style
+  }), contents, { compact: useCompact, r18Mode })
   const replyCacheKey = useCompact ? `uncensored-reply:${hashOf(JSON.stringify({ model, messages }))}` : null
   if (replyCacheKey) {
     const cachedReply = await aiCache.getJson(replyCacheKey)
@@ -1941,7 +1962,7 @@ async function callUncensored (contents, declarations, allowed = null, { timeout
     }
   }
   const buildMinimalBody = () => {
-    const compactMsgs = toOpenAIMessages(uncensoredSystemInstruction({ compact: true, r18Mode, story, settings: serverSettings(contents) }), contents, { compact: true, r18Mode })
+    const compactMsgs = toOpenAIMessages(uncensoredSystemInstruction({ compact: true, r18Mode, story, settings: serverSettings(contents), style }), contents, { compact: true, r18Mode })
       .map(m => m.role === 'user' && typeof m.content === 'string' && m.content.length > 2800
         ? { ...m, content: `${m.content.slice(0, 500)}\n\n${m.content.slice(-2300)}` }
         : m)

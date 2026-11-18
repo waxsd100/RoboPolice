@@ -30,7 +30,8 @@ module.exports = {
       // ...and, once, finds the channel of messages stored before channels were recorded.
       require('../../miscellaneous/backfillChannels').startBackfill()
     }
-    // Every worker checks its own in-process state for the uncensored model and Sokudan sidecar.
+    // Every worker warms its L1 speaking-style cache from Redis/Postgres and checks local sidecars.
+    require('../modules/streamerStyle').warmCache()
     require('../modules/eventDrafter').startUncensoredCheck({ notifyWebhook: hasShardZero })
     require('../utils/sokudan').startSokudanCheck()
     // Every worker keeps the details of the servers it hosts current (member counts change hourly enough).

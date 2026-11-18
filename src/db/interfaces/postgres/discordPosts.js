@@ -88,4 +88,64 @@ async function recentPosts (guildIDs, authorIDs, limit = 200) {
   return rows.rows
 }
 
-module.exports = { savePosts, deletePost, deletePosts, postsOfMonth, recentPosts, backfillState, saveBackfill }
+// Recent 2-turn conversation pairs where one of `authorIDs` replied to another member in
+// `guildIDs`. Prefers explicit Discord replies (message_replies) and falls back to the immediately
+// preceding non-streamer message in the same channel within 90 seconds when no reply link exists.
+// [{ id, guild_id, channel_id, channel_name, author_id, partner_id, partner_content, reply_content, explicit, created_at }]
+async function recentReplyPairs (guildIDs, authorIDs, limit = 120) {
+  if (!guildIDs?.length || !authorIDs?.length) return []
+  const { fromStoredContent } = require('./create')
+  const rows = await pool.query(
+    `WITH recent AS (
+       SELECT p.id, c.guild_id, p.channel_id, COALESCE(c.name, p.channel_id) AS channel_name,
+              p.author_id, p.content AS reply_content, p.created_at
+       FROM discord_posts p
+       JOIN discord_channels c ON c.id = p.channel_id
+       WHERE c.guild_id = ANY($1::text[]) AND p.author_id = ANY($2::text[])
+       ORDER BY p.created_at DESC
+       LIMIT $3
+     )
+     SELECT r.id, r.guild_id, r.channel_id, r.channel_name, r.author_id, r.reply_content, r.created_at,
+            COALESCE(parent.author_id, adj.author_id) AS partner_id,
+            COALESCE(parent.content, adj.content) AS partner_content,
+            (parent.id IS NOT NULL) AS explicit
+     FROM recent r
+     LEFT JOIN message_replies mr ON mr.message_id = r.id
+     LEFT JOIN messages parent
+       ON parent.id = mr.reply_to
+      AND parent.guild_id = r.guild_id
+      AND parent.channel_id = r.channel_id
+      AND parent.author_id <> r.author_id
+      AND parent.content IS NOT NULL AND parent.content <> 'None'
+     LEFT JOIN LATERAL (
+       SELECT prev.id, prev.author_id, prev.content
+       FROM messages prev
+       WHERE mr.reply_to IS NULL
+         AND prev.channel_id = r.channel_id
+         AND prev.guild_id = r.guild_id
+         AND prev.ts < r.created_at
+         AND prev.ts >= r.created_at - INTERVAL '90 seconds'
+       ORDER BY prev.ts DESC
+       LIMIT 1
+     ) adj
+       ON adj.author_id <> r.author_id
+      AND adj.content IS NOT NULL AND adj.content <> 'None'
+     WHERE COALESCE(parent.content, adj.content) IS NOT NULL
+     ORDER BY (parent.id IS NOT NULL) DESC, r.created_at DESC
+     LIMIT $4`,
+    [guildIDs, authorIDs, Math.max(limit * 3, 240), limit])
+  return rows.rows.map(r => ({
+    id: r.id,
+    guild_id: r.guild_id,
+    channel_id: r.channel_id,
+    channel_name: r.channel_name,
+    author_id: r.author_id,
+    partner_id: r.partner_id,
+    partner_content: fromStoredContent(r.partner_content),
+    reply_content: r.reply_content,
+    explicit: Boolean(r.explicit),
+    created_at: r.created_at
+  }))
+}
+
+module.exports = { savePosts, deletePost, deletePosts, postsOfMonth, recentPosts, recentReplyPairs, backfillState, saveBackfill }

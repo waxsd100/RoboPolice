@@ -403,4 +403,18 @@ async function deleteGuildYouTube (guildID) {
   await collectGarbage()
 }
 
-module.exports = { setBotChannels, getVideoIds, saveSync, getKnowledge, videosInSummaryBatch, getOverview, listChannels, listLiveEventGuilds, liveEventsOn, setLiveEvents, upsertVideos, recentVideoIds, getLiveVideoIds, getLiveEvents, saveLiveEvent, archivesToSummarize, claimArchiveToSummarize, recordArchiveAttempt, websubDue, saveWebsub, isKnownChannel, videoCards, getVideo, videoIdsMissingStats, markStatsChecked, videoDuration, getSummary, saveSummary, getOtherSummaries, deleteGuildYouTube }
+// Recent published (non-live/non-upcoming) videos of followed channels for speaking-style
+// extraction: [{ video_id, channel_id, title, description, duration, published_at, summary }].
+async function recentVideosForStyle (limit = 20) {
+  const rows = await pool.query(
+    `SELECT v.video_id, v.channel_id, v.title, v.description, v.duration, v.published_at, v.summary
+     FROM youtube_videos v
+     WHERE v.channel_id IS NOT NULL
+       AND COALESCE(v.live_status, 'none') NOT IN ('live', 'upcoming')
+     ORDER BY v.published_at DESC NULLS LAST
+     LIMIT $1`,
+    [limit])
+  return rows.rows
+}
+
+module.exports = { setBotChannels, getVideoIds, saveSync, getKnowledge, videosInSummaryBatch, getOverview, listChannels, listLiveEventGuilds, liveEventsOn, setLiveEvents, upsertVideos, recentVideoIds, getLiveVideoIds, getLiveEvents, saveLiveEvent, archivesToSummarize, claimArchiveToSummarize, recordArchiveAttempt, websubDue, saveWebsub, isKnownChannel, videoCards, getVideo, videoIdsMissingStats, markStatsChecked, videoDuration, getSummary, saveSummary, getOtherSummaries, recentVideosForStyle, deleteGuildYouTube }
