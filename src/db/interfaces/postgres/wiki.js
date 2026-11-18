@@ -63,11 +63,12 @@ function createStore (source) {
     return rows.rows[0]?.at || null
   }
 
-  // Parts with no embedding by `model`: [{ url, position, title, heading, text }].
+  // Parts not yet handled by `model`: [{ url, position, title, heading, text }]. A part Gemini
+  // blocked is stored with embedding = NULL and embedding_model = model, like noise messages.
   async function sectionsToEmbed (model, limit) {
     const rows = await pool.query(
       `SELECT s.url, s.position, p.title, s.heading, s.text FROM knowledge_sections s JOIN knowledge_pages p ON p.source = s.source AND p.url = s.url
-       WHERE s.source = $1 AND (s.embedding IS NULL OR s.embedding_model IS DISTINCT FROM $2::embedding_model)
+       WHERE s.source = $1 AND s.embedding_model IS DISTINCT FROM $2::embedding_model
        ORDER BY s.url, s.position LIMIT $3`,
       [source, model, limit])
     return rows.rows
@@ -76,7 +77,7 @@ function createStore (source) {
   async function saveSectionEmbedding (url, position, embedding, model) {
     await pool.query(
       'UPDATE knowledge_sections SET embedding = $4, embedding_model = $5 WHERE source = $1 AND url = $2 AND position = $3',
-      [source, url, position, toVectorLiteral(embedding), model])
+      [source, url, position, embedding ? toVectorLiteral(embedding) : null, model])
   }
 
   // The `limit` parts closest in meaning to the vector `query`: [{ url, title, heading, text, score }].
@@ -128,8 +129,9 @@ function createStore (source) {
   }
 
   // Replaces what was taken out of a part: [{ kind, name, aliases, content }]. Pieces of knowledge
-  // that did not change keep their embedding.
-  async function saveFacts (url, position, textHash, facts) {
+  // that did not change keep their embedding. When `blocked` is true, also marks the section's own
+  // embedding as NULL for `model` so search_wiki never injects text Gemini already refused.
+  async function saveFacts (url, position, textHash, facts, { blocked = false, model = null } = {}) {
     const client = await pool.getPostgresClient()
     try {
       await client.query('BEGIN')
@@ -152,7 +154,13 @@ function createStore (source) {
            SELECT fact.id, a.n - 1, a.alias FROM fact, unnest($7::text[]) WITH ORDINALITY AS a (alias, n)`,
           [source, url, position, f.kind, f.name, f.content, aliases, kept?.embedding || null, kept?.embedding_model || null])
       }
-      await client.query('UPDATE knowledge_sections SET facts_hash = $4 WHERE source = $1 AND url = $2 AND position = $3', [source, url, position, textHash])
+      if (blocked && model) {
+        await client.query(
+          'UPDATE knowledge_sections SET facts_hash = $4, embedding = NULL, embedding_model = $5 WHERE source = $1 AND url = $2 AND position = $3',
+          [source, url, position, textHash, model])
+      } else {
+        await client.query('UPDATE knowledge_sections SET facts_hash = $4 WHERE source = $1 AND url = $2 AND position = $3', [source, url, position, textHash])
+      }
       await client.query('COMMIT')
     } catch (e) {
       await client.query('ROLLBACK').catch(() => {})
@@ -199,12 +207,22 @@ function createStore (source) {
     return rows.rows
   }
 
+  // Quotes and catchphrases extracted from this source: [{ name, content }].
+  async function quoteFacts (limit = 40) {
+    const rows = await pool.query(
+      `SELECT DISTINCT ON (f.name) f.name, f.content FROM knowledge_facts f
+       WHERE f.source = $2 AND f.kind = 'quote'
+       ORDER BY f.name, f.id DESC LIMIT $1`,
+      [limit, source])
+    return rows.rows
+  }
+
   async function hasSections () {
     const rows = await pool.query('SELECT 1 FROM knowledge_sections WHERE source = $1 LIMIT 1', [source])
     return rows.rows.length !== 0
   }
 
-  return { savePage, deletePagesExcept, lastRead, pageLastRead, sectionsToEmbed, saveSectionEmbedding, nearestSections, characters, characterImages, sectionsToExtract, saveFacts, factsToEmbed, saveFactEmbedding, nearestFacts, characterFacts, hasSections }
+  return { savePage, deletePagesExcept, lastRead, pageLastRead, sectionsToEmbed, saveSectionEmbedding, nearestSections, characters, characterImages, sectionsToExtract, saveFacts, factsToEmbed, saveFactEmbedding, nearestFacts, characterFacts, quoteFacts, hasSections }
 }
 
 // The wiki's tables.

@@ -21,17 +21,19 @@ const POCKET_DIR = path.resolve(__dirname, '..', '..', '..', 'vendor', 'yomiyasu
 const TIMEOUT_MS = 30 * 1000
 const MIN_CHARS = 40 // a greeting or a one-liner has nothing to polish
 const LONG_CHARS = 250 // longer replies may have subtle stiffness worth checking
+const PERSONA_LONG_CHARS = 600 // streamer-persona chat keeps its spoken cadence unless long or clearly AI-stiff
 const MAX_CHARS = 2000
 
 // Common AI-like phrasing and punctuation that yomiyasu-pocket rewrites. Short replies without any
 // of these are sent as they are, saving a round-trip and its tokens.
 const AI_PATTERNS = /重要なのは|大切なのは|注目すべきは|特筆すべきは|と言えるでしょう|と言えます|に他なりません|単なる[^\n。]{1,30}ではなく|だけでなく[^\n。]{1,30}もまた|——|――| — /
 
-function needsPolish (text) {
+function needsPolish (text, { streamerPersona = false } = {}) {
   const s = String(text || '')
   const chars = [...s].length
   if (chars < MIN_CHARS || s.length > MAX_CHARS) return false
-  return chars >= LONG_CHARS || AI_PATTERNS.test(s)
+  const longThreshold = streamerPersona ? PERSONA_LONG_CHARS : LONG_CHARS
+  return chars >= longThreshold || AI_PATTERNS.test(s)
 }
 
 let pocket = null
@@ -89,11 +91,12 @@ function rejected (before, after) {
 }
 
 const DISCORD_NOTE = `\n${prompts.render('polish/discord-note')}`
+const PERSONA_NOTE = '話し手固有の一人称・二人称・語尾・くだけた話し言葉・句読点の抜き差し・笑い表記（w・草など）・改行のテンポは、AI 臭い定型表現でない限り書き換えずそのまま残してください。標準的な書き言葉に均さないこと。'
 
 // The reply rewritten, or as it was.
-async function polish (text, { guildID = null } = {}) {
+async function polish (text, { guildID = null, streamerPersona = false, styleProfile = null } = {}) {
   const before = String(text || '')
-  if (!enabled() || !needsPolish(before)) return before
+  if (!enabled() || !needsPolish(before, { streamerPersona })) return before
   if (!AI_PATTERNS.test(before) && sokudan.isUsable()) {
     const check = await sokudan.detectStiffAiReply(before)
     if (check && check.needsPolish === false) {
@@ -103,8 +106,11 @@ async function polish (text, { guildID = null } = {}) {
   }
   try {
     const m = lightModel()
+    const personaAddendum = streamerPersona
+      ? `\n\n${PERSONA_NOTE}${styleProfile ? `\n\nこの話し手の文体の特徴（崩さないこと）:\n${styleProfile}` : ''}`
+      : ''
     const content = await callGemini(m, {
-      systemInstruction: { parts: [{ text: instruction() + '\n' + DISCORD_NOTE }] },
+      systemInstruction: { parts: [{ text: instruction() + '\n' + DISCORD_NOTE + personaAddendum }] },
       contents: [{ role: 'user', parts: [{ text: before }] }],
       generationConfig: { ...thinkingConfig(m, { setting: 'GEMINI_LIGHT_THINKING_LEVEL', fallback: 'minimal' }) }
     }, { purpose: 'replyPolish', timeoutMs: TIMEOUT_MS })
@@ -121,4 +127,4 @@ async function polish (text, { guildID = null } = {}) {
   }
 }
 
-module.exports = { polish, needsPolish, enabled, rejected, keptParts, keptNumbers, AI_PATTERNS, POCKET_DIR }
+module.exports = { polish, needsPolish, enabled, rejected, keptParts, keptNumbers, AI_PATTERNS, POCKET_DIR, PERSONA_LONG_CHARS }
