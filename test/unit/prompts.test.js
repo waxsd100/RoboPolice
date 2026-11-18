@@ -30,11 +30,11 @@ test('every prompt file renders, with each of its names given', () => {
 })
 
 test('fills in values as they are, and keeps sections only when set', () => {
-  const system = prompts.render('chat/system', { modelName: 'A & <B>', persona: '', uncensored: false })
+  const system = prompts.render('chat/system', { modelName: 'A & <B>', persona: '', uncensored: false, mature: '- M', settings: '' })
   assert.match(system, /「A & <B>」と答える/)
   assert.doesNotMatch(system, /運営者が設定したキャラクター/)
   assert.doesNotMatch(system, /^\{\{!|会話の返事（メンション）のシステム指示/m)
-  const withPersona = prompts.render('chat/system', { modelName: 'A & <B>', persona: 'ござる口調', uncensored: false })
+  const withPersona = prompts.render('chat/system', { modelName: 'A & <B>', persona: 'ござる口調', uncensored: false, mature: '- M', settings: '' })
   assert.ok(withPersona.endsWith('\n\n## 運営者が設定したキャラクター\nござる口調'))
   assert.ok(withPersona.startsWith(`${system}\n\n`))
 
@@ -46,7 +46,7 @@ test('fills in values as they are, and keeps sections only when set', () => {
 })
 
 test('refuses a prompt with a name left out', () => {
-  assert.throws(() => prompts.render('chat/system', { modelName: 'A', uncensored: false }), /chat\/system needs \{\{persona\}\}/)
+  assert.throws(() => prompts.render('chat/system', { modelName: 'A', uncensored: false, mature: '', settings: '' }), /chat\/system needs \{\{persona\}\}/)
   assert.throws(() => prompts.render('../../index'), /outside/)
 })
 

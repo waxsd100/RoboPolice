@@ -757,7 +757,7 @@ test('sokudan\'s reading of the request comes before the word patterns: a story,
     const tools = createTools({ guild, member, ask: async () => '' })
     await draft({ request: '黒板に書いてあったこと教えて', channelName: 'general', guild, member, tools })
     const prompt = bodies.at(-1).contents[0].parts[0].text
-    assert.match(compactUncensoredText(prompt, { story: false }), /^## 話し方（このサーバーの設定）/)
+    assert.match(compactUncensoredText(prompt, { story: false }), /^依頼されたチャンネル: /)
     assert.doesNotMatch(compactUncensoredText(prompt, { story: false }), /※執筆時の注意/)
     assert.match(compactUncensoredText(prompt, { story: true }), /※執筆時の注意/)
     assert.match(compactUncensoredText(prompt), /※執筆時の注意/, 'without an answer, the words decide (書いて)')
