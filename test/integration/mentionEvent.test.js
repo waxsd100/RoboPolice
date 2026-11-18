@@ -2136,7 +2136,7 @@ describe('mention → event / forum post (integration)', () => {
       assert.match(replies[0].state.content, /AI（Google）の制限で答えられなかった/)
       assert.equal(logs.length, 1)
       assert.equal(logs[0].kind, 'refused')
-      assert.equal(logs[0].referenced_text, null, 'not a reply')
+      assert.match(logs[0].request_text, /<untrusted source="server">[\s\S]*<untrusted source="request">\n30分睡眠配信はどう思いますか？/, 'the whole request as sent, also when it is not a reply')
       assert.equal(logs[0].block_reason, 'PROHIBITED_CONTENT')
       assert.match(logs[0].context, /^sent: [^;]*members/)
       assert.match(logs[0].fallbacks, /refused \(PROHIBITED_CONTENT\) → without [^;]*members/)
