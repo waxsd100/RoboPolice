@@ -16,7 +16,7 @@ const { embed, embedQuery, blend, model: embeddingModel } = require('../utils/em
 const { fromStoredContent } = require('../../db/interfaces/postgres/create')
 const semanticSearch = require('./semanticSearch')
 const { messageEmbeddingsEnabled } = require('./embeddingIndexer')
-const { wrap, reportInjectionAsync } = require('../utils/untrusted')
+const { wrap } = require('../utils/untrusted')
 const serverLore = require('./serverLore')
 const serverRules = require('./serverRules')
 const loreStore = require('../../db/interfaces/postgres/serverLore')
@@ -418,8 +418,6 @@ function createTools ({ guild, member, ask, progress = () => {} }) {
     if (!executors[name]) return { error: `不明なツールです: ${name}` }
     try {
       const result = String(await executors[name](args || {})).slice(0, MAX_RESULT_CHARS)
-      // Only logged (the result is marked off as data below), so the model does not wait for it.
-      reportInjectionAsync(`the ${name} result in ${guild.id}`, result).catch(() => {})
       // Whatever a tool read was written by someone else: marked off as data (untrusted.js).
       return { result: wrap(name, result) }
     } catch (e) {

@@ -38,7 +38,6 @@ BOT が Gemini（と検閲なしモデル・画像モデル）に渡すプロン
 | `emoji/describe.md` | サーバー絵文字の説明 |
 | `image/cover.md`、`image/edit.md` | イベント・フォーラム投稿のカバー画像（英語） |
 | `chat/pictures/*.md` | 依頼と一緒に見せる絵文字・添付画像の前置き |
-| `chat/tool-compress.md` | 長いツール結果を、依頼に要る事実だけに縮める |
 | `chat/uncensored/describe-images.md` | 検閲なしモデルへ引き継ぐ前の、添付画像の説明の依頼 |
 | `tools/<ツール名>.md` | AI が呼べるツール（調べ物・質問・下書きの提出など）の説明。最初の段落がツールの説明、`## 引数名` の節がその引数の説明（コードの `prompts.tool()`） |
 | `tools/shared/image-instruction.md` | 下書きの提出ツールに共通の `image_instruction` 引数の説明 |
