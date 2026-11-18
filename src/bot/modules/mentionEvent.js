@@ -4,6 +4,7 @@ const { draft, revise, isConfigured, isUncensoredUsable, isUncensoredDirective, 
 const { createTools, describeServer, worthSearching, withServerEmojis, sharedOwnerEmojis, withServerChannels, channelTheme, SHORT_TOPIC_PROMPT, StopDrafting } = require('./eventTools')
 const { embedQuery } = require('../utils/embeddings')
 const sokudan = require('../utils/sokudan')
+const aiTranscript = require('../utils/aiTranscript')
 const { withLinkCards } = require('../utils/linkCards')
 const { safeLinks } = require('../utils/linkSafety')
 const { reportInjectionAsync } = require('../utils/untrusted')
@@ -870,7 +871,8 @@ async function handle (message) {
           geminiCalls: usage.requests || 0,
           blockReason: outcome.blockReason || null,
           fallbacks: usage.fallbacks?.length ? usage.fallbacks.join('; ') : null,
-          context: usage.context?.length ? usage.context.join('; ') : null
+          context: usage.context?.length ? usage.context.join('; ') : null,
+          aiTranscript: aiTranscript.forLog(usage)
         }).catch(err => global.logger.warn(`Could not save mention log in ${guild.id}: ${err.message}`))
       }
       global.logger.info(`Mention drafting in ${guild.id}: ${usage.requests} Gemini request(s), ${usage.retries} retried after HTTP 429`)

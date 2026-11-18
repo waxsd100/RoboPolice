@@ -840,6 +840,7 @@ function installMentionLogStore (logs = []) {
       block_reason: entry.blockReason ?? null,
       fallbacks: entry.fallbacks ?? null,
       context: entry.context ?? null,
+      ai_transcript: entry.aiTranscript ?? null,
       created_at: new Date()
     }
     logs.push(row)

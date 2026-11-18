@@ -12,6 +12,7 @@ const aiCache = require('../utils/aiCache')
 const sokudan = require('../utils/sokudan')
 const prompts = require('../utils/prompts')
 const { currentUsage, recordTokens, addTokens, addModel, addFallback, addContext } = require('../utils/geminiUsage')
+const aiTranscript = require('../utils/aiTranscript')
 
 // A fixed model, not an alias such as gemini-flash-latest: an explicit cache (below) is made for one
 // model, and a change of model should be a choice, not a surprise.
@@ -481,7 +482,16 @@ async function callGemini (model, body, options) {
     const thinking = thinkingConfig(model, { setting: 'GEMINI_LIGHT_THINKING_LEVEL', fallback: 'low' })
     if (thinking.thinkingConfig) body = { ...body, generationConfig: { ...body.generationConfig, ...thinking } }
   }
-  const data = await geminiRequest(model, 'generateContent', body, options)
+  // Recorded for the mention log, sent and received (or the error): options.transcript names the
+  // system instructions and tools when they are in a cache rather than the body.
+  let data
+  try {
+    data = await geminiRequest(model, 'generateContent', body, options)
+  } catch (e) {
+    aiTranscript.recordGemini({ model, purpose: options?.purpose, body, ...options?.transcript, error: e })
+    throw e
+  }
+  aiTranscript.recordGemini({ model, purpose: options?.purpose, body, ...options?.transcript, response: data })
   const candidate = data.candidates?.[0]
   const content = candidate?.content
   const finish = candidate?.finishReason
@@ -1912,6 +1922,7 @@ async function callUncensored (contents, declarations, allowed = null, { timeout
   if (!res.ok) {
     if (res.status >= 500) markUnusable()
     const text = (await res.text()).slice(0, 1000)
+    aiTranscript.recordUncensored({ model, messages, tools: body.tools, error: `HTTP ${res.status} ${text}` })
     throw new GeminiError(`Uncensored request failed: HTTP ${res.status} ${text}`, `AI の呼び出しに失敗しました（HTTP ${res.status}）`, null, res.status)
   }
   let data
@@ -1919,8 +1930,10 @@ async function callUncensored (contents, declarations, allowed = null, { timeout
     data = await readUncensoredResponse(res)
   } catch (err) {
     markUnusable()
+    aiTranscript.recordUncensored({ model, messages, tools: body.tools, error: err })
     throw err
   }
+  aiTranscript.recordUncensored({ model, messages, tools: body.tools, response: data?.choices?.[0]?.message })
   let parts = parseUncensoredParts(data?.choices?.[0]?.message, declarations, allowed)
   if (!parts.length && useCompact) {
     let retryRes
@@ -2186,6 +2199,7 @@ async function generate (contents, declarations, allowed = null, { deep = false,
     : { purpose: 'mention', timeoutMs: replyTimeoutMs(), flex: contents.tier === 'flex', stream: true, strictSafety }
   // The last step, limited to submitting (allowed), has its own toolConfig: sent in full, since a
   // request that uses a cache cannot set one.
+  callOptions.transcript = { system: prefix.systemInstruction.parts[0].text, tools: prefix.tools }
   const cache = allowed ? null : await cachedPrefix(model, prefix)
   if (cache) {
     try {

@@ -723,11 +723,13 @@ describe('stores', { skip: !database.available && 'needs PGHOST' }, () => {
         response: 'ごめん',
         blockReason: 'PROHIBITED_CONTENT',
         fallbacks: 'gemini-3.8-flash refused (PROHIBITED_CONTENT) → without server',
-        context: 'sent: server, members'
+        context: 'sent: server, members',
+        aiTranscript: { systems: { h: 'SYS' }, calls: [{ model: 'm', response: { finishReason: 'SAFETY' } }] }
       })
       const [refused] = (await store.getMentionLogs('g1', { userID: 'u3' }))
       assert.equal(refused.id, refusedID)
       assert.deepEqual([refused.block_reason, refused.fallbacks, refused.context], ['PROHIBITED_CONTENT', 'gemini-3.8-flash refused (PROHIBITED_CONTENT) → without server', 'sent: server, members'])
+      assert.deepEqual(refused.ai_transcript, { systems: { h: 'SYS' }, calls: [{ model: 'm', response: { finishReason: 'SAFETY' } }] })
       await require('../../src/db/interfaces/postgres/delete').deleteMessage('m100')
 
       const all = await store.getMentionLogs('g1')

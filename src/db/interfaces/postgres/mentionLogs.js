@@ -20,15 +20,16 @@ async function saveMentionLog ({
   geminiCalls = 0,
   blockReason = null,
   fallbacks = null,
-  context = null
+  context = null,
+  aiTranscript = null
 }) {
   const res = await pool.query(
     `INSERT INTO mention_logs (
        guild_id, channel_id, message_id, reply_message_id,
        user_id, user_name, kind, request, referenced_text, response,
        model, prompt_tokens, cached_tokens, output_tokens, thinking_tokens, gemini_calls,
-       block_reason, fallbacks, context
-     ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19)
+       block_reason, fallbacks, context, ai_transcript
+     ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20)
      RETURNING id`,
     [
       guildID,
@@ -49,7 +50,8 @@ async function saveMentionLog ({
       geminiCalls || 0,
       blockReason,
       fallbacks,
-      context
+      context,
+      aiTranscript ? JSON.stringify(aiTranscript) : null
     ]
   )
   return res.rows[0]?.id ?? null
@@ -67,7 +69,7 @@ async function getMentionLogs (guildID, { limit = 50, userID = null } = {}) {
     `SELECT id, guild_id, channel_id, message_id, reply_message_id,
             user_id, user_name, kind, request, referenced_text, response,
             model, prompt_tokens, cached_tokens, output_tokens, thinking_tokens, gemini_calls,
-            block_reason, fallbacks, context, created_at
+            block_reason, fallbacks, context, ai_transcript, created_at
      FROM mention_logs
      WHERE ${where}
      ORDER BY created_at DESC, id DESC

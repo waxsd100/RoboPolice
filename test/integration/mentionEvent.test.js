@@ -2141,5 +2141,36 @@ describe('mention → event / forum post (integration)', () => {
       assert.match(logs[0].context, /^sent: [^;]*members/)
       assert.match(logs[0].fallbacks, /refused \(PROHIBITED_CONTENT\) → without [^;]*members/)
     })
+
+    test('everything sent to the AI and what came back is in the mention log', async (t) => {
+      t.mock.method(global.logger, 'warn', () => {})
+      const { installMentionLogStore } = require('../helpers/fakes')
+      const logs = installMentionLogStore()
+      const { channel } = createChannel()
+      const ratings = [{ category: 'HARM_CATEGORY_SEXUALLY_EXPLICIT', probability: 'LOW', blocked: true }]
+      let n = 0
+      global.fetch = async (url, init) => {
+        n++
+        if (n === 1) return { ok: true, json: async () => ({ candidates: [{ content: { role: 'model', parts: [{ functionCall: { name: 'list_channels', args: {} }, thoughtSignature: 'x'.repeat(5000) }] } }], usageMetadata: { promptTokenCount: 10 } }) }
+        return { ok: true, json: async () => ({ candidates: [{ finishReason: 'SAFETY', safetyRatings: ratings }] }) }
+      }
+      await mentionEvent.handle(mention(channel, '<@BOT> 児童'))
+      const { systems, calls } = logs[0].ai_transcript
+      assert.equal(logs[0].block_reason, 'SAFETY')
+      assert.ok(calls.length >= 2)
+      const [first, second] = calls
+      assert.equal(first.purpose, 'mention')
+      assert.match(systems[first.system], /## 役割\n/, 'the system instructions, once, by reference')
+      assert.equal(second.system, first.system)
+      assert.ok(first.tools.includes('list_channels'))
+      assert.equal(first.fromTurn, 0)
+      assert.match(first.turns[0].parts[0].text, /<untrusted source="request">\n児童/)
+      assert.deepEqual(first.response.parts, [{ functionCall: { name: 'list_channels', args: {} } }], 'no thought signature')
+      assert.equal(second.fromTurn, 1, 'only what is new since the call before')
+      assert.equal(second.turns[0].role, 'model')
+      assert.equal(second.turns[1].parts[0].functionResponse.name, 'list_channels')
+      assert.deepEqual([second.response.finishReason, second.response.safetyRatings], ['SAFETY', ratings])
+      assert.ok(second.safetySettings.length)
+    })
   })
 })
