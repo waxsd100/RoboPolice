@@ -199,8 +199,12 @@ function installLoreStore ({ facts = {}, styles = {}, messages = [] } = {}) {
     .map(f => ({ ...f, score: f.embedding ? similarity(q, fromBase64(f.embedding)) : 0 }))
     .sort((a, b) => b.score - a.score).slice(0, limit)
   store.hasFacts = async guildID => (facts[guildID] || []).some(f => f.embedding)
-  store.getStyle = async guildID => saved.styles[guildID] ? { style: saved.styles[guildID], source_hash: 'x', updated_at: new Date() } : null
-  store.saveStyle = async (guildID, style) => { saved.styles[guildID] = style }
+  saved.styleHashes = {}
+  store.getStyle = async guildID => saved.styles[guildID] ? { style: saved.styles[guildID], source_hash: saved.styleHashes[guildID] || 'x', updated_at: new Date() } : null
+  store.saveStyle = async (guildID, style, hash) => {
+    saved.styles[guildID] = style
+    saved.styleHashes[guildID] = hash
+  }
   store.deleteStyle = async guildID => { delete saved.styles[guildID] }
   store.memberMessages = async (guildID, authorID, channelIDs, limit) => messages
     .filter(m => m.guild_id === guildID && m.author_id === authorID && channelIDs.includes(m.channel_id))

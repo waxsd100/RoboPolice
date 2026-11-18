@@ -173,8 +173,12 @@ async function refreshGuild (guild, { log = m => global.logger.warn(m), now = ne
     await store.deleteStyle(guild.id)
   } else {
     const style = await store.getStyle(guild.id)
-    const hash = hashOf(sample.join('\n'))
-    if (!style || (style.source_hash !== hash && now - new Date(style.updated_at) > STYLE_REFRESH_MS)) {
+    // The prompt's version and the messages it was made from: a new prompt makes it again at once,
+    // new messages at most once a week.
+    const prompt = hashOf(prompts.render('lore/style', { conversation: '' })).slice(0, 8)
+    const hash = `${prompt}:${hashOf(sample.join('\n'))}`
+    const promptChanged = !String(style?.source_hash || '').startsWith(`${prompt}:`)
+    if (!style || promptChanged || (style.source_hash !== hash && now - new Date(style.updated_at) > STYLE_REFRESH_MS)) {
       try {
         await store.saveStyle(guild.id, await describeStyle(fit(sample, MAX_CHUNK_CHARS), guild.id), hash)
       } catch (e) {

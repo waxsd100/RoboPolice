@@ -92,6 +92,22 @@ describe('refreshGuild', () => {
     assert.deepEqual(await lore.refreshGuild(guild(), { now: NOW, log: () => {} }), { extracted: 0, removed: 0 })
   })
 
+  test('a style made with an earlier prompt is made again at once; with the same prompt, not until a week has passed', async () => {
+    const messages = many('c1', 20, '2026-11-03T10:00:00+09:00')
+    // Saved before (source_hash without this prompt's version).
+    const saved = installLoreStore({ messages, styles: { [GUILD]: 'BOT にも人間と同じノリで話しかけて問題ありません' } })
+    const requests = installGemini([[{ text: '[]' }], [{ text: 'ゆるくて、ツッコミが多い' }]])
+    await lore.refreshGuild(guild(), { now: NOW, log: () => {} })
+    assert.equal(saved.styles[GUILD], 'ゆるくて、ツッコミが多い')
+    assert.match(requests[1].body.contents[0].parts[0].text, /メンバー同士がどんなノリで話しているか/)
+    // A message more, the same prompt, the same day: kept as it is.
+    messages.push(...many('c1', 1, '2026-11-03T12:00:00+09:00'))
+    const again = installGemini([[{ text: '[]' }]])
+    await lore.refreshGuild(guild(), { now: NOW, log: () => {} })
+    assert.ok(again.every(r => !/どんなノリで話しているか/.test(r.body.contents[0].parts[0].text)))
+    assert.equal(saved.styles[GUILD], 'ゆるくて、ツッコミが多い')
+  })
+
   test('a chunk whose messages changed is read again; one out of the window goes', async () => {
     const messages = many('c1', 20, '2026-11-03T10:00:00+09:00')
     const saved = installLoreStore({ messages, styles: { [GUILD]: '前のノリ' } })
