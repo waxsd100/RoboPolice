@@ -829,7 +829,7 @@ function installMentionLogStore (logs = []) {
       user_name: entry.userName ?? null,
       kind: entry.kind,
       request: entry.request ?? '',
-      referenced_text: entry.referencedText ?? null,
+      prompt: entry.prompt ?? null,
       response: entry.response ?? '',
       model: entry.model ?? null,
       prompt_tokens: entry.promptTokens || 0,
@@ -840,6 +840,7 @@ function installMentionLogStore (logs = []) {
       block_reason: entry.blockReason ?? null,
       fallbacks: entry.fallbacks ?? null,
       context: entry.context ?? null,
+      ai_transcript: entry.aiTranscript ?? null,
       created_at: new Date()
     }
     logs.push(row)

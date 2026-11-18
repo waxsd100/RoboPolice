@@ -20,7 +20,6 @@ const DEFAULT_REFUSAL_THRESHOLD = 0.65
 const DEFAULT_POLISH_SCORE_THRESHOLD = 1.0
 const MAX_STATE_CHARS = 1200
 const MAX_REFERENCE_CONTEXT_CHARS = 400
-const MIN_INJECTION_CHECK_CHARS = 12
 const MIN_REFUSAL_CHECK_CHARS = 10
 const ADULT_CHANNEL_LABEL_PATTERN = /(?:^|[^a-z0-9])(?:r-?18|nsfw)(?:$|[^a-z0-9])|18禁|成人向け|アダルト|えっち|エッチ|エロ|官能|下ネタ|年齢制限/i
 const CONTEXT_DEPENDENT_REQUEST_PATTERN = /続き|続編|その後|その先|それ|これ|あれ|さっき|前の|今の|もっと|さらに|そのまま|書き直|変えて/i
@@ -198,9 +197,7 @@ const MENTION_QUESTIONS = () => prompts.questions('mention', {
   is_story: { type: 'noul' },
   complexity: { type: 'score', levels: 3 }
 })
-const INJECTION_QUESTIONS = () => prompts.questions('injection', { injection: { type: 'noul' } })
 const REFUSAL_QUESTIONS = () => prompts.questions('refusal', { refusal: { type: 'noul' } })
-const BLOCK_RISK_QUESTIONS = () => prompts.questions('block-risk', { block_risk: { type: 'noul' } })
 const STIFFNESS_QUESTIONS = () => prompts.questions('stiffness', {
   stiffness: { type: 'score', levels: 3 },
   needs_rewrite: { type: 'noul' }
@@ -265,25 +262,6 @@ async function classifyMentionRequest (request, referencedText = '', channelCont
   }
 }
 
-// Use Case 2a: Screens untrusted text for prompt injection / jailbreak attempts that evade regex.
-async function detectInjection (text) {
-  if (!isUsable()) return { detected: false, probability: 0 }
-  const raw = cleanState(text, Number.MAX_SAFE_INTEGER)
-  const half = Math.floor(MAX_STATE_CHARS / 2)
-  const cleaned = raw.length > MAX_STATE_CHARS
-    ? `${raw.slice(0, half)}\n${raw.slice(-half)}`
-    : raw
-  if ([...cleaned].length < MIN_INJECTION_CHECK_CHARS) return { detected: false, probability: 0 }
-
-  const data = await systemOne(cleaned, INJECTION_QUESTIONS(), { maxStateChars: MAX_STATE_CHARS + 2 })
-  const prob = Number.isFinite(data?.answers?.injection?.noul) ? data.answers.injection.noul : 0
-  const threshold = boolThreshold('SOKUDAN_INJECTION_THRESHOLD')
-  return {
-    detected: prob >= threshold,
-    probability: prob
-  }
-}
-
 // Use Case 2b: Screens a chat reply from Gemini to detect soft refusals or fade-to-morning
 // ("朝チュン") evasions on R18 requests when paraphrased wording evades regex.
 async function detectRefusalReply (text, requestText = '') {
@@ -332,25 +310,6 @@ async function detectStiffAiReply (text) {
   }
 }
 
-// How likely Google is to refuse a request that carries `text` (other people's words gathered
-// around a request), from 0 to 1; null when sokudan gave no answer. Read in parts of at most
-// MAX_STATE_CHARS, and the likeliest part counts.
-const DEFAULT_BLOCK_RISK_THRESHOLD = 0.5
-function blockRiskThreshold () {
-  const n = Number(process.env.SOKUDAN_BLOCK_RISK_THRESHOLD)
-  return process.env.SOKUDAN_BLOCK_RISK_THRESHOLD && n > 0 && n <= 1 ? n : DEFAULT_BLOCK_RISK_THRESHOLD
-}
-async function blockRisk (text) {
-  if (!isUsable()) return null
-  const cleaned = cleanState(text, Number.MAX_SAFE_INTEGER)
-  if (!cleaned) return 0
-  const parts = []
-  for (let i = 0; i < cleaned.length; i += MAX_STATE_CHARS) parts.push(cleaned.slice(i, i + MAX_STATE_CHARS))
-  const answers = await Promise.all(parts.map(part => systemOne(part, BLOCK_RISK_QUESTIONS())))
-  const probs = answers.map(a => a?.answers?.block_risk?.noul).filter(Number.isFinite)
-  return probs.length ? Math.max(...probs) : null
-}
-
 module.exports = {
   sokudanEndpoint,
   isConfigured,
@@ -364,9 +323,6 @@ module.exports = {
   systemOne,
   scoreToThinkingLevel,
   classifyMentionRequest,
-  detectInjection,
   detectRefusalReply,
-  blockRisk,
-  blockRiskThreshold,
   detectStiffAiReply
 }

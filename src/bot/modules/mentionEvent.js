@@ -4,9 +4,10 @@ const { draft, revise, isConfigured, isUncensoredUsable, isUncensoredDirective, 
 const { createTools, describeServer, worthSearching, withServerEmojis, sharedOwnerEmojis, withServerChannels, channelTheme, SHORT_TOPIC_PROMPT, StopDrafting } = require('./eventTools')
 const { embedQuery } = require('../utils/embeddings')
 const sokudan = require('../utils/sokudan')
+const aiTranscript = require('../utils/aiTranscript')
 const { withLinkCards } = require('../utils/linkCards')
 const { safeLinks } = require('../utils/linkSafety')
-const { reportInjectionAsync } = require('../utils/untrusted')
+const { reportInjection } = require('../utils/untrusted')
 const { picturesFor, attachedPictures } = require('../utils/foreignEmojis')
 const { EMBED_COLORS } = require('../utils/constants')
 const { hasStaffAccess } = require('../utils/staffAccess')
@@ -147,7 +148,7 @@ function splitChatMessages (content, footer = '') {
 // replies to, what the tools read): linkSafety.js. Links left out are logged.
 function checkedText (text, result, guild) {
   if (!text) return text
-  const { text: clean, removed } = safeLinks(text, result.conversation?.contents, result.conversation?.toolUrls)
+  const { text: clean, removed } = safeLinks(text, result.conversation?.contents)
   if (removed.length) global.logger.warn(`[INJECTION]: Left out link(s) that came from nowhere in a reply in ${guild.id}: ${removed.join(' ').slice(0, 300)}`)
   return clean
 }
@@ -585,10 +586,9 @@ async function handle (message) {
       referenced = repliedTo && !edit
         ? await tools.readThread(message.messageReference.channelID || message.channel.id, repliedTo).catch(e => ({ text: `（読めませんでした: ${e.message}）`, count: 1 }))
         : null
-      // Attempts to take over the model are only logged (the prompt marks all of this as data), so
-      // nothing waits for them.
-      reportInjectionAsync(`a mention by ${message.author.id} in ${guild.id}`, request).catch(() => {})
-      if (referenced) reportInjectionAsync(`the conversation a mention in ${guild.id} replies to`, referenced.text).catch(() => {})
+      // Attempts to take over the model are only logged: the prompt marks all of this as data.
+      reportInjection(`a mention by ${message.author.id} in ${guild.id}`, request)
+      if (referenced) reportInjection(`the conversation a mention in ${guild.id} replies to`, referenced.text)
       // Fetched fresh for every request. Without it the draft still works, just with less context.
       // Knowledge is looked up by what the members said, not the bot's own earlier replies.
       // What was just being talked about in the channel, as far as it bears on the request
@@ -860,7 +860,7 @@ async function handle (message) {
           userName: message.author.username || null,
           kind: outcome.kind,
           request: request || '',
-          referencedText: referenced?.text || null,
+          prompt: usage.prompt || null,
           response: outcome.response,
           model: usage.models?.length ? usage.models.join(' → ') : null,
           promptTokens: usage.tokens?.prompt || 0,
@@ -870,7 +870,9 @@ async function handle (message) {
           geminiCalls: usage.requests || 0,
           blockReason: outcome.blockReason || null,
           fallbacks: usage.fallbacks?.length ? usage.fallbacks.join('; ') : null,
-          context: usage.context?.length ? usage.context.join('; ') : null
+          context: usage.context?.length ? usage.context.join('; ') : null,
+          aiTranscript: aiTranscript.forLog(usage),
+          repliedToMessageID: repliedTo || null
         }).catch(err => global.logger.warn(`Could not save mention log in ${guild.id}: ${err.message}`))
       }
       global.logger.info(`Mention drafting in ${guild.id}: ${usage.requests} Gemini request(s), ${usage.retries} retried after HTTP 429`)

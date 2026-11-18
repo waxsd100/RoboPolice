@@ -46,6 +46,13 @@ function addContext (note) {
   if (usage?.context && !usage.context.includes(note)) usage.context.push(note)
 }
 
+// The whole request as sent to the AI (the first turn: the server's information, the recent talk,
+// the replied-to conversation, the request), for the mention log.
+function setPrompt (text) {
+  const usage = currentUsage()
+  if (usage && typeof text === 'string') usage.prompt = text
+}
+
 function addFallback (note) {
   const usage = currentUsage()
   if (usage?.fallbacks && !usage.fallbacks.includes(note)) usage.fallbacks.push(note)
@@ -100,4 +107,4 @@ function logTokens () {
   tokens.clear()
 }
 
-module.exports = { addContext, trackUsage, currentUsage, addTokens, addModel, addFallback, tokenFooter, recordTokens, tokenCounts, logTokens }
+module.exports = { addContext, setPrompt, trackUsage, currentUsage, addTokens, addModel, addFallback, tokenFooter, recordTokens, tokenCounts, logTokens }

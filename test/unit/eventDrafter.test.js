@@ -1477,7 +1477,7 @@ describe('explicit cache and thinking', () => {
     }
   })
 
-  test('compactContentsForWire masks older long tool outputs while keeping the latest step intact, and compressToolResult extracts long outputs via extractModel preserving URLs for safeLinks', async () => {
+  test('compactContentsForWire masks older long tool outputs while keeping the latest step intact, and a long tool result reaches the main model as it is, with no call in between', async () => {
     const { compactContentsForWire } = require('../../src/bot/modules/eventDrafter')
     const { wrap } = require('../../src/bot/utils/untrusted')
     const { safeLinks } = require('../../src/bot/utils/linkSafety')
@@ -1501,61 +1501,23 @@ describe('explicit cache and thinking', () => {
     process.env.GEMINI_EXPLICIT_CACHE = 'false'
     const hugePage = wrap('fetch_url', `イベント詳細ページ\n${'無関係な広告テキスト。'.repeat(350)}\n申し込みページ: https://tickets.example.jp/entry/999\n開催日時: 2026-11-20 19:00`)
     const requests = []
-    let mainStep = 0
     global.fetch = async (url, init) => {
-      const body = JSON.parse(init.body)
-      requests.push({ url, body })
-      if (/gemini-3\.1-flash-lite/.test(url)) {
-        return {
-          ok: true,
-          json: async () => ({
-            candidates: [{ content: { role: 'model', parts: [{ text: '開催日時: 2026-11-20 19:00' }] } }]
-          })
-        }
-      }
-      mainStep++
-      if (mainStep === 1) {
-        return {
-          ok: true,
-          json: async () => ({
-            candidates: [{ content: { role: 'model', parts: [call('fetch_url', { url: 'https://example.jp/event' })] } }]
-          })
-        }
-      }
-      return {
-        ok: true,
-        json: async () => ({
-          candidates: [{ content: { role: 'model', parts: [call('submit_chat_reply', { text: '申し込みはこちら https://tickets.example.jp/entry/999' })] } }]
-        })
-      }
+      requests.push({ url, body: JSON.parse(init.body) })
+      const parts = requests.length === 1
+        ? [call('fetch_url', { url: 'https://example.jp/event' })]
+        : [call('submit_chat_reply', { text: '申し込みはこちら https://tickets.example.jp/entry/999' })]
+      return { ok: true, json: async () => ({ candidates: [{ content: { role: 'model', parts } }] }) }
     }
     const pageTools = {
       declarations: [{ name: 'fetch_url', description: 'URL取得', parameters: { type: 'OBJECT', properties: { url: { type: 'STRING' } } } }],
       call: async () => ({ result: hugePage })
     }
     const result = await draft({ request: 'https://example.jp/event の内容を教えて', channelName: 'general', guild, tools: pageTools, now: NOW })
-    const extractCalls = requests.filter(r => /gemini-3\.1-flash-lite/.test(r.url))
-    assert.equal(extractCalls.length, 1, 'extractModel called once on >=3000 char tool output')
-    assert.equal(extractCalls[0].body.serviceTier, 'flex')
-    const secondMainCall = requests.filter(r => /gemini-3\.8-flash/.test(r.url))[1]
-    const sentToolText = secondMainCall.body.contents[2].parts[0].functionResponse.response.result
-    assert.ok(sentToolText.length < 300, 'main model receives compact extracted summary instead of 3500+ chars')
-    assert.match(sentToolText, /長文のため関連箇所を抽出/)
-    const checked = safeLinks(result.text, result.conversation.contents, result.conversation.toolUrls)
-    assert.deepEqual(checked.removed, [], 'URL from raw page is preserved in toolUrls even if omitted from summary')
+    assert.equal(requests.length, 2, 'one call per step, nothing else')
+    assert.equal(requests[1].body.contents[2].parts[0].functionResponse.response.result, hugePage)
+    const checked = safeLinks(result.text, result.conversation.contents)
+    assert.deepEqual(checked.removed, [])
     assert.match(checked.text, /https:\/\/tickets\.example\.jp\/entry\/999/)
-
-    // Deterministic structured tools (search_youtube, search_steam, etc.) must NOT be compressed via extractModel,
-    // so exact view counts and dates are never dropped, while still recording URLs in toolUrls.
-    const { compressToolResult } = require('../../src/bot/modules/eventDrafter')
-    let extractAttempted = 0
-    global.fetch = async () => { extractAttempted++; throw new Error('must not call extractModel') }
-    const ytListing = wrap('search_youtube', `- 神回動画（公開 2026-10-28、再生 152,300回）https://www.youtube.com/watch?v=vid00000001\n${'説明 '.repeat(1200)}`)
-    const holder = []
-    const keptYt = await compressToolResult('search_youtube', { query: '神回' }, { result: ytListing }, holder)
-    assert.equal(extractAttempted, 0)
-    assert.equal(keptYt.result, ytListing)
-    assert.deepEqual(holder.toolUrls, ['https://www.youtube.com/watch?v=vid00000001'])
   })
 })
 

@@ -78,9 +78,7 @@ SOKUDAN_URL=http://${{sokudan.RAILWAY_PRIVATE_DOMAIN}}:${{sokudan.PORT}}
 | `SOKUDAN_R18_ROUTE_THRESHOLD` | `0.85` | 用途1: R18 の語がない創作・濡れ場依頼を、sokudan の判定だけで検閲なしモデルへ先に振り分ける閾値 |
 | `SOKUDAN_DEEP_THRESHOLD` | `SOKUDAN_BOOL_THRESHOLD` | 用途1: `deepModel` 直接振り分けの閾値だけ個別に変えたい場合 |
 | `SOKUDAN_STORY_THRESHOLD` | `SOKUDAN_BOOL_THRESHOLD` | 用途1: 小説・物語などの創作の依頼かどうか（検閲なしモデルへの書かせ方・考える深さ・サーバー情報を省くかの判定）の閾値だけ個別に変えたい場合 |
-| `SOKUDAN_INJECTION_THRESHOLD` | `SOKUDAN_BOOL_THRESHOLD` | 用途2a: プロンプトインジェクション警告の閾値 |
 | `SOKUDAN_REFUSAL_THRESHOLD` | `0.65` | 用途2b: 創作・R18 候補への返事に対する R18 ソフト拒否／朝チュン検知の閾値 |
-| `SOKUDAN_BLOCK_RISK_THRESHOLD` | `0.5` | Gemini に送る前に、サーバーの情報・チャンネルの最近の会話・返信先の会話のうち、Google にブロックされそうな部分を外す閾値 |
 | `SOKUDAN_POLISH_THRESHOLD` | `SOKUDAN_BOOL_THRESHOLD` | 用途3: `replyPolish` で書き直しを実行する `noul` 閾値 |
 | `SOKUDAN_POLISH_SCORE_THRESHOLD` | `1.0` | 用途3: `replyPolish` で書き直しを実行する硬さスコア閾値（`0`〜`2`） |
 
@@ -98,8 +96,6 @@ INFO: [SOKUDAN]: Connected to http://sokudan.railway.internal:8000 (model: /app/
 - **用途1（事前ルーティング）**:
   - `[SOKUDAN]: Deep reasoning/creative request detected (p=0.xx); routing directly to gemini-4-argon`
   - `[SOKUDAN]: R18 intent detected in request (p=0.xx); ... answers instead of ...`
-- **用途2（インジェクション検知）**:
-  - `[INJECTION]: Possible prompt injection (sokudan p=0.xx) in ...`
 - **用途3（`replyPolish` スキップ）**:
   - `[POLISH]: Skipped polishing a natural reply in ... (sokudan score=0.xx, p=0.xx)`
 

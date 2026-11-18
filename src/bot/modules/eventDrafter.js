@@ -11,7 +11,8 @@ const geminiLoad = require('../utils/geminiLoad')
 const aiCache = require('../utils/aiCache')
 const sokudan = require('../utils/sokudan')
 const prompts = require('../utils/prompts')
-const { currentUsage, recordTokens, addTokens, addModel, addFallback, addContext } = require('../utils/geminiUsage')
+const { currentUsage, recordTokens, addTokens, addModel, addFallback, addContext, setPrompt } = require('../utils/geminiUsage')
+const aiTranscript = require('../utils/aiTranscript')
 
 // A fixed model, not an alias such as gemini-flash-latest: an explicit cache (below) is made for one
 // model, and a change of model should be a choice, not a surprise.
@@ -481,7 +482,16 @@ async function callGemini (model, body, options) {
     const thinking = thinkingConfig(model, { setting: 'GEMINI_LIGHT_THINKING_LEVEL', fallback: 'low' })
     if (thinking.thinkingConfig) body = { ...body, generationConfig: { ...body.generationConfig, ...thinking } }
   }
-  const data = await geminiRequest(model, 'generateContent', body, options)
+  // Recorded for the mention log, sent and received (or the error): options.transcript names the
+  // system instructions and tools when they are in a cache rather than the body.
+  let data
+  try {
+    data = await geminiRequest(model, 'generateContent', body, options)
+  } catch (e) {
+    aiTranscript.recordGemini({ model, purpose: options?.purpose, body, ...options?.transcript, error: e })
+    throw e
+  }
+  aiTranscript.recordGemini({ model, purpose: options?.purpose, body, ...options?.transcript, response: data })
   const candidate = data.candidates?.[0]
   const content = candidate?.content
   const finish = candidate?.finishReason
@@ -1912,6 +1922,7 @@ async function callUncensored (contents, declarations, allowed = null, { timeout
   if (!res.ok) {
     if (res.status >= 500) markUnusable()
     const text = (await res.text()).slice(0, 1000)
+    aiTranscript.recordUncensored({ model, messages, tools: body.tools, error: `HTTP ${res.status} ${text}` })
     throw new GeminiError(`Uncensored request failed: HTTP ${res.status} ${text}`, `AI の呼び出しに失敗しました（HTTP ${res.status}）`, null, res.status)
   }
   let data
@@ -1919,8 +1930,10 @@ async function callUncensored (contents, declarations, allowed = null, { timeout
     data = await readUncensoredResponse(res)
   } catch (err) {
     markUnusable()
+    aiTranscript.recordUncensored({ model, messages, tools: body.tools, error: err })
     throw err
   }
+  aiTranscript.recordUncensored({ model, messages, tools: body.tools, response: data?.choices?.[0]?.message })
   let parts = parseUncensoredParts(data?.choices?.[0]?.message, declarations, allowed)
   if (!parts.length && useCompact) {
     let retryRes
@@ -2082,82 +2095,6 @@ function compactContentsForWire (contents) {
   return changed ? next : contents
 }
 
-const TOOL_COMPRESS_MIN_CHARS = 3000
-const DETERMINISTIC_STRUCTURED_TOOLS = new Set([
-  'search_youtube',
-  'search_twitch',
-  'search_steam',
-  'list_scheduled_events',
-  'about_member'
-])
-
-// Compresses large read-tool outputs (>= 3,000 chars) using extractModel() on Flex before they are
-// appended to the main conversation, keeping exact URLs in contents.toolUrls so safeLinks never
-// strips a legitimate link from the compressed page. Deterministic structured listings (YouTube,
-// Twitch, Steam, scheduled events, member profiles) are already compact and kept verbatim so counts
-// and dates are never dropped or rounded by an intermediate summary.
-async function compressToolResult (toolName, args, response, contents) {
-  if (
-    process.env.TOOL_RESULT_COMPRESS === 'false' ||
-    !isConfigured() ||
-    toolName === 'ask_user' ||
-    typeof response?.result !== 'string' ||
-    response.result.length < TOOL_COMPRESS_MIN_CHARS
-  ) {
-    return response
-  }
-  if (contents) {
-    if (!Array.isArray(contents.toolUrls)) contents.toolUrls = []
-    for (const u of urlsIn(response.result)) {
-      if (!contents.toolUrls.includes(u)) contents.toolUrls.push(u)
-    }
-  }
-  const { source, inner } = unwrapUntrusted(response.result)
-  if (
-    inner.length < TOOL_COMPRESS_MIN_CHARS ||
-    DETERMINISTIC_STRUCTURED_TOOLS.has(toolName) ||
-    (toolName === 'fetch_url' && inner.startsWith('動画情報（'))
-  ) {
-    return response
-  }
-  const reqContext = String(contents?.requestText || '').slice(0, 500)
-  const argSummary = args && Object.keys(args).length ? JSON.stringify(args).slice(0, 300) : 'なし'
-  const extractPrompt = prompts.render('chat/tool-compress', {
-    request: wrap('request', reqContext || '（依頼文なし）'),
-    tool: toolName,
-    args: argSummary,
-    result: wrap(toolName, inner)
-  })
-  try {
-    const model = extractModel()
-    const extracted = await callGemini(
-      model,
-      {
-        contents: [{ role: 'user', parts: [{ text: extractPrompt }] }],
-        generationConfig: {
-          temperature: 0,
-          ...thinkingConfig(model, { setting: 'GEMINI_EXTRACT_THINKING_LEVEL', fallback: 'minimal' })
-        }
-      },
-      { purpose: 'toolCompress', timeoutMs: 25 * 1000, flex: true }
-    )
-    const summary = (extracted?.parts || [])
-      .filter(p => typeof p.text === 'string' && !p.thought)
-      .map(p => p.text.trim())
-      .filter(Boolean)
-      .join('\n')
-      .trim()
-    if (!summary || summary.length + 80 >= inner.length) return response
-    const compressedInner = `${summary}\n（長文のため関連箇所を抽出・原文 ${inner.length} 文字）`
-    return {
-      ...response,
-      result: wrap(source || toolName, compressedInner)
-    }
-  } catch (_) {
-    return response
-  }
-}
-
 async function generate (contents, declarations, allowed = null, { deep = false, uncensored = false } = {}) {
   if (uncensored) return callUncensored(contents, declarations, allowed)
   const model = deep ? deepModel() : replyModel(contents)
@@ -2186,6 +2123,7 @@ async function generate (contents, declarations, allowed = null, { deep = false,
     : { purpose: 'mention', timeoutMs: replyTimeoutMs(), flex: contents.tier === 'flex', stream: true, strictSafety }
   // The last step, limited to submitting (allowed), has its own toolConfig: sent in full, since a
   // request that uses a cache cannot set one.
+  callOptions.transcript = { system: prefix.systemInstruction.parts[0].text, tools: prefix.tools }
   const cache = allowed ? null : await cachedPrefix(model, prefix)
   if (cache) {
     try {
@@ -2420,9 +2358,7 @@ async function runAgent (contents, tools, submits = SUBMIT_DECLARATIONS) {
     // Sequential, not parallel: two ask_user calls would otherwise fight over the same message.
     const responses = []
     for (const c of calls) {
-      const rawResponse = await tools.call(c.name, c.args)
-      const compressedResponse = await compressToolResult(c.name, c.args, rawResponse, contents)
-      responses.push({ functionResponse: { name: c.name, response: compressedResponse } })
+      responses.push({ functionResponse: { name: c.name, response: await tools.call(c.name, c.args) } })
     }
     contents.push({ role: 'user', parts: responses })
   }
@@ -2478,9 +2414,6 @@ async function check (conversation, { name, args, calls = [] }) {
   conversation.lastGeminiModel = conversation.contents?.uncensored
     ? null
     : (conversation.contents?.deep ? deepModel() : replyModel(conversation.contents))
-  if (Array.isArray(conversation.contents?.toolUrls) && conversation.contents.toolUrls.length) {
-    conversation.toolUrls = conversation.contents.toolUrls
-  }
   if (name === SUBMIT_CHAT_DECLARATION.name) {
     const cleaned = stripDebugFooterLines(String(args.text || '')).trim().slice(0, MAX_CHAT_REPLY) || '……'
     return { kind: 'chat', text: cleaned, conversation }
@@ -2510,43 +2443,6 @@ async function check (conversation, { name, args, calls = [] }) {
 const eventTools = () => require('./eventTools')
 
 // model, thinking, tier: the server's own model, thinking level and tier (%replymodel); null for the default.
-// What was gathered around a request (other people's words), without the parts sokudan reads as
-// likely to make Google refuse the whole request (sokudan.blockRisk): the server's information by
-// its "### " sections, the channel's recent messages one by one, and the replied-to conversation
-// as a whole. As it was when sokudan is not set up or gives no answer; and a block that comes all
-// the same is asked again with the request alone (withRequestAlone in runAgent).
-async function withoutBlockRisks ({ server, recent = [], referenced, where = '' }) {
-  if (!sokudan.isUsable()) return { server, recent, referenced }
-  const threshold = sokudan.blockRiskThreshold()
-  const risky = async text => {
-    const p = await sokudan.blockRisk(text).catch(() => null)
-    return Number.isFinite(p) && p >= threshold
-  }
-  const sections = typeof server === 'string' ? server.split(/\n(?=### )/) : []
-  // Each kind is read whole first (a few calls), and only a kind that reads as risky is read part
-  // by part to find which: most requests carry nothing of the sort.
-  const partsRisky = async parts => parts.length && await risky(parts.join('\n'))
-    ? Promise.all(parts.map(risky))
-    : parts.map(() => false)
-  const [sectionRisks, recentRisks, referencedRisk] = await Promise.all([
-    partsRisky(sections),
-    partsRisky(recent),
-    referenced?.text ? risky(referenced.text) : false
-  ])
-  const dropped = []
-  if (sectionRisks.some(Boolean)) dropped.push(`server ${sectionRisks.filter(Boolean).length}/${sections.length}`)
-  if (recentRisks.some(Boolean)) dropped.push(`recent ${recentRisks.filter(Boolean).length}/${recent.length}`)
-  if (referencedRisk) dropped.push('conversation')
-  if (dropped.length) {
-    global.logger?.info(`[SOKUDAN]: Left out what Google may refuse in ${where}: ${dropped.join(', ')}`)
-    addContext(`left out by sokudan: ${dropped.join(', ')}`)
-  }
-  return {
-    server: typeof server === 'string' ? sections.filter((_, i) => !sectionRisks[i]).join('\n') || null : server,
-    recent: recent.filter((_, i) => !recentRisks[i]),
-    referenced: referencedRisk ? null : referenced
-  }
-}
 
 async function draft ({ request, referenced, recent = [], channelName, channelID, server, forum = null, images = [], pictures = [], edit = null, replyLength = null, streamerPersona = true, safetyFilter = false, uncensoredR18 = true, rules = null, model = null, thinking = null, tier = null, decision, guild, member, tools, now = new Date() }) {
   const parsed = parseModelDirective(request)
@@ -2578,9 +2474,8 @@ async function draft ({ request, referenced, recent = [], channelName, channelID
       ]
     : []
   const shown = [...emojiShown, ...attachedShown]
-  const sent = await withoutBlockRisks({ server, recent, referenced, where: guild?.id })
   const conversation = {
-    contents: [{ role: 'user', parts: [{ text: buildPrompt({ request, referenced: sent.referenced, recent: sent.recent, channelName, channelID, channelInfo: channelID ? eventTools().requestChannelInfo(channelID, guild) : null, server: sent.server, forum, images, edit, channels: member ? eventTools().namedChannels([request, referenced?.text], guild, member) : [], people: member ? eventTools().namedMembers([request, referenced?.text], guild, member) : [], rules, now }) }, ...shown] }],
+    contents: [{ role: 'user', parts: [{ text: buildPrompt({ request, referenced, recent, channelName, channelID, channelInfo: channelID ? eventTools().requestChannelInfo(channelID, guild) : null, server, forum, images, edit, channels: member ? eventTools().namedChannels([request, referenced?.text], guild, member) : [], people: member ? eventTools().namedMembers([request, referenced?.text], guild, member) : [], rules, now }) }, ...shown] }],
     guild,
     member,
     tools,
@@ -2593,6 +2488,7 @@ async function draft ({ request, referenced, recent = [], channelName, channelID
   }
   // What went with the request, for the mention log: why Google refused can be looked for there.
   const firstText = conversation.contents[0].parts[0].text
+  setPrompt(firstText)
   const sources = [...firstText.matchAll(/<untrusted source="([^"]+)">/g)].map(m => m[1]).filter(name => name !== 'request')
   addContext(`sent: ${[...sources, ...(shown.length ? [`pictures ${emojiPics.length + attachedPics.length}`] : [])].join(', ') || 'request only'}`)
   // Kept with the conversation, so a correction (revise) uses them too.
@@ -2706,4 +2602,4 @@ async function revise (conversation, correction) {
   return check(conversation, await runAgent(conversation.contents, conversation.tools, conversation.submits))
 }
 
-module.exports = { THINKING_LEVELS, SERVICE_TIERS, defaultTaskConfig, resolveTaskConfig, replyTimeoutMs, flexUsable, SAFETY_SETTINGS, STRICT_SAFETY_SETTINGS, withSafetySettings, THINK_DEEPER_DECLARATION, HAND_OVER_R18_DECLARATION, isR18Text, isExplicitR18Text, r18Route, isRefusalReply, isRefusalReplyAsync, refusalKind, STORY_REQUEST_PATTERN, adaptiveThinkingLevel, compactContentsForWire, compressToolResult, deepModel, DEFAULT_UNCENSORED_MODEL, normalizeLocalModelId, uncensoredModel, uncensoredR18Model, parseModelDirective, extractReferencedDirective, resolveReferencedDirective, rememberThreadModel, isUncensoredDirective, applyModelDirective, isLocalUncensoredUrl, uncensoredEndpoint, isUncensoredConfigured, isUncensoredUsable, checkUncensoredConnection, startUncensoredCheck, uncensoredState, ensureUncensoredModelLoaded, cleanUncensoredContent, compactUncensoredText, extractUncensoredAnswer, UNCENSORED_SAMPLING_PARAMS, readUncensoredResponse, callUncensored, REPLY_LENGTHS, DEFAULT_REPLY_LENGTH, PERSONAS, thinkingConfig, cachedPrefix, caches, purgedFor, promptVersion, lightModel, extractModel, DEFAULT_EXTRACT_MODEL, draft, revise, MAX_STEPS, isConfigured, toScheduledEvent, callGemini, geminiRequest, geminiSend, geminiStream, retryTimer, DEFAULT_GEMINI_MODEL, ENTITY_TYPES, GeminiError }
+module.exports = { THINKING_LEVELS, SERVICE_TIERS, defaultTaskConfig, resolveTaskConfig, replyTimeoutMs, flexUsable, SAFETY_SETTINGS, STRICT_SAFETY_SETTINGS, withSafetySettings, THINK_DEEPER_DECLARATION, HAND_OVER_R18_DECLARATION, isR18Text, isExplicitR18Text, r18Route, isRefusalReply, isRefusalReplyAsync, refusalKind, STORY_REQUEST_PATTERN, adaptiveThinkingLevel, compactContentsForWire, deepModel, DEFAULT_UNCENSORED_MODEL, normalizeLocalModelId, uncensoredModel, uncensoredR18Model, parseModelDirective, extractReferencedDirective, resolveReferencedDirective, rememberThreadModel, isUncensoredDirective, applyModelDirective, isLocalUncensoredUrl, uncensoredEndpoint, isUncensoredConfigured, isUncensoredUsable, checkUncensoredConnection, startUncensoredCheck, uncensoredState, ensureUncensoredModelLoaded, cleanUncensoredContent, compactUncensoredText, extractUncensoredAnswer, UNCENSORED_SAMPLING_PARAMS, readUncensoredResponse, callUncensored, REPLY_LENGTHS, DEFAULT_REPLY_LENGTH, PERSONAS, thinkingConfig, cachedPrefix, caches, purgedFor, promptVersion, lightModel, extractModel, DEFAULT_EXTRACT_MODEL, draft, revise, MAX_STEPS, isConfigured, toScheduledEvent, callGemini, geminiRequest, geminiSend, geminiStream, retryTimer, DEFAULT_GEMINI_MODEL, ENTITY_TYPES, GeminiError }
