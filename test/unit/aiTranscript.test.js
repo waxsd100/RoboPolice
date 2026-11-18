@@ -29,11 +29,11 @@ test('records each call, the system instructions once, and only what is new in t
   assert.equal(aiTranscript.forLog({}), null, 'nothing outside a mention')
 })
 
-test('turns the transcript into rows for the tables: one call row each, one message row for each part', () => {
+test('turns the transcript into rows for the tables: one call row each, one message row for each part with something in it', () => {
   const rows = aiTranscript.toRows({
     systems: { h: 'SYS' },
     calls: [
-      { at: 't0', model: 'm', purpose: 'mention', system: 'h', tools: ['a'], fromTurn: 0, turns: [{ role: 'user', parts: [{ text: '依頼' }, { picture: { mimeType: 'image/png', bytes: 3 } }] }], response: { finishReason: 'STOP', parts: [{ thought: true, text: '考え' }, { functionCall: { name: 'a', args: { q: 1 } } }] } },
+      { at: 't0', model: 'm', purpose: 'mention', system: 'h', tools: ['a'], fromTurn: 0, turns: [{ role: 'user', parts: [{ text: '依頼' }, { picture: { mimeType: 'image/png', bytes: 3 } }] }], response: { finishReason: 'STOP', parts: [{ thought: true, text: '考え' }, { functionCall: { name: 'a', args: { q: 1 } } }, {}, { text: '' }] } },
       { at: 't1', model: 'm', purpose: 'mention', system: 'h', fromTurn: 1, turns: [{ role: 'user', parts: [{ functionResponse: { name: 'a', response: { result: 'r' } } }] }], response: { finishReason: 'SAFETY', safetyRatings: [{ category: 'X', blocked: true }], parts: [] } },
       { at: 't2', model: 'u', purpose: 'uncensored', system: 'h2', fromTurn: 0, turns: [{ role: 'user', content: [{ text: 'やあ' }, { picture: true }] }, { role: 'assistant', content: null, tool_calls: [{ function: { name: 'b', arguments: '{}' } }] }], response: { message: { role: 'assistant', content: 'こんにちは' } }, error: null }
     ]

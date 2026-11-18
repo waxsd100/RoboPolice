@@ -129,11 +129,12 @@ function forLog (usage) {
 // message (the uncensored model).
 function messageRows (item) {
   if (Array.isArray(item?.parts)) {
-    return item.parts.map(part => {
-      if (part.functionCall) return { role: item.role, kind: 'function_call', name: part.functionCall.name, content: JSON.stringify(part.functionCall.args ?? {}) }
-      if (part.functionResponse) return { role: item.role, kind: 'function_response', name: part.functionResponse.name, content: JSON.stringify(part.functionResponse.response ?? null) }
-      if (part.picture) return { role: item.role, kind: 'picture', name: null, content: `${part.picture.mimeType || '?'} ${part.picture.bytes ?? '?'} bytes` }
-      return { role: item.role, kind: part.thought ? 'thought' : 'text', name: null, content: part.text ?? null }
+    // A part with no text (one that only carried a thought signature, which is not kept) is left out.
+    return item.parts.flatMap(part => {
+      if (part.functionCall) return [{ role: item.role, kind: 'function_call', name: part.functionCall.name, content: JSON.stringify(part.functionCall.args ?? {}) }]
+      if (part.functionResponse) return [{ role: item.role, kind: 'function_response', name: part.functionResponse.name, content: JSON.stringify(part.functionResponse.response ?? null) }]
+      if (part.picture) return [{ role: item.role, kind: 'picture', name: null, content: `${part.picture.mimeType || '?'} ${part.picture.bytes ?? '?'} bytes` }]
+      return part.text ? [{ role: item.role, kind: part.thought ? 'thought' : 'text', name: null, content: part.text }] : []
     })
   }
   const rows = []

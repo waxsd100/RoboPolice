@@ -293,6 +293,8 @@ async function streamed (res) {
       else parts.push({ ...part })
     }
     if (candidate?.finishReason) merged.candidates[0].finishReason = candidate.finishReason
+    // Why a candidate was blocked comes with its last chunk, and is what the mention log shows.
+    if (candidate?.safetyRatings?.length) merged.candidates[0].safetyRatings = candidate.safetyRatings
     if (chunk.usageMetadata) merged.usageMetadata = chunk.usageMetadata
     if (chunk.promptFeedback) merged.promptFeedback = chunk.promptFeedback
   }
@@ -464,12 +466,15 @@ const SAFETY_SETTINGS = [
   { category: 'HARM_CATEGORY_DANGEROUS_CONTENT', threshold: 'OFF' },
   { category: 'HARM_CATEGORY_CIVIC_INTEGRITY', threshold: 'BLOCK_MEDIUM_AND_ABOVE' }
 ]
+// A server with the safety filter on (/safetyfilter): every category blocks from a medium
+// probability. Not from a low one: at low, a single harmless word such as 「児童」 is blocked.
+// How far adult requests go there is said in the system instructions (chat/mature/filtered.md).
 const STRICT_SAFETY_SETTINGS = [
-  { category: 'HARM_CATEGORY_HARASSMENT', threshold: 'BLOCK_LOW_AND_ABOVE' },
-  { category: 'HARM_CATEGORY_HATE_SPEECH', threshold: 'BLOCK_LOW_AND_ABOVE' },
-  { category: 'HARM_CATEGORY_SEXUALLY_EXPLICIT', threshold: 'BLOCK_LOW_AND_ABOVE' },
-  { category: 'HARM_CATEGORY_DANGEROUS_CONTENT', threshold: 'BLOCK_LOW_AND_ABOVE' },
-  { category: 'HARM_CATEGORY_CIVIC_INTEGRITY', threshold: 'BLOCK_LOW_AND_ABOVE' }
+  { category: 'HARM_CATEGORY_HARASSMENT', threshold: 'BLOCK_MEDIUM_AND_ABOVE' },
+  { category: 'HARM_CATEGORY_HATE_SPEECH', threshold: 'BLOCK_MEDIUM_AND_ABOVE' },
+  { category: 'HARM_CATEGORY_SEXUALLY_EXPLICIT', threshold: 'BLOCK_MEDIUM_AND_ABOVE' },
+  { category: 'HARM_CATEGORY_DANGEROUS_CONTENT', threshold: 'BLOCK_MEDIUM_AND_ABOVE' },
+  { category: 'HARM_CATEGORY_CIVIC_INTEGRITY', threshold: 'BLOCK_MEDIUM_AND_ABOVE' }
 ]
 function withSafetySettings (model, body, { strict = false } = {}) {
   if (body.safetySettings || /image/i.test(model)) return body

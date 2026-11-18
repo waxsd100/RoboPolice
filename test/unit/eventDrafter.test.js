@@ -157,6 +157,19 @@ describe('draft', () => {
     ])
   })
 
+  test('a streamed reply that is blocked keeps why: the safety ratings of its last chunk', async () => {
+    const { callGemini } = require('../../src/bot/modules/eventDrafter')
+    const ratings = [{ category: 'HARM_CATEGORY_SEXUALLY_EXPLICIT', probability: 'MEDIUM', blocked: true }]
+    const sse = [
+      { candidates: [{ content: { role: 'model', parts: [{ text: '考え中…', thought: true }] } }] },
+      { candidates: [{ finishReason: 'SAFETY', safetyRatings: ratings }] }
+    ].map(e => `data: ${JSON.stringify(e)}\r\n\r\n`).join('')
+    global.fetch = async () => ({ ok: true, body: [new TextEncoder().encode(sse)] })
+    const e = await callGemini('gemini-3.8-flash', { contents: [] }, { stream: true }).catch(err => err)
+    assert.equal(e.blocked, 'SAFETY')
+    assert.match(e.message, /"safetyRatings":\[\{"category":"HARM_CATEGORY_SEXUALLY_EXPLICIT","probability":"MEDIUM","blocked":true\}\]/)
+  })
+
   test('GEMINI_STREAM=false asks without streaming', async () => {
     process.env.GEMINI_STREAM = 'false'
     try {
@@ -203,6 +216,7 @@ describe('draft', () => {
     assert.equal(requests[1].body.safetySettings, undefined)
     assert.deepEqual(requests[2].body.safetySettings, [])
     assert.deepEqual(requests[3].body.safetySettings, STRICT_SAFETY_SETTINGS)
+    assert.ok(STRICT_SAFETY_SETTINGS.every(s => s.threshold === 'BLOCK_MEDIUM_AND_ABOVE'), 'not from a low probability, where a single harmless word is blocked')
     assert.equal(summaryRequest('dQw4w9WgXcQ').body.safetySettings, undefined, 'video summaries keep the model\'s own, also in a batch')
     const more = installGemini([[{ text: 'd' }]])
     await callGemini('gemini-3.8-flash', { contents: [] }, { defaultSafety: true })

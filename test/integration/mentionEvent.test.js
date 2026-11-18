@@ -1188,7 +1188,7 @@ describe('mention → event / forum post (integration)', () => {
     assert.ok(requests.every(r => /google-ai-studio/.test(r.url)))
     assert.match(requests[0].body.contents[0].parts[0].text, /<untrusted source="server">/)
     assert.doesNotMatch(requests[1].body.contents[0].parts[0].text, /<untrusted source="server">/)
-    assert.equal(requests[0].body.safetySettings[0].threshold, 'BLOCK_LOW_AND_ABOVE')
+    assert.equal(requests[0].body.safetySettings[0].threshold, 'BLOCK_MEDIUM_AND_ABOVE')
     assert.match(replies[0].state.content, /AI（Google）の制限で答えられなかった/)
 
     // Owner server (or server with r18 enabled): hands over to the uncensored model.
