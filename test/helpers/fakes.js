@@ -876,12 +876,14 @@ function installMentionLogStore (logs = []) {
     for (const [key, column] of Object.entries(COLUMNS)) {
       if (fields[key] !== undefined) row[column] = fields[key]
     }
+    // As v_mention_logs shows them: the fallbacks joined, and the further messages as a list.
+    if (Array.isArray(fields.fallbacks)) row.fallbacks = fields.fallbacks.join('; ')
     if (fields.status) row.statuses.push(fields.status)
-    if (fields.status === 'done') row.finished_at = new Date()
+    if (['done', 'failed'].includes(fields.status)) row.finished_at = new Date()
   }
   store.saveMentionLog = async ({ kind, response, ...entry }) => {
     const id = await store.startMentionLog(entry)
-    await store.updateMentionLog(id, { ...entry, status: 'done', kind, response: response ?? null })
+    await store.updateMentionLog(id, { ...entry, status: kind === 'error' ? 'failed' : 'done', kind, response: response ?? null })
     return id
   }
   store.getMentionLogs = async (guildID, { limit = 50, userID = null } = {}) => logs

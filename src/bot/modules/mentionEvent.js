@@ -526,15 +526,15 @@ function usageFields (usage) {
     outputTokens: usage.tokens?.output || 0,
     thinkingTokens: usage.tokens?.thoughts || 0,
     geminiCalls: usage.requests || 0,
-    fallbacks: usage.fallbacks?.length ? usage.fallbacks.join('; ') : null,
+    fallbacks: usage.fallbacks?.length ? [...usage.fallbacks] : undefined,
     context: usage.context?.length ? usage.context.join('; ') : null,
     aiTranscript: aiTranscript.forLog(usage)
   }
 }
 
 // A mention's log (mention_logs), made the moment the mention arrives and brought up to date as it
-// is handled: its status (received, generating, waiting, done), each AI call as it is made, and in
-// the end what came of it. The writes go one after another, in the order they were asked for, and
+// is handled: its status (received, generating, waiting, then done, or failed for an error), each
+// AI call as it is made, and in the end what came of it. The writes go one after another, in the order they were asked for, and
 // nothing waits for them but `done`; without the database there is no log, and the mention is
 // handled all the same.
 function mentionLog (message, guild, request, repliedTo) {
@@ -561,19 +561,19 @@ function mentionLog (message, guild, request, repliedTo) {
   return {
     set: write,
     status (next) {
-      if (current === 'done' || next === current) return
+      if (current === 'ended' || next === current) return
       current = next
       write({ status: next })
     },
-    progress: usage => { if (current !== 'done') write(usageFields(usage)) },
+    progress: usage => { if (current !== 'ended') write(usageFields(usage)) },
     finish (outcome, usage = null) {
-      current = 'done'
+      current = 'ended'
       write({
         ...(usage ? usageFields(usage) : {}),
-        status: 'done',
+        status: outcome.kind === 'error' ? 'failed' : 'done',
         kind: outcome.kind,
         response: outcome.response ?? null,
-        blockReason: outcome.blockReason || null,
+        ...(outcome.blockReason ? { blockReason: outcome.blockReason } : {}),
         ...(outcome.followUpMessageIDs ? { followUpMessageIDs: outcome.followUpMessageIDs } : {})
       })
       return chain
@@ -774,7 +774,7 @@ async function handle (message) {
                 prevId = followUp.id
               }
             }
-            // A reply to any of them continues this mention's conversation (mention_logs.follow_up_message_ids).
+            // A reply to any of them continues this mention's conversation (mention_log_follow_ups).
             outcome.followUpMessageIDs = sentIds.slice(2)
             rememberThreadModel(sentIds, result.conversation?.contents)
             return

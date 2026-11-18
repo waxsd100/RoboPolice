@@ -815,9 +815,16 @@ describe('stores', { skip: !database.available && 'needs PGHOST' }, () => {
       assert.deepEqual((await store.getAiCalls(live)).map(c => [c.seq, c.messages.length]), [[0, 1], [1, 1]], 'each call saved once, though the transcript was given three times')
       // One left unfinished with nothing recorded for 30 minutes reads as interrupted.
       const stuck = await store.startMentionLog({ guildID: 'g1', channelID: 'c1', messageID: 's2', userID: 'u5' })
-      await pool.query("UPDATE mention_logs SET status = 'generating', updated_at = now() - INTERVAL '31 minutes' WHERE id = $1", [stuck])
+      await pool.query("UPDATE mention_logs SET status = 'generating', created_at = now() - INTERVAL '40 minutes' WHERE id = $1", [stuck])
+      await pool.query("UPDATE mention_log_events SET at = now() - INTERVAL '40 minutes' WHERE mention_log_id = $1", [stuck])
       assert.equal((await pool.query('SELECT status FROM v_mention_logs WHERE id = $1', [stuck])).rows[0].status, 'interrupted')
-      assert.equal((await pool.query('SELECT status FROM v_mention_threads WHERE mention_log_id = $1', [stuck])).rows[0].status, 'interrupted')
+      // Its history, and one that ended in an error.
+      assert.deepEqual((await store.getEvents(live)).map(e => [e.event, e.detail]), [['status', 'received'], ['status', 'generating'], ['status', 'waiting'], ['status', 'done']])
+      const failed = await store.saveMentionLog({ guildID: 'g1', channelID: 'c1', messageID: 's4', userID: 'u5', kind: 'error', request: 'x', response: '⚠️', fallbacks: 'a → b; b → c', blockReason: 'SAFETY' })
+      const [f] = (await pool.query('SELECT status, kind, block_reason, fallbacks, follow_up_message_ids, parent_id FROM v_mention_logs WHERE id = $1', [failed])).rows
+      assert.deepEqual(f, { status: 'failed', kind: 'error', block_reason: 'SAFETY', fallbacks: 'a → b; b → c', follow_up_message_ids: null, parent_id: null })
+      assert.deepEqual((await store.getEvents(failed)).map(e => e.event), ['status', 'status', 'fallback', 'fallback', 'refused'])
+      for (const id of ['s4']) await purge.deleteMessage(id)
       // Deleting the second part of a split answer deletes its log, as deleting the first does.
       const split = await store.saveMentionLog({ guildID: 'g1', channelID: 'c1', messageID: 's3', replyMessageID: 'sr3', followUpMessageIDs: ['sr3b'], userID: 'u5', kind: 'chat', request: 'x', response: 'y' })
       await purge.deleteMessage('sr3b')

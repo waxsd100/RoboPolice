@@ -2154,6 +2154,18 @@ describe('mention → event / forum post (integration)', () => {
       assert.equal(logs.length, 1)
     })
 
+    test('a mention that ends in an error is logged as failed', async (t) => {
+      t.mock.method(global.logger, 'error', () => {})
+      const { installMentionLogStore } = require('../helpers/fakes')
+      const logs = installMentionLogStore()
+      const { channel } = createChannel()
+      global.fetch = async () => ({ ok: false, status: 500, text: async () => 'internal' })
+      await mentionEvent.handle(mention(channel, '<@BOT> 調子はどう？'))
+      assert.deepEqual([logs[0].status, logs[0].kind], ['failed', 'error'])
+      assert.deepEqual(logs[0].statuses, ['received', 'generating', 'failed'])
+      assert.ok(logs[0].finished_at)
+    })
+
     test('a mention turned down before the AI is asked is logged too', async () => {
       const { installMentionLogStore } = require('../helpers/fakes')
       const logs = installMentionLogStore()

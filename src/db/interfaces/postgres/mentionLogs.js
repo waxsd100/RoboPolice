@@ -4,7 +4,11 @@ const { toRows } = require('../../../bot/utils/aiTranscript')
 
 // A mention's log is made when it arrives (startMentionLog, status received) and brought up to
 // date as it is handled (updateMentionLog): its status, what was sent to the AI and each AI call as
-// it is made, and in the end its result (status done, kind, response).
+// it is made, and in the end its result (status done or failed, kind, response). What only some
+// mentions have is kept in rows of its own (062_mention_logs_status.sql): each status, fallback and
+// refusal in mention_log_events, the further messages of a long answer in mention_log_follow_ups.
+const STATUSES = ['received', 'generating', 'waiting', 'done', 'failed']
+
 async function startMentionLog ({ guildID, channelID, messageID, userID, userName = null, request = '', repliedToMessageID = null }) {
   return inTransaction(async client => {
     const res = await client.query(
@@ -13,6 +17,7 @@ async function startMentionLog ({ guildID, channelID, messageID, userID, userNam
       [guildID, channelID, messageID, userID, userName, request ?? '']
     )
     const id = res.rows[0].id
+    await addEvent(client, id, 'status', 'received')
     await saveThread(client, id, guildID, repliedToMessageID)
     return id
   })
@@ -27,37 +32,59 @@ const COLUMNS = {
   prompt: 'prompt',
   response: 'response',
   replyMessageID: 'reply_message_id',
-  followUpMessageIDs: 'follow_up_message_ids',
   model: 'model',
   promptTokens: 'prompt_tokens',
   cachedTokens: 'cached_tokens',
   outputTokens: 'output_tokens',
   thinkingTokens: 'thinking_tokens',
   geminiCalls: 'gemini_calls',
-  blockReason: 'block_reason',
-  fallbacks: 'fallbacks',
   context: 'context'
 }
 
+// fields: the columns above, and
+//   fallbacks: every fallback so far, in order (a list, or one text joined with "; "): those not
+//     yet recorded are added
+//   blockReason: why Google refused, recorded once
+//   followUpMessageIDs: the further messages of the answer, in order
+//   aiTranscript: the AI calls so far (aiTranscript.forLog): those not yet saved are added
 async function updateMentionLog (id, fields = {}) {
+  if (fields.status !== undefined && !STATUSES.includes(fields.status)) throw new Error(`Unknown mention status: ${fields.status}`)
   return inTransaction(async client => {
-    const sets = ['updated_at = now()']
+    const sets = []
     const values = [id]
     for (const [key, column] of Object.entries(COLUMNS)) {
       if (fields[key] === undefined) continue
-      values.push(key === 'followUpMessageIDs' && !fields[key]?.length ? null : fields[key])
+      values.push(fields[key])
       sets.push(`${column} = $${values.length}`)
     }
-    if (fields.status === 'done') sets.push('finished_at = now()')
-    await client.query(`UPDATE mention_logs SET ${sets.join(', ')} WHERE id = $1`, values)
+    if (sets.length) await client.query(`UPDATE mention_logs SET ${sets.join(', ')} WHERE id = $1`, values)
+    if (fields.status !== undefined) await addEvent(client, id, 'status', fields.status)
+    const fallbacks = typeof fields.fallbacks === 'string' ? fields.fallbacks.split('; ') : fields.fallbacks
+    if (fallbacks?.length) {
+      const known = Number((await client.query("SELECT count(*) AS n FROM mention_log_events WHERE mention_log_id = $1 AND event = 'fallback'", [id])).rows[0].n)
+      for (const detail of fallbacks.slice(known).filter(Boolean)) await addEvent(client, id, 'fallback', detail)
+    }
+    if (fields.blockReason) {
+      const last = (await client.query("SELECT detail FROM mention_log_events WHERE mention_log_id = $1 AND event = 'refused' ORDER BY id DESC LIMIT 1", [id])).rows[0]?.detail
+      if (last !== fields.blockReason) await addEvent(client, id, 'refused', fields.blockReason)
+    }
+    for (const [i, messageID] of (fields.followUpMessageIDs || []).entries()) {
+      await client.query(
+        'INSERT INTO mention_log_follow_ups (message_id, mention_log_id, seq) VALUES ($1, $2, $3) ON CONFLICT DO NOTHING',
+        [messageID, id, i + 1]
+      )
+    }
     if (fields.aiTranscript) await saveTranscript(client, id, toRows(fields.aiTranscript))
   })
 }
 
+const addEvent = (client, id, event, detail) =>
+  client.query('INSERT INTO mention_log_events (mention_log_id, event, detail) VALUES ($1, $2, $3)', [id, event, String(detail)])
+
 // A mention logged all at once, as it ended (for a mention not followed along the way).
 async function saveMentionLog ({ guildID, channelID, messageID, userID, userName = null, request, repliedToMessageID = null, kind, response, ...rest }) {
   const id = await startMentionLog({ guildID, channelID, messageID, userID, userName, request, repliedToMessageID })
-  await updateMentionLog(id, { ...rest, status: 'done', kind, response: response ?? null })
+  await updateMentionLog(id, { ...rest, status: kind === 'error' ? 'failed' : 'done', kind, response: response ?? null })
   return id
 }
 
@@ -76,17 +103,21 @@ async function inTransaction (work) {
   }
 }
 
-// Where a mention stands in its conversation (060_mention_log_tree.sql): its parent is the mention
-// whose answer (any of its messages, when it was split) or whose own message it replied to, and the
-// closure gets the mention itself and every ancestor of the parent.
+// Where a mention stands in its conversation (mention_log_tree): its parent is the mention whose
+// answer (any of its messages, when it was split) or whose own message it replied to, and the
+// closure gets the mention itself and every ancestor of the parent (the parent at depth 1).
 async function saveThread (client, id, guildID, repliedToMessageID) {
   const parent = repliedToMessageID
     ? (await client.query(
-        'SELECT id FROM mention_logs WHERE guild_id = $1 AND id <> $3 AND (reply_message_id = $2 OR message_id = $2 OR $2 = ANY(follow_up_message_ids)) ORDER BY id DESC LIMIT 1',
+        `SELECT l.id FROM mention_logs l
+         WHERE l.guild_id = $1 AND l.id <> $3 AND (
+           l.reply_message_id = $2 OR l.message_id = $2
+           OR EXISTS (SELECT 1 FROM mention_log_follow_ups f WHERE f.mention_log_id = l.id AND f.message_id = $2)
+         )
+         ORDER BY l.id DESC LIMIT 1`,
         [guildID, repliedToMessageID, id]
       )).rows[0]?.id ?? null
     : null
-  if (parent !== null) await client.query('UPDATE mention_logs SET parent_id = $2 WHERE id = $1', [id, parent])
   await client.query(
     `INSERT INTO mention_log_tree (ancestor_id, descendant_id, depth)
      SELECT $1::bigint, $1::bigint, 0
@@ -160,16 +191,21 @@ async function getMentionLogs (guildID, { limit = 50, userID = null } = {}) {
   params.push(limit)
   const res = await pool.query(
     `SELECT id, guild_id, channel_id, message_id, reply_message_id, follow_up_message_ids, parent_id,
-            status, updated_at, finished_at, user_id, user_name, kind, request, prompt, response,
+            status, user_id, user_name, kind, request, prompt, response,
             model, prompt_tokens, cached_tokens, output_tokens, thinking_tokens, gemini_calls,
-            block_reason, fallbacks, context, created_at
-     FROM mention_logs
+            block_reason, fallbacks, context, created_at, updated_at, finished_at
+     FROM v_mention_logs
      WHERE ${where}
      ORDER BY created_at DESC, id DESC
      LIMIT $${params.length}`,
     params
   )
   return res.rows
+}
+
+// What happened while a mention was handled, in order (for tests and tools).
+async function getEvents (mentionLogID) {
+  return (await pool.query('SELECT event, detail, at FROM mention_log_events WHERE mention_log_id = $1 ORDER BY id', [mentionLogID])).rows
 }
 
 // Who asked the bot to make what is at `path` under /channels/<guild>/: a forum post's thread ID,
@@ -190,4 +226,4 @@ async function findPostCreator (guildID, path, kind = 'forum') {
   }
 }
 
-module.exports = { startMentionLog, updateMentionLog, saveMentionLog, getMentionLogs, getAiCalls, getThread, findPostCreator }
+module.exports = { STATUSES, startMentionLog, updateMentionLog, saveMentionLog, getMentionLogs, getEvents, getAiCalls, getThread, findPostCreator }
