@@ -728,7 +728,7 @@ describe('stores', { skip: !database.available && 'needs PGHOST' }, () => {
           systems: { h1: 'SYS' },
           calls: [
             { at: '2026-11-18T05:09:40Z', model: 'm', purpose: 'mention', system: 'h1', tools: ['list_channels'], safetySettings: [{ category: 'HARM_CATEGORY_SEXUALLY_EXPLICIT', threshold: 'BLOCK_LOW_AND_ABOVE' }], fromTurn: 0, turns: [{ role: 'user', parts: [{ text: '依頼の本文' }, { picture: { mimeType: 'image/png', bytes: 30 } }] }], response: { finishReason: 'STOP', parts: [{ functionCall: { name: 'list_channels', args: {} } }] } },
-            { at: '2026-11-18T05:09:45Z', model: 'm', purpose: 'mention', system: 'h1', fromTurn: 1, turns: [{ role: 'model', parts: [{ functionCall: { name: 'list_channels', args: {} } }] }, { role: 'user', parts: [{ functionResponse: { name: 'list_channels', response: { result: '#general' } } }] }], response: { finishReason: 'SAFETY', safetyRatings: [{ category: 'HARM_CATEGORY_SEXUALLY_EXPLICIT', probability: 'LOW', blocked: true }, { category: 'HARM_CATEGORY_HATE_SPEECH', probability: 'NEGLIGIBLE' }], parts: [] } }
+            { at: '2026-11-18T05:09:45Z', model: 'm', purpose: 'mention', attempts: 3, system: 'h1', fromTurn: 1, turns: [{ role: 'model', parts: [{ functionCall: { name: 'list_channels', args: {} } }] }, { role: 'user', parts: [{ functionResponse: { name: 'list_channels', response: { result: '#general' } } }] }], response: { finishReason: 'SAFETY', safetyRatings: [{ category: 'HARM_CATEGORY_SEXUALLY_EXPLICIT', probability: 'LOW', blocked: true }, { category: 'HARM_CATEGORY_HATE_SPEECH', probability: 'NEGLIGIBLE' }], parts: [] } }
           ]
         }
       })
@@ -737,6 +737,7 @@ describe('stores', { skip: !database.available && 'needs PGHOST' }, () => {
       assert.deepEqual([refused.block_reason, refused.fallbacks, refused.context], ['PROHIBITED_CONTENT', 'gemini-3.8-flash refused (PROHIBITED_CONTENT) → without server', 'sent: server, members'])
       const calls = await store.getAiCalls(refusedID)
       assert.deepEqual(calls.map(c => [c.seq, c.finish_reason, c.blocked_by, c.tool_count, Number(c.sent_messages)]), [[0, 'STOP', null, 1, 2], [1, 'SAFETY', 'HARM_CATEGORY_SEXUALLY_EXPLICIT:LOW', null, 2]])
+      assert.deepEqual(calls.map(c => c.attempts), [1, 3], 'how many times each call was sent')
       assert.equal(calls[0].system_head, 'SYS')
       assert.equal(calls[0].received, 'function_call(list_channels): {}')
       assert.deepEqual(calls[0].messages.map(m => [m.direction, m.turn, m.role, m.kind, m.name, m.content]), [
@@ -781,10 +782,10 @@ describe('stores', { skip: !database.available && 'needs PGHOST' }, () => {
       assert.equal(await store.findPostCreator('g1', '9999'), null)
 
       // Replies continue a conversation: a tree of any depth, which branches.
-      const save = (messageID, replyID, repliedTo) => store.saveMentionLog({ guildID: 'g1', channelID: 'c1', messageID, replyMessageID: replyID, userID: 'u4', kind: 'chat', request: messageID, response: replyID, repliedToMessageID: repliedTo })
-      const root = await save('t1', 'tr1', null)
+      const save = (messageID, replyID, repliedTo, followUps = null) => store.saveMentionLog({ guildID: 'g1', channelID: 'c1', messageID, replyMessageID: replyID, followUpMessageIDs: followUps, userID: 'u4', kind: 'chat', request: messageID, response: replyID, repliedToMessageID: repliedTo })
+      const root = await save('t1', 'tr1', null, ['tr1b', 'tr1c'])
       const a = await save('t2', 'tr2', 'tr1') // replies to the bot's answer to t1
-      const b = await save('t3', 'tr3', 'tr1') // another member replies to the same answer
+      const b = await save('t3', 'tr3', 'tr1c') // another member replies to the last part of the same, split answer
       const c = await save('t4', 'tr4', 'tr2') // and the conversation goes on under t2
       const other = await save('t5', 'tr5', 'nothing-logged')
       const thread = await store.getThread(c)
@@ -792,6 +793,7 @@ describe('stores', { skip: !database.available && 'needs PGHOST' }, () => {
         [Number(root), 0, null], [Number(a), 1, Number(root)], [Number(b), 1, Number(root)], [Number(c), 2, Number(a)]
       ])
       assert.ok(thread.every(r => Number(r.thread_id) === Number(root)))
+      assert.deepEqual((await store.getMentionLogs('g1', { userID: 'u4' })).find(r => r.message_id === 't1').follow_up_message_ids, ['tr1b', 'tr1c'])
       const below = (await pool.query('SELECT descendant_id, depth FROM mention_log_tree WHERE ancestor_id = $1 ORDER BY depth, descendant_id', [a])).rows
       assert.deepEqual(below.map(r => [Number(r.descendant_id), r.depth]), [[Number(a), 0], [Number(c), 1]])
       assert.deepEqual((await store.getThread(other)).map(r => [r.depth, r.parent_id]), [[0, null]], 'a reply to something not logged starts its own thread')

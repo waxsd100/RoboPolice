@@ -1,13 +1,17 @@
 // Everything sent to an AI model while one mention is handled, and what came back, for the mention
-// log (mention_logs.ai_transcript): so why a request was refused or answered as it was can be
+// log (mention_ai_calls, mention_ai_messages, mention_ai_systems): so why a request was refused or answered as it was can be
 // looked at afterwards. Kept with the mention's usage (geminiUsage.js), so every call made for it,
 // wherever, is recorded.
 //
-// { systems: { <hash>: text }, calls: [{ at, model, purpose, system, cachedContent, tools,
+// { systems: { <hash>: text }, calls: [{ at, model, purpose, attempts, system, cachedContent, tools,
 //   safetySettings, generationConfig, fromTurn, turns, response, error }] }
-// A call's conversation is stored as what is new since the call before (`turns` from `fromTurn`),
-// and each set of system instructions once (`systems`). Pictures are left out (their type and
-// size are kept), and so are thought signatures; long texts are cut to MAX_TEXT.
+// Every call is recorded: the reply and its steps, and what is asked along the way (embeddings,
+// Gemini's cache, the uncensored model, rewriting the reply); `attempts` is how many times it was
+// sent (retries after HTTP 429 included), so they add up to mention_logs.gemini_calls.
+// A call's conversation is stored as what is new since the call before for the same purpose
+// (`turns` from `fromTurn`), and each set of system instructions once (`systems`). Pictures are left
+// out (their type and size are kept), and so are thought signatures and embedding vectors; long
+// texts are cut to MAX_TEXT.
 const crypto = require('crypto')
 const { currentUsage } = require('./geminiUsage')
 
@@ -49,17 +53,33 @@ function slimMessage (message) {
 function transcript () {
   const usage = currentUsage()
   if (!usage) return null
-  if (!usage.transcript) usage.transcript = { systems: {}, calls: [], lastTurns: [] }
+  if (!usage.transcript) usage.transcript = { systems: {}, calls: [], lastTurns: {} }
   return usage.transcript
 }
 
-// What is new in `turns` since the turns of the call before: { fromTurn, turns }.
-function delta (t, turns) {
+// What is new in `turns` since the turns of the call before for the same purpose: { fromTurn, turns }.
+function delta (t, purpose, turns) {
   const serialized = turns.map(turn => JSON.stringify(turn))
+  const last = t.lastTurns[purpose] || []
   let same = 0
-  while (same < serialized.length && same < t.lastTurns.length && serialized[same] === t.lastTurns[same]) same++
-  t.lastTurns = serialized
+  while (same < serialized.length && same < last.length && serialized[same] === last[same]) same++
+  t.lastTurns[purpose] = serialized
   return { fromTurn: same, turns: turns.slice(same) }
+}
+
+// The conversation a Gemini request sends: its contents, or the texts of an embedding request.
+function sentTurns (body) {
+  if (Array.isArray(body.contents)) return body.contents
+  const requests = Array.isArray(body.requests) ? body.requests : body.content ? [body] : []
+  return requests.map(r => ({ role: 'user', parts: r.content?.parts || [] }))
+}
+
+// What came back that is not a candidate: how many vectors (an embedding), or the cache made.
+function otherAnswer (response) {
+  if (Array.isArray(response.embeddings)) return [{ text: `（埋め込み ${response.embeddings.length} 件）` }]
+  if (response.embedding) return [{ text: '（埋め込み 1 件）' }]
+  if (typeof response.name === 'string' && response.name.startsWith('cachedContents/')) return [{ text: `（キャッシュ ${response.name}）` }]
+  return []
 }
 
 function systemRef (t, text) {
@@ -71,7 +91,7 @@ function systemRef (t, text) {
 
 // A call to Gemini: the body as sent (`system`: the system instructions' text, when they are in a
 // cache and not in the body), and the response (or the error).
-function recordGemini ({ model, purpose = '', body = {}, system = null, tools = null, response = null, error = null }) {
+function recordGemini ({ model, purpose = '', attempts = 1, body = {}, system = null, tools = null, response = null, error = null }) {
   const t = transcript()
   if (!t || t.calls.length >= MAX_CALLS) return
   const systemText = body.systemInstruction?.parts?.map(p => p.text || '').join('\n') || system
@@ -81,18 +101,19 @@ function recordGemini ({ model, purpose = '', body = {}, system = null, tools = 
     at: new Date().toISOString(),
     model,
     purpose,
+    attempts,
     system: systemRef(t, systemText),
     cachedContent: body.cachedContent || null,
     tools: toolNames.length ? toolNames : null,
     safetySettings: body.safetySettings || null,
     generationConfig: body.generationConfig || null,
-    ...delta(t, (body.contents || []).map(slimTurn)),
+    ...delta(t, purpose, sentTurns(body).map(slimTurn)),
     response: response
       ? {
           finishReason: candidate?.finishReason || null,
           blockReason: response.promptFeedback?.blockReason || null,
           safetyRatings: candidate?.safetyRatings || response.promptFeedback?.safetyRatings || null,
-          parts: (candidate?.content?.parts || []).map(slimPart),
+          parts: candidate ? (candidate.content?.parts || []).map(slimPart) : otherAnswer(response),
           usage: response.usageMetadata || null
         }
       : null,
@@ -100,8 +121,11 @@ function recordGemini ({ model, purpose = '', body = {}, system = null, tools = 
   })
 }
 
-// A call to the uncensored model (OpenAI-style messages).
-function recordUncensored ({ model, messages = [], tools = null, response = null, error = null }) {
+// A call to the uncensored model (OpenAI-style messages): the body as sent, and the response (the
+// whole one: its message, why it ended and its usage) or the error.
+function recordUncensored ({ model, attempts = 1, body = {}, response = null, error = null }) {
+  const messages = body.messages || []
+  const tools = body.tools || null
   const t = transcript()
   if (!t || t.calls.length >= MAX_CALLS) return
   const [first, ...rest] = messages
@@ -110,12 +134,26 @@ function recordUncensored ({ model, messages = [], tools = null, response = null
     at: new Date().toISOString(),
     model,
     purpose: 'uncensored',
+    attempts,
     system: systemRef(t, typeof system === 'string' ? system : null),
     tools: tools ? tools.map(d => d.function?.name || d.name).filter(Boolean) : null,
-    ...delta(t, (system ? rest : messages).map(slimMessage)),
-    response: response ? { message: slimMessage(response) } : null,
+    generationConfig: generationOf(body),
+    ...delta(t, 'uncensored', (system ? rest : messages).map(slimMessage)),
+    response: response
+      ? {
+          finishReason: response.choices?.[0]?.finish_reason || null,
+          message: response.choices?.[0]?.message ? slimMessage(response.choices[0].message) : null,
+          usage: response.usage || null
+        }
+      : null,
     error: error ? String(error.message || error).slice(0, 2000) : null
   })
+}
+
+// The settings an uncensored request was sent with (all but its model, messages and tools).
+function generationOf (body) {
+  const { model, messages, tools, ...rest } = body
+  return Object.keys(rest).length ? rest : null
 }
 
 // The transcript of the mention being handled, for the mention log, or null.
@@ -160,6 +198,7 @@ function toRows (log) {
       calledAt: call.at || new Date().toISOString(),
       model: call.model || null,
       purpose: call.purpose || null,
+      attempts: call.attempts || 1,
       systemHash: call.system || null,
       cachedContent: call.cachedContent || null,
       tools: call.tools || null,

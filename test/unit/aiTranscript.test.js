@@ -11,10 +11,16 @@ test('records each call, the system instructions once, and only what is new in t
     aiTranscript.recordGemini({ model: 'm', purpose: 'mention', body: { contents: [turn1] }, system: 'SYS', tools: [{ functionDeclarations: [{ name: 'a' }] }], response: { candidates: [{ finishReason: 'STOP', content: { parts: [{ text: 'x'.repeat(30000) }] } }] } })
     const turn2 = { role: 'model', parts: [{ text: 'ok' }] }
     aiTranscript.recordGemini({ model: 'm', purpose: 'mention', body: { contents: [turn1, turn2, { role: 'user', parts: [{ text: '次' }] }] }, system: 'SYS', error: new Error('HTTP 500') })
-    aiTranscript.recordUncensored({ model: 'u', messages: [{ role: 'system', content: 'USYS' }, { role: 'user', content: 'やあ' }], response: { role: 'assistant', content: 'こんにちは' } })
+    aiTranscript.recordUncensored({ model: 'u', attempts: 2, body: { messages: [{ role: 'system', content: 'USYS' }, { role: 'user', content: 'やあ' }], temperature: 0.8 }, response: { choices: [{ finish_reason: 'stop', message: { role: 'assistant', content: 'こんにちは' } }], usage: { prompt_tokens: 5 } } })
+    // What is asked along the way: an embedding (no vectors kept) and Gemini's cache.
+    aiTranscript.recordGemini({ model: 'e', purpose: 'embedding', body: { requests: [{ content: { parts: [{ text: '検索語' }] } }] }, response: { embeddings: [{ values: [0.1, 0.2] }] } })
+    aiTranscript.recordGemini({ model: 'm', purpose: 'cache', body: { systemInstruction: { parts: [{ text: 'SYS' }] }, tools: [{ functionDeclarations: [{ name: 'a' }] }] }, response: { name: 'cachedContents/abc' } })
+    // The conversation of a purpose is compared with that purpose's last call, not with the embedding in between.
+    aiTranscript.recordGemini({ model: 'm', purpose: 'mention', body: { contents: [turn1, turn2, { role: 'user', parts: [{ text: '次' }] }, { role: 'model', parts: [{ text: '最後' }] }] }, system: 'SYS', response: { candidates: [{ finishReason: 'STOP', content: { parts: [] } }] } })
   })
   const log = aiTranscript.forLog(usage)
   assert.equal(Object.keys(log.systems).length, 2)
+  assert.equal(log.calls.length, 6)
   const [a, b, c] = log.calls
   assert.equal(log.systems[a.system], 'SYS')
   assert.equal(b.system, a.system)
@@ -25,7 +31,11 @@ test('records each call, the system instructions once, and only what is new in t
   assert.equal(c.purpose, 'uncensored')
   assert.equal(log.systems[c.system], 'USYS')
   assert.deepEqual(c.turns, [{ role: 'user', content: 'やあ' }])
-  assert.equal(c.response.message.content, 'こんにちは')
+  assert.deepEqual([c.attempts, c.response.finishReason, c.response.message.content, c.response.usage, c.generationConfig], [2, 'stop', 'こんにちは', { prompt_tokens: 5 }, { temperature: 0.8 }])
+  const [, , , embedding, cache, last] = log.calls
+  assert.deepEqual([a.attempts, embedding.turns, embedding.response.parts], [1, [{ role: 'user', parts: [{ text: '検索語' }] }], [{ text: '（埋め込み 1 件）' }]])
+  assert.deepEqual([cache.system, cache.tools, cache.response.parts], [a.system, ['a'], [{ text: '（キャッシュ cachedContents/abc）' }]])
+  assert.deepEqual([last.fromTurn, last.turns.length], [3, 1])
   assert.equal(aiTranscript.forLog({}), null, 'nothing outside a mention')
 })
 

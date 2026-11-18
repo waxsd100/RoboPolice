@@ -2144,18 +2144,28 @@ describe('mention → event / forum post (integration)', () => {
 
     test('everything sent to the AI and what came back is in the mention log', async (t) => {
       t.mock.method(global.logger, 'warn', () => {})
+      const { retryTimer } = require('../../src/bot/modules/eventDrafter')
+      t.mock.method(retryTimer, 'sleep', async () => {})
       const { installMentionLogStore } = require('../helpers/fakes')
       const logs = installMentionLogStore()
       const { channel } = createChannel()
       const ratings = [{ category: 'HARM_CATEGORY_SEXUALLY_EXPLICIT', probability: 'LOW', blocked: true }]
       let n = 0
+      let limited = false
       global.fetch = async (url, init) => {
+        // Gemini is busy once: the call is sent again, and both sends are counted.
+        if (!limited) {
+          limited = true
+          return { ok: false, status: 429, headers: { get: () => '0' }, text: async () => '' }
+        }
         n++
         if (n === 1) return { ok: true, json: async () => ({ candidates: [{ content: { role: 'model', parts: [{ functionCall: { name: 'list_channels', args: {} }, thoughtSignature: 'x'.repeat(5000) }] } }], usageMetadata: { promptTokenCount: 10 } }) }
         return { ok: true, json: async () => ({ candidates: [{ finishReason: 'SAFETY', safetyRatings: ratings }] }) }
       }
       await mentionEvent.handle(mention(channel, '<@BOT> 児童'))
       const { systems, calls } = logs[0].ai_transcript
+      assert.equal(calls.reduce((sum, c) => sum + c.attempts, 0), logs[0].gemini_calls, 'every request sent is in the log')
+      assert.equal(calls[0].attempts, 2)
       assert.equal(logs[0].block_reason, 'SAFETY')
       assert.ok(calls.length >= 2)
       const [first, second] = calls

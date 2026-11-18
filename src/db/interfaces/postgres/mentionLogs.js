@@ -7,6 +7,7 @@ async function saveMentionLog ({
   channelID,
   messageID,
   replyMessageID = null,
+  followUpMessageIDs = null,
   userID,
   userName = null,
   kind,
@@ -33,8 +34,8 @@ async function saveMentionLog ({
        guild_id, channel_id, message_id, reply_message_id,
        user_id, user_name, kind, request, prompt, response,
        model, prompt_tokens, cached_tokens, output_tokens, thinking_tokens, gemini_calls,
-       block_reason, fallbacks, context
-     ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19)
+       block_reason, fallbacks, context, follow_up_message_ids
+     ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20)
      RETURNING id`,
       [
         guildID,
@@ -55,7 +56,8 @@ async function saveMentionLog ({
         geminiCalls || 0,
         blockReason,
         fallbacks,
-        context
+        context,
+        followUpMessageIDs?.length ? followUpMessageIDs : null
       ]
     )
     const id = res.rows[0]?.id ?? null
@@ -74,12 +76,12 @@ async function saveMentionLog ({
 }
 
 // Where a mention stands in its conversation (060_mention_log_tree.sql): its parent is the mention
-// whose answer (or whose own message) it replied to, and the closure gets the mention itself and
-// every ancestor of the parent.
+// whose answer (any of its messages, when it was split) or whose own message it replied to, and the
+// closure gets the mention itself and every ancestor of the parent.
 async function saveThread (client, id, guildID, repliedToMessageID) {
   const parent = repliedToMessageID
     ? (await client.query(
-        'SELECT id FROM mention_logs WHERE guild_id = $1 AND id <> $3 AND (reply_message_id = $2 OR message_id = $2) ORDER BY id DESC LIMIT 1',
+        'SELECT id FROM mention_logs WHERE guild_id = $1 AND id <> $3 AND (reply_message_id = $2 OR message_id = $2 OR $2 = ANY(follow_up_message_ids)) ORDER BY id DESC LIMIT 1',
         [guildID, repliedToMessageID, id]
       )).rows[0]?.id ?? null
     : null
@@ -114,12 +116,12 @@ async function saveTranscript (client, mentionLogID, rows) {
   for (const call of rows.calls) {
     const res = await client.query(
       `INSERT INTO mention_ai_calls (
-         mention_log_id, seq, called_at, model, purpose, system_hash, cached_content, tools,
+         mention_log_id, seq, called_at, model, purpose, attempts, system_hash, cached_content, tools,
          safety_settings, generation_config, finish_reason, block_reason, safety_ratings, usage, error
-       ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
+       ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
        RETURNING id`,
       [
-        mentionLogID, call.seq, call.calledAt, call.model, call.purpose, call.systemHash, call.cachedContent, call.tools,
+        mentionLogID, call.seq, call.calledAt, call.model, call.purpose, call.attempts || 1, call.systemHash, call.cachedContent, call.tools,
         json(call.safetySettings), json(call.generationConfig), call.finishReason, call.blockReason, json(call.safetyRatings), json(call.usage), call.error
       ]
     )
@@ -151,7 +153,7 @@ async function getMentionLogs (guildID, { limit = 50, userID = null } = {}) {
   }
   params.push(limit)
   const res = await pool.query(
-    `SELECT id, guild_id, channel_id, message_id, reply_message_id,
+    `SELECT id, guild_id, channel_id, message_id, reply_message_id, follow_up_message_ids, parent_id,
             user_id, user_name, kind, request, prompt, response,
             model, prompt_tokens, cached_tokens, output_tokens, thinking_tokens, gemini_calls,
             block_reason, fallbacks, context, created_at

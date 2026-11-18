@@ -377,7 +377,37 @@ let warnedFlexDomain = false
 // default endpoint (flexUsable) and also retried on HTTP 503 (no Flex capacity). It is not sent at
 // the standard tier when Flex fails, unless GEMINI_DEEP_FLEX_FALLBACK=true: the caller deals with
 // the failure (the stronger model's turn is answered by the usual model, runAgent).
-async function geminiPost (path, body, { timeoutMs = GEMINI_TIMEOUT_MS, purpose = 'other', model = '', flex = false, stream = false, standard = false } = {}) {
+// Every call is recorded for the mention being handled (aiTranscript.js), as sent, with how many
+// times it was sent: options.transcript names the system instructions and tools when they are in a
+// cache rather than the body. A Flex call asked again at the standard tier is recorded as it ended,
+// and the standard one on its own.
+async function geminiPost (path, body, options = {}) {
+  const sent = { body, attempts: 0 }
+  const record = result => aiTranscript.recordGemini({ model: options.model || '', purpose: options.purpose || 'other', body: sent.body, ...options.transcript, attempts: sent.attempts, ...result })
+  let data
+  try {
+    data = await geminiAttempts(path, body, options, sent)
+  } catch (e) {
+    record({ error: e })
+    throw e
+  }
+  if (data instanceof StandardTier) {
+    record({ error: data.why })
+    return geminiPost(path, data.body, { ...options, flex: false, standard: true })
+  }
+  record({ response: data })
+  return data
+}
+
+// A Flex call that is to be asked again at the standard tier (GEMINI_DEEP_FLEX_FALLBACK).
+class StandardTier {
+  constructor (body, why) {
+    this.body = body
+    this.why = why
+  }
+}
+
+async function geminiAttempts (path, body, { timeoutMs = GEMINI_TIMEOUT_MS, purpose = 'other', model = '', flex = false, stream = false, standard = false } = {}, sent = {}) {
   const usage = currentUsage()
   // A user near their limits has every generation of their mention on Flex (mentionQuota.js), and
   // when the bot as a whole is busy every generation is, in the background too (geminiLoad.js);
@@ -391,10 +421,12 @@ async function geminiPost (path, body, { timeoutMs = GEMINI_TIMEOUT_MS, purpose 
   }
   const headers = geminiHeaders()
   if (flex) body = { ...body, serviceTier: 'flex' }
+  sent.body = body
 
   let res
   for (let attempt = 0; ; attempt++) {
     if (usage) usage.requests++
+    sent.attempts = attempt + 1
     res = await fetch(url, {
       method: 'POST',
       headers,
@@ -417,7 +449,7 @@ async function geminiPost (path, body, { timeoutMs = GEMINI_TIMEOUT_MS, purpose 
     global.logger?.info(`[GEMINI]: Flex ${why} for ${model} (HTTP ${res.status}); asking at the standard tier`)
     if (purpose.startsWith('mention')) addFallback(`${model}: Flex ${why} → standard tier`)
     const { serviceTier, ...standardBody } = body
-    return geminiPost(path, standardBody, { timeoutMs, purpose, model, stream, standard: true })
+    return new StandardTier(standardBody, `Flex ${why} (HTTP ${res.status}); asked again at the standard tier`)
   }
   if (!res.ok) {
     const text = (await res.text()).slice(0, 1000)
@@ -487,16 +519,7 @@ async function callGemini (model, body, options) {
     const thinking = thinkingConfig(model, { setting: 'GEMINI_LIGHT_THINKING_LEVEL', fallback: 'low' })
     if (thinking.thinkingConfig) body = { ...body, generationConfig: { ...body.generationConfig, ...thinking } }
   }
-  // Recorded for the mention log, sent and received (or the error): options.transcript names the
-  // system instructions and tools when they are in a cache rather than the body.
-  let data
-  try {
-    data = await geminiRequest(model, 'generateContent', body, options)
-  } catch (e) {
-    aiTranscript.recordGemini({ model, purpose: options?.purpose, body, ...options?.transcript, error: e })
-    throw e
-  }
-  aiTranscript.recordGemini({ model, purpose: options?.purpose, body, ...options?.transcript, response: data })
+  const data = await geminiRequest(model, 'generateContent', body, options)
   const candidate = data.candidates?.[0]
   const content = candidate?.content
   const finish = candidate?.finishReason
@@ -1871,10 +1894,17 @@ async function callUncensored (contents, declarations, allowed = null, { timeout
     }
   }
   const usage = currentUsage()
+  // Each request is recorded for the mention log as it was sent (aiTranscript.js), with how many
+  // times it was sent.
+  const sent = { body, attempts: 0 }
+  const record = result => aiTranscript.recordUncensored({ model, body: sent.body, attempts: sent.attempts, ...result })
   const send = async payload => {
+    sent.body = payload
+    sent.attempts = 0
     let r
     for (let attempt = 0; ; attempt++) {
       if (usage) usage.requests++
+      sent.attempts = attempt + 1
       r = await fetch(endpoint.url, {
         method: 'POST',
         headers,
@@ -1917,17 +1947,18 @@ async function callUncensored (contents, declarations, allowed = null, { timeout
   try {
     res = await send(body)
     if (res.status === 400) {
-      await res.text().catch(() => {})
+      record({ error: `HTTP 400 ${(await res.text().catch(() => '')).slice(0, 1000)}; asked again with a shorter request` })
       res = await send(buildMinimalBody())
     }
   } catch (err) {
     markUnusable()
+    record({ error: err })
     throw err
   }
   if (!res.ok) {
     if (res.status >= 500) markUnusable()
     const text = (await res.text()).slice(0, 1000)
-    aiTranscript.recordUncensored({ model, messages, tools: body.tools, error: `HTTP ${res.status} ${text}` })
+    record({ error: `HTTP ${res.status} ${text}` })
     throw new GeminiError(`Uncensored request failed: HTTP ${res.status} ${text}`, `AI の呼び出しに失敗しました（HTTP ${res.status}）`, null, res.status)
   }
   let data
@@ -1935,10 +1966,10 @@ async function callUncensored (contents, declarations, allowed = null, { timeout
     data = await readUncensoredResponse(res)
   } catch (err) {
     markUnusable()
-    aiTranscript.recordUncensored({ model, messages, tools: body.tools, error: err })
+    record({ error: err })
     throw err
   }
-  aiTranscript.recordUncensored({ model, messages, tools: body.tools, response: data?.choices?.[0]?.message })
+  record({ response: data })
   let parts = parseUncensoredParts(data?.choices?.[0]?.message, declarations, allowed)
   if (!parts.length && useCompact) {
     let retryRes
@@ -1946,6 +1977,7 @@ async function callUncensored (contents, declarations, allowed = null, { timeout
       retryRes = await send(buildMinimalBody())
     } catch (err) {
       markUnusable()
+      record({ error: err })
       throw err
     }
     if (retryRes.ok) {
@@ -1953,11 +1985,14 @@ async function callUncensored (contents, declarations, allowed = null, { timeout
         data = await readUncensoredResponse(retryRes)
       } catch (err) {
         markUnusable()
+        record({ error: err })
         throw err
       }
+      record({ response: data })
       parts = parseUncensoredParts(data?.choices?.[0]?.message, declarations, allowed)
-    } else if (retryRes.status >= 500) {
-      markUnusable()
+    } else {
+      if (retryRes.status >= 500) markUnusable()
+      record({ error: `HTTP ${retryRes.status} ${(await retryRes.text().catch(() => '')).slice(0, 1000)}` })
     }
   }
   const msg = data?.choices?.[0]?.message
