@@ -253,6 +253,31 @@ function installEmojiStore ({ emojis = {}, descriptions = {} } = {}) {
 }
 installEmojiStore()
 
+// Replaces the streamer speaking-style store (streamerStyle.js) with an in-memory one so no unit
+// test reaches Postgres unless restoreStreamerStyleStore() is called (stores.test.js).
+const realStreamerStyleStore = { ...require('../../src/db/interfaces/postgres/streamerStyle') }
+function restoreStreamerStyleStore () {
+  Object.assign(require('../../src/db/interfaces/postgres/streamerStyle'), realStreamerStyleStore)
+}
+function installStreamerStyleStore (entries = {}) {
+  const store = require('../../src/db/interfaces/postgres/streamerStyle')
+  const saved = { ...entries }
+  store.getStyle = async (key = store.DEFAULT_KEY) => saved[key] ? { ...saved[key] } : null
+  store.saveStyle = async (entry, key = store.DEFAULT_KEY) => {
+    saved[key] = {
+      profile: String(entry?.profile || ''),
+      quantitative: String(entry?.quantitative || ''),
+      exemplars: Array.isArray(entry?.exemplars) ? [...entry.exemplars] : [],
+      dialoguePairs: Array.isArray(entry?.dialoguePairs) ? entry.dialoguePairs.map(p => ({ ...p })) : [],
+      sourceHash: String(entry?.sourceHash || ''),
+      updatedAt: entry?.updatedAt || Date.now()
+    }
+  }
+  store.deleteStyle = async (key = store.DEFAULT_KEY) => { delete saved[key] }
+  return saved
+}
+installStreamerStyleStore()
+
 // The reply settings (/replylength, /persona), in memory: lengths { guildID: 'long' | 'normal' |
 // 'short' }, personas { guildID: false } for servers that turned the streamer off, debugFooters
 // { guildID: true } for servers that show the debug line, tokenLimits { guildID: { '5h', week,
@@ -733,6 +758,10 @@ function installYouTubeStore (knowledge = {}, summaries = {}) {
     const ids = [...new Set(Object.values(summaries).flatMap(s => Object.keys(s)))].filter(id => !own.has(id))
     return ids.map(id => ({ video_id: id, summary: anySummary(id) })).filter(r => r.summary)
   }
+  store.recentVideosForStyle = async (limit = 20) => allVideos()
+    .filter(v => !['live', 'upcoming'].includes(v.live_status))
+    .slice(0, limit)
+    .map(v => ({ ...v, summary: anySummary(v.video_id) || v.summary || null }))
   store.deleteGuildYouTube = async guildID => {
     delete liveSettings[guildID]
     if (knowledge[guildID]?.channel) knowledge[guildID].channel.live_events = false
@@ -811,7 +840,7 @@ async function startServer (handler) {
 }
 
 module.exports = {
-  perms, createGuild, createMember, installBot, installYouTubeStore, installQuotaStore, installEmbeddingStore, configureGateway, installGemini, call, submit, lastToolResponses, startServer, installLoreStore, restoreLoreStore, installEmojiStore, restoreEmojiStore, stripUntrusted, unwrapTools, installLoadStore, installAiCacheStore, installTwitchStore, installSteamStore
+  perms, createGuild, createMember, installBot, installYouTubeStore, installQuotaStore, installEmbeddingStore, configureGateway, installGemini, call, submit, lastToolResponses, startServer, installLoreStore, restoreLoreStore, installEmojiStore, restoreEmojiStore, installStreamerStyleStore, restoreStreamerStyleStore, stripUntrusted, unwrapTools, installLoadStore, installAiCacheStore, installTwitchStore, installSteamStore
 }
 
 // A fake embedding model: each text points along the axis of the first topic it mentions, so

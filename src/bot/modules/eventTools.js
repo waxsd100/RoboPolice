@@ -1218,7 +1218,7 @@ async function describeServer (guild, member, requestChannelID, { query = '', co
   const mentioned = mentionedEmojiIDs([query, context])
   if (slim) {
     if (streamerPersona !== false && streamerStyle.enabled()) {
-      const personaLines = await streamerStyle.sectionForPrompt({ slim: true }).catch(() => [])
+      const personaLines = await streamerStyle.sectionForPrompt({ slim: true, query }).catch(() => [])
       if (personaLines.length) lines.push('', ...personaLines)
     }
     const lore = serverLore.enabled()
@@ -1276,7 +1276,7 @@ async function describeServer (guild, member, requestChannelID, { query = '', co
     return embedding
   }
   if (streamerPersona !== false && streamerStyle.enabled()) {
-    const personaLines = await streamerStyle.sectionForPrompt({ vectorOf, slim: false }).catch(() => [])
+    const personaLines = await streamerStyle.sectionForPrompt({ vectorOf, slim: false, query }).catch(() => [])
     if (personaLines.length) lines.push('', ...personaLines)
   }
   const knowledgeText = [theme, ...texts].filter(Boolean).join('\n')

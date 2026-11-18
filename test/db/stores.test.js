@@ -849,4 +849,77 @@ describe('stores', { skip: !database.available && 'needs PGHOST' }, () => {
       assert.deepEqual(await store.getMentionLogs('g1'), [], 'deleting request or reply messages purges mention_logs')
     })
   })
+
+  describe('streamer style store, Discord 2-turn reply pairs, and YouTube style videos', () => {
+    test('persists and reads back streamer_style profile, exemplars, and dialogue pairs', async (t) => {
+      const { restoreStreamerStyleStore, installStreamerStyleStore } = require('../helpers/fakes')
+      restoreStreamerStyleStore()
+      t.after(() => installStreamerStyleStore())
+      const store = require('../../src/db/interfaces/postgres/streamerStyle')
+      assert.equal(await store.getStyle(), null)
+      await store.saveStyle({
+        profile: '- 一人称は俺',
+        quantitative: '- 句点 0%',
+        exemplars: ['いや草w', 'それな'],
+        dialoguePairs: [{ partner: 'おすすめある？', reply: 'これマジで面白いよ' }],
+        sourceHash: 'abc12345:deadbeef',
+        updatedAt: Date.parse('2026-11-18T12:00:00Z')
+      })
+      const loaded = await store.getStyle()
+      assert.equal(loaded.profile, '- 一人称は俺')
+      assert.equal(loaded.quantitative, '- 句点 0%')
+      assert.deepEqual(loaded.exemplars, ['いや草w', 'それな'])
+      assert.deepEqual(loaded.dialoguePairs, [{ partner: 'おすすめある？', reply: 'これマジで面白いよ' }])
+      assert.equal(loaded.sourceHash, 'abc12345:deadbeef')
+      assert.equal(loaded.updatedAt, Date.parse('2026-11-18T12:00:00Z'))
+      await store.deleteStyle()
+      assert.equal(await store.getStyle(), null)
+    })
+
+    test('discordPosts.recentReplyPairs returns explicit replies first and falls back to adjacent non-streamer turns within 90s', async () => {
+      const discordPosts = require('../../src/db/interfaces/postgres/discordPosts')
+      const { toStoredContent } = require('../../src/db/interfaces/postgres/create')
+      await q(`INSERT INTO messages (id, author_id, content, ts, channel_id, guild_id) VALUES
+        ('rp_p1', 'u_fan', $1, '2026-11-18T10:00:00Z', 'c1', 'g1'),
+        ('rp_r1', 'u_streamer', $2, '2026-11-18T10:05:00Z', 'c1', 'g1'),
+        ('rp_p2', 'u_fan2', $3, '2026-11-18T10:10:00Z', 'c1', 'g1'),
+        ('rp_r2', 'u_streamer', $4, '2026-11-18T10:10:30Z', 'c1', 'g1'),
+        ('rp_r3', 'u_streamer', $5, '2026-11-18T10:10:45Z', 'c1', 'g1')
+        ON CONFLICT (id) DO NOTHING`, [
+        toStoredContent('おすすめの(ゲーム)教えて！'),
+        toStoredContent('いや普通にこれ面白いよw'),
+        toStoredContent('今日めっちゃ寒くない？'),
+        toStoredContent('わかる布団から出られん'),
+        toStoredContent('あとコーヒーも飲みたい')
+      ])
+      await q("INSERT INTO message_replies (message_id, reply_to) VALUES ('rp_r1', 'rp_p1') ON CONFLICT DO NOTHING")
+      await discordPosts.savePosts([
+        { id: 'rp_r1', guildID: 'g1', channelID: 'c1', channelName: '雑談', authorID: 'u_streamer', content: 'いや普通にこれ面白いよw', createdAt: new Date('2026-11-18T10:05:00Z') },
+        { id: 'rp_r2', guildID: 'g1', channelID: 'c1', channelName: '雑談', authorID: 'u_streamer', content: 'わかる布団から出られん', createdAt: new Date('2026-11-18T10:10:30Z') },
+        { id: 'rp_r3', guildID: 'g1', channelID: 'c1', channelName: '雑談', authorID: 'u_streamer', content: 'あとコーヒーも飲みたい', createdAt: new Date('2026-11-18T10:10:45Z') }
+      ])
+
+      const pairs = await discordPosts.recentReplyPairs(['g1'], ['u_streamer'], 10)
+      assert.equal(pairs.length, 2, 'consecutive self-message rp_r3 is excluded while explicit and adjacent pairs are kept')
+      assert.equal(pairs[0].id, 'rp_r1')
+      assert.equal(pairs[0].explicit, true)
+      assert.equal(pairs[0].partner_content, 'おすすめの(ゲーム)教えて！', 'escaped markdown in messages.content is decoded')
+      assert.equal(pairs[0].reply_content, 'いや普通にこれ面白いよw')
+      assert.equal(pairs[1].id, 'rp_r2')
+      assert.equal(pairs[1].explicit, false)
+      assert.equal(pairs[1].partner_content, '今日めっちゃ寒くない？')
+    })
+
+    test('youtube.recentVideosForStyle returns recent non-live/non-upcoming videos of followed channels', async () => {
+      const youtubeDB = require('../../src/db/interfaces/postgres/youtube')
+      await q("INSERT INTO youtube_channels (channel_id, channel_ref, title, position) VALUES ('UCstyle1', '@style', 'スタイルch', 99) ON CONFLICT DO NOTHING")
+      await q(`INSERT INTO youtube_videos (video_id, channel_id, title, duration, published_at, live_status, summary, summary_created_at) VALUES
+        ('styleVid001', 'UCstyle1', '完了動画', 'PT12M30S', '2026-11-18T09:00:00Z', 'none', '「ご安心を」と発言', now()),
+        ('styleVid002', 'UCstyle1', '予定配信', NULL, '2026-11-19T09:00:00Z', 'upcoming', NULL, NULL)
+        ON CONFLICT (video_id) DO NOTHING`)
+      const list = await youtubeDB.recentVideosForStyle(50)
+      assert.ok(list.some(v => v.video_id === 'styleVid001' && v.summary === '「ご安心を」と発言'))
+      assert.ok(!list.some(v => v.video_id === 'styleVid002'))
+    })
+  })
 })
