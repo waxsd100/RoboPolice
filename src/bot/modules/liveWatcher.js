@@ -236,7 +236,8 @@ async function checkChannel (channelID, guildIDs, now = new Date()) {
   if (checkingChannels.has(channelID)) return 0
   checkingChannels.add(channelID)
   try {
-    const guilds = guildIDs.map(id => global.bot.guilds.get(id)).filter(Boolean)
+    // A server where the bot cannot make events is left out before YouTube is asked anything.
+    const guilds = guildIDs.map(id => global.bot.guilds.get(id)).filter(Boolean).filter(canMakeEvents)
     if (guilds.length === 0) return 0
     const since = new Date(now.getTime() - hoursSetting('UPLOAD_EVENT_MAX_AGE_HOURS', DEFAULT_UPLOAD_MAX_AGE_HOURS) * 3600 * 1000)
     const [known, liveIds, recent] = await Promise.all([youtubeDB.getVideoIds(channelID), youtubeDB.getLiveVideoIds(channelID), youtubeDB.recentVideoIds(channelID, since)])
@@ -258,12 +259,23 @@ async function checkChannel (channelID, guildIDs, now = new Date()) {
   }
 }
 
+// Whether the bot may make events in `guild`. Without Manage Events it says so once, not at every
+// check (every minute, for every channel followed), and once more when it may again.
+const lackingManageEvents = new Set()
+function canMakeEvents (guild) {
+  const can = !!guild.members.get(global.bot.user.id)?.permissions.has('manageEvents')
+  if (!can && !lackingManageEvents.has(guild.id)) {
+    lackingManageEvents.add(guild.id)
+    global.logger.warn(`[LIVE]: Cannot make events in ${guild.id}: the bot lacks Manage Events (said once, until it has it)`)
+  } else if (can && lackingManageEvents.delete(guild.id)) {
+    global.logger.info(`[LIVE]: The bot can make events in ${guild.id} again`)
+  }
+  return can
+}
+
 // One server's events for the channel's videos `ids` (byId: their current state from YouTube).
 async function updateGuild (guild, ids, byId, records, now = new Date()) {
-  if (!guild.members.get(global.bot.user.id)?.permissions.has('manageEvents')) {
-    global.logger.warn(`[LIVE]: Cannot make events in ${guild.id}: the bot lacks Manage Events`)
-    return 0
-  }
+  if (!canMakeEvents(guild)) return 0
   let changed = 0
   for (const id of ids) {
     const video = byId.get(id) || null

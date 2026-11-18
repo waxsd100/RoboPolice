@@ -235,13 +235,24 @@ describe('checkGuild', () => {
     assert.equal(warned.mock.calls.length, 0, 'not warned about every minute')
   })
 
-  test('without Manage Events, nothing is made and it says why', async (t) => {
+  test('without Manage Events, nothing is made or asked of YouTube, and it says why once, until it may again', async (t) => {
     const warned = t.mock.method(global.logger, 'warn', () => {})
+    const told = t.mock.method(global.logger, 'info', () => {})
     const bot = installBot({ canManageEvents: false })
-    fakeYouTube(['stream00001'], [apiVideo('stream00001', 'upcoming', { liveStreamingDetails: {} })])
+    const youtube = fakeYouTube(['stream00001'], [apiVideo('stream00001', 'upcoming', { liveStreamingDetails: {} })])
     assert.equal(await liveWatcher.checkGuild('100', UC), 0)
     assert.equal(bot.calls.length, 0)
+    assert.deepEqual(youtube, [], 'YouTube is not asked')
     assert.match(warned.mock.calls[0].arguments[0], /lacks Manage Events/)
+    // Every minute after that: nothing more is said.
+    await liveWatcher.checkGuild('100', UC)
+    await liveWatcher.checkGuild('100', UC)
+    assert.equal(warned.mock.calls.filter(c => /lacks Manage Events/.test(c.arguments[0])).length, 1)
+    // Given the permission, it says so once and makes the event.
+    const allowed = installBot()
+    await liveWatcher.checkGuild('100', UC)
+    assert.equal(told.mock.calls.filter(c => /can make events in 100 again/.test(c.arguments[0])).length, 1)
+    assert.ok(allowed.calls.some(c => c.method === 'POST'))
   })
 
   test('checkAll checks every channel the bot follows for the servers that turned it on; a push just its channel', async () => {
