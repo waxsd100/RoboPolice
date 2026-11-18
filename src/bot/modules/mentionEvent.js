@@ -861,7 +861,7 @@ async function handle (message) {
           userName: message.author.username || null,
           kind: outcome.kind,
           request: request || '',
-          requestText: usage.requestText || null,
+          prompt: usage.prompt || null,
           response: outcome.response,
           model: usage.models?.length ? usage.models.join(' → ') : null,
           promptTokens: usage.tokens?.prompt || 0,

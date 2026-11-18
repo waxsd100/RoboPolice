@@ -48,9 +48,9 @@ function addContext (note) {
 
 // The whole request as sent to the AI (the first turn: the server's information, the recent talk,
 // the replied-to conversation, the request), for the mention log.
-function setRequestText (text) {
+function setPrompt (text) {
   const usage = currentUsage()
-  if (usage && typeof text === 'string') usage.requestText = text
+  if (usage && typeof text === 'string') usage.prompt = text
 }
 
 function addFallback (note) {
@@ -107,4 +107,4 @@ function logTokens () {
   tokens.clear()
 }
 
-module.exports = { addContext, setRequestText, trackUsage, currentUsage, addTokens, addModel, addFallback, tokenFooter, recordTokens, tokenCounts, logTokens }
+module.exports = { addContext, setPrompt, trackUsage, currentUsage, addTokens, addModel, addFallback, tokenFooter, recordTokens, tokenCounts, logTokens }

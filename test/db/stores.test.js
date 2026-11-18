@@ -682,7 +682,7 @@ describe('stores', { skip: !database.available && 'needs PGHOST' }, () => {
         userName: 'alice',
         kind: 'chat',
         request: 'こんにちは',
-        requestText: null,
+        prompt: null,
         response: 'やあ、元気？',
         model: 'gemini-3.8-flash',
         promptTokens: 120,
@@ -702,7 +702,7 @@ describe('stores', { skip: !database.available && 'needs PGHOST' }, () => {
         userName: 'bob',
         kind: 'event',
         request: '11/3 19時から交流会',
-        requestText: '告知本文',
+        prompt: '告知本文',
         response: 'イベントを登録しました: https://discord.com/events/g1/ev1',
         model: 'gemini-3.8-flash',
         promptTokens: 200,
@@ -737,7 +737,7 @@ describe('stores', { skip: !database.available && 'needs PGHOST' }, () => {
       assert.equal(all[0].message_id, 'm102')
       assert.equal(all[0].kind, 'event')
       assert.equal(all[0].request, '11/3 19時から交流会')
-      assert.equal(all[0].request_text, '告知本文')
+      assert.equal(all[0].prompt, '告知本文')
       assert.equal(all[1].message_id, 'm101')
       assert.equal(all[1].response, 'やあ、元気？')
 

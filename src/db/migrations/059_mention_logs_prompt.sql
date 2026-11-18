@@ -1,9 +1,10 @@
 -- referenced_text held only the replied-to conversation, and was empty for a mention that was not a
--- reply. It is now request_text: the whole request as sent to the AI (the server's information,
--- the recent talk, the replied-to conversation, the request itself), so what the AI was asked is
--- in the log whatever the mention was.
-ALTER TABLE mention_logs RENAME COLUMN referenced_text TO request_text;
-COMMENT ON COLUMN mention_logs.request_text IS 'AI に送った依頼の本文すべて（サーバーの情報・チャンネルの最近の会話・返信先の会話・依頼文など。システム指示は ai_transcript）';
+-- reply. It is now prompt: the whole request as sent to the AI (the server's information, the
+-- recent talk, the replied-to conversation, the member's request itself), so what the AI was asked
+-- is in the log whatever the mention was. `request` stays what the member wrote.
+ALTER TABLE mention_logs RENAME COLUMN referenced_text TO prompt;
+COMMENT ON COLUMN mention_logs.request IS 'メンバーが書いた依頼文（メンション部分を除く）';
+COMMENT ON COLUMN mention_logs.prompt IS 'AI に送った依頼の本文すべて（サーバーの情報・チャンネルの最近の会話・返信先の会話・依頼文など。システム指示は ai_transcript）';
 
 DROP VIEW IF EXISTS v_mention_logs;
 CREATE VIEW v_mention_logs AS
@@ -20,7 +21,7 @@ SELECT
   l.kind,
   l.model,
   l.request,
-  l.request_text,
+  l.prompt,
   l.response,
   l.prompt_tokens,
   l.cached_tokens,
@@ -50,8 +51,8 @@ COMMENT ON COLUMN v_mention_logs.user_id IS '質問者のDiscordユーザーID';
 COMMENT ON COLUMN v_mention_logs.user_name IS '質問時点でのユーザー表示名';
 COMMENT ON COLUMN v_mention_logs.kind IS '応答種別（chat / event / forum / edit等）';
 COMMENT ON COLUMN v_mention_logs.model IS '応答生成に使用したAIモデル名';
-COMMENT ON COLUMN v_mention_logs.request IS 'ユーザーの質問テキスト';
-COMMENT ON COLUMN v_mention_logs.request_text IS 'AI に送った依頼の本文すべて（サーバーの情報・最近の会話・返信先・依頼文など）';
+COMMENT ON COLUMN v_mention_logs.request IS 'メンバーが書いた依頼文（メンション部分を除く）';
+COMMENT ON COLUMN v_mention_logs.prompt IS 'AI に送った依頼の本文すべて（サーバーの情報・最近の会話・返信先・依頼文など）';
 COMMENT ON COLUMN v_mention_logs.response IS 'Botが送信した応答テキスト';
 COMMENT ON COLUMN v_mention_logs.prompt_tokens IS '入力プロンプトトークン数';
 COMMENT ON COLUMN v_mention_logs.cached_tokens IS 'キャッシュヒットした入力トークン数';

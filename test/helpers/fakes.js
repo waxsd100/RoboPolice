@@ -829,7 +829,7 @@ function installMentionLogStore (logs = []) {
       user_name: entry.userName ?? null,
       kind: entry.kind,
       request: entry.request ?? '',
-      request_text: entry.requestText ?? null,
+      prompt: entry.prompt ?? null,
       response: entry.response ?? '',
       model: entry.model ?? null,
       prompt_tokens: entry.promptTokens || 0,

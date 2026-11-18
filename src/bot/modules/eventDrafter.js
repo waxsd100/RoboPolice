@@ -11,7 +11,7 @@ const geminiLoad = require('../utils/geminiLoad')
 const aiCache = require('../utils/aiCache')
 const sokudan = require('../utils/sokudan')
 const prompts = require('../utils/prompts')
-const { currentUsage, recordTokens, addTokens, addModel, addFallback, addContext, setRequestText } = require('../utils/geminiUsage')
+const { currentUsage, recordTokens, addTokens, addModel, addFallback, addContext, setPrompt } = require('../utils/geminiUsage')
 const aiTranscript = require('../utils/aiTranscript')
 
 // A fixed model, not an alias such as gemini-flash-latest: an explicit cache (below) is made for one
@@ -2607,7 +2607,7 @@ async function draft ({ request, referenced, recent = [], channelName, channelID
   }
   // What went with the request, for the mention log: why Google refused can be looked for there.
   const firstText = conversation.contents[0].parts[0].text
-  setRequestText(firstText)
+  setPrompt(firstText)
   const sources = [...firstText.matchAll(/<untrusted source="([^"]+)">/g)].map(m => m[1]).filter(name => name !== 'request')
   addContext(`sent: ${[...sources, ...(shown.length ? [`pictures ${emojiPics.length + attachedPics.length}`] : [])].join(', ') || 'request only'}`)
   // Kept with the conversation, so a correction (revise) uses them too.

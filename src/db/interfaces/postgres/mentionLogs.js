@@ -10,7 +10,7 @@ async function saveMentionLog ({
   userName = null,
   kind,
   request,
-  requestText = null,
+  prompt = null,
   response,
   model = null,
   promptTokens = 0,
@@ -26,7 +26,7 @@ async function saveMentionLog ({
   const res = await pool.query(
     `INSERT INTO mention_logs (
        guild_id, channel_id, message_id, reply_message_id,
-       user_id, user_name, kind, request, request_text, response,
+       user_id, user_name, kind, request, prompt, response,
        model, prompt_tokens, cached_tokens, output_tokens, thinking_tokens, gemini_calls,
        block_reason, fallbacks, context, ai_transcript
      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20)
@@ -40,7 +40,7 @@ async function saveMentionLog ({
       userName,
       kind,
       request ?? '',
-      requestText,
+      prompt,
       response ?? '',
       model,
       promptTokens || 0,
@@ -67,7 +67,7 @@ async function getMentionLogs (guildID, { limit = 50, userID = null } = {}) {
   params.push(limit)
   const res = await pool.query(
     `SELECT id, guild_id, channel_id, message_id, reply_message_id,
-            user_id, user_name, kind, request, request_text, response,
+            user_id, user_name, kind, request, prompt, response,
             model, prompt_tokens, cached_tokens, output_tokens, thinking_tokens, gemini_calls,
             block_reason, fallbacks, context, ai_transcript, created_at
      FROM mention_logs
