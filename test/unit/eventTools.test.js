@@ -475,7 +475,8 @@ describe('search_youtube', () => {
     installEmbeddingStore({ videos: { 100: { v1: toBase64(minecraft), v0: toBase64(minecraft), v2: toBase64(other) } } })
     const text = (await tools().call('search_youtube', { query: 'minecraft の建築' })).result
     assert.match(text, /「minecraft の建築」に意味が近い順の動画（語をすべて含むもの 0 件を優先）:\n- マイクラ 建築/)
-    assert.ok(text.indexOf('マイクラ 雑談') < text.indexOf('記念配信'), 'the stream comes after the videos close in meaning')
+    assert.match(text, /マイクラ 雑談/)
+    assert.doesNotMatch(text, /記念配信/, 'the stream, not about it, is left out')
   })
 
   test('matches every word of the query in the title or description, ignoring case', async () => {

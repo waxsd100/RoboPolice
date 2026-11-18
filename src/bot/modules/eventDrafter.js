@@ -2434,10 +2434,14 @@ async function runAgent (contents, tools, submits = SUBMIT_DECLARATIONS) {
     // `calls` is kept: a correction must answer every call of this turn, not just the submit.
     if (submitted) return { name: submitted.name, args: submitted.args || {}, calls }
     if (calls.length === 0) throw new GeminiError(`Gemini answered without a tool call: ${JSON.stringify(content).slice(0, 1000)}`, 'AI の応答の形式が想定と違いました')
-    // Sequential, not parallel: two ask_user calls would otherwise fight over the same message.
+    // Several lookups of one step at the same time, not one after another; but one after another
+    // when the requester is asked something (two ask_user calls would fight over the same message).
+    const asks = calls.some(c => c.name === 'ask_user')
     const responses = []
-    for (const c of calls) {
-      responses.push({ functionResponse: { name: c.name, response: await tools.call(c.name, c.args) } })
+    if (asks) {
+      for (const c of calls) responses.push({ functionResponse: { name: c.name, response: await tools.call(c.name, c.args) } })
+    } else {
+      responses.push(...await Promise.all(calls.map(async c => ({ functionResponse: { name: c.name, response: await tools.call(c.name, c.args) } }))))
     }
     contents.push({ role: 'user', parts: responses })
   }

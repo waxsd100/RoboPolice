@@ -17,6 +17,7 @@ const { fromStoredContent } = require('../../db/interfaces/postgres/create')
 const semanticSearch = require('./semanticSearch')
 const { messageEmbeddingsEnabled } = require('./embeddingIndexer')
 const { wrap } = require('../utils/untrusted')
+const { relevant } = require('../utils/relevance')
 const serverLore = require('./serverLore')
 const serverRules = require('./serverRules')
 const loreStore = require('../../db/interfaces/postgres/serverLore')
@@ -1171,8 +1172,8 @@ async function relatedMessages (guild, member, vectorOf) {
   if (!channels.length) return []
   const vector = await vectorOf()
   if (!vector) return []
-  const near = (await embeddingStore.nearestMessages(guild.id, channels.map(c => c.id), vector, { model: embeddingModel(), limit: MAX_RELATED_MESSAGES * 2 }))
-    .filter(r => r.score >= MIN_MESSAGE_SCORE)
+  // Only those close enough to the request (relevance.js).
+  const near = relevant(await embeddingStore.nearestMessages(guild.id, channels.map(c => c.id), vector, { model: embeddingModel(), limit: MAX_RELATED_MESSAGES * 2 }), { min: MIN_MESSAGE_SCORE })
   const byID = new Map((await embeddingStore.getMessages(near.map(r => r.message_id))).map(m => [m.id, m]))
   return near.map(r => byID.get(r.message_id))
     .filter(m => m && m.author_id !== global.bot.user.id && embeddableText(fromStoredContent(m.content)))

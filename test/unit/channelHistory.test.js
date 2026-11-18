@@ -194,9 +194,8 @@ describe('searching messages by meaning (MESSAGE_EMBEDDINGS=true)', () => {
     const text = (await tools().call('search_channel_history', { channel_id: '201', query: '怖い' })).result
     assert.equal(text, [
       '<#201> の保存済みメッセージから「怖い」に意味が近いもの（近い順）:',
+      // Only what is close: the Minecraft talk has nothing to do with it.
       '[2026-10-01T00:00:00.000Z] alice: ホラーゲームやろう',
-      '[2026-10-02T00:00:00.000Z] alice: マイクラで城',
-      '[2026-10-01T00:04:00.000Z] 3: いいね、何やる？',
       '',
       '語を含む最近のメッセージ:',
       '[2026-10-30T00:00:00.000Z] alice: 怖いの新着'

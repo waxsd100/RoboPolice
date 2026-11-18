@@ -8,6 +8,7 @@ const { model, similarity, blend } = embeddings
 const store = require('../../db/interfaces/postgres/embeddings')
 const { fromStoredContent } = require('../../db/interfaces/postgres/create')
 const { embeddableText } = require('../utils/messageNoise')
+const { relevant, WINDOW: SCORE_WINDOW, CLIFF } = require('../utils/relevance')
 
 const KEYWORD_BONUS = 0.15
 // Reciprocal rank fusion: a message's score is the sum of 1 / (RRF_K + its rank) in each ranking
@@ -32,15 +33,19 @@ async function candidates (guildID, channelIDs, query, limit) {
   nearest.forEach((r, i) => add(r.message_id, i))
   keyword.forEach((r, i) => add(r.message_id, i))
   const ranked = [...fused.entries()].sort((x, y) => y[1] - x[1]).map(([id]) => id)
-  return { q, ranked, fused, cosine: new Map(nearest.map(r => [r.message_id, r.score])) }
+  return { q, ranked, fused, cosine: new Map(nearest.map(r => [r.message_id, r.score])), byKeyword: new Set(keyword.map(r => r.message_id)) }
 }
 
 // The stored messages of `channelIDs` closest to `query`, best first, by meaning and by keyword
 // fused: [{ id, author_id, channel_id, ts, content, score }]. Content is the text as written.
+// Those found by meaning only as many as are close enough (relevance.js); those holding the words
+// all.
 async function searchMessages (guildID, channelIDs, query, { limit = 30 } = {}) {
-  const { ranked, fused } = await candidates(guildID, channelIDs, query, limit * 2)
-  const found = new Map((await store.getMessages(ranked)).map(m => [m.id, textOf(m)]))
-  return ranked
+  const { ranked, fused, cosine, byKeyword } = await candidates(guildID, channelIDs, query, limit * 2)
+  const close = new Set(relevant([...cosine.entries()], { score: ([, c]) => c }).map(([id]) => id))
+  const kept = ranked.filter(id => close.has(id) || byKeyword.has(id))
+  const found = new Map((await store.getMessages(kept)).map(m => [m.id, textOf(m)]))
+  return kept
     .map(id => found.get(id))
     // Gone since, or noise embedded before it was left out (messageNoise.js).
     .filter(m => m && embeddableText(m.content))
@@ -53,9 +58,8 @@ async function searchMessages (guildID, channelIDs, query, { limit = 30 } = {}) 
 // anything, so their similarity alone cannot tell what they are about.
 const MIN_RELIABLE_CHARS = 10
 // Conversations about as close as the best one (within SCORE_WINDOW) are kept, cut where the
-// scores drop by CLIFF or more from one to the next: how many is up to the query, not a fixed count.
-const SCORE_WINDOW = 0.08
-const CLIFF = 0.03
+// scores drop by CLIFF or more from one to the next: how many is up to the query, not a fixed count
+// (relevance.js).
 // Maximal marginal relevance: of those kept, each next one is picked for its closeness to the query
 // (MMR_LAMBDA) against its closeness to those already picked (1 − MMR_LAMBDA), so five
 // conversations saying the same do not crowd out the rest.
@@ -115,10 +119,7 @@ async function searchConversations (guildID, channelIDs, query, { limit = 5, bef
   }
 
   // As many as the scores say.
-  conversations.sort((x, y) => y.score - x.score)
-  let kept = conversations.filter(c => c.score >= conversations[0].score - SCORE_WINDOW)
-  const cliff = kept.findIndex((c, i) => i > 0 && kept[i - 1].score - c.score >= CLIFF)
-  if (cliff > 0) kept = kept.slice(0, cliff)
+  const kept = relevant(conversations)
 
   // For variety, and no message twice.
   const picked = []
@@ -142,22 +143,26 @@ async function searchConversations (guildID, channelIDs, query, { limit = 5, bef
   return picked.map(({ hit, messages, score }) => ({ hit, messages, score }))
 }
 
-// `videos` ordered by closeness to `query`, or null when the server's videos have no embeddings
-// yet (the caller then falls back to keywords).
+// Of `videos`, those that are about `query`, closest first: every one that holds all its words,
+// then those close in meaning, as many as are close enough (relevance.js), not the whole list in
+// order. Null when the server's videos have no embeddings yet (the caller then falls back to
+// keywords).
 async function rankVideos (guildID, videos, query) {
   // Only vectors from the current model: while a model change is being worked through, the rest wait.
   if (!await store.hasVideoEmbeddings(guildID, model())) return null
   const q = await embeddings.embedQuery(query)
   const scores = await store.videoScores(guildID, q, model())
   const words = wordsOf(query)
-  return videos
-    .map(v => ({
-      video: v,
-      score: (scores[v.video_id] || 0) +
-        (matchesAll(words, `${v.title}\n${v.description || ''}\n${v.summary || ''}`) ? KEYWORD_BONUS : 0)
-    }))
-    .sort((a, b) => b.score - a.score)
-    .map(r => r.video)
+  const scored = videos.map(v => ({
+    video: v,
+    cosine: scores[v.video_id] || 0,
+    keyword: matchesAll(words, `${v.title}\n${v.description || ''}\n${v.summary || ''}`)
+  }))
+  const byMeaning = relevant(scored, { score: r => r.cosine })
+  return [
+    ...scored.filter(r => r.keyword).sort((a, b) => b.cosine - a.cosine),
+    ...byMeaning.filter(r => !r.keyword)
+  ].map(r => r.video)
 }
 
 module.exports = { searchMessages, searchConversations, rankVideos, KEYWORD_BONUS, RRF_K, MIN_RELIABLE_CHARS, SCORE_WINDOW, CLIFF, MMR_LAMBDA }

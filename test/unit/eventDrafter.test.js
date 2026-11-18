@@ -130,6 +130,28 @@ describe('draft', () => {
     assert.equal(result.event.name, 'A')
   })
 
+  test('the lookups of one step run at the same time; with a question to the requester, one after another', async () => {
+    let running = 0
+    let most = 0
+    const slow = {
+      declarations: [{ name: 'a', description: 'a' }, { name: 'b', description: 'b' }, { name: 'ask_user', description: 'ask' }],
+      call: async name => {
+        running++
+        most = Math.max(most, running)
+        await new Promise(resolve => setTimeout(resolve, 20))
+        running--
+        return { result: name }
+      }
+    }
+    installGemini([[call('a'), call('b')], [call('submit_chat_reply', { text: 'ok' })]])
+    await draft({ request: '調べて', channelName: 'general', guild, tools: slow, now: NOW })
+    assert.equal(most, 2, 'both at once')
+    most = 0
+    installGemini([[call('a'), call('ask_user', { question: 'q', options: ['x'] })], [call('submit_chat_reply', { text: 'ok' })]])
+    await draft({ request: '調べて', channelName: 'general', guild, tools: slow, now: NOW })
+    assert.equal(most, 1, 'one after another when the requester is asked')
+  })
+
   test('a streamed reply is put back together: thought summaries left out, signatures and calls kept, usage taken', async () => {
     const enc = new TextEncoder()
     const events = [

@@ -333,6 +333,24 @@ describe('embeddingIndexer', () => {
   })
 })
 
+test('a query is embedded once: asked again, or by several at the same time, it is not sent again; after a failure it is', async () => {
+  configureGateway()
+  const batches = installEmbeddingModel()
+  const [a, b] = await Promise.all([embedQuery('児童'), embedQuery('児童')])
+  await embedQuery('児童')
+  assert.equal(batches.length, 1, 'one request for the same query')
+  assert.deepEqual(a, b)
+  await embedQuery('別の話')
+  assert.equal(batches.length, 2)
+  // A failed one is asked again the next time.
+  const working = global.fetch
+  global.fetch = async () => ({ ok: false, status: 500, text: async () => 'down' })
+  await assert.rejects(embedQuery('落ちる'))
+  global.fetch = working
+  await embedQuery('落ちる')
+  assert.equal(batches.length, 3)
+})
+
 describe('semanticSearch', () => {
   beforeEach(() => configureGateway())
 
@@ -436,7 +454,7 @@ describe('semanticSearch', () => {
     const [horror, minecraft] = await embed(['ホラー', 'マイクラ'])
     installEmbeddingStore({ videos: { 100: { v1: toBase64(minecraft), v2: toBase64(horror) } } })
     const videos = [{ video_id: 'v1', title: 'マイクラ建築' }, { video_id: 'v2', title: '深夜の実況' }]
-    assert.deepEqual((await semanticSearch.rankVideos('100', videos, 'こわいゲーム')).map(v => v.video_id), ['v2', 'v1'])
+    assert.deepEqual((await semanticSearch.rankVideos('100', videos, 'こわいゲーム')).map(v => v.video_id), ['v2'], 'not the Minecraft one, which is not about it')
     assert.equal(await semanticSearch.rankVideos('999', videos, 'x'), null)
   })
 })

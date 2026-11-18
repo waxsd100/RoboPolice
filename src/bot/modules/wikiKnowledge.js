@@ -7,6 +7,7 @@
 // characters are.
 //
 // Runs on the worker owning shard 0, like the other jobs for every server.
+const { relevant } = require('../utils/relevance')
 const prompts = require('../utils/prompts')
 const { knowledgeSetting } = require('../utils/knowledgeDefaults')
 const crypto = require('crypto')
@@ -235,10 +236,11 @@ async function searchWiki (query, { facts = 8, sections = 3 } = {}) {
   // The closest of the wiki's and of the X posts' together.
   const closest = async (find, limit) => (await Promise.all(stores().filter((_, i) => filled[i]).map(t => find(t, limit))))
     .flat().sort((a, b) => (b.score ?? 0) - (a.score ?? 0)).slice(0, limit)
-  const [knowledge, parts] = await Promise.all([
-    closest((t, n) => t.nearestFacts(q, model(), n), facts),
-    closest((t, n) => t.nearestSections(q, model(), n), sections)
-  ])
+  // Only what is close enough (relevance.js), not the closest whatever they are.
+  const [knowledge, parts] = (await Promise.all([
+    closest((t, n) => t.nearestFacts(q, model(), n), facts * 2),
+    closest((t, n) => t.nearestSections(q, model(), n), sections * 2)
+  ])).map((found, i) => relevant(found, { min: MIN_RELATED_SCORE, limit: i === 0 ? facts : sections }))
   if (!knowledge.length && !parts.length) return `wiki に「${query}」に近い記述は見つかりませんでした`
   const lines = [`wiki で「${query}」に意味が近いもの（近い順）:`]
   if (knowledge.length) {
@@ -264,9 +266,9 @@ async function relatedKnowledge (query, vector, { limit = 6, random = Math.rando
   const named = (await store.characterFacts().catch(() => []))
     .filter(c => [c.name, ...(c.aliases || [])].some(n => n && n.length >= 2 && text.includes(n)))
     .map(c => ({ kind: 'character', ...c }))
+  // Drawn from those close enough (relevance.js), not from all above MIN_RELATED_SCORE.
   const near = vector
-    ? (await Promise.all(stores().map(t => t.nearestFacts(vector, model(), limit * RELATED_CANDIDATES).catch(() => []))))
-        .flat().filter(f => (f.score ?? 0) >= MIN_RELATED_SCORE)
+    ? relevant((await Promise.all(stores().map(t => t.nearestFacts(vector, model(), limit * RELATED_CANDIDATES).catch(() => [])))).flat(), { min: MIN_RELATED_SCORE })
     : []
   const seen = new Set()
   const key = f => `${f.kind}:${f.name}`
