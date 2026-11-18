@@ -35,6 +35,8 @@ function maxSteps () {
   return Number.isInteger(n) && n >= 1 ? n : MAX_STEPS
 }
 const LAST_STEP_NOTE = prompts.render('chat/last-step')
+// Put in place of the tool results when they got the request refused (runAgent).
+const WITHHELD_NOTE = prompts.render('chat/withheld')
 // Dates in messages and event pages are written for this community's local time.
 const TIMEZONE = 'Asia/Tokyo'
 
@@ -2227,6 +2229,24 @@ function withRequestAlone (turn) {
   return { turn: { role: 'user', parts: [{ text: text.replace(GATHERED_SECTION, '').replace(/\n{3,}/g, '\n\n').replace(/^\n+/, '') }] }, dropped }
 }
 
+// Puts every tool result after `start` away (WITHHELD_NOTE in its place). Resolves to how many.
+function withholdToolResults (contents, start) {
+  let count = 0
+  for (let i = start; i < contents.length; i++) {
+    const turn = contents[i]
+    if (turn?.role !== 'user' || !turn.parts?.some(p => p.functionResponse)) continue
+    contents[i] = {
+      ...turn,
+      parts: turn.parts.map(p => {
+        if (!p.functionResponse) return p
+        count++
+        return { functionResponse: { ...p.functionResponse, response: { result: WITHHELD_NOTE } } }
+      })
+    }
+  }
+  return count
+}
+
 async function runAgent (contents, tools, submits = SUBMIT_DECLARATIONS) {
   const allowUncensored = contents.uncensoredR18 !== false && !contents.safetyFilter
   // Not offered again once the stronger model or the uncensored fallback took over this conversation.
@@ -2240,6 +2260,9 @@ async function runAgent (contents, tools, submits = SUBMIT_DECLARATIONS) {
     ...submits
   ]
   const start = contents.length
+  // Set when tool results got this turn refused (below); a correction may use tools again.
+  contents.toolsWithheld = false
+  contents.submitOnly = false
   const steps = maxSteps()
   for (let step = 0; step < steps; step++) {
     const last = step === steps - 1
@@ -2247,7 +2270,7 @@ async function runAgent (contents, tools, submits = SUBMIT_DECLARATIONS) {
     if (last && step > 0) contents[contents.length - 1].parts.push({ text: LAST_STEP_NOTE })
     let content
     try {
-      content = await generate(contents, declarationsFor(), last ? submits.map(d => d.name) : null, { deep: !!contents.deep, uncensored: !!contents.uncensored })
+      content = await generate(contents, declarationsFor(), last || contents.submitOnly ? submits.map(d => d.name) : null, { deep: !!contents.deep, uncensored: !!contents.uncensored })
     } catch (e) {
       if (contents.uncensored && !contents.geminiBlocked) {
         const currentModel = uncensoredModel(contents)
@@ -2279,6 +2302,22 @@ async function runAgent (contents, tools, submits = SUBMIT_DECLARATIONS) {
         contents.uncensoredError = e
         offered.length = 0
         step = -1
+        continue
+      }
+      // Blocked by Google after tools were used: what they read (other members' messages, the
+      // wiki, the channel) is most often what it is about, and asking again from the start would
+      // only read it all again. So the same step is asked once more with every tool result of this
+      // turn put away, and only a submit allowed: the answer is made from the request and what the
+      // model already knows. Not for the uncensored model, which Google does not judge, nor for a
+      // request that may be one for adult writing (the uncensored model answers instead, below).
+      const withheld = e.blocked && !contents.uncensored && contents.r18Maybe !== true && !contents.toolsWithheld ? withholdToolResults(contents, start) : 0
+      if (withheld) {
+        const failed = contents.deep ? deepModel() : replyModel(contents)
+        global.logger?.warn(`[GEMINI]: ${failed} refused (${e.blocked}) after ${withheld} tool result(s); asking again without them`)
+        addFallback(`${failed} refused (${e.blocked}) → without ${withheld} tool result(s)`)
+        contents.toolsWithheld = true
+        contents.submitOnly = true
+        step--
         continue
       }
       // Blocked by Google: once more with the request alone, without what was gathered around it

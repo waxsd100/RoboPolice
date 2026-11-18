@@ -94,3 +94,54 @@ JOIN LATERAL (
 LEFT JOIN guilds g ON g.id = l.guild_id;
 
 COMMENT ON COLUMN v_mention_threads.status IS '処理の状態（received・generating・waiting・done・interrupted）';
+
+-- blocked_by was empty when Google gave no `blocked` flag with its ratings, as it often does: a call
+-- that ended in SAFETY now names each category rated at or above the threshold it was sent with.
+CREATE OR REPLACE VIEW v_mention_ai_calls AS
+SELECT
+  a.mention_log_id,
+  l.created_at AS mention_at,
+  l.guild_id,
+  g.name AS guild_name,
+  l.user_name,
+  l.request,
+  l.kind AS mention_kind,
+  a.seq,
+  a.id AS call_id,
+  a.called_at,
+  a.model,
+  a.purpose,
+  a.finish_reason,
+  a.block_reason,
+  COALESCE(
+    (SELECT string_agg(r->>'category' || ':' || COALESCE(r->>'probability', '?'), ', ')
+       FROM jsonb_array_elements(COALESCE(a.safety_ratings, '[]'::jsonb)) r
+       WHERE (r->>'blocked')::boolean IS TRUE),
+    CASE WHEN a.finish_reason = 'SAFETY' THEN
+      (SELECT string_agg(r->>'category' || ':' || (r->>'probability'), ', ')
+         FROM jsonb_array_elements(COALESCE(a.safety_ratings, '[]'::jsonb)) r
+         JOIN jsonb_array_elements(COALESCE(a.safety_settings, '[]'::jsonb)) s ON s->>'category' = r->>'category'
+         WHERE (CASE r->>'probability' WHEN 'LOW' THEN 1 WHEN 'MEDIUM' THEN 2 WHEN 'HIGH' THEN 3 ELSE 0 END)
+            >= (CASE s->>'threshold' WHEN 'BLOCK_LOW_AND_ABOVE' THEN 1 WHEN 'BLOCK_MEDIUM_AND_ABOVE' THEN 2 WHEN 'BLOCK_ONLY_HIGH' THEN 3 ELSE 99 END))
+    END
+  ) AS blocked_by,
+  a.safety_ratings,
+  a.safety_settings,
+  array_length(a.tools, 1) AS tool_count,
+  a.tools,
+  (SELECT count(*) FROM mention_ai_messages m WHERE m.call_id = a.id AND m.direction = 'sent') AS sent_messages,
+  (SELECT string_agg(m.kind || COALESCE('(' || m.name || ')', '') || ': ' || left(m.content, 200), E'\n' ORDER BY m.seq)
+     FROM mention_ai_messages m WHERE m.call_id = a.id AND m.direction = 'received') AS received,
+  a.system_hash,
+  left(s.text, 200) AS system_head,
+  a.cached_content,
+  a.generation_config,
+  a.usage,
+  a.error,
+  a.attempts
+FROM mention_ai_calls a
+JOIN mention_logs l ON l.id = a.mention_log_id
+LEFT JOIN guilds g ON g.id = l.guild_id
+LEFT JOIN mention_ai_systems s ON s.hash = a.system_hash;
+
+COMMENT ON COLUMN v_mention_ai_calls.blocked_by IS '止めた安全カテゴリと確率（例: HARM_CATEGORY_HARASSMENT:MEDIUM）。Google が blocked を付けていればそれ、なければ SAFETY で終わった呼び出しの、送った閾値以上と判定されたカテゴリ。PROHIBITED_CONTENT（設定では変えられない判定）は finish_reason・block_reason を見る';
