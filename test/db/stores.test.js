@@ -800,6 +800,30 @@ describe('stores', { skip: !database.available && 'needs PGHOST' }, () => {
       const purge = require('../../src/db/interfaces/postgres/delete')
       for (const id of ['t1', 't2', 't3', 't4', 't5']) await purge.deleteMessage(id)
 
+      // A mention is logged when it arrives, and brought up to date as it is handled.
+      const live = await store.startMentionLog({ guildID: 'g1', channelID: 'c1', messageID: 's1', userID: 'u5', userName: 'eve', request: '児童' })
+      const status = async () => (await pool.query('SELECT status, kind, response, finished_at, gemini_calls FROM v_mention_logs WHERE id = $1', [live])).rows[0]
+      assert.deepEqual(await status(), { status: 'received', kind: null, response: null, finished_at: null, gemini_calls: 0 })
+      const transcript = { systems: { h9: 'SYS9' }, calls: [{ model: 'm', purpose: 'mention', system: 'h9', turns: [{ role: 'user', parts: [{ text: '依頼' }] }] }] }
+      await store.updateMentionLog(live, { status: 'generating', replyMessageID: 'sr1', aiTranscript: transcript })
+      transcript.calls.push({ model: 'm', purpose: 'mention', system: 'h9', fromTurn: 1, turns: [{ role: 'model', parts: [{ text: '答え' }] }] })
+      await store.updateMentionLog(live, { status: 'waiting', geminiCalls: 2, aiTranscript: transcript })
+      assert.equal((await status()).status, 'waiting')
+      await store.updateMentionLog(live, { status: 'done', kind: 'chat', response: 'やあ', aiTranscript: transcript })
+      const done = await status()
+      assert.deepEqual([done.status, done.kind, done.response, done.gemini_calls, done.finished_at !== null], ['done', 'chat', 'やあ', 2, true])
+      assert.deepEqual((await store.getAiCalls(live)).map(c => [c.seq, c.messages.length]), [[0, 1], [1, 1]], 'each call saved once, though the transcript was given three times')
+      // One left unfinished with nothing recorded for 30 minutes reads as interrupted.
+      const stuck = await store.startMentionLog({ guildID: 'g1', channelID: 'c1', messageID: 's2', userID: 'u5' })
+      await pool.query("UPDATE mention_logs SET status = 'generating', updated_at = now() - INTERVAL '31 minutes' WHERE id = $1", [stuck])
+      assert.equal((await pool.query('SELECT status FROM v_mention_logs WHERE id = $1', [stuck])).rows[0].status, 'interrupted')
+      assert.equal((await pool.query('SELECT status FROM v_mention_threads WHERE mention_log_id = $1', [stuck])).rows[0].status, 'interrupted')
+      // Deleting the second part of a split answer deletes its log, as deleting the first does.
+      const split = await store.saveMentionLog({ guildID: 'g1', channelID: 'c1', messageID: 's3', replyMessageID: 'sr3', followUpMessageIDs: ['sr3b'], userID: 'u5', kind: 'chat', request: 'x', response: 'y' })
+      await purge.deleteMessage('sr3b')
+      assert.equal((await pool.query('SELECT count(*)::int AS n FROM mention_logs WHERE id = $1', [split])).rows[0].n, 0)
+      for (const id of ['s1', 's2']) await purge.deleteMessage(id)
+
       const del = require('../../src/db/interfaces/postgres/delete')
       await del.deleteMessage('m101')
       await del.deleteMessages(['r102', 'm103'])

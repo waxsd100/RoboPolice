@@ -2,71 +2,72 @@
 const pool = require('../../clients/postgres')
 const { toRows } = require('../../../bot/utils/aiTranscript')
 
-async function saveMentionLog ({
-  guildID,
-  channelID,
-  messageID,
-  replyMessageID = null,
-  followUpMessageIDs = null,
-  userID,
-  userName = null,
-  kind,
-  request,
-  prompt = null,
-  response,
-  model = null,
-  promptTokens = 0,
-  cachedTokens = 0,
-  outputTokens = 0,
-  thinkingTokens = 0,
-  geminiCalls = 0,
-  blockReason = null,
-  fallbacks = null,
-  context = null,
-  aiTranscript = null,
-  repliedToMessageID = null
-}) {
+// A mention's log is made when it arrives (startMentionLog, status received) and brought up to
+// date as it is handled (updateMentionLog): its status, what was sent to the AI and each AI call as
+// it is made, and in the end its result (status done, kind, response).
+async function startMentionLog ({ guildID, channelID, messageID, userID, userName = null, request = '', repliedToMessageID = null }) {
+  return inTransaction(async client => {
+    const res = await client.query(
+      `INSERT INTO mention_logs (guild_id, channel_id, message_id, user_id, user_name, request, status)
+       VALUES ($1, $2, $3, $4, $5, $6, 'received') RETURNING id`,
+      [guildID, channelID, messageID, userID, userName, request ?? '']
+    )
+    const id = res.rows[0].id
+    await saveThread(client, id, guildID, repliedToMessageID)
+    return id
+  })
+}
+
+// The columns updateMentionLog sets, by the name it is given them under. Only those given (not
+// undefined) are changed.
+const COLUMNS = {
+  status: 'status',
+  kind: 'kind',
+  request: 'request',
+  prompt: 'prompt',
+  response: 'response',
+  replyMessageID: 'reply_message_id',
+  followUpMessageIDs: 'follow_up_message_ids',
+  model: 'model',
+  promptTokens: 'prompt_tokens',
+  cachedTokens: 'cached_tokens',
+  outputTokens: 'output_tokens',
+  thinkingTokens: 'thinking_tokens',
+  geminiCalls: 'gemini_calls',
+  blockReason: 'block_reason',
+  fallbacks: 'fallbacks',
+  context: 'context'
+}
+
+async function updateMentionLog (id, fields = {}) {
+  return inTransaction(async client => {
+    const sets = ['updated_at = now()']
+    const values = [id]
+    for (const [key, column] of Object.entries(COLUMNS)) {
+      if (fields[key] === undefined) continue
+      values.push(key === 'followUpMessageIDs' && !fields[key]?.length ? null : fields[key])
+      sets.push(`${column} = $${values.length}`)
+    }
+    if (fields.status === 'done') sets.push('finished_at = now()')
+    await client.query(`UPDATE mention_logs SET ${sets.join(', ')} WHERE id = $1`, values)
+    if (fields.aiTranscript) await saveTranscript(client, id, toRows(fields.aiTranscript))
+  })
+}
+
+// A mention logged all at once, as it ended (for a mention not followed along the way).
+async function saveMentionLog ({ guildID, channelID, messageID, userID, userName = null, request, repliedToMessageID = null, kind, response, ...rest }) {
+  const id = await startMentionLog({ guildID, channelID, messageID, userID, userName, request, repliedToMessageID })
+  await updateMentionLog(id, { ...rest, status: 'done', kind, response: response ?? null })
+  return id
+}
+
+async function inTransaction (work) {
   const client = await pool.getPostgresClient()
   try {
     await client.query('BEGIN')
-    const res = await client.query(
-      `INSERT INTO mention_logs (
-       guild_id, channel_id, message_id, reply_message_id,
-       user_id, user_name, kind, request, prompt, response,
-       model, prompt_tokens, cached_tokens, output_tokens, thinking_tokens, gemini_calls,
-       block_reason, fallbacks, context, follow_up_message_ids
-     ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20)
-     RETURNING id`,
-      [
-        guildID,
-        channelID,
-        messageID,
-        replyMessageID,
-        userID,
-        userName,
-        kind,
-        request ?? '',
-        prompt,
-        response ?? '',
-        model,
-        promptTokens || 0,
-        cachedTokens || 0,
-        outputTokens || 0,
-        thinkingTokens || 0,
-        geminiCalls || 0,
-        blockReason,
-        fallbacks,
-        context,
-        followUpMessageIDs?.length ? followUpMessageIDs : null
-      ]
-    )
-    const id = res.rows[0]?.id ?? null
-    if (id !== null) {
-      await saveThread(client, id, guildID, repliedToMessageID)
-      await saveTranscript(client, id, toRows(aiTranscript))
-    }
+    const result = await work(client)
     await client.query('COMMIT')
-    return id
+    return result
   } catch (e) {
     await client.query('ROLLBACK').catch(() => {})
     throw e
@@ -107,13 +108,18 @@ async function getThread (mentionLogID) {
 }
 
 // The AI calls of a mention (aiTranscript.toRows): each set of system instructions once (kept
-// across mentions), each call, and each message of it.
+// across mentions), each call, and each message of it. Calls already saved (written while the
+// mention was handled) are not saved again: a call's place (seq) does not change.
 async function saveTranscript (client, mentionLogID, rows) {
   if (!rows) return
-  for (const { hash, text } of rows.systems) {
+  const saved = Number((await client.query('SELECT count(*) AS n FROM mention_ai_calls WHERE mention_log_id = $1', [mentionLogID])).rows[0].n)
+  const calls = rows.calls.filter(call => call.seq >= saved)
+  if (!calls.length) return
+  const used = new Set(calls.map(call => call.systemHash))
+  for (const { hash, text } of rows.systems.filter(system => used.has(system.hash))) {
     await client.query('INSERT INTO mention_ai_systems (hash, text) VALUES ($1, $2) ON CONFLICT (hash) DO NOTHING', [hash, text])
   }
-  for (const call of rows.calls) {
+  for (const call of calls) {
     const res = await client.query(
       `INSERT INTO mention_ai_calls (
          mention_log_id, seq, called_at, model, purpose, attempts, system_hash, cached_content, tools,
@@ -154,7 +160,7 @@ async function getMentionLogs (guildID, { limit = 50, userID = null } = {}) {
   params.push(limit)
   const res = await pool.query(
     `SELECT id, guild_id, channel_id, message_id, reply_message_id, follow_up_message_ids, parent_id,
-            user_id, user_name, kind, request, prompt, response,
+            status, updated_at, finished_at, user_id, user_name, kind, request, prompt, response,
             model, prompt_tokens, cached_tokens, output_tokens, thinking_tokens, gemini_calls,
             block_reason, fallbacks, context, created_at
      FROM mention_logs
@@ -184,4 +190,4 @@ async function findPostCreator (guildID, path, kind = 'forum') {
   }
 }
 
-module.exports = { saveMentionLog, getMentionLogs, getAiCalls, getThread, findPostCreator }
+module.exports = { startMentionLog, updateMentionLog, saveMentionLog, getMentionLogs, getAiCalls, getThread, findPostCreator }

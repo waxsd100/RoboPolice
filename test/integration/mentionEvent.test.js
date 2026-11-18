@@ -2126,6 +2126,44 @@ describe('mention → event / forum post (integration)', () => {
       assert.match(logs[0].context, /^sent: /)
     })
 
+    test('the log is made when the mention arrives, and says where it stands until it is done', async () => {
+      const { installMentionLogStore } = require('../helpers/fakes')
+      const logs = installMentionLogStore()
+      const { channel, replies } = createChannel()
+      let seen = null
+      installGemini([
+        [call('list_channels')],
+        body => {
+          // The first AI call is in the log already, while the mention is still being handled.
+          seen = { status: logs[0].status, calls: logs[0].ai_transcript?.calls?.length ?? 0, kind: logs[0].kind }
+          return [submit({ name: '交流会', start: '2026-11-03T19:00:00+09:00' })]
+        }
+      ])
+      const done = mentionEvent.handle(mention(channel, '<@BOT> 11/3 19時から交流会'))
+      const [reply] = replies
+      await waitForButtons(reply, '登録する')
+      assert.deepEqual(seen, { status: 'generating', calls: 1, kind: null })
+      for (let i = 0; i < 50 && logs[0].status !== 'waiting'; i++) await new Promise(resolve => setImmediate(resolve))
+      assert.equal(logs[0].status, 'waiting', 'waiting for the requester to confirm the preview')
+      assert.equal(logs[0].reply_message_id, reply.id)
+      await press(reply, '登録する')
+      await done
+      assert.deepEqual([logs[0].status, logs[0].kind], ['done', 'event'])
+      assert.deepEqual(logs[0].statuses, ['received', 'generating', 'waiting', 'generating', 'done'])
+      assert.ok(logs[0].finished_at)
+      assert.equal(logs.length, 1)
+    })
+
+    test('a mention turned down before the AI is asked is logged too', async () => {
+      const { installMentionLogStore } = require('../helpers/fakes')
+      const logs = installMentionLogStore()
+      const { channel, replies } = createChannel()
+      await mentionEvent.handle(mention(channel, '<@!BOT>'))
+      assert.equal(logs.length, 1)
+      assert.deepEqual([logs[0].status, logs[0].kind, logs[0].response], ['done', 'refused', replies[0].state.content])
+      assert.deepEqual(logs[0].statuses, ['received', 'done'])
+    })
+
     test('a request Google refuses is logged with why, what went with it, and what was tried', async (t) => {
       t.mock.method(global.logger, 'warn', () => {})
       const { installMentionLogStore } = require('../helpers/fakes')
