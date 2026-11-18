@@ -825,6 +825,7 @@ function installMentionLogStore (logs = []) {
       channel_id: entry.channelID,
       message_id: entry.messageID,
       reply_message_id: entry.replyMessageID ?? null,
+      follow_up_message_ids: entry.followUpMessageIDs ?? null,
       user_id: entry.userID,
       user_name: entry.userName ?? null,
       kind: entry.kind,

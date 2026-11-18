@@ -695,6 +695,8 @@ async function handle (message) {
                 prevId = followUp.id
               }
             }
+            // A reply to any of them continues this mention's conversation (mention_logs.follow_up_message_ids).
+            outcome.followUpMessageIDs = sentIds.slice(2)
             rememberThreadModel(sentIds, result.conversation?.contents)
             return
           }
@@ -856,6 +858,7 @@ async function handle (message) {
           channelID: message.channel.id,
           messageID: message.id,
           replyMessageID: reply?.id || null,
+          followUpMessageIDs: outcome.followUpMessageIDs || null,
           userID: message.author.id,
           userName: message.author.username || null,
           kind: outcome.kind,
