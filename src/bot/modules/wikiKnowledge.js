@@ -18,6 +18,7 @@ const { isGatewayConfigured } = require('../utils/aiGateway')
 const { callGemini, resolveTaskConfig } = require('./eventDrafter')
 const { withoutCharCount } = require('../utils/textClean')
 const { looksLikeInjection } = require('../utils/untrusted')
+const { mentionsMinor, isUnsafeMinorContent, sanitizeUntrustedLines, MIN_MINOR_RELATED_SCORE, MAX_MINOR_RELATED_ITEMS } = require('../utils/minorSafety')
 const store = require('../../db/interfaces/postgres/wiki')
 const xStore = require('../../db/interfaces/postgres/xKnowledge')
 const discordStore = require('../../db/interfaces/postgres/discordKnowledge')
@@ -95,6 +96,9 @@ const FACT_SCHEMA = {
   }
 }
 
+const isSafeFact = f => !isUnsafeMinorContent(`${f.name}\n${f.content}\n${(f.aliases || []).join(' ')}`)
+const isSafeSection = s => !isUnsafeMinorContent(`${s.title} / ${s.heading}\n${s.text}`)
+
 // The knowledge in one part: [{ kind, name, aliases, content }].
 async function extractFacts (section, { guildID = null } = {}) {
   const { model: m, thinking, flex } = await resolveTaskConfig('extract', guildID)
@@ -105,8 +109,9 @@ async function extractFacts (section, { guildID = null } = {}) {
   const raw = JSON.parse(content.parts.map(p => p.text || '').join('') || '[]')
   return (Array.isArray(raw) ? raw : [])
     .filter(f => KINDS.includes(f?.kind) && String(f.name || '').trim() && String(f.content || '').trim())
-    // Stored knowledge goes into every later prompt: an instruction slipped into it would stay.
+    // Stored knowledge goes into every later prompt: an instruction or CSAM-triggering entry slipped into it would stay.
     .filter(f => !looksLikeInjection(`${f.name}\n${f.content}\n${(f.aliases || []).join(' ')}`))
+    .filter(isSafeFact)
     .slice(0, MAX_FACTS)
     .map(f => ({
       kind: f.kind,
@@ -129,8 +134,8 @@ async function extractPending ({ log = () => {} } = {}) {
       } catch (e) {
         if (e.blocked) {
           // Google refuses this text (e.g. PROHIBITED_CONTENT) and would again: it is marked done with
-          // no knowledge, not sent again until it changes. Its text is still embedded and searchable.
-          await tables.saveFacts(section.url, section.position, section.text_hash, [])
+          // no knowledge and its section embedding is cleared so search_wiki never injects it either.
+          await tables.saveFacts(section.url, section.position, section.text_hash, [], { blocked: true, model: model() })
             .then(() => global.logger.info(`[KNOWLEDGE]: Skipped ${section.title} / ${section.heading}: Gemini blocked it (${e.blocked})`))
             .catch(err => log(`Could not mark ${section.title} / ${section.heading} as skipped: ${err.message}`))
         } else {
@@ -152,9 +157,16 @@ async function embedPending () {
     for (;;) {
       const batch = await tables.sectionsToEmbed(current, EMBED_BATCH)
       if (batch.length === 0) break
-      const vectors = await embed(batch.map(s => `${s.title} / ${s.heading}\n${s.text}`))
-      for (const [i, s] of batch.entries()) await tables.saveSectionEmbedding(s.url, s.position, vectors[i], current)
-      done += batch.length
+      const safe = []
+      for (const s of batch) {
+        if (isSafeSection(s)) safe.push(s)
+        else await tables.saveSectionEmbedding(s.url, s.position, null, current)
+      }
+      if (safe.length) {
+        const vectors = await embed(safe.map(s => `${s.title} / ${s.heading}\n${s.text}`))
+        for (const [i, s] of safe.entries()) await tables.saveSectionEmbedding(s.url, s.position, vectors[i], current)
+      }
+      done += safe.length
     }
     for (;;) {
       const batch = await tables.factsToEmbed(current, EMBED_BATCH)
@@ -202,6 +214,7 @@ async function refresh ({ force = false } = {}) {
       global.logger.info(`[WIKI]: Read ${read.length} page(s) of ${root.origin}${gone ? `, ${gone} gone` : ''}`)
     }
     await processPending(m => global.logger.warn(`[WIKI]: ${m}`))
+    await require('./streamerStyle').refresh().catch(e => global.logger.warn(`[PERSONA]: ${e.message}`))
     // Emojis described before the wiki said who the characters are get described again.
     require('./emojiDescriber').startDescriber()
     return true
@@ -233,21 +246,30 @@ async function searchWiki (query, { facts = 8, sections = 3 } = {}) {
   const filled = await Promise.all(stores().map(t => t.hasSections()))
   if (!filled.some(Boolean)) return 'wiki はまだ読み込まれていません（しばらくすると読み込まれます）'
   const q = await embedQuery(query)
+  const minorQuery = mentionsMinor(query)
+  const minScore = minorQuery ? Math.max(MIN_RELATED_SCORE, MIN_MINOR_RELATED_SCORE) : MIN_RELATED_SCORE
+  const factLimit = minorQuery ? Math.min(facts, MAX_MINOR_RELATED_ITEMS * 2) : facts
+  const sectionLimit = minorQuery ? Math.min(sections, 1) : sections
   // The closest of the wiki's and of the X posts' together.
   const closest = async (find, limit) => (await Promise.all(stores().filter((_, i) => filled[i]).map(t => find(t, limit))))
     .flat().sort((a, b) => (b.score ?? 0) - (a.score ?? 0)).slice(0, limit)
-  // Only what is close enough (relevance.js), not the closest whatever they are.
-  const [knowledge, parts] = (await Promise.all([
+  const [rawFacts, rawSections] = await Promise.all([
     closest((t, n) => t.nearestFacts(q, model(), n), facts * 2),
     closest((t, n) => t.nearestSections(q, model(), n), sections * 2)
-  ])).map((found, i) => relevant(found, { min: MIN_RELATED_SCORE, limit: i === 0 ? facts : sections }))
+  ])
+  // Unsafe minor co-occurrences are stripped before scoring; minor-term queries also require a tighter match.
+  const knowledge = relevant(rawFacts.filter(isSafeFact), { min: minScore, limit: factLimit })
+  const parts = relevant(rawSections.filter(isSafeSection), { min: minScore, limit: sectionLimit })
   if (!knowledge.length && !parts.length) return `wiki に「${query}」に近い記述は見つかりませんでした`
   const lines = [`wiki で「${query}」に意味が近いもの（近い順）:`]
   if (knowledge.length) {
     lines.push('', '知識:', ...knowledge.map(f => `- [${KIND_LABELS[f.kind]}] ${f.name}${f.aliases?.length ? `（${f.aliases.join('、')}）` : ''}: ${f.content}（${f.title} / ${f.heading}）`))
   }
   if (parts.length) {
-    lines.push('', '本文:', ...parts.map(s => `- ${s.title} / ${s.heading}（${s.url}）\n${s.text.slice(0, MAX_RESULT_TEXT)}${s.text.length > MAX_RESULT_TEXT ? '…' : ''}`))
+    lines.push('', '本文:', ...parts.map(s => {
+      const body = sanitizeUntrustedLines(s.text)
+      return `- ${s.title} / ${s.heading}（${s.url}）\n${body.slice(0, MAX_RESULT_TEXT)}${body.length > MAX_RESULT_TEXT ? '…' : ''}`
+    }))
   }
   return lines.join('\n')
 }
@@ -263,18 +285,22 @@ const RELATED_CANDIDATES = 3 // times `limit`
 async function relatedKnowledge (query, vector, { limit = 6, random = Math.random } = {}) {
   if (!searchable() || !String(query || '').trim()) return []
   const text = String(query)
+  const minorQuery = mentionsMinor(text)
+  const minScore = minorQuery ? Math.max(MIN_RELATED_SCORE, MIN_MINOR_RELATED_SCORE) : MIN_RELATED_SCORE
+  const effectiveLimit = minorQuery ? Math.min(limit, MAX_MINOR_RELATED_ITEMS) : limit
   const named = (await store.characterFacts().catch(() => []))
-    .filter(c => [c.name, ...(c.aliases || [])].some(n => n && n.length >= 2 && text.includes(n)))
+    .filter(isSafeFact)
+    .filter(c => [c.name, ...(c.aliases || [])].some(n => n && n.length >= 2 && (!minorQuery || !mentionsMinor(n) || text.trim() === n) && text.includes(n)))
     .map(c => ({ kind: 'character', ...c }))
   // Drawn from those close enough (relevance.js), not from all above MIN_RELATED_SCORE.
   const near = vector
-    ? relevant((await Promise.all(stores().map(t => t.nearestFacts(vector, model(), limit * RELATED_CANDIDATES).catch(() => [])))).flat(), { min: MIN_RELATED_SCORE })
+    ? relevant((await Promise.all(stores().map(t => t.nearestFacts(vector, model(), limit * RELATED_CANDIDATES).catch(() => [])))).flat().filter(isSafeFact), { min: minScore })
     : []
   const seen = new Set()
   const key = f => `${f.kind}:${f.name}`
-  const picked = named.filter(f => !seen.has(key(f)) && seen.add(key(f))).slice(0, limit)
+  const picked = named.filter(f => !seen.has(key(f)) && seen.add(key(f))).slice(0, effectiveLimit)
   const pool = near.filter(f => !seen.has(key(f)) && seen.add(key(f)))
-  return [...picked, ...weightedSample(pool, limit - picked.length, f => f.score - MIN_RELATED_SCORE + 0.05, random)]
+  return [...picked, ...weightedSample(pool, effectiveLimit - picked.length, f => f.score - minScore + 0.05, random)]
     .map(f => `- [${KIND_LABELS[f.kind]}] ${f.name}${f.aliases?.length ? `（${f.aliases.join('、')}）` : ''}: ${f.content}`)
 }
 

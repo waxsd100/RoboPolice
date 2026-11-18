@@ -22,6 +22,7 @@ const { isGatewayConfigured } = require('../utils/aiGateway')
 const { callGemini, resolveTaskConfig } = require('./eventDrafter')
 const { withoutCharCount } = require('../utils/textClean')
 const { looksLikeInjection } = require('../utils/untrusted')
+const { mentionsMinor, isUnsafeMinorContent, sanitizeUntrustedLines, MIN_MINOR_RELATED_SCORE, MAX_MINOR_RELATED_ITEMS } = require('../utils/minorSafety')
 const { publicChannels } = require('./discordKnowledge')
 const { fromStoredContent } = require('../../db/interfaces/postgres/create')
 const store = require('../../db/interfaces/postgres/serverLore')
@@ -166,8 +167,9 @@ async function extractFacts (chunk, guildID = null) {
     guildID) || '[]')
   return (Array.isArray(raw) ? raw : [])
     .filter(f => KINDS.includes(f?.kind) && String(f.name || '').trim() && String(f.content || '').trim())
-    // Kept for every later reply: an instruction slipped into it would stay.
+    // Kept for every later reply: an instruction or unsafe minor entry slipped into it would stay.
     .filter(f => !looksLikeInjection(`${f.name}\n${f.content}`))
+    .filter(f => !isUnsafeMinorContent(`${f.name}\n${f.content}`))
     .slice(0, MAX_FACTS)
     .map(f => ({ kind: f.kind, name: String(f.name).trim().slice(0, 100), content: withoutCharCount(String(f.content).trim()).slice(0, 300) }))
 }
@@ -283,17 +285,21 @@ function startServerLore () {
 // among the close ones like the community knowledge (wikiKnowledge.relatedKnowledge), and how its
 // members talk. { facts: [line], style } for the server profile.
 const MIN_RELATED_SCORE = 0.55
-async function relatedLore (guildID, vectorOf, { limit = 5, random = Math.random } = {}) {
+async function relatedLore (guildID, vectorOf, { query = '', limit = 5, random = Math.random } = {}) {
   if (!enabled()) return { facts: [], style: null }
   const style = await store.getStyle(guildID).catch(() => null)
   const vector = await store.hasFacts(guildID).catch(() => false) ? await vectorOf() : null
   const near = vector ? await store.nearestFacts(guildID, vector, model(), limit * 3).catch(() => []) : []
+  const minorQuery = mentionsMinor(query)
+  const minScore = minorQuery ? Math.max(MIN_RELATED_SCORE, MIN_MINOR_RELATED_SCORE) : MIN_RELATED_SCORE
+  const effectiveLimit = minorQuery ? Math.min(limit, MAX_MINOR_RELATED_ITEMS) : limit
+  const safeNear = near.filter(f => !isUnsafeMinorContent(`${f.name}\n${f.content}`))
   const { weightedSample } = require('./wikiKnowledge')
   // Drawn from those close enough (relevance.js), not from all above MIN_RELATED_SCORE.
-  const close = relevant(near, { min: MIN_RELATED_SCORE })
-  const facts = weightedSample(close, limit, f => f.score - MIN_RELATED_SCORE + 0.05, random)
+  const close = relevant(safeNear, { min: minScore })
+  const facts = weightedSample(close, effectiveLimit, f => f.score - minScore + 0.05, random)
     .map(f => `- [${KIND_LABELS[f.kind]}] ${f.name}: ${f.content}（${f.week} の週）`)
-  return { facts, style: style?.style || null }
+  return { facts, style: style?.style ? sanitizeUntrustedLines(style.style) : null }
 }
 
 module.exports = { startServerLore, runDue, refreshGuild, extractFacts, relatedLore, embedPending, enabled, weekOf, fit, liveLines, KIND_LABELS }

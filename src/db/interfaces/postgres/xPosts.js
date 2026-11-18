@@ -32,4 +32,16 @@ async function postsOfMonth (account, month) {
   return rows.rows
 }
 
-module.exports = { savePosts, knownIds, postsOfMonth }
+// Recent own posts across `accounts` (newest first): [{ id, account, url, text, created_at, reply_to }].
+async function recentPosts (accounts, limit = 200) {
+  const list = (accounts || []).map(a => String(a || '').toLowerCase()).filter(Boolean)
+  if (!list.length) return []
+  const rows = await pool.query(
+    `SELECT id, account, url, text, created_at, reply_to FROM x_posts
+     WHERE lower(account) = ANY($1::text[])
+     ORDER BY created_at DESC LIMIT $2`,
+    [list, limit])
+  return rows.rows
+}
+
+module.exports = { savePosts, knownIds, postsOfMonth, recentPosts }

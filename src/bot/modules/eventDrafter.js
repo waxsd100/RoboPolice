@@ -11,6 +11,7 @@ const geminiLoad = require('../utils/geminiLoad')
 const aiCache = require('../utils/aiCache')
 const sokudan = require('../utils/sokudan')
 const prompts = require('../utils/prompts')
+const { mentionsMinor, isUnsafeMinorContent } = require('../utils/minorSafety')
 const { currentUsage, recordTokens, addTokens, addModel, addFallback, addContext, setPrompt } = require('../utils/geminiUsage')
 const aiTranscript = require('../utils/aiTranscript')
 
@@ -99,17 +100,18 @@ function modelName () {
 // character notes from the operator (CHAT_PERSONA), e.g. a catchphrase or how to address members.
 // How far dirty jokes and adult requests go is said here, by the server's safety filter (open or
 // filtered), and never in the request: next to words of a request such as 児童, Google blocks the
-// whole request. Two versions of these instructions, so two caches.
+// whole request — and when the request itself mentions minor terms (omitMature), adult policy text
+// is omitted altogether so sexual terms never co-occur with minor terms in the Gemini payload.
 // uncensored: for the uncensored model, whose own rules say how far adult requests go
 // (prompts/chat/uncensored/rules.md) in place of this.
 // settings: the server's way of speaking and reply length (serverSettings), also in these
 // instructions and never in the request; '' to leave them out (a story by the uncensored model).
-function systemInstruction ({ uncensored = false, safetyFilter = false, settings = '' } = {}) {
+function systemInstruction ({ uncensored = false, safetyFilter = false, omitMature = false, settings = '' } = {}) {
   return prompts.render('chat/system', {
     modelName: modelName(),
     persona: (process.env.CHAT_PERSONA || '').trim(),
     uncensored,
-    mature: uncensored ? '' : prompts.render(safetyFilter ? 'chat/mature/filtered' : 'chat/mature/open'),
+    mature: (uncensored || omitMature) ? '' : prompts.render(safetyFilter ? 'chat/mature/filtered' : 'chat/mature/open'),
     settings
   })
 }
@@ -1003,6 +1005,8 @@ function resolveReferencedDirective (request, referenced = null, decision = null
 }
 
 function isUncensoredDirective (request, referenced = null, decision = null) {
+  const refText = typeof referenced === 'string' ? referenced : referenced?.text
+  if (mentionsMinor(request, refText) || isUnsafeMinorContent(request) || isUnsafeMinorContent(refText)) return false
   const explicit = parseModelDirective(request).directive
   if (explicit) return isDirectiveUncensoredValue(explicit)
   return isDirectiveUncensoredValue(resolveReferencedDirective(request, referenced, decision))
@@ -1039,7 +1043,7 @@ function applyModelDirective (contents, directive, { inherited = false } = {}) {
     contents.explicitDirective = !inherited
     return true
   }
-  const allowUncensored = contents.uncensoredR18 !== false && !contents.safetyFilter
+  const allowUncensored = contents.uncensoredR18 !== false && !contents.safetyFilter && !contents.minorTerm
   if (!isUncensoredConfigured() || !allowUncensored) return false
   if (lower === '1' || lower === 'uncensored' || lower === 'fallback' || lower === 'heretic') {
     contents.deep = false
@@ -1151,6 +1155,9 @@ function r18RouteThreshold () {
 function r18Route ({ request, referenced = null, decision = null }) {
   const req = String(request || '')
   const ref = typeof referenced === 'string' ? referenced : referenced?.text
+  if (mentionsMinor(req, ref) || isUnsafeMinorContent(req) || isUnsafeMinorContent(ref)) {
+    return { route: false, why: null, maybe: false, disallowHandover: true }
+  }
   const nonChatIntent = Boolean(decision?.intent && decision.intent !== 'chat')
   const lookupAsk = isLookupOrMetaQuestion(req)
   const imageAsk = isImageGenerationRequest(req)
@@ -2142,7 +2149,7 @@ async function generate (contents, declarations, allowed = null, { deep = false,
   const model = deep ? deepModel() : replyModel(contents)
   const strictSafety = !!contents.safetyFilter
   const prefix = {
-    systemInstruction: { parts: [{ text: systemInstruction({ safetyFilter: !!contents.safetyFilter, settings: serverSettings(contents) }) }] },
+    systemInstruction: { parts: [{ text: systemInstruction({ safetyFilter: !!contents.safetyFilter, omitMature: !!contents.omitMature, settings: serverSettings(contents) }) }] },
     tools: [{ functionDeclarations: declarations }],
     // ANY: every turn must be a tool call, so the loop always ends in a submit_* call.
     toolConfig: { functionCallingConfig: { mode: 'ANY', ...(allowed ? { allowedFunctionNames: allowed } : {}) } }
@@ -2249,11 +2256,17 @@ function withholdToolResults (contents, start) {
 
 async function runAgent (contents, tools, submits = SUBMIT_DECLARATIONS) {
   const allowUncensored = contents.uncensoredR18 !== false && !contents.safetyFilter
-  // Not offered again once the stronger model or the uncensored fallback took over this conversation.
+  // Not offered again once the stronger model or the uncensored fallback took over this conversation,
+  // and never offered alongside minor terms or after a safety-block retry strips mature policy.
   const offered = [
     ...(deepModel() && !contents.deepRefused && !contents.uncensored && !contents.uncensoredFailed ? [THINK_DEEPER_DECLARATION] : []),
-    ...(allowUncensored && !contents.isEdit && !contents.disallowUncensoredHandover && isUncensoredConfigured() && !contents.uncensored && !contents.uncensoredFailed ? [HAND_OVER_R18_DECLARATION] : [])
+    ...(allowUncensored && !contents.isEdit && !contents.minorTerm && !contents.omitMature && !contents.disallowUncensoredHandover && isUncensoredConfigured() && !contents.uncensored && !contents.uncensoredFailed ? [HAND_OVER_R18_DECLARATION] : [])
   ]
+  const stripMature = () => {
+    contents.omitMature = true
+    const idx = offered.indexOf(HAND_OVER_R18_DECLARATION)
+    if (idx !== -1) offered.splice(idx, 1)
+  }
   const declarationsFor = () => [
     ...tools.declarations,
     ...offered.filter(d => !(contents.deep && d === THINK_DEEPER_DECLARATION) && !contents.uncensored),
@@ -2315,6 +2328,7 @@ async function runAgent (contents, tools, submits = SUBMIT_DECLARATIONS) {
         const failed = contents.deep ? deepModel() : replyModel(contents)
         global.logger?.warn(`[GEMINI]: ${failed} refused (${e.blocked}) after ${withheld} tool result(s); asking again without them`)
         addFallback(`${failed} refused (${e.blocked}) → without ${withheld} tool result(s)`)
+        stripMature()
         contents.toolsWithheld = true
         contents.submitOnly = true
         step--
@@ -2332,6 +2346,7 @@ async function runAgent (contents, tools, submits = SUBMIT_DECLARATIONS) {
         addFallback(`${failed} refused (${e.blocked}) → without ${alone.dropped.join(', ')}`)
         contents.splice(start)
         contents[0] = alone.turn
+        stripMature()
         contents.requestAlone = true
         step = -1
         continue
@@ -2365,6 +2380,7 @@ async function runAgent (contents, tools, submits = SUBMIT_DECLARATIONS) {
         addFallback(`${deepModel()} ${why} → ${fallback}`)
         contents.splice(start)
         for (let i = 0; i < contents.length; i++) contents[i] = stripModelTurnThoughts(contents[i])
+        if (e.blocked) stripMature()
         contents.deep = false
         contents.deepRefused = true
         offered.length = 0
@@ -2590,6 +2606,9 @@ async function draft ({ request, referenced, recent = [], channelName, channelID
   conversation.contents.hasReference = !!referenced
   conversation.contents.hasPictures = attachedPics.length > 0 || images.length > 0
   if (attachedPics.length) conversation.contents.attachedPictures = attachedPics
+  const minorTerm = mentionsMinor(request, referenced?.text)
+  conversation.contents.minorTerm = minorTerm
+  if (minorTerm) conversation.contents.omitMature = true
   // How sokudan reads the request (what is asked for, a story, R18, how much thought), asked once
   // for every request; `decision` when the caller already asked (null: it gave no answer). Kept
   // with the conversation: the thinking level and how the uncensored model is written to go by it.
@@ -2601,14 +2620,14 @@ async function draft ({ request, referenced, recent = [], channelName, channelID
   if (decision) conversation.contents.sokudanDecision = decision
   const threadDirective = !parsed.directive ? resolveReferencedDirective(request, rawReferenced, decision) : null
   const r18 = r18Route({ request, referenced, decision })
-  conversation.contents.r18Maybe = r18.maybe
-  conversation.contents.disallowUncensoredHandover = !!r18.disallowHandover
+  conversation.contents.r18Maybe = minorTerm ? false : r18.maybe
+  conversation.contents.disallowUncensoredHandover = !!(minorTerm || r18.disallowHandover)
   if (parsed.directive && applyModelDirective(conversation.contents, parsed.directive)) {
     const chosen = conversation.contents.uncensored
       ? uncensoredModel(conversation.contents)
       : (conversation.contents.deep ? deepModel() : replyModel(conversation.contents))
     global.logger?.info(`[GEMINI]: Explicit model directive "${parsed.directive}" in request; using ${chosen}`)
-  } else if (conversation.contents.uncensoredR18 && isUncensoredConfigured() && r18.route) {
+  } else if (!minorTerm && conversation.contents.uncensoredR18 && isUncensoredConfigured() && r18.route) {
     conversation.contents.uncensored = true
     conversation.contents.directUncensored = true
     conversation.contents.uncensoredR18Mode = true
@@ -2642,6 +2661,12 @@ async function revise (conversation, correction) {
     : (conversation.contents.uncensored ? null : (conversation.contents.deep ? deepModel() : replyModel(conversation.contents)))
   conversation.contents.isRevision = true
   conversation.contents.requestText = correction
+  if (mentionsMinor(correction)) {
+    conversation.contents.minorTerm = true
+    conversation.contents.omitMature = true
+    conversation.contents.r18Maybe = false
+    conversation.contents.disallowUncensoredHandover = true
+  }
   conversation.contents.push({
     role: 'user',
     parts: conversation.lastCalls.map(call => ({
@@ -2659,7 +2684,7 @@ async function revise (conversation, correction) {
       ? uncensoredModel(conversation.contents)
       : (conversation.contents.deep ? deepModel() : replyModel(conversation.contents))
     global.logger?.info(`[GEMINI]: Explicit model directive "${parsed.directive}" in revision; using ${chosen}`)
-  } else if (allowUncensored && !conversation.contents.uncensored && isUncensoredConfigured()) {
+  } else if (allowUncensored && !conversation.contents.minorTerm && !conversation.contents.uncensored && isUncensoredConfigured()) {
     const decision = sokudan.isUsable() ? await sokudan.classifyMentionRequest(correction) : null
     if (decision) conversation.contents.sokudanDecision = decision
     const r18 = r18Route({ request: correction, decision })

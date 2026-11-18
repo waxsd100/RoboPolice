@@ -707,7 +707,7 @@ async function handle (message) {
       const [server, recent, pictures] = await Promise.all([
         directR18
           ? null
-          : describeServer(guild, member, message.channel.id, { query: request, context: referenced?.othersText, queryVector, slim: slimProfile, extraEmojis }).catch(e => {
+          : describeServer(guild, member, message.channel.id, { query: request, context: referenced?.othersText, queryVector, slim: slimProfile, extraEmojis, streamerPersona: streamerPersona !== false }).catch(e => {
             global.logger.warn(`Could not describe server ${guild.id}: ${e.message}`)
             return null
           }),
@@ -755,7 +755,17 @@ async function handle (message) {
           if (!previous) {
             // Rewritten to read less like AI-made Japanese (replyPolish.js), but not what the
             // stronger model or the uncensored fallback wrote.
-            if (!result.conversation?.contents?.deep && !result.conversation?.contents?.uncensored) result = { ...result, text: await polish(result.text, { guildID: guild.id }) }
+            if (!result.conversation?.contents?.deep && !result.conversation?.contents?.uncensored) {
+              const useStreamer = streamerPersona !== false
+              result = {
+                ...result,
+                text: await polish(result.text, {
+                  guildID: guild.id,
+                  streamerPersona: useStreamer,
+                  styleProfile: useStreamer ? require('./streamerStyle').cachedProfile() : null
+                })
+              }
+            }
             const { content, embeds } = await withLinkCards(withServerChannels(withServerEmojis(checkedLinks(result, guild), guild, extraEmojis), guild, message.member))
             outcome = { kind: 'chat', response: content }
             const chunks = splitChatMessages(content, debugFooter ? tokenFooter(usage) : '')

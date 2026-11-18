@@ -75,4 +75,17 @@ async function saveBackfill (guildID, channelID, beforeID, done) {
     [channelID, guildID, beforeID, done])
 }
 
-module.exports = { savePosts, deletePost, deletePosts, postsOfMonth, backfillState, saveBackfill }
+// Recent messages of `authorIDs` in `guildIDs` (newest first):
+// [{ id, guild_id, channel_id, channel_name, author_id, content, created_at }].
+async function recentPosts (guildIDs, authorIDs, limit = 200) {
+  if (!guildIDs?.length || !authorIDs?.length) return []
+  const rows = await pool.query(
+    `SELECT p.id, c.guild_id, p.channel_id, COALESCE(c.name, p.channel_id) AS channel_name, p.author_id, p.content, p.created_at
+     FROM discord_posts p JOIN discord_channels c ON c.id = p.channel_id
+     WHERE c.guild_id = ANY($1::text[]) AND p.author_id = ANY($2::text[])
+     ORDER BY p.created_at DESC LIMIT $3`,
+    [guildIDs, authorIDs, limit])
+  return rows.rows
+}
+
+module.exports = { savePosts, deletePost, deletePosts, postsOfMonth, recentPosts, backfillState, saveBackfill }

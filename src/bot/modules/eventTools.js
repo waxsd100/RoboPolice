@@ -18,6 +18,8 @@ const semanticSearch = require('./semanticSearch')
 const { messageEmbeddingsEnabled } = require('./embeddingIndexer')
 const { wrap } = require('../utils/untrusted')
 const { relevant } = require('../utils/relevance')
+const { mentionsMinor, isUnsafeMinorContent, sanitizeUntrustedLines, MAX_MINOR_RELATED_ITEMS } = require('../utils/minorSafety')
+const streamerStyle = require('./streamerStyle')
 const serverLore = require('./serverLore')
 const serverRules = require('./serverRules')
 const loreStore = require('../../db/interfaces/postgres/serverLore')
@@ -254,7 +256,7 @@ function createTools ({ guild, member, ask, progress = () => {} }) {
       }
       const page = await urlFetcher.fetchPageText(url)
       sources.push(page.url)
-      return page.text
+      return sanitizeUntrustedLines(page.text)
     },
     async get_discord_message ({ link }) {
       const channelLink = String(link).match(CHANNEL_LINK)
@@ -274,18 +276,20 @@ function createTools ({ guild, member, ask, progress = () => {} }) {
       const count = Math.min(Math.max(parseInt(limit, 10) || 20, 1), MAX_RECENT_MESSAGES)
       const messages = await global.bot.getMessages(channelID, { limit: count })
       sources.push(`<#${channel.id}>`)
-      return messages.filter(Boolean).map(m => formatMessage(m)).join('\n') // null: one Eris could not read
+      return messages.filter(m => m && !isUnsafeMinorContent(m.content)).map(m => formatMessage(m)).join('\n')
     },
     async search_channel_history ({ channel_id: channelID, query }) {
       const channel = await readableChannel(channelID)
       // Stored text is escaped for log embeds; search and show what people actually wrote.
-      const rows = (await messageDB.getChannelHistory(channelID, HISTORY_SCAN))
+      const allRows = (await messageDB.getChannelHistory(channelID, HISTORY_SCAN))
         .map(r => ({ ...r, content: fromStoredContent(r.content) }))
         .filter(r => r.content)
+      sources.push(`<#${channel.id}>`)
+      if (allRows.length === 0) return `<#${channel.id}> の保存済みメッセージはありません（保存しているのは削除・編集ログを設定したサーバーの、保持期間内のメッセージのみ）`
+      const rows = allRows.filter(r => !isUnsafeMinorContent(r.content))
+      const minorQuery = mentionsMinor(query)
       const words = String(query || '').toLowerCase().split(/\s+/).filter(Boolean)
       const matches = rows.filter(r => words.every(w => (r.content || '').toLowerCase().includes(w)))
-      sources.push(`<#${channel.id}>`)
-      if (rows.length === 0) return `<#${channel.id}> の保存済みメッセージはありません（保存しているのは削除・編集ログを設定したサーバーの、保持期間内のメッセージのみ）`
       const name = id => guild.members.get(id)?.username || id
       if (words.length && messageEmbeddingsEnabled()) {
         const close = await semanticSearch.searchMessages(guild.id, [channel.id], query, { limit: MAX_HISTORY_RESULTS }).catch(e => {
@@ -293,9 +297,11 @@ function createTools ({ guild, member, ask, progress = () => {} }) {
           return null
         })
         if (close) {
-          // Messages too new to be embedded yet are found by their words.
+          // Messages too new to be embedded yet are found by their words (capped on minor-term queries).
           const found = new Set(close.map(m => m.id))
-          const recent = matches.filter(r => !found.has(r.id)).slice(0, 10)
+          const recent = (!minorQuery || close.length === 0)
+            ? matches.filter(r => !found.has(r.id)).slice(0, minorQuery ? MAX_MINOR_RELATED_ITEMS : 10)
+            : []
           return [
             `<#${channel.id}> の保存済みメッセージから「${query}」に意味が近いもの（近い順）:`,
             ...close.map(r => `[${new Date(r.ts).toISOString()}] ${name(r.author_id)}: ${(r.content || '').replace(/\s+/g, ' ').slice(0, MAX_HISTORY_TEXT)}`),
@@ -304,13 +310,14 @@ function createTools ({ guild, member, ask, progress = () => {} }) {
         }
       }
       // Oldest first, like reading the channel.
-      const lines = matches.slice(0, MAX_HISTORY_RESULTS).reverse()
+      const matchCap = minorQuery ? MAX_MINOR_RELATED_ITEMS * 2 : MAX_HISTORY_RESULTS
+      const lines = matches.slice(0, matchCap).reverse()
         .map(r => `[${new Date(r.ts).toISOString()}] ${name(r.author_id)}: ${(r.content || '').replace(/\s+/g, ' ').slice(0, MAX_HISTORY_TEXT)}`)
-      const oldest = new Date(rows[rows.length - 1].ts).toISOString()
+      const oldest = new Date(allRows[allRows.length - 1].ts).toISOString()
       return [
-        `<#${channel.id}> の保存済みメッセージ ${rows.length} 件（${oldest} 以降）${words.length ? `のうち「${query}」を含む ${matches.length} 件` : ''}、古い順:`,
+        `<#${channel.id}> の保存済みメッセージ ${allRows.length} 件（${oldest} 以降）${words.length ? `のうち「${query}」を含む ${matches.length} 件` : ''}、古い順:`,
         ...lines,
-        ...(matches.length > MAX_HISTORY_RESULTS ? [`…ほか ${matches.length - MAX_HISTORY_RESULTS} 件（query で絞り込めます）`] : [])
+        ...(matches.length > matchCap ? [`…ほか ${matches.length - matchCap} 件（query で絞り込めます）`] : [])
       ].join('\n')
     },
     async search_server_messages ({ query }) {
@@ -391,7 +398,8 @@ function createTools ({ guild, member, ask, progress = () => {} }) {
       const roles = (m.roles || []).map(id => guild.roles.get(id)).filter(r => r && !r.managed).sort((a, b) => (b.position ?? 0) - (a.position ?? 0)).map(r => r.name)
       const channels = [...guild.channels.values()].filter(c => canRead(c, member) && canRead(c, global.bot.user.id))
       // The stored messages only where reading them for this is declared (SERVER_LORE, serverLore.js).
-      const messages = serverLore.enabled() && channels.length ? await loreStore.memberMessages(guild.id, m.id, channels.map(c => c.id), MAX_MEMBER_MESSAGES) : []
+      const rawMessages = serverLore.enabled() && channels.length ? await loreStore.memberMessages(guild.id, m.id, channels.map(c => c.id), MAX_MEMBER_MESSAGES) : []
+      const messages = rawMessages.filter(r => !isUnsafeMinorContent(fromStoredContent(r.content)))
       const channelName = id => guild.channels.get(id)?.name || id
       return [
         `表示名: ${displayName(m)}（@${m.username}、ID: ${m.id}）${m.bot ? '（BOT）' : ''}`,
@@ -414,7 +422,7 @@ function createTools ({ guild, member, ask, progress = () => {} }) {
       sources.push(link)
       const meta = await lookupYouTubeVideo(videoID)
       const metaLine = meta ? `動画情報: ${formatVideo({ ...meta, description: '', summary: null }).replace(/^- /, '')}\n` : ''
-      return `${metaLine}${link} の内容の要約${cached ? '（保存済み）' : ''}:\n${linkTimestamps(summary, videoID)}`
+      return `${metaLine}${link} の内容の要約${cached ? '（保存済み）' : ''}:\n${linkTimestamps(sanitizeUntrustedLines(summary), videoID)}`
     }
   }
 
@@ -488,6 +496,8 @@ function formatYouTubeVideoDetail (v) {
   const views = formatCount(v.view_count, '回')
   const likes = formatCount(v.like_count)
   const comments = formatCount(v.comment_count, '件')
+  const safeDesc = v.description ? sanitizeUntrustedLines(v.description) : ''
+  const safeSummary = v.summary ? sanitizeUntrustedLines(v.summary) : ''
   const lines = [
     '動画情報（YouTube Data API / 保存データ）:',
     `題名: ${v.title}`,
@@ -499,8 +509,8 @@ function formatYouTubeVideoDetail (v) {
     views ? `再生回数: ${views}` : '',
     likes ? `高評価数: ${likes}` : '',
     comments ? `コメント数: ${comments}` : '',
-    v.description ? `概要欄:\n${v.description}` : '',
-    v.summary ? `保存済みの内容要約:\n${linkTimestamps(v.summary, v.video_id)}` : ''
+    safeDesc ? `概要欄:\n${safeDesc}` : '',
+    safeSummary ? `保存済みの内容要約:\n${linkTimestamps(safeSummary, v.video_id)}` : ''
   ]
   return lines.filter(Boolean).join('\n')
 }
@@ -552,10 +562,11 @@ function formatVideo (v) {
   const comments = formatCount(v.comment_count, '件')
   if (comments) details.push(`コメント ${comments}`)
   const head = `- ${when ? `[${when}] ` : ''}${v.title}（${details.join('、')}）${v.url}`
-  const description = (v.description || '').replace(/\s+/g, ' ').slice(0, 200)
+  const description = sanitizeUntrustedLines(v.description || '').replace(/\s+/g, ' ').slice(0, 200)
+  const safeSummary = v.summary ? sanitizeUntrustedLines(v.summary).replace(/\s+/g, ' ').slice(0, 400) : ''
   const lines = [head]
   if (description) lines.push(`  ${description}`)
-  if (v.summary) lines.push(`  内容の要約: ${linkTimestamps(v.summary.replace(/\s+/g, ' ').slice(0, 400), v.video_id)}`)
+  if (safeSummary) lines.push(`  内容の要約: ${linkTimestamps(safeSummary, v.video_id)}`)
   return lines.join('\n')
 }
 
@@ -592,6 +603,7 @@ function inferVideoSort (query, explicitSort, allowed = VALID_VIDEO_SORTS) {
 async function searchYouTube (guildID, query, sort) {
   const linkedIds = parseVideoIds(query)
   const cleanedQuery = linkedIds.length ? String(query || '').replace(/https?:\/\/\S+/gi, ' ') : String(query || '')
+  const minorQuery = mentionsMinor(cleanedQuery)
   const rawWords = cleanedQuery.toLowerCase().split(/\s+/).filter(Boolean)
   const words = filterVideoQueryWords(rawWords, YOUTUBE_META_TOKEN)
   const sortMode = inferVideoSort(query, sort)
@@ -613,10 +625,11 @@ async function searchYouTube (guildID, query, sort) {
 
   // Summaries of linked videos from other channels are knowledge too.
   const externalFetchedSet = new Set(externalVideos.map(v => v.video_id))
+  const otherCap = minorQuery ? MAX_MINOR_RELATED_ITEMS : MAX_YOUTUBE_RESULTS
   const others = (await youtubeDB.getOtherSummaries())
-    .filter(s => !externalFetchedSet.has(s.video_id) && (linkedIds.includes(s.video_id) || matchesAll(words.length ? words : rawWords, s.summary)))
-    .map(s => `- https://www.youtube.com/watch?v=${s.video_id}\n  内容の要約: ${linkTimestamps(s.summary.replace(/\s+/g, ' ').slice(0, 400), s.video_id)}`)
-  const otherLines = others.length ? ['', `その他の要約済み動画（${others.length} 件）:`, ...others.slice(0, MAX_YOUTUBE_RESULTS)] : []
+    .filter(s => !externalFetchedSet.has(s.video_id) && !isUnsafeMinorContent(s.summary) && (linkedIds.includes(s.video_id) || matchesAll(words.length ? words : rawWords, s.summary)))
+    .map(s => `- https://www.youtube.com/watch?v=${s.video_id}\n  内容の要約: ${linkTimestamps(sanitizeUntrustedLines(s.summary).replace(/\s+/g, ' ').slice(0, 400), s.video_id)}`)
+  const otherLines = others.length ? ['', `その他の要約済み動画（${others.length} 件）:`, ...others.slice(0, otherCap)] : []
 
   if (!knowledge) return [...externalLines, 'BOT が見ている YouTube チャンネルはありません', ...otherLines].filter(Boolean).join('\n')
   const { videos } = knowledge
@@ -624,14 +637,15 @@ async function searchYouTube (guildID, query, sort) {
   if (!channels.length) return [...externalLines, 'YouTube チャンネルはまだ情報を取得していません（しばらくすると自動で取得されます）', ...otherLines].filter(Boolean).join('\n')
   const channelName = new Map(channels.map(c => [c.channel_id, c.title]))
   const videoText = v => `${v.video_id || ''}\n${v.title}\n${v.description || ''}\n${v.summary || ''}`
+  const safeVideos = videos.filter(v => !isUnsafeMinorContent(videoText(v)))
   const linkedOnly = linkedIds.length > 0 && words.length === 0
   const matches = linkedOnly
-    ? videos.filter(v => linkedIds.includes(v.video_id))
-    : videos.filter(v => (linkedIds.length && linkedIds.includes(v.video_id)) || matchesAll(words, videoText(v)))
-  const rawMatches = rawWords.length ? videos.filter(v => matchesAll(rawWords, videoText(v))) : matches
+    ? safeVideos.filter(v => linkedIds.includes(v.video_id))
+    : safeVideos.filter(v => (linkedIds.length && linkedIds.includes(v.video_id)) || matchesAll(words, videoText(v)))
+  const rawMatches = rawWords.length ? safeVideos.filter(v => matchesAll(rawWords, videoText(v))) : matches
   // By meaning when embeddings exist and relevance order was asked, so different wording still finds the video.
   const ranked = !linkedOnly && sortMode === 'relevance' && rawWords.length
-    ? await semanticSearch.rankVideos(guildID, videos, cleanedQuery).catch(e => {
+    ? await semanticSearch.rankVideos(guildID, safeVideos, cleanedQuery).catch(e => {
       global.logger.warn(`Semantic YouTube search failed, using keywords: ${e.message}`)
       return null
     })
@@ -641,36 +655,37 @@ async function searchYouTube (guildID, query, sort) {
   if (linkedOnly) {
     ordered = matches
   } else if (sortMode === 'views') {
-    const poolVideos = words.length ? matches : videos
+    const poolVideos = words.length ? matches : safeVideos
     ordered = [...poolVideos].sort((a, b) => (b.view_count ?? -1) - (a.view_count ?? -1) || new Date(b.published_at || 0) - new Date(a.published_at || 0))
   } else if (sortMode === 'oldest') {
-    const poolVideos = words.length ? matches : videos
+    const poolVideos = words.length ? matches : safeVideos
     ordered = [...poolVideos].sort((a, b) => new Date(a.published_at || 0) - new Date(b.published_at || 0))
   } else if (sortMode === 'newest') {
-    const poolVideos = words.length ? matches : videos
+    const poolVideos = words.length ? matches : safeVideos
     ordered = [...poolVideos].sort((a, b) => new Date(b.published_at || 0) - new Date(a.published_at || 0))
   } else {
     // Otherwise lives first: "the next stream" is the usual question.
     ordered = ranked || [...matches.filter(v => LIVE_LABELS[v.live_status]), ...matches.filter(v => !LIVE_LABELS[v.live_status])]
   }
 
-  let shown = await refreshShownVideos(ordered.slice(0, MAX_YOUTUBE_RESULTS))
+  const videoCap = (minorQuery && words.length) ? MAX_MINOR_RELATED_ITEMS * 2 : MAX_YOUTUBE_RESULTS
+  let shown = await refreshShownVideos(ordered.slice(0, videoCap))
   if (sortMode === 'views') {
     shown = [...shown].sort((a, b) => (b.view_count ?? -1) - (a.view_count ?? -1) || new Date(b.published_at || 0) - new Date(a.published_at || 0))
   }
   const renderVideo = v => channels.length > 1 && channelName.get(v.channel_id) ? formatVideo(v).replace(/^- /, `- 【${channelName.get(v.channel_id)}】`) : formatVideo(v)
-  const fallbackCandidates = (!ranked && !linkedOnly && words.length && !matches.length && !others.length && !externalVideos.length && videos.length)
+  const fallbackCandidates = (!ranked && !linkedOnly && !minorQuery && words.length && !matches.length && !others.length && !externalVideos.length && safeVideos.length)
     ? (sortMode === 'views'
-        ? [...videos].sort((a, b) => (b.view_count ?? -1) - (a.view_count ?? -1) || new Date(b.published_at || 0) - new Date(a.published_at || 0))
+        ? [...safeVideos].sort((a, b) => (b.view_count ?? -1) - (a.view_count ?? -1) || new Date(b.published_at || 0) - new Date(a.published_at || 0))
         : sortMode === 'oldest'
-          ? [...videos].sort((a, b) => new Date(a.published_at || 0) - new Date(b.published_at || 0))
-          : [...videos.filter(v => v.summary), ...videos.filter(v => !v.summary)]
+          ? [...safeVideos].sort((a, b) => new Date(a.published_at || 0) - new Date(b.published_at || 0))
+          : [...safeVideos.filter(v => v.summary), ...safeVideos.filter(v => !v.summary)]
       ).slice(0, MAX_YOUTUBE_RESULTS)
     : []
   const fallbackVideos = fallbackCandidates.length ? await refreshShownVideos(fallbackCandidates) : []
 
   const missingStatsCount = sortMode === 'views'
-    ? (words.length ? matches : videos).filter(v => v.view_count === null || v.view_count === undefined).length
+    ? (words.length ? matches : safeVideos).filter(v => v.view_count === null || v.view_count === undefined).length
     : 0
   let heading = ''
   if (linkedOnly) {
@@ -679,7 +694,7 @@ async function searchYouTube (guildID, query, sort) {
     const missingNote = missingStatsCount > shown.length ? `、うち再生数未取得 ${missingStatsCount - shown.filter(v => v.view_count != null).length} 件` : ''
     heading = words.length
       ? `「${query}」に一致した動画（再生数の多い順、${matches.length} 件${missingNote}）:`
-      : `再生数の多い順の動画（${videos.length} 件${missingNote}）:`
+      : `再生数の多い順の動画（${safeVideos.length} 件${missingNote}）:`
   } else if (sortMode === 'oldest') {
     heading = words.length ? `「${query}」に一致した動画（古い順、${matches.length} 件）:` : '古い順の動画:'
   } else if (ranked) {
@@ -708,7 +723,7 @@ async function searchYouTube (guildID, query, sort) {
     `保存している動画 ${videos.length} 件、うち内容の要約あり ${videos.filter(v => v.summary).length} 件`,
     heading,
     ...shown.map(renderVideo),
-    ...(!ranked && !linkedOnly && ordered.length > MAX_YOUTUBE_RESULTS ? [`…ほか ${ordered.length - MAX_YOUTUBE_RESULTS} 件（query で絞り込めます）`] : []),
+    ...(!ranked && !linkedOnly && ordered.length > videoCap ? [`…ほか ${ordered.length - videoCap} 件（query で絞り込めます）`] : []),
     ...(fallbackVideos.length
       ? ['', '（指定の語が直接含まれる動画はありませんでした。以下は保存済みの動画です。内容が合うものがあればここから選んでください）', ...fallbackVideos.map(renderVideo)]
       : []),
@@ -726,7 +741,7 @@ async function searchTwitch (query, sort) {
   const sortMode = inferVideoSort(query, sort, TWITCH_SORTS)
   const [channels, archives] = await Promise.all([twitchDB.getOverview(), twitchDB.getArchives()])
   if (!channels.length) return 'BOT が見ている Twitch チャンネルはありません'
-  const filtered = archives.filter(v => matchesAll(words, `${v.title}\n${v.description || ''}`))
+  const filtered = archives.filter(v => !isUnsafeMinorContent(`${v.title}\n${v.description || ''}`) && matchesAll(words, `${v.title}\n${v.description || ''}`))
   const matches = sortMode === 'views'
     ? [...filtered].sort((a, b) => (Number(b.view_count) || 0) - (Number(a.view_count) || 0) || new Date(b.published_at || 0) - new Date(a.published_at || 0))
     : sortMode === 'oldest'
@@ -761,13 +776,14 @@ const STEAM_META_WORDS = /^(?:おすすめ|オススメ|推奨|ゲーム|神ゲ�
 async function searchSteam (query, section = 'all') {
   const rawWords = String(query || '').toLowerCase().split(/\s+/).filter(Boolean)
   const words = rawWords.filter(w => !STEAM_META_WORDS.test(w))
-  const [profiles, games, reviews, wishlist] = await Promise.all([
+  const [profiles, games, rawReviews, wishlist] = await Promise.all([
     steamDB.getOverview(),
     steamDB.getGames(),
     steamDB.getReviews(),
     steamDB.getWishlist()
   ])
   if (!profiles.length) return 'BOT が見ている Steam アカウントはありません'
+  const reviews = rawReviews.filter(r => !isUnsafeMinorContent(`${r.name || ''}\n${r.content || ''}`))
 
   const profileUrl = p => `https://steamcommunity.com/${p.custom_url ? `id/${p.custom_url}` : `profiles/${p.steam_id}`}`
   const whoPrefix = p => profiles.length > 1 ? `【${p.persona_name || p.account_ref}】` : ''
@@ -1166,8 +1182,8 @@ function worthSearching (text) {
 const MAX_RELATED_MESSAGES = 3
 const MIN_MESSAGE_SCORE = 0.65
 const MAX_RELATED_MESSAGE_CHARS = 120
-async function relatedMessages (guild, member, vectorOf) {
-  if (!messageEmbeddingsEnabled()) return []
+async function relatedMessages (guild, member, vectorOf, { query = '' } = {}) {
+  if (!messageEmbeddingsEnabled() || mentionsMinor(query)) return []
   const channels = [...guild.channels.values()].filter(c => canRead(c, member) && canRead(c, global.bot.user.id))
   if (!channels.length) return []
   const vector = await vectorOf()
@@ -1176,7 +1192,11 @@ async function relatedMessages (guild, member, vectorOf) {
   const near = relevant(await embeddingStore.nearestMessages(guild.id, channels.map(c => c.id), vector, { model: embeddingModel(), limit: MAX_RELATED_MESSAGES * 2 }), { min: MIN_MESSAGE_SCORE })
   const byID = new Map((await embeddingStore.getMessages(near.map(r => r.message_id))).map(m => [m.id, m]))
   return near.map(r => byID.get(r.message_id))
-    .filter(m => m && m.author_id !== global.bot.user.id && embeddableText(fromStoredContent(m.content)))
+    .filter(m => {
+      if (!m || m.author_id === global.bot.user.id) return false
+      const text = fromStoredContent(m.content)
+      return embeddableText(text) && !isUnsafeMinorContent(text)
+    })
     .slice(0, MAX_RELATED_MESSAGES)
     .map(m => {
       const who = guild.members.get(m.author_id)
@@ -1190,15 +1210,19 @@ async function relatedMessages (guild, member, vectorOf) {
 // thread, the channel's theme also steers which knowledge, lore, past talk and emojis come first.
 // slim: for bare greetings, edits, or pure creative stories that do not touch server data, send
 // only the server name, style, and compact emoji codes.
-async function describeServer (guild, member, requestChannelID, { query = '', context = '', queryVector = null, slim = false, extraEmojis = null } = {}) {
+async function describeServer (guild, member, requestChannelID, { query = '', context = '', queryVector = null, slim = false, extraEmojis = null, streamerPersona = true } = {}) {
   // Ensure the channel cache is readable before building the profile.
   guild.channels.values()
   const lines = [`サーバー名: ${guild.name}`]
   const sharedEmojis = Array.isArray(extraEmojis) ? extraEmojis : await sharedOwnerEmojis(guild, requestChannelID)
   const mentioned = mentionedEmojiIDs([query, context])
   if (slim) {
+    if (streamerPersona !== false && streamerStyle.enabled()) {
+      const personaLines = await streamerStyle.sectionForPrompt({ slim: true }).catch(() => [])
+      if (personaLines.length) lines.push('', ...personaLines)
+    }
     const lore = serverLore.enabled()
-      ? await serverLore.relatedLore(guild.id, () => Promise.resolve(null)).catch(() => ({ facts: [], style: null }))
+      ? await serverLore.relatedLore(guild.id, () => Promise.resolve(null), { query }).catch(() => ({ facts: [], style: null }))
       : { facts: [], style: null }
     if (lore.style) lines.push('', '### このサーバーのノリ（メンバーの会話から）', lore.style)
     const ownEmojis = usableEmojis(guild)
@@ -1251,6 +1275,10 @@ async function describeServer (guild, member, requestChannelID, { query = '', co
     }
     return embedding
   }
+  if (streamerPersona !== false && streamerStyle.enabled()) {
+    const personaLines = await streamerStyle.sectionForPrompt({ vectorOf, slim: false }).catch(() => [])
+    if (personaLines.length) lines.push('', ...personaLines)
+  }
   const knowledgeText = [theme, ...texts].filter(Boolean).join('\n')
   const known = wikiKnowledge.searchable() ? await wikiKnowledge.relatedKnowledge(knowledgeText, await vectorOf()).catch(() => []) : []
   if (known.length) {
@@ -1258,10 +1286,10 @@ async function describeServer (guild, member, requestChannelID, { query = '', co
       'キャラクターが何者かはここ（と search_wiki）で確かめ、絵文字の説明（見た目）から決めつけないこと。', ...known)
   }
 
-  const lore = await serverLore.relatedLore(guild.id, vectorOf).catch(() => ({ facts: [], style: null }))
+  const lore = await serverLore.relatedLore(guild.id, vectorOf, { query: knowledgeText }).catch(() => ({ facts: [], style: null }))
   if (lore.style) lines.push('', '### このサーバーのノリ（メンバーの会話から）', lore.style)
   if (lore.facts.length) lines.push('', '### このサーバーのこと（メンバーの会話から。身内ネタ・用語・出来事など）', ...lore.facts)
-  const said = await relatedMessages(guild, member, vectorOf).catch(() => [])
+  const said = await relatedMessages(guild, member, vectorOf, { query: knowledgeText }).catch(() => [])
   if (said.length) lines.push('', '### このサーバーで前に出た、依頼に近い発言', ...said)
 
   const emojiLines = await emojiSection(guild, vectorOf, { sharedEmojis, mentioned })

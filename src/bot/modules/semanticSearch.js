@@ -9,6 +9,7 @@ const store = require('../../db/interfaces/postgres/embeddings')
 const { fromStoredContent } = require('../../db/interfaces/postgres/create')
 const { embeddableText } = require('../utils/messageNoise')
 const { relevant, WINDOW: SCORE_WINDOW, CLIFF } = require('../utils/relevance')
+const { mentionsMinor, isUnsafeMinorContent, MIN_MINOR_RELATED_SCORE, MAX_MINOR_RELATED_ITEMS } = require('../utils/minorSafety')
 
 const KEYWORD_BONUS = 0.15
 // Reciprocal rank fusion: a message's score is the sum of 1 / (RRF_K + its rank) in each ranking
@@ -39,18 +40,35 @@ async function candidates (guildID, channelIDs, query, limit) {
 // The stored messages of `channelIDs` closest to `query`, best first, by meaning and by keyword
 // fused: [{ id, author_id, channel_id, ts, content, score }]. Content is the text as written.
 // Those found by meaning only as many as are close enough (relevance.js); those holding the words
-// all.
+// all unless `query` contains minor-related terms, where dumping every unrelated keyword match into
+// one prompt triggers Google's child-safety classifier.
 async function searchMessages (guildID, channelIDs, query, { limit = 30 } = {}) {
+  const minorQuery = mentionsMinor(query)
+  const effectiveLimit = minorQuery ? Math.min(limit, MAX_MINOR_RELATED_ITEMS * 2) : limit
   const { ranked, fused, cosine, byKeyword } = await candidates(guildID, channelIDs, query, limit * 2)
-  const close = new Set(relevant([...cosine.entries()], { score: ([, c]) => c }).map(([id]) => id))
-  const kept = ranked.filter(id => close.has(id) || byKeyword.has(id))
+  const close = new Set(relevant([...cosine.entries()], {
+    score: ([, c]) => c,
+    ...(minorQuery ? { min: MIN_MINOR_RELATED_SCORE, limit: effectiveLimit } : {})
+  }).map(([id]) => id))
+  let unembeddedKeywordKept = 0
+  const kept = ranked.filter(id => {
+    if (close.has(id)) return true
+    if (!byKeyword.has(id)) return false
+    if (!minorQuery) return true
+    // On minor queries, drop embedded messages whose meaning is far from the query, and cap
+    // unembedded keyword-only matches so unrelated messages sharing the word never flood the prompt.
+    if (cosine.has(id)) return false
+    if (unembeddedKeywordKept >= MAX_MINOR_RELATED_ITEMS) return false
+    unembeddedKeywordKept++
+    return true
+  })
   const found = new Map((await store.getMessages(kept)).map(m => [m.id, textOf(m)]))
   return kept
     .map(id => found.get(id))
-    // Gone since, or noise embedded before it was left out (messageNoise.js).
-    .filter(m => m && embeddableText(m.content))
+    // Gone since, unsafe minor co-occurrence, or noise embedded before it was left out (messageNoise.js).
+    .filter(m => m && embeddableText(m.content) && !isUnsafeMinorContent(m.content))
     .map(m => ({ ...m, score: fused.get(m.id) }))
-    .slice(0, limit)
+    .slice(0, effectiveLimit)
 }
 
 // A message shorter than this says little alone (「こどもでーす」): in a conversation it counts for
@@ -82,8 +100,9 @@ const reliability = text => Math.min(1, [...String(text || '').trim()].length / 
 // sharing a message with another.
 // [{ hit: { id, author_id, channel_id, ts, content }, messages: [same, oldest first], score }]
 async function searchConversations (guildID, channelIDs, query, { limit = 5, before = 1, after = 2, withinSeconds = 30 * 60 } = {}) {
+  const minorQuery = mentionsMinor(query)
   const { q, ranked, cosine } = await candidates(guildID, channelIDs, query, POOL * 4)
-  const hits = (await store.getMessages(ranked.slice(0, POOL))).map(textOf).filter(m => embeddableText(m.content))
+  const hits = (await store.getMessages(ranked.slice(0, POOL))).map(textOf).filter(m => embeddableText(m.content) && !isUnsafeMinorContent(m.content))
   if (!hits.length) return []
   const order = new Map(ranked.map((id, i) => [id, i]))
   hits.sort((x, y) => order.get(x.id) - order.get(y.id))
@@ -103,7 +122,7 @@ async function searchConversations (guildID, channelIDs, query, { limit = 5, bef
     const byID = new Map()
     // The reply chain first: it is the conversation for certain; the neighbours in time fill in.
     for (const m of [hit, parent, ...replies, ...around]) {
-      if (m && !byID.has(m.id) && (m.id === hit.id || embeddableText(m.content)) && byID.size < MAX_CONVERSATION) byID.set(m.id, m)
+      if (m && !byID.has(m.id) && !isUnsafeMinorContent(m.content) && (m.id === hit.id || embeddableText(m.content)) && byID.size < MAX_CONVERSATION) byID.set(m.id, m)
     }
     conversations.push({ hit, messages: [...byID.values()].sort((x, y) => new Date(x.ts) - new Date(y.ts)) })
   }
@@ -119,7 +138,7 @@ async function searchConversations (guildID, channelIDs, query, { limit = 5, bef
   }
 
   // As many as the scores say.
-  const kept = relevant(conversations)
+  const kept = relevant(conversations, minorQuery ? { min: MIN_MINOR_RELATED_SCORE } : undefined)
 
   // For variety, and no message twice.
   const picked = []
@@ -153,15 +172,25 @@ async function rankVideos (guildID, videos, query) {
   const q = await embeddings.embedQuery(query)
   const scores = await store.videoScores(guildID, q, model())
   const words = wordsOf(query)
-  const scored = videos.map(v => ({
+  const minorQuery = mentionsMinor(query)
+  const safeVideos = videos.filter(v => !isUnsafeMinorContent(`${v.title}\n${v.description || ''}\n${v.summary || ''}`))
+  const scored = safeVideos.map(v => ({
     video: v,
     cosine: scores[v.video_id] || 0,
     keyword: matchesAll(words, `${v.title}\n${v.description || ''}\n${v.summary || ''}`)
   }))
-  const byMeaning = relevant(scored, { score: r => r.cosine })
+  const byMeaning = relevant(scored, {
+    score: r => r.cosine,
+    ...(minorQuery ? { min: MIN_MINOR_RELATED_SCORE, limit: MAX_MINOR_RELATED_ITEMS * 2 } : {})
+  })
+  const keywordHits = scored
+    .filter(r => r.keyword && (!minorQuery || r.cosine >= 0.55 || Object.keys(scores).length === 0))
+    .sort((a, b) => b.cosine - a.cosine)
+  const cappedKeywords = minorQuery ? keywordHits.slice(0, MAX_MINOR_RELATED_ITEMS * 2) : keywordHits
+  const pickedIds = new Set(cappedKeywords.map(r => r.video.video_id))
   return [
-    ...scored.filter(r => r.keyword).sort((a, b) => b.cosine - a.cosine),
-    ...byMeaning.filter(r => !r.keyword)
+    ...cappedKeywords,
+    ...byMeaning.filter(r => !pickedIds.has(r.video.video_id))
   ].map(r => r.video)
 }
 

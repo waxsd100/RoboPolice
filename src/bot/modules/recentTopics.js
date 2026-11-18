@@ -13,6 +13,7 @@ const crypto = require('crypto')
 const { embed, embedQuery, model, similarity, toBase64, fromBase64 } = require('../utils/embeddings')
 const { embeddableText } = require('../utils/messageNoise')
 const { relevant } = require('../utils/relevance')
+const { mentionsMinor, isUnsafeMinorContent, MIN_MINOR_RELATED_SCORE, MAX_MINOR_RELATED_ITEMS } = require('../utils/minorSafety')
 const aiCache = require('../utils/aiCache')
 
 const DEFAULT_MESSAGES = 50
@@ -72,7 +73,7 @@ async function relatedRecent (message, request, {
   const since = now - setting('MENTION_RECENT_HOURS', DEFAULT_HOURS) * 60 * 60 * 1000
   const page = await getMessages(message.channel.id, { limit: setting('MENTION_RECENT_MESSAGES', DEFAULT_MESSAGES, 100), before: message.id })
   const candidates = page
-    .filter(m => m && !m.author?.bot && m.timestamp >= since)
+    .filter(m => m && !m.author?.bot && m.timestamp >= since && !isUnsafeMinorContent(m.content))
     .map(m => ({ m, text: embeddableText(m.content) }))
     .filter(c => c.text)
   if (!candidates.length) return []
@@ -109,8 +110,11 @@ async function relatedRecent (message, request, {
   }
   const vectors = candidates.map(c => cachedVector(`${currentModel}\n${c.text}`))
   const guild = message.channel.guild
+  const minorQuery = mentionsMinor(request)
+  const minScore = minorQuery ? Math.max(MIN_SCORE, MIN_MINOR_RELATED_SCORE) : MIN_SCORE
+  const topicLimit = minorQuery ? Math.min(MAX_TOPICS, MAX_MINOR_RELATED_ITEMS) : MAX_TOPICS
   // Only those close enough to the request (relevance.js), then in the order they were said.
-  return relevant(candidates.map((c, i) => ({ ...c, score: similarity(query, vectors[i]) })), { min: MIN_SCORE, limit: MAX_TOPICS })
+  return relevant(candidates.map((c, i) => ({ ...c, score: similarity(query, vectors[i]) })), { min: minScore, limit: topicLimit })
     .sort((a, b) => a.m.timestamp - b.m.timestamp)
     .map(({ m }) => {
       const at = new Intl.DateTimeFormat('ja-JP', { timeZone: 'Asia/Tokyo', hour: '2-digit', minute: '2-digit' }).format(new Date(m.timestamp))
