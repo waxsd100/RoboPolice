@@ -872,7 +872,8 @@ async function handle (message) {
           blockReason: outcome.blockReason || null,
           fallbacks: usage.fallbacks?.length ? usage.fallbacks.join('; ') : null,
           context: usage.context?.length ? usage.context.join('; ') : null,
-          aiTranscript: aiTranscript.forLog(usage)
+          aiTranscript: aiTranscript.forLog(usage),
+          repliedToMessageID: repliedTo || null
         }).catch(err => global.logger.warn(`Could not save mention log in ${guild.id}: ${err.message}`))
       }
       global.logger.info(`Mention drafting in ${guild.id}: ${usage.requests} Gemini request(s), ${usage.retries} retried after HTTP 429`)

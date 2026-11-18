@@ -125,4 +125,54 @@ function forLog (usage) {
   return { systems: t.systems, calls: t.calls }
 }
 
-module.exports = { recordGemini, recordUncensored, forLog, slimPart, MAX_TEXT }
+// One message row (mention_ai_messages) for each part of a Gemini turn, or for an OpenAI-style
+// message (the uncensored model).
+function messageRows (item) {
+  if (Array.isArray(item?.parts)) {
+    return item.parts.map(part => {
+      if (part.functionCall) return { role: item.role, kind: 'function_call', name: part.functionCall.name, content: JSON.stringify(part.functionCall.args ?? {}) }
+      if (part.functionResponse) return { role: item.role, kind: 'function_response', name: part.functionResponse.name, content: JSON.stringify(part.functionResponse.response ?? null) }
+      if (part.picture) return { role: item.role, kind: 'picture', name: null, content: `${part.picture.mimeType || '?'} ${part.picture.bytes ?? '?'} bytes` }
+      return { role: item.role, kind: part.thought ? 'thought' : 'text', name: null, content: part.text ?? null }
+    })
+  }
+  const rows = []
+  const content = Array.isArray(item?.content)
+    ? item.content.map(p => p.picture ? '[画像]' : p.text).filter(Boolean).join('\n')
+    : item?.content
+  if (content) rows.push({ role: item.role, kind: 'text', name: item.name || null, content })
+  for (const call of item?.tool_calls || []) rows.push({ role: item.role, kind: 'function_call', name: call.function?.name, content: call.function?.arguments ?? null })
+  if (item?.role === 'tool' && !content) rows.push({ role: 'tool', kind: 'function_response', name: item.name || null, content: null })
+  return rows
+}
+
+// The transcript as rows for mention_ai_systems, mention_ai_calls and mention_ai_messages.
+function toRows (log) {
+  if (!log?.calls?.length) return null
+  const systems = Object.entries(log.systems || {}).map(([hash, text]) => ({ hash, text }))
+  const calls = log.calls.map((call, seq) => {
+    const sent = (call.turns || []).flatMap((turn, i) => messageRows(turn).map(row => ({ ...row, direction: 'sent', turn: (call.fromTurn || 0) + i })))
+    const answer = call.response?.parts ? { role: 'model', parts: call.response.parts } : call.response?.message
+    const received = answer ? messageRows(answer).map(row => ({ ...row, direction: 'received', turn: null })) : []
+    return {
+      seq,
+      calledAt: call.at,
+      model: call.model || null,
+      purpose: call.purpose || null,
+      systemHash: call.system || null,
+      cachedContent: call.cachedContent || null,
+      tools: call.tools || null,
+      safetySettings: call.safetySettings || null,
+      generationConfig: call.generationConfig || null,
+      finishReason: call.response?.finishReason || null,
+      blockReason: call.response?.blockReason || null,
+      safetyRatings: call.response?.safetyRatings || null,
+      usage: call.response?.usage || null,
+      error: call.error || null,
+      messages: [...sent, ...received].map((row, i) => ({ ...row, seq: i }))
+    }
+  })
+  return { systems, calls }
+}
+
+module.exports = { recordGemini, recordUncensored, forLog, toRows, slimPart, MAX_TEXT }

@@ -53,6 +53,10 @@ async function prune () {
     mentionLogsDeleted += res.rowCount
     if (res.rowCount < BATCH_SIZE) break
   }
+  // System instructions no AI call of a kept mention points at any more.
+  if (mentionLogsDeleted) {
+    await pool.query('DELETE FROM mention_ai_systems s WHERE NOT EXISTS (SELECT 1 FROM mention_ai_calls a WHERE a.system_hash = s.hash)')
+  }
   return { deleted, mentionLogsDeleted, days }
 }
 
