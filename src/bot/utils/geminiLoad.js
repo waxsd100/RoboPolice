@@ -53,6 +53,23 @@ function levelOf (share) {
   return 0
 }
 
+const DEFAULT_OP_TIMEOUT_MS = 3000
+
+function opTimeoutMs () {
+  const n = Number(process.env.REDIS_OP_TIMEOUT_MS)
+  return Number.isFinite(n) && n > 0 ? Math.floor(n) : DEFAULT_OP_TIMEOUT_MS
+}
+
+function withTimeout (promise) {
+  const ms = opTimeoutMs()
+  let timer
+  const timeout = new Promise((resolve, reject) => {
+    timer = setTimeout(() => reject(new Error(`Redis operation timed out after ${ms}ms`)), ms)
+    timer.unref?.()
+  })
+  return Promise.race([Promise.resolve(promise), timeout]).finally(() => clearTimeout(timer))
+}
+
 let known = { level: 0, share: 0, at: -Infinity }
 let reading = null
 
@@ -67,7 +84,7 @@ async function refresh (now = Date.now()) {
     reading = (async () => {
       try {
         const bucket = bucketOf(now)
-        const share = spent(await store.get([keyOf(bucket), keyOf(bucket - 1)]), now) / budget()
+        const share = spent(await withTimeout(store.get([keyOf(bucket), keyOf(bucket - 1)])), now) / budget()
         const level = levelOf(share)
         if (level !== known.level) global.logger?.info(`[GEMINI]: Load ${Math.round(share * 100)}% of GEMINI_HOURLY_BUDGET: level ${level}`)
         known = { level, share, at: now }

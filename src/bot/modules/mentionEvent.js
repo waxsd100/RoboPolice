@@ -257,10 +257,45 @@ function failure (reason) {
 
 // The error log for the reply: message and the top of the stack, with secrets masked, since the
 // reply may be in a channel many people can read.
-function errorLog (e) {
+function errorLog (e, maxLen = MAX_ERROR_LOG) {
   const text = redact(e.stack || `${e.name}: ${e.message}`)
-  const log = text.length > MAX_ERROR_LOG ? `${text.slice(0, MAX_ERROR_LOG)}\n…（以下省略）` : text
-  return `\`\`\`\n${log.replace(/```/g, '`\u200b``')}\n\`\`\``
+  const escaped = text.replace(/```/g, '`\u200b``')
+  const limit = Math.max(0, Math.min(MAX_ERROR_LOG, maxLen))
+  const log = escaped.length > limit ? `${escaped.slice(0, limit)}\n…（以下省略）` : escaped
+  return `\`\`\`\n${log}\n\`\`\``
+}
+
+// Fits an error reply inside Discord's 2,000-character limit even when e.hint is long.
+function formatErrorReply (e) {
+  const rawCause = e.hint || (e.name === 'TimeoutError' ? 'AI の応答が時間内に返りませんでした' : null)
+  const cause = rawCause ? String(rawCause).slice(0, 300) : null
+  const header = `⚠️ エラーが発生しました${cause ? `（${cause}）` : ''}。時間をおいてもう一度お試しください。\n`
+  const maxLog = Math.max(0, MAX_MESSAGE - header.length - 20)
+  return `${header}${errorLog(e, maxLog)}`
+}
+
+// Updates the placeholder reply with a final notice/error. If the attachment-clearing REST PATCH
+// fails, falls back to Eris's reply.edit() and then a new message so the placeholder is never left
+// behind silently.
+async function deliverNotice (reply, message, reference, content, guildID) {
+  const safe = String(content || '').slice(0, MAX_MESSAGE)
+  if (reply) {
+    try {
+      await editReply(reply, { content: safe, embeds: [], components: [], allowedMentions: NO_MENTIONS }, null)
+      return
+    } catch (err) {
+      global.logger?.warn(`Could not edit mention reply in ${guildID} via PATCH (${err.message}); retrying with reply.edit`)
+    }
+    try {
+      await reply.edit({ content: safe, embeds: [], components: [], allowedMentions: NO_MENTIONS })
+      return
+    } catch (err) {
+      global.logger?.warn(`Could not edit mention reply in ${guildID} (${err.message}); sending a new message`)
+    }
+  }
+  await message.channel.createMessage({ content: safe, allowedMentions: NO_MENTIONS, ...reference }).catch(err => {
+    global.logger?.warn(`Could not send mention fallback reply in ${guildID}: ${err.message}`)
+  })
 }
 
 function sourcesField (sources) {
@@ -642,6 +677,12 @@ async function handle (message) {
         usage.flex = true
         await reply.edit({ content: `利用量が上限の ${Math.floor(quota.used * 100)}% に近づいたので、低速モード（Flex）で考えています…（数分かかることがあります）`, allowedMentions: NO_MENTIONS }).catch(() => {})
       }
+      let notifiedLoadFlex = false
+      usage.onFlex = () => {
+        if (notifiedLoadFlex || usage.flex) return
+        notifiedLoadFlex = true
+        return reply.edit({ content: '利用が集中しているため、低速モード（Flex）で考えています…（数分かかることがあります）', allowedMentions: NO_MENTIONS }).catch(() => {})
+      }
       usage.onWait = ms => reply.edit({ content: `AI が混み合っているため、${Math.ceil(ms / 1000)} 秒待ってから再試行します…`, allowedMentions: NO_MENTIONS }).catch(() => {})
       const member = message.member
       const tools = createTools({
@@ -804,7 +845,7 @@ async function handle (message) {
         if (result.error) {
           const errContent = failure(checkedText(String(result.error), result, guild).slice(0, 1900))
           outcome = { kind: 'error', response: errContent }
-          await editReply(reply, { content: errContent, embeds: [], components: [], allowedMentions: NO_MENTIONS }, null)
+          await deliverNotice(reply, message, reference, errContent, guild.id)
           return
         }
         result = checkedDraft(result, guild)
@@ -913,7 +954,7 @@ async function handle (message) {
     } catch (e) {
       if (e instanceof StopDrafting || e instanceof postedEdit.EditRefused) {
         outcome = { kind: 'refused', response: e.message }
-        await editReply(reply, { content: e.message, embeds: [], components: [], allowedMentions: NO_MENTIONS }, null).catch(() => {})
+        await deliverNotice(reply, message, reference, e.message, guild.id)
         return
       }
       // Google refused to answer (its own filters, which no setting turns off): not a fault of the
@@ -922,28 +963,24 @@ async function handle (message) {
         global.logger.info(`[GEMINI]: A mention in ${guild.id} was refused by Google (${e.blocked})`)
         const content = 'ごめん、その内容は AI（Google）の制限で答えられなかった…！言い方や中身を変えてもう一回どうぞ。'
         outcome = { kind: 'refused', response: content, blockReason: e.blocked }
-        if (reply) await editReply(reply, { content, embeds: [], components: [], allowedMentions: NO_MENTIONS }, null).catch(() => {})
-        else await message.channel.createMessage({ content, allowedMentions: NO_MENTIONS, ...reference }).catch(() => {})
+        await deliverNotice(reply, message, reference, content, guild.id)
         return
       }
       global.logger.error(e)
       // The console log alone is easy to miss; also send it to the error webhook the operators watch.
-      global.webhook.error(redact(`Drafting from a mention in ${guild.id} failed: ${e.message}`).slice(0, 2000))
-      const cause = e.hint || (e.name === 'TimeoutError' ? 'AI の応答が時間内に返りませんでした' : null)
-      const content = `⚠️ エラーが発生しました${cause ? `（${cause}）` : ''}。時間をおいてもう一度お試しください。\n${errorLog(e)}`
+      try {
+        global.webhook?.error?.(redact(`Drafting from a mention in ${guild.id} failed: ${e.message}`).slice(0, 2000))
+      } catch (_) {}
+      const content = formatErrorReply(e)
       outcome = { kind: 'error', response: content }
-      if (reply) {
-        await editReply(reply, { content, embeds: [], components: [], allowedMentions: NO_MENTIONS }, null).catch(() => {})
-      } else {
-        await message.channel.createMessage({ content, allowedMentions: NO_MENTIONS, ...reference }).catch(() => {})
-      }
+      await deliverNotice(reply, message, reference, content, guild.id)
     } finally {
       inProgress.delete(message.author.id)
       // Whatever it ended in, the tokens it used count against the user's limits.
-      await mentionQuota.record(message.author.id, usage.cost)
+      await mentionQuota.record(message.author.id, usage.cost).catch(() => {})
       // The request as it was answered (a reply with only an image is asked as replacing the image).
       log.set({ request: request || '' })
-      await log.finish(outcome || { kind: 'error', response: null }, usage)
+      await log.finish(outcome || { kind: 'error', response: null }, usage).catch(() => {})
       global.logger.info(`Mention drafting in ${guild.id}: ${usage.requests} Gemini request(s), ${usage.retries} retried after HTTP 429`)
     }
   })

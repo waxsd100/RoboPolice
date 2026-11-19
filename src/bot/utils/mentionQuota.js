@@ -97,6 +97,23 @@ function flexAt (limits = {}) {
   return percent / 100
 }
 
+const DEFAULT_OP_TIMEOUT_MS = 3000
+
+function opTimeoutMs () {
+  const n = Number(process.env.REDIS_OP_TIMEOUT_MS)
+  return Number.isFinite(n) && n > 0 ? Math.floor(n) : DEFAULT_OP_TIMEOUT_MS
+}
+
+function withTimeout (promise) {
+  const ms = opTimeoutMs()
+  let timer
+  const timeout = new Promise((resolve, reject) => {
+    timer = setTimeout(() => reject(new Error(`Redis operation timed out after ${ms}ms`)), ms)
+    timer.unref?.()
+  })
+  return Promise.race([Promise.resolve(promise), timeout]).finally(() => clearTimeout(timer))
+}
+
 // Whether `userID` may have a mention answered now, in a server with `limits` (its own, see
 // windowLimit). Resolves to { allowed, flex } (flex: past the share where it slows down to Flex,
 // with `window` and `used` as a share) or, when not, { allowed: false, scope: 'user', window: '5h' |
@@ -113,7 +130,7 @@ async function take (userID, guildID = null, now = new Date(), { limits = {} } =
     for (const w of WINDOWS) {
       const limit = windowLimit(w, limits)
       if (!limit) continue
-      const { value, resetsInMs } = await store.get(windowKey(userID, w), now)
+      const { value, resetsInMs } = await withTimeout(store.get(windowKey(userID, w), now))
       if (value >= limit) {
         return { allowed: false, scope: 'user', window: w.name, label: w.label, limit, resetsAt: new Date(now.getTime() + (resetsInMs ?? w.seconds * 1000)) }
       }
@@ -125,7 +142,7 @@ async function take (userID, guildID = null, now = new Date(), { limits = {} } =
     }
     const guildLimit = isOwnerGuild(guildID) ? 0 : limitOf('MENTION_GUILD_DAILY_LIMIT_OTHER', DEFAULT_OTHER_GUILD_LIMIT)
     if (guildLimit) {
-      const count = await store.increment(`mention-quota-guild:${guildID}:${today(now)}`, DAY_TTL_SECONDS)
+      const count = await withTimeout(store.increment(`mention-quota-guild:${guildID}:${today(now)}`, DAY_TTL_SECONDS))
       if (count > guildLimit) return { allowed: false, scope: 'guild', limit: guildLimit }
     }
     return flex ? { allowed: true, flex, window: slowWindow, used } : { allowed: true, flex: false }
@@ -141,7 +158,7 @@ async function record (userID, cost, now = new Date()) {
   if (!amount || isCreator(userID)) return
   try {
     // Counted in every window, whatever this server's limits: another server may limit it.
-    for (const w of WINDOWS) await store.add(windowKey(userID, w), amount, w.seconds, now)
+    for (const w of WINDOWS) await withTimeout(store.add(windowKey(userID, w), amount, w.seconds, now))
   } catch (e) {
     global.logger.warn(`Could not count a mention's tokens: ${e.message}`)
   }

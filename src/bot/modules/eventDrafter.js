@@ -416,8 +416,13 @@ async function geminiAttempts (path, body, { timeoutMs = GEMINI_TIMEOUT_MS, purp
   // A user near their limits has every generation of their mention on Flex (mentionQuota.js), and
   // when the bot as a whole is busy every generation is, in the background too (geminiLoad.js);
   // but for image models.
-  if ((usage?.flex || geminiLoad.flexForAll()) && /:(stream)?[gG]enerateContent/.test(path) && !/image/i.test(model)) flex = true
+  const isGenerate = /:(stream)?[gG]enerateContent/.test(path) && !/image/i.test(model)
+  const loadFlex = !flex && !usage?.flex && isGenerate && geminiLoad.flexForAll()
+  if ((usage?.flex || loadFlex) && isGenerate) flex = true
   flex = flex && !standard && flexUsable()
+  if (flex && loadFlex && purpose.startsWith('mention') && usage?.onFlex) {
+    await Promise.resolve(usage.onFlex()).catch(() => {})
+  }
   const url = gatewayURL(`google-ai-studio/v1beta/${path}`, { direct: flex })
   if (flex && customBase() && !hasDefaultEndpoint() && !warnedFlexDomain) {
     warnedFlexDomain = true
@@ -688,6 +693,12 @@ async function purgeStaleCaches (version) {
   return stale.length
 }
 
+let pendingPurge = Promise.resolve()
+
+function flushCachePurge () {
+  return pendingPurge
+}
+
 // The name of a cache holding `prefix` (systemInstruction, tools, toolConfig) for `model`, made if
 // needed and shared across workers in Redis; null when there is none to use.
 async function cachedPrefix (model, prefix, now = Date.now()) {
@@ -710,13 +721,18 @@ async function cachedPrefix (model, prefix, now = Date.now()) {
     await aiCache.setJson(redisKey, entry, Math.max(60, Math.floor((entry.expiresAt - now) / 1000)))
     if (!purgedFor.has(version)) {
       purgedFor.add(version)
-      if (await aiCache.setnx(`gemini-cache-purged:${version}`, '1', 24 * 60 * 60)) {
-        const purged = await purgeStaleCaches(version).catch(e => {
-          global.logger?.warn(`[GEMINI]: Could not delete the caches of earlier instructions: ${e.message.slice(0, 200)}`)
-          return 0
-        })
-        if (purged) global.logger?.info(`[GEMINI]: Deleted ${purged} cache(s) of earlier instructions`)
-      }
+      // Clean up old prompt caches in the background so a deploy never stalls the first mention reply.
+      const prev = pendingPurge
+      const job = (async () => {
+        if (await aiCache.setnx(`gemini-cache-purged:${version}`, '1', 24 * 60 * 60)) {
+          const purged = await purgeStaleCaches(version).catch(e => {
+            global.logger?.warn(`[GEMINI]: Could not delete the caches of earlier instructions: ${e.message.slice(0, 200)}`)
+            return 0
+          })
+          if (purged) global.logger?.info(`[GEMINI]: Deleted ${purged} cache(s) of earlier instructions`)
+        }
+      })().catch(() => {})
+      pendingPurge = Promise.all([prev, job]).then(() => {})
     }
     return made.name
   } catch (e) {
@@ -2731,4 +2747,4 @@ async function revise (conversation, correction) {
   return check(conversation, await runAgent(conversation.contents, conversation.tools, conversation.submits))
 }
 
-module.exports = { THINKING_LEVELS, SERVICE_TIERS, defaultTaskConfig, resolveTaskConfig, replyTimeoutMs, flexUsable, SAFETY_SETTINGS, STRICT_SAFETY_SETTINGS, withSafetySettings, THINK_DEEPER_DECLARATION, HAND_OVER_R18_DECLARATION, isR18Text, isExplicitR18Text, r18Route, isRefusalReply, isRefusalReplyAsync, refusalKind, STORY_REQUEST_PATTERN, adaptiveThinkingLevel, compactContentsForWire, deepModel, DEFAULT_UNCENSORED_MODEL, normalizeLocalModelId, uncensoredModel, uncensoredR18Model, parseModelDirective, extractReferencedDirective, resolveReferencedDirective, rememberThreadModel, isUncensoredDirective, applyModelDirective, isLocalUncensoredUrl, uncensoredEndpoint, isUncensoredConfigured, isUncensoredUsable, checkUncensoredConnection, startUncensoredCheck, uncensoredState, ensureUncensoredModelLoaded, cleanUncensoredContent, compactUncensoredText, extractUncensoredAnswer, UNCENSORED_SAMPLING_PARAMS, readUncensoredResponse, callUncensored, REPLY_LENGTHS, DEFAULT_REPLY_LENGTH, PERSONAS, thinkingConfig, cachedPrefix, caches, purgedFor, promptVersion, lightModel, extractModel, DEFAULT_EXTRACT_MODEL, draft, revise, MAX_STEPS, isConfigured, toScheduledEvent, callGemini, geminiRequest, geminiSend, geminiStream, retryTimer, DEFAULT_GEMINI_MODEL, ENTITY_TYPES, GeminiError }
+module.exports = { THINKING_LEVELS, SERVICE_TIERS, defaultTaskConfig, resolveTaskConfig, replyTimeoutMs, flexUsable, SAFETY_SETTINGS, STRICT_SAFETY_SETTINGS, withSafetySettings, THINK_DEEPER_DECLARATION, HAND_OVER_R18_DECLARATION, isR18Text, isExplicitR18Text, r18Route, isRefusalReply, isRefusalReplyAsync, refusalKind, STORY_REQUEST_PATTERN, adaptiveThinkingLevel, compactContentsForWire, deepModel, DEFAULT_UNCENSORED_MODEL, normalizeLocalModelId, uncensoredModel, uncensoredR18Model, parseModelDirective, extractReferencedDirective, resolveReferencedDirective, rememberThreadModel, isUncensoredDirective, applyModelDirective, isLocalUncensoredUrl, uncensoredEndpoint, isUncensoredConfigured, isUncensoredUsable, checkUncensoredConnection, startUncensoredCheck, uncensoredState, ensureUncensoredModelLoaded, cleanUncensoredContent, compactUncensoredText, extractUncensoredAnswer, UNCENSORED_SAMPLING_PARAMS, readUncensoredResponse, callUncensored, REPLY_LENGTHS, DEFAULT_REPLY_LENGTH, PERSONAS, thinkingConfig, cachedPrefix, flushCachePurge, caches, purgedFor, promptVersion, lightModel, extractModel, DEFAULT_EXTRACT_MODEL, draft, revise, MAX_STEPS, isConfigured, toScheduledEvent, callGemini, geminiRequest, geminiSend, geminiStream, retryTimer, DEFAULT_GEMINI_MODEL, ENTITY_TYPES, GeminiError }

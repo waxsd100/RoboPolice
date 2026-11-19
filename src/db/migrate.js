@@ -35,12 +35,18 @@ async function migrate ({ pool = require('./clients/postgres'), dir = DIR, log =
   for (let attempt = 1; attempt <= MAX_MIGRATE_ATTEMPTS; attempt++) {
     let client
     let clientBroken = false
+    let prevQueryTimeout
     try {
       client = await pool.getPostgresClient()
+      if (client.connectionParameters && 'query_timeout' in client.connectionParameters) {
+        prevQueryTimeout = client.connectionParameters.query_timeout
+        client.connectionParameters.query_timeout = 0
+      }
       if (typeof client.on === 'function' && !client._hasRoboPoliceErrorHandler) {
         client._hasRoboPoliceErrorHandler = true
         client.on('error', () => { clientBroken = true })
       }
+      await client.query('SET statement_timeout = 0')
       await client.query('SELECT pg_advisory_lock($1)', [LOCK_ID])
       // Index builds one process at a time and within 32 MB of maintenance memory: a parallel build
       // shares its memory through /dev/shm (64 MB on Railway), and an unbounded HNSW build can
@@ -78,10 +84,14 @@ async function migrate ({ pool = require('./clients/postgres'), dir = DIR, log =
       throw e
     } finally {
       if (client) {
+        if (client.connectionParameters && prevQueryTimeout !== undefined) {
+          client.connectionParameters.query_timeout = prevQueryTimeout
+        }
         if (!clientBroken) {
           await client.query('RESET maintenance_work_mem').catch(() => { clientBroken = true })
           await client.query('RESET max_parallel_maintenance_workers').catch(() => { clientBroken = true })
           await client.query('SELECT pg_advisory_unlock($1)', [LOCK_ID]).catch(() => { clientBroken = true })
+          await client.query('RESET statement_timeout').catch(() => { clientBroken = true })
         }
         client.release(clientBroken ? new Error('Migration client closed after error') : undefined)
       }
