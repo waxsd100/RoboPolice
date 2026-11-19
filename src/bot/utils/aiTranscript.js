@@ -21,6 +21,18 @@ const MAX_CALLS = 60
 const hashOf = text => crypto.createHash('sha256').update(text).digest('hex').slice(0, 16)
 const cut = text => typeof text === 'string' && text.length > MAX_TEXT ? `${text.slice(0, MAX_TEXT)}…（${text.length - MAX_TEXT}文字省略）` : text
 
+function slimFunctionResponse (response) {
+  if (response === undefined) return null
+  try {
+    const serialized = JSON.stringify(response)
+    if (serialized === undefined) return null
+    if (serialized.length <= MAX_TEXT) return JSON.parse(serialized)
+    return { _truncated: true, preview: cut(serialized) }
+  } catch (_) {
+    return { _truncated: true, preview: cut(String(response)) }
+  }
+}
+
 function slimPart (part) {
   if (!part || typeof part !== 'object') return part
   const out = {}
@@ -29,7 +41,7 @@ function slimPart (part) {
     if (key === 'inlineData' || key === 'inline_data') {
       out.picture = { mimeType: value?.mimeType || value?.mime_type, bytes: Math.floor(String(value?.data || '').length * 3 / 4) }
     } else if (key === 'functionResponse') {
-      out.functionResponse = { name: value?.name, response: JSON.parse(cut(JSON.stringify(value?.response ?? null)) || 'null') }
+      out.functionResponse = { name: value?.name, response: slimFunctionResponse(value?.response ?? null) }
     } else {
       out[key] = typeof value === 'string' ? cut(value) : value
     }
@@ -98,64 +110,72 @@ function systemRef (t, text) {
 // A call to Gemini: the body as sent (`system`: the system instructions' text, when they are in a
 // cache and not in the body), and the response (or the error).
 function recordGemini ({ model, purpose = '', attempts = 1, body = {}, system = null, tools = null, response = null, error = null }) {
-  const t = transcript()
-  if (!t || t.calls.length >= MAX_CALLS) return
-  const systemText = body.systemInstruction?.parts?.map(p => p.text || '').join('\n') || system
-  const toolNames = (body.tools || tools || []).flatMap(set => (set.functionDeclarations || []).map(d => d.name))
-  const candidate = response?.candidates?.[0]
-  t.calls.push({
-    at: new Date().toISOString(),
-    model,
-    purpose,
-    attempts,
-    system: systemRef(t, systemText),
-    cachedContent: body.cachedContent || null,
-    tools: toolNames.length ? toolNames : null,
-    safetySettings: body.safetySettings || null,
-    generationConfig: body.generationConfig || null,
-    ...delta(t, purpose, sentTurns(body).map(slimTurn)),
-    response: response
-      ? {
-          finishReason: candidate?.finishReason || null,
-          blockReason: response.promptFeedback?.blockReason || null,
-          safetyRatings: candidate?.safetyRatings || response.promptFeedback?.safetyRatings || null,
-          parts: candidate ? (candidate.content?.parts || []).map(slimPart) : otherAnswer(response),
-          usage: response.usageMetadata || null
-        }
-      : null,
-    error: error ? String(error.message || error).slice(0, 2000) : null
-  })
-  recorded()
+  try {
+    const t = transcript()
+    if (!t || t.calls.length >= MAX_CALLS) return
+    const systemText = body.systemInstruction?.parts?.map(p => p.text || '').join('\n') || system
+    const toolNames = (body.tools || tools || []).flatMap(set => (set.functionDeclarations || []).map(d => d.name))
+    const candidate = response?.candidates?.[0]
+    t.calls.push({
+      at: new Date().toISOString(),
+      model,
+      purpose,
+      attempts,
+      system: systemRef(t, systemText),
+      cachedContent: body.cachedContent || null,
+      tools: toolNames.length ? toolNames : null,
+      safetySettings: body.safetySettings || null,
+      generationConfig: body.generationConfig || null,
+      ...delta(t, purpose, sentTurns(body).map(slimTurn)),
+      response: response
+        ? {
+            finishReason: candidate?.finishReason || null,
+            blockReason: response.promptFeedback?.blockReason || null,
+            safetyRatings: candidate?.safetyRatings || response.promptFeedback?.safetyRatings || null,
+            parts: candidate ? (candidate.content?.parts || []).map(slimPart) : otherAnswer(response),
+            usage: response.usageMetadata || null
+          }
+        : null,
+      error: error ? String(error.message || error).slice(0, 2000) : null
+    })
+    recorded()
+  } catch (e) {
+    global.logger?.warn?.(`Could not record Gemini transcript: ${e.message}`)
+  }
 }
 
 // A call to the uncensored model (OpenAI-style messages): the body as sent, and the response (the
 // whole one: its message, why it ended and its usage) or the error.
 function recordUncensored ({ model, attempts = 1, body = {}, response = null, error = null }) {
-  const messages = body.messages || []
-  const tools = body.tools || null
-  const t = transcript()
-  if (!t || t.calls.length >= MAX_CALLS) return
-  const [first, ...rest] = messages
-  const system = first?.role === 'system' ? first.content : null
-  t.calls.push({
-    at: new Date().toISOString(),
-    model,
-    purpose: 'uncensored',
-    attempts,
-    system: systemRef(t, typeof system === 'string' ? system : null),
-    tools: tools ? tools.map(d => d.function?.name || d.name).filter(Boolean) : null,
-    generationConfig: generationOf(body),
-    ...delta(t, 'uncensored', (system ? rest : messages).map(slimMessage)),
-    response: response
-      ? {
-          finishReason: response.choices?.[0]?.finish_reason || null,
-          message: response.choices?.[0]?.message ? slimMessage(response.choices[0].message) : null,
-          usage: response.usage || null
-        }
-      : null,
-    error: error ? String(error.message || error).slice(0, 2000) : null
-  })
-  recorded()
+  try {
+    const messages = body.messages || []
+    const tools = body.tools || null
+    const t = transcript()
+    if (!t || t.calls.length >= MAX_CALLS) return
+    const [first, ...rest] = messages
+    const system = first?.role === 'system' ? first.content : null
+    t.calls.push({
+      at: new Date().toISOString(),
+      model,
+      purpose: 'uncensored',
+      attempts,
+      system: systemRef(t, typeof system === 'string' ? system : null),
+      tools: tools ? tools.map(d => d.function?.name || d.name).filter(Boolean) : null,
+      generationConfig: generationOf(body),
+      ...delta(t, 'uncensored', (system ? rest : messages).map(slimMessage)),
+      response: response
+        ? {
+            finishReason: response.choices?.[0]?.finish_reason || null,
+            message: response.choices?.[0]?.message ? slimMessage(response.choices[0].message) : null,
+            usage: response.usage || null
+          }
+        : null,
+      error: error ? String(error.message || error).slice(0, 2000) : null
+    })
+    recorded()
+  } catch (e) {
+    global.logger?.warn?.(`Could not record uncensored transcript: ${e.message}`)
+  }
 }
 
 // The settings an uncensored request was sent with (all but its model, messages and tools).
@@ -168,7 +188,7 @@ function generationOf (body) {
 function forLog (usage) {
   const t = usage?.transcript
   if (!t?.calls?.length) return null
-  return { systems: t.systems, calls: t.calls }
+  return { systems: { ...t.systems }, calls: [...t.calls] }
 }
 
 // One message row (mention_ai_messages) for each part of a Gemini turn, or for an OpenAI-style

@@ -50,3 +50,15 @@ test('nothing changes when Redis cannot be read', async () => {
   load.store.get = async () => { throw new Error('ECONNREFUSED') }
   assert.equal((await load.refresh(100 * HOUR)).level, 0)
 })
+
+test('does not hang forever when Redis stalls', async () => {
+  process.env.REDIS_OP_TIMEOUT_MS = '30'
+  try {
+    load.store.get = () => new Promise(() => {})
+    const started = Date.now()
+    assert.equal((await load.refresh(100 * HOUR)).level, 0)
+    assert.ok(Date.now() - started < 1000, 'timed out promptly')
+  } finally {
+    delete process.env.REDIS_OP_TIMEOUT_MS
+  }
+})

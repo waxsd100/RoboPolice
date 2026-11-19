@@ -109,4 +109,20 @@ describe('mentionQuota', () => {
     assert.equal((await mentionQuota.take('1', OTHER)).allowed, true)
     assert.match(warned.mock.calls[0].arguments[0], /ECONNREFUSED/)
   })
+
+  test('lets the mention through promptly when Redis hangs', async (t) => {
+    process.env.REDIS_OP_TIMEOUT_MS = '30'
+    try {
+      const warned = t.mock.method(global.logger, 'warn', () => {})
+      mentionQuota.store.get = () => new Promise(() => {})
+      mentionQuota.store.add = () => new Promise(() => {})
+      const started = Date.now()
+      assert.deepEqual(await mentionQuota.take('1', OTHER), { allowed: true, flex: false })
+      await mentionQuota.record('1', 500)
+      assert.ok(Date.now() - started < 1000, 'timed out promptly')
+      assert.match(warned.mock.calls[0].arguments[0], /timed out/)
+    } finally {
+      delete process.env.REDIS_OP_TIMEOUT_MS
+    }
+  })
 })

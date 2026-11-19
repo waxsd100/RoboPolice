@@ -67,3 +67,40 @@ test('turns the transcript into rows for the tables: one call row each, one mess
   assert.equal(aiTranscript.toRows(null), null)
   assert.ok(!Number.isNaN(Date.parse(aiTranscript.toRows({ systems: {}, calls: [{ model: 'm' }] }).calls[0].calledAt)), 'a call without a time is saved at the time it is saved')
 })
+
+test('slimPart and recordGemini handle oversized or non-JSON functionResponse payloads without throwing', async () => {
+  const huge = 'あ'.repeat(aiTranscript.MAX_TEXT + 5000)
+  const slimmed = aiTranscript.slimPart({ functionResponse: { name: 'search_wiki', response: { text: huge } } })
+  assert.equal(slimmed.functionResponse.name, 'search_wiki')
+  assert.equal(slimmed.functionResponse.response._truncated, true)
+  assert.match(slimmed.functionResponse.response.preview, /…（\d+文字省略）$/)
+
+  const circular = {}
+  circular.self = circular
+  const slimCircular = aiTranscript.slimPart({ functionResponse: { name: 'weird', response: circular } })
+  assert.equal(slimCircular.functionResponse.response._truncated, true)
+
+  let usage
+  let snapshot
+  await trackUsage(async u => {
+    usage = u
+    aiTranscript.recordGemini({
+      model: 'm',
+      purpose: 'mention',
+      body: { contents: [{ role: 'user', parts: [{ functionResponse: { name: 'search_wiki', response: { text: huge } } }] }] },
+      response: { candidates: [{ finishReason: 'STOP', content: { parts: [{ text: 'ok' }] } }] }
+    })
+    snapshot = aiTranscript.forLog(usage)
+    aiTranscript.recordGemini({
+      model: 'm',
+      purpose: 'mention',
+      body: { contents: [{ role: 'user', parts: [{ text: '2nd' }] }] },
+      response: { candidates: [{ finishReason: 'STOP', content: { parts: [{ text: 'ok2' }] } }] }
+    })
+  })
+  assert.equal(snapshot.calls.length, 1, 'forLog returns a shallow snapshot isolated from subsequent calls')
+  assert.equal(aiTranscript.forLog(usage).calls.length, 2)
+  const rows = aiTranscript.toRows(snapshot)
+  assert.equal(rows.calls[0].messages[0].kind, 'function_response')
+  assert.doesNotThrow(() => JSON.parse(rows.calls[0].messages[0].content))
+})

@@ -33,9 +33,27 @@ const store = {
   }
 }
 
+const DEFAULT_OP_TIMEOUT_MS = 3000
+
+function opTimeoutMs () {
+  const n = Number(process.env.REDIS_OP_TIMEOUT_MS)
+  return Number.isFinite(n) && n > 0 ? Math.floor(n) : DEFAULT_OP_TIMEOUT_MS
+}
+
+function withTimeout (promise) {
+  const ms = opTimeoutMs()
+  let timer
+  const timeout = new Promise((resolve, reject) => {
+    // Keep the timer ref'd so the timeout still fires if nothing else holds the event loop;
+    // finally() clears it as soon as the operation settles.
+    timer = setTimeout(() => reject(new Error(`Redis operation timed out after ${ms}ms`)), ms)
+  })
+  return Promise.race([Promise.resolve(promise), timeout]).finally(() => clearTimeout(timer))
+}
+
 async function get (key) {
   try {
-    return (await store.get(key)) ?? null
+    return (await withTimeout(store.get(key))) ?? null
   } catch (_) {
     return null
   }
@@ -54,7 +72,7 @@ async function getJson (key) {
 async function mget (keys) {
   if (!keys.length) return []
   try {
-    return (await store.mget(keys)).map(v => v ?? null)
+    return (await withTimeout(store.mget(keys))).map(v => v ?? null)
   } catch (_) {
     return keys.map(() => null)
   }
@@ -62,7 +80,7 @@ async function mget (keys) {
 
 async function set (key, value, seconds) {
   try {
-    const res = await store.set(key, String(value), seconds)
+    const res = await withTimeout(store.set(key, String(value), seconds))
     return res !== false
   } catch (_) {
     return false
@@ -76,13 +94,13 @@ async function setJson (key, value, seconds) {
 async function mset (entries, seconds) {
   if (!entries.length) return
   try {
-    await store.mset(entries, seconds)
+    await withTimeout(store.mset(entries, seconds))
   } catch (_) {}
 }
 
 async function setnx (key, value, seconds) {
   try {
-    return await store.setnx(key, String(value), seconds)
+    return await withTimeout(store.setnx(key, String(value), seconds))
   } catch (_) {
     return true
   }
@@ -90,7 +108,7 @@ async function setnx (key, value, seconds) {
 
 async function del (key) {
   try {
-    await store.del(key)
+    await withTimeout(store.del(key))
   } catch (_) {}
 }
 

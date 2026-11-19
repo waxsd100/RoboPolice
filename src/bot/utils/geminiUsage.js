@@ -6,10 +6,11 @@ const { AsyncLocalStorage } = require('node:async_hooks')
 const storage = new AsyncLocalStorage()
 
 // onWait(ms) is told when a call waits before retrying, to show the requester why it is slow.
+// onFlex() is told when global load switches a mention call to Flex inference.
 // tokens: what the calls used, from Gemini's usageMetadata (shown under a chat reply); cost: the
 // same weighted by model, as counted against the user's limits (mentionQuota.js).
 function trackUsage (fn) {
-  const usage = { requests: 0, retries: 0, onWait: () => {}, tokens: { prompt: 0, cached: 0, output: 0, thoughts: 0 }, cost: 0, models: [], fallbacks: [], context: [] }
+  const usage = { requests: 0, retries: 0, onWait: () => {}, onFlex: () => {}, tokens: { prompt: 0, cached: 0, output: 0, thoughts: 0 }, cost: 0, models: [], fallbacks: [], context: [] }
   return storage.run(usage, () => fn(usage))
 }
 

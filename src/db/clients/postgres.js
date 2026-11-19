@@ -26,6 +26,12 @@ function attachClientErrorHandler (client) {
 let pool = null
 let endPromise = null
 
+function nonNegativeInt (name, fallback) {
+  if (process.env[name] === undefined) return fallback
+  const n = Number(process.env[name])
+  return Number.isFinite(n) && n >= 0 ? Math.floor(n) : fallback
+}
+
 function getPool () {
   if (!pool) {
     endPromise = null
@@ -35,10 +41,12 @@ function getPool () {
       database: process.env.PGDATABASE,
       password: process.env.PGPASSWORD,
       port: Number(process.env.PGPORT) || 5432,
-      max: 5, // 5 clients each, god help us all if this isn't sufficient
+      max: Math.max(1, nonNegativeInt('PG_POOL_MAX', 10)),
       keepAlive: true,
       keepAliveInitialDelayMillis: 10000,
       connectionTimeoutMillis: Number(process.env.PG_CONNECT_TIMEOUT_MS) || 15000,
+      statement_timeout: nonNegativeInt('PG_STATEMENT_TIMEOUT_MS', 30000),
+      query_timeout: nonNegativeInt('PG_QUERY_TIMEOUT_MS', 45000),
       idleTimeoutMillis: 30000
     })
     pool.on('connect', attachClientErrorHandler)

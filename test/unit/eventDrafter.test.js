@@ -1,4 +1,4 @@
-const { test, describe, beforeEach } = require('node:test')
+const { test, describe, beforeEach, afterEach } = require('node:test')
 const assert = require('node:assert/strict')
 const { draft, revise, toScheduledEvent, isConfigured, ENTITY_TYPES, MAX_STEPS, replyTimeoutMs } = require('../../src/bot/modules/eventDrafter')
 const { createGuild, configureGateway, installGemini, call, submit, lastToolResponses } = require('../helpers/fakes')
@@ -922,7 +922,7 @@ describe('token cost', () => {
 })
 
 describe('explicit cache and thinking', () => {
-  const { caches, purgedFor, promptVersion, thinkingConfig } = require('../../src/bot/modules/eventDrafter')
+  const { caches, purgedFor, promptVersion, thinkingConfig, flushCachePurge } = require('../../src/bot/modules/eventDrafter')
   const reply = { candidates: [{ content: { role: 'model', parts: [call('submit_chat_reply', { text: 'やあ' })] } }] }
   const quietTools = { declarations: [], call: async () => ({}) }
 
@@ -961,7 +961,11 @@ describe('explicit cache and thinking', () => {
     purgedFor.clear()
   })
 
-  test('the first cache of changed instructions deletes the caches of the earlier ones, once', async () => {
+  afterEach(async () => {
+    await flushCachePurge()
+  })
+
+  test('the first cache of changed instructions deletes the caches of the earlier ones, once, in the background', async () => {
     const { cachedPrefix } = require('../../src/bot/modules/eventDrafter')
     const prefix = { systemInstruction: { parts: [{ text: '新しい指示' }] } }
     const current = `robopolice-mention:${promptVersion(prefix)}`
@@ -977,6 +981,7 @@ describe('explicit cache and thinking', () => {
       ]
     })
     assert.match(await cachedPrefix('gemini-3.8-flash', prefix), /^cachedContents\//)
+    await flushCachePurge()
     const made = requests.find(r => r.method === 'POST')
     assert.equal(made.body.displayName, current)
     assert.equal(requests.filter(r => r.method === 'GET').length, 3, 'every page is read')
@@ -985,7 +990,55 @@ describe('explicit cache and thinking', () => {
     // Another set of tools with the same instructions: no second clean-up.
     const before = requests.length
     await cachedPrefix('gemini-3.8-flash', { ...prefix, tools: [{ functionDeclarations: [] }] })
+    await flushCachePurge()
     assert.deepEqual(requests.slice(before).map(r => r.method), ['POST'])
+  })
+
+  test('slow stale-cache cleanup does not block cachedPrefix from returning the new cache name', async () => {
+    const { cachedPrefix } = require('../../src/bot/modules/eventDrafter')
+    let releaseGet
+    const getGate = new Promise(resolve => { releaseGet = resolve })
+    const fake = installCachingGemini()
+    const origFetch = global.fetch
+    global.fetch = async (url, init) => {
+      if ((init.method || 'GET') === 'GET') {
+        await getGate
+        return { ok: true, json: async () => ({ cachedContents: [] }) }
+      }
+      return origFetch(url, init)
+    }
+    const name = await cachedPrefix('gemini-3.8-flash', { systemInstruction: { parts: [{ text: 'slow purge test' }] } })
+    assert.match(name, /^cachedContents\//, 'returns immediately while purge is still pending')
+    assert.equal(fake.filter(r => r.method === 'POST').length, 1)
+    releaseGet()
+    await flushCachePurge()
+  })
+
+  test('global load switching a mention to Flex calls usage.onFlex', async () => {
+    const { trackUsage } = require('../../src/bot/utils/geminiUsage')
+    const geminiLoad = require('../../src/bot/utils/geminiLoad')
+    const { installLoadStore } = require('../helpers/fakes')
+    const loadCounts = installLoadStore()
+    geminiLoad.reset()
+    try {
+      const now = Date.now()
+      geminiLoad.record(2000000, now)
+      await geminiLoad.refresh(now)
+      assert.equal(geminiLoad.flexForAll(), true)
+      process.env.GEMINI_EXPLICIT_CACHE = 'false'
+      const requests = installGemini([[call('submit_chat_reply', { text: 'お待たせ' })]])
+      let flexNotified = 0
+      await trackUsage(async usage => {
+        usage.onFlex = () => { flexNotified++ }
+        const res = await draft({ request: 'やあ', channelName: 'general', guild, tools: quietTools, now: NOW })
+        assert.equal(res.text, 'お待たせ')
+      })
+      assert.equal(flexNotified, 1)
+      assert.equal(requests[0].body.serviceTier, 'flex')
+    } finally {
+      loadCounts.clear()
+      geminiLoad.reset()
+    }
   })
 
   test('a clean-up that fails does not stop the cache from being used', async () => {
@@ -994,6 +1047,7 @@ describe('explicit cache and thinking', () => {
     const fake = global.fetch
     global.fetch = async (url, init) => (init.method || 'GET') === 'GET' ? { ok: false, status: 403, text: async () => 'denied' } : fake(url, init)
     assert.match(await cachedPrefix('gemini-3.8-flash', { systemInstruction: { parts: [{ text: 'x' }] } }), /^cachedContents\//)
+    await flushCachePurge()
     assert.equal(requests.filter(r => r.method === 'POST').length, 1)
   })
 

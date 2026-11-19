@@ -948,6 +948,64 @@ describe('mention → event / forum post (integration)', () => {
     assert.match(content, /…（以下省略）\n```$/)
   })
 
+  test('a long error hint still fits in 2000 characters and falls back to reply.edit / createMessage if PATCH edit fails', async (t) => {
+    t.mock.method(global.logger, 'error', () => {})
+    const warned = t.mock.method(global.logger, 'warn', () => {})
+    t.mock.method(global.webhook, 'error', () => {})
+    const { channel, replies } = createChannel()
+    const origRequest = global.bot.requestHandler.request
+    // Case 1: PATCH edit fails -> falls back to reply.edit, and long hint + stack stays <= 2000.
+    global.bot.requestHandler.request = async (method, url, ...rest) => {
+      if (method === 'PATCH') throw new Error('PATCH failed 503')
+      return origRequest(method, url, ...rest)
+    }
+    global.fetch = async () => {
+      const err = new Error('boom ' + 'y'.repeat(3000))
+      err.hint = '長すぎるヒント'.repeat(200)
+      throw err
+    }
+    await mentionEvent.handle(mention(channel, '<@BOT> 交流会'))
+    assert.equal(replies.length, 1)
+    assert.match(replies[0].state.content, /^⚠️ エラーが発生しました（長すぎるヒント/)
+    assert.ok(replies[0].state.content.length <= 2000, `length ${replies[0].state.content.length}`)
+    assert.match(replies[0].state.content, /```$/)
+    assert.ok(warned.mock.calls.some(c => /retrying with reply\.edit/.test(c.arguments[0])))
+
+    // Case 2: Both PATCH and reply.edit fail -> falls back to posting a new message in the channel.
+    const { channel: ch2, replies: replies2 } = createChannel()
+    const origCreate = ch2.createMessage
+    ch2.createMessage = async payload => {
+      const msg = await origCreate(payload)
+      msg.edit = async () => { throw new Error('reply.edit failed 500') }
+      return msg
+    }
+    await mentionEvent.handle(mention(ch2, '<@BOT> 交流会'))
+    assert.equal(replies2.length, 2, 'sent a fallback message in the channel')
+    assert.equal(replies2[0].state.content, '内容を読み取っています…')
+    assert.match(replies2[1].state.content, /^⚠️ エラーが発生しました/)
+    assert.ok(replies2[1].state.content.length <= 2000)
+  })
+
+  test('updates the placeholder message when global load switches a mention to Flex', async () => {
+    const geminiLoad = require('../../src/bot/utils/geminiLoad')
+    const { installLoadStore } = require('../helpers/fakes')
+    const loadCounts = installLoadStore()
+    geminiLoad.reset()
+    try {
+      const now = Date.now()
+      geminiLoad.record(2000000, now)
+      await geminiLoad.refresh(now)
+      const { channel, replies } = createChannel()
+      installGemini([[call('submit_chat_reply', { text: 'お待たせしました' })]])
+      await mentionEvent.handle(mention(channel, '<@BOT> こんちゃ'))
+      assert.ok(replies[0].history.some(s => /利用が集中しているため、低速モード（Flex）で考えています/.test(s.content)))
+      assert.equal(replies[0].state.content, 'お待たせしました')
+    } finally {
+      loadCounts.clear()
+      geminiLoad.reset()
+    }
+  })
+
   test('内容を修正 changes the text only: the chosen image stays, and new candidates are only offered', async () => {
     const { channel, replies } = createChannel()
     installGemini([
