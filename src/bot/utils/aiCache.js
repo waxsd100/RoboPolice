@@ -44,8 +44,9 @@ function withTimeout (promise) {
   const ms = opTimeoutMs()
   let timer
   const timeout = new Promise((resolve, reject) => {
+    // Keep the timer ref'd so the timeout still fires if nothing else holds the event loop;
+    // finally() clears it as soon as the operation settles.
     timer = setTimeout(() => reject(new Error(`Redis operation timed out after ${ms}ms`)), ms)
-    timer.unref?.()
   })
   return Promise.race([Promise.resolve(promise), timeout]).finally(() => clearTimeout(timer))
 }
