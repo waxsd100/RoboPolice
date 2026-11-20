@@ -13,8 +13,8 @@ const page = (title, body, extra = '') => `<html><head><title>${title} - テス�
 <div id="page-footer">footer</div>
 <div class="user-area"><h2>Menu</h2><a href="/d/MenuBar1">menu</a></div>${extra}</body></html>`
 
-// The Discord messages' and the web's tables are empty here unless a test says otherwise.
-const quietStores = [require('../../src/db/interfaces/postgres/discordKnowledge'), require('../../src/db/interfaces/postgres/webKnowledge')]
+// The Discord messages', the web's and the YouTube videos' tables are empty here unless a test says otherwise.
+const quietStores = [require('../../src/db/interfaces/postgres/discordKnowledge'), require('../../src/db/interfaces/postgres/webKnowledge'), require('../../src/db/interfaces/postgres/youtubeKnowledge')]
 beforeEach(() => {
   for (const tables of quietStores) {
     for (const [name, value] of [['hasSections', false], ['sectionsToExtract', []], ['nearestFacts', []], ['nearestSections', []]]) {

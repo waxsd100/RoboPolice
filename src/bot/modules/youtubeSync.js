@@ -53,7 +53,13 @@ async function syncChannel (channel) {
   const knowledge = await fetchChannelKnowledge({ id: channel.channel_id }, process.env.YOUTUBE_API_KEY, { knownIds, backfillToken: channel.backfill_token })
   await youtubeDB.saveSync(knowledge)
   await backfillChannelStats(channel.channel_id).catch(e => global.logger?.warn?.(`[YOUTUBE]: Could not backfill video stats for ${channel.channel_id}: ${e.message}`))
-  return { added: new Set(knowledge.videos.filter(v => !knownIds.has(v.id)).map(v => v.id)).size, more: !!knowledge.backfillToken }
+  const added = new Set(knowledge.videos.filter(v => !knownIds.has(v.id)).map(v => v.id)).size
+  if (added && syncsHere() && require('./youtubeKnowledge').enabled()) {
+    require('./youtubeKnowledge').refresh()
+      .then(saved => saved && require('./wikiKnowledge').processPending(m => global.logger?.warn?.(`[YOUTUBE-KNOWLEDGE]: ${m}`)))
+      .catch(e => global.logger?.warn?.(`[YOUTUBE-KNOWLEDGE]: ${e.message}`))
+  }
+  return { added, more: !!knowledge.backfillToken }
 }
 
 // Syncs every channel the bot follows, for /youtube sync. guildID: whose view to return.

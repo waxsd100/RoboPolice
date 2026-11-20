@@ -23,10 +23,12 @@ const store = require('../../db/interfaces/postgres/wiki')
 const xStore = require('../../db/interfaces/postgres/xKnowledge')
 const discordStore = require('../../db/interfaces/postgres/discordKnowledge')
 const webStore = require('../../db/interfaces/postgres/webKnowledge')
+const youtubeStore = require('../../db/interfaces/postgres/youtubeKnowledge')
 
 // The knowledge tables: the wiki's, the X posts' (twitterKnowledge.js), the streamer's Discord
-// messages' (discordKnowledge.js) and what was looked up on the web (webKnowledge.js), worked on alike.
-const stores = () => [store, xStore, discordStore, webStore]
+// messages' (discordKnowledge.js), what was looked up on the web (webKnowledge.js) and the
+// streamer's YouTube videos (youtubeKnowledge.js), worked on alike.
+const stores = () => [store, xStore, discordStore, webStore, youtubeStore]
 
 const DEFAULT_REFRESH_HOURS = 168
 const DEFAULT_DELAY_MS = 1000
@@ -202,9 +204,10 @@ async function refresh ({ force = false } = {}) {
   running = true
   try {
     const maxAge = setting('WIKI_REFRESH_HOURS', DEFAULT_REFRESH_HOURS) * 3600 * 1000
-    // Without WIKI_URLS there is no wiki to read, but the X posts, Discord messages and topics
-    // looked up on the web still get their knowledge taken out below.
+    // Without WIKI_URLS there is no wiki to read, but the X posts, Discord messages, YouTube
+    // videos and topics looked up on the web still get their knowledge taken out below.
     await require('./webKnowledge').refresh().catch(e => global.logger.warn(`[WEB]: ${e.message}`))
+    await require('./youtubeKnowledge').refresh({ force }).catch(e => global.logger.warn(`[YOUTUBE-KNOWLEDGE]: ${e.message}`))
     for (const root of wikiRoots()) {
       const last = await store.lastRead(root.origin)
       if (!force && last && Date.now() - new Date(last).getTime() < maxAge) continue
@@ -233,10 +236,10 @@ function startWiki () {
   return setInterval(() => refresh(), CHECK_EVERY_MS)
 }
 
-// Whether there is any knowledge to search: a wiki, X accounts, Discord accounts or topics to look
-// up on the web are set.
+// Whether there is any knowledge to search: a wiki, X accounts, Discord accounts, YouTube
+// channels or topics to look up on the web are set.
 function searchable () {
-  return enabled() || require('./twitterKnowledge').enabled() || require('./discordKnowledge').enabled() || require('./webKnowledge').enabled()
+  return enabled() || require('./twitterKnowledge').enabled() || require('./discordKnowledge').enabled() || require('./webKnowledge').enabled() || require('./youtubeKnowledge').enabled()
 }
 
 // What the wiki (and the X posts) know closest in meaning to `query`, as the search_wiki tool
@@ -250,7 +253,7 @@ async function searchWiki (query, { facts = 8, sections = 3 } = {}) {
   const minScore = minorQuery ? Math.max(MIN_RELATED_SCORE, MIN_MINOR_RELATED_SCORE) : MIN_RELATED_SCORE
   const factLimit = minorQuery ? Math.min(facts, MAX_MINOR_RELATED_ITEMS * 2) : facts
   const sectionLimit = minorQuery ? Math.min(sections, 1) : sections
-  // The closest of the wiki's and of the X posts' together.
+  // The closest across all configured knowledge stores together.
   const closest = async (find, limit) => (await Promise.all(stores().filter((_, i) => filled[i]).map(t => find(t, limit))))
     .flat().sort((a, b) => (b.score ?? 0) - (a.score ?? 0)).slice(0, limit)
   const [rawFacts, rawSections] = await Promise.all([
@@ -288,7 +291,11 @@ async function relatedKnowledge (query, vector, { limit = 6, random = Math.rando
   const minorQuery = mentionsMinor(text)
   const minScore = minorQuery ? Math.max(MIN_RELATED_SCORE, MIN_MINOR_RELATED_SCORE) : MIN_RELATED_SCORE
   const effectiveLimit = minorQuery ? Math.min(limit, MAX_MINOR_RELATED_ITEMS) : limit
-  const named = (await store.characterFacts().catch(() => []))
+  const charSources = [
+    store.characterFacts().catch(() => []),
+    ...(require('./youtubeKnowledge').enabled() ? [youtubeStore.characterFacts().catch(() => [])] : [])
+  ]
+  const named = (await Promise.all(charSources)).flat()
     .filter(isSafeFact)
     .filter(c => [c.name, ...(c.aliases || [])].some(n => n && n.length >= 2 && (!minorQuery || !mentionsMinor(n) || text.trim() === n) && text.includes(n)))
     .map(c => ({ kind: 'character', ...c }))
@@ -320,15 +327,19 @@ function weightedSample (items, count, weightOf, random = Math.random) {
 
 // Who the wiki's characters are, for describing emojis: { text, hash }, text empty when unknown.
 // The characters taken out as knowledge (with other names and looks) when there are any, else the
-// parts of the pages about characters. The wiki's only, not the X posts': those change daily, and
-// every emoji would be described again each time.
+// parts of the pages about characters. The wiki's only when a wiki is configured (not X posts,
+// which change daily and would re-describe every emoji each time); falls back to YouTube character
+// facts when no wiki has any.
 //
 // Also: names, each character's name and other names (an emoji named after one is that one), and
 // images, a picture of each character the wiki has one of ({ name, url }), shown to Gemini so it
 // can tell which character an emoji is from how it looks. The hash covers all of it.
 async function characterContext () {
   if (!searchable()) return { text: '', hash: null, names: [], images: [] }
-  const known = await store.characterFacts().catch(() => [])
+  let known = await store.characterFacts().catch(() => [])
+  if (!known.length && !enabled() && require('./youtubeKnowledge').enabled()) {
+    known = await youtubeStore.characterFacts().catch(() => [])
+  }
   const rows = known.length
     ? known.map(c => ({ heading: `${c.name}${c.aliases?.length ? `（${c.aliases.join('、')}）` : ''}`, text: c.content }))
     : await store.characters().catch(() => [])

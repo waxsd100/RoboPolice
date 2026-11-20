@@ -138,6 +138,7 @@ async function storeSummary (guildID, videoID, text) {
   const summary = cleanSummary(text).slice(0, MAX_SUMMARY)
   if (!summary) throw new GeminiError(`Gemini returned no summary for ${videoID}`, 'AI が動画を要約できませんでした')
   await youtubeDB.saveSummary(guildID, videoID, summary)
+  require('./youtubeKnowledge').onSummarySaved(videoID)
   return summary
 }
 
