@@ -292,3 +292,72 @@ describe('migration 051', () => {
     assert.equal(dbRows.has('v3'), false, 'chatter-only broken row is deleted')
   })
 })
+
+describe('Flex fallback and rate-limit resilience', () => {
+  const { retryTimer } = require('../../src/bot/modules/eventDrafter')
+  const { mergePartSummaries } = require('../../src/bot/modules/videoSummary')
+
+  test('summarizeVideo on Flex falls back to standard tier on 503 and rides out 429 retries', async (t) => {
+    configureGateway()
+    const store = installYouTubeStore()
+    const waits = []
+    t.mock.method(retryTimer, 'sleep', async ms => { waits.push(ms) })
+    t.mock.method(global.logger, 'info', () => {})
+
+    const requests = []
+    let standardAttempts = 0
+    global.fetch = async (url, init) => {
+      const body = JSON.parse(init.body)
+      requests.push({ url, body })
+      if (body.serviceTier === 'flex') {
+        return { ok: false, status: 503, headers: { get: () => null }, text: async () => 'no flex capacity' }
+      }
+      standardAttempts++
+      if (standardAttempts <= 4) {
+        return { ok: false, status: 429, headers: { get: () => null }, text: async () => '{"error":{"status":"RESOURCE_EXHAUSTED"}}' }
+      }
+      return { ok: true, json: async () => ({ candidates: [{ content: { role: 'model', parts: [{ text: '- [0:00] 標準ティアで要約' }] } }] }) }
+    }
+
+    const res = await summarizeVideo('100', 'https://youtu.be/flexBusy001', { flex: true })
+    assert.equal(res.summary, '- [0:00] 標準ティアで要約')
+    assert.equal(store.summaries[100].flexBusy001, '- [0:00] 標準ティアで要約')
+    assert.equal(requests.filter(r => r.body.serviceTier === 'flex').length, 3, 'tries Flex plus 2 retries before fallback')
+    assert.equal(requests.filter(r => r.body.serviceTier === undefined).length, 5, 'retries standard up to 429 recovery')
+    assert.deepEqual(waits, [2000, 4000, 2000, 4000, 8000, 16000])
+  })
+
+  test('VIDEO_SUMMARY_FLEX_FALLBACK=false keeps summarizeVideo Flex-only, while mergePartSummaries always falls back on Flex congestion', async (t) => {
+    configureGateway()
+    installYouTubeStore()
+    t.mock.method(retryTimer, 'sleep', async () => {})
+    t.mock.method(global.logger, 'info', () => {})
+    const prev = process.env.VIDEO_SUMMARY_FLEX_FALLBACK
+    process.env.VIDEO_SUMMARY_FLEX_FALLBACK = 'false'
+    t.after(() => {
+      if (prev === undefined) delete process.env.VIDEO_SUMMARY_FLEX_FALLBACK
+      else process.env.VIDEO_SUMMARY_FLEX_FALLBACK = prev
+    })
+
+    const requests = []
+    global.fetch = async (url, init) => {
+      const body = JSON.parse(init.body)
+      requests.push({ url, body })
+      if (body.serviceTier === 'flex') {
+        return { ok: false, status: 503, headers: { get: () => null }, text: async () => 'at capacity' }
+      }
+      return { ok: true, json: async () => ({ candidates: [{ content: { role: 'model', parts: [{ text: '- [0:00] A\n- [2:00:00] B' }] } }] }) }
+    }
+
+    await assert.rejects(
+      summarizeVideo('100', 'https://youtu.be/flexOnly001', { flex: true }),
+      { hint: 'AI（Flex）が混み合っていて答えられませんでした。少し時間をおいてお試しください' }
+    )
+    assert.ok(requests.every(r => r.body.serviceTier === 'flex'))
+
+    requests.length = 0
+    const merged = await mergePartSummaries('100', ['### 0:00〜2:00:00\n- [0:00] A', '### 2:00:00〜4:00:00\n- [2:00:00] B'], { flex: true })
+    assert.equal(merged, '- [0:00] A\n- [2:00:00] B')
+    assert.ok(requests.some(r => r.body.serviceTier === undefined), 'mergePartSummaries falls back to standard tier')
+  })
+})

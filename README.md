@@ -306,7 +306,7 @@ rm robopolice-key.json
 | `REPLY_POLISH` | 任意（既定: オン）。AI特有の表現・記号を含む返信や250文字以上の返信を`GEMINI_LIGHT_MODEL`と`yomiyasu-pocket`で自然な日本語に整えます。 |
 | `MENTION_RECENT_TOPICS`, `MENTION_RECENT_MESSAGES`, `MENTION_RECENT_HOURS` | 任意。メンション時に同じチャンネルの直近の関連発言（既定: 過去12時間の最新50件から最大8件）を文脈として渡します。 |
 | `YOUTUBE_API_KEY`, `YOUTUBE_CHANNELS`, `YOUTUBE_AUTO_SYNC_MINUTES`, `YOUTUBE_LIVE_POLL_SECONDS`, `YOUTUBE_WEBSUB_URL`, `YOUTUBE_WEBSUB_SECRET`, `YOUTUBE_GATEWAY_PROVIDER` | 任意。YouTubeチャンネルの同期、動画要約、配信・新着動画イベント自動登録、WebSubプッシュ通知に関する設定。 |
-| `VIDEO_SUMMARY_BATCH`, `VIDEO_SUMMARY_FLEX_SECONDS`, `VIDEO_SUMMARY_CONCURRENCY`, `VIDEO_SUMMARY_TIMEOUT_MINUTES`, `VIDEO_SUMMARY_THINKING_LEVEL`, `VIDEO_SUMMARY_FPS` | 任意。動画要約のBatch API利用、Flex推論の対象秒数（既定300秒以下と最新動画）、同時実行数、タイムアウト、思考レベル、フレームレート（既定`0.2` fps）。 |
+| `VIDEO_SUMMARY_BATCH`, `VIDEO_SUMMARY_FLEX_SECONDS`, `VIDEO_SUMMARY_FLEX_FALLBACK`, `VIDEO_SUMMARY_CONCURRENCY`, `VIDEO_SUMMARY_TIMEOUT_MINUTES`, `VIDEO_SUMMARY_THINKING_LEVEL`, `VIDEO_SUMMARY_FPS` | 任意。動画要約のBatch API利用、Flex推論の対象秒数（既定300秒以下と最新動画）、Flex混雑・制限時の標準ティアへのフォールバック（既定オン）、同時実行数、タイムアウト、思考レベル、フレームレート（既定`0.2` fps）。 |
 | `TWITCH_CHANNELS`, `TWITCH_CLIENT_ID`, `TWITCH_CLIENT_SECRET`, `TWITCH_SYNC_MINUTES` | 任意。フォローするTwitchチャンネル（カンマ区切り）とAPI認証情報、同期周期（既定60分）。 |
 | `STEAM_ACCOUNTS`, `STEAM_API_KEY`, `STEAM_SYNC_MINUTES` | 任意。同期するSteamアカウント（既定: `nobaman`）、任意のSteam Web APIキー、同期周期（既定360分）。 |
 | `WIKI_URLS`, `WIKI_REFRESH_HOURS`, `WIKI_DELAY_MS` | 任意。コミュニティWikiのURL（既定: `https://novamanhikoushiki.memo.wiki/`）、再取得周期（既定168時間）、ページ間ウェイト（既定1000ms）。 |

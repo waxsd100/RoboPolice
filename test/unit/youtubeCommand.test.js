@@ -445,5 +445,53 @@ describe('/youtube', () => {
       assert.ok(store.summaries[100].d6BAt1Kb7c0)
       assert.match(posted[0].content, /動画を要約しました。[\s\S]*https:\/\/www\.youtube\.com\/watch\?v=d6BAt1Kb7c0/)
     })
+
+    test('completed batch clips and oversized batch fallbacks succeed via standard tier when Flex returns HTTP 503', async (t) => {
+      const { retryTimer } = require('../../src/bot/modules/eventDrafter')
+      t.mock.method(global.logger, 'info', () => {})
+      t.mock.method(retryTimer, 'sleep', async () => {})
+      store.knowledge[100] = {
+        channel: { channel_id: UC, title: 'のばまんch' },
+        videos: [
+          { video_id: 'sZMjbROyaSs', title: '長時間アーカイブ', url: 'https://youtu.be/sZMjbROyaSs', duration: 'PT4H' },
+          { video_id: 'd6BAt1Kb7c0', title: '未分割で上限超過したアーカイブ', url: 'https://youtu.be/d6BAt1Kb7c0', duration: 'PT4H' }
+        ]
+      }
+      batches.push({
+        name: 'batches/b-flex',
+        guild_id: '100',
+        channel_id: '201',
+        requester_id: '1',
+        video_ids: ['sZMjbROyaSs', 'd6BAt1Kb7c0'],
+        model: 'gemini-3.8-flash'
+      })
+      const batchResults = [
+        answer('sZMjbROyaSs:0-7200', '- [0:00] 開始'),
+        answer('sZMjbROyaSs:7200-14400', '- [10:00] 中盤'),
+        { metadata: { key: 'd6BAt1Kb7c0' }, error: { message: 'Request contains an invalid argument.' } }
+      ]
+      const requests = []
+      global.fetch = async (url, init = {}) => {
+        if (url.endsWith('/batches/b-flex')) {
+          return { ok: true, json: async () => ({ name: 'batches/b-flex', metadata: { state: 'BATCH_STATE_SUCCEEDED' }, response: { inlinedResponses: { inlinedResponses: batchResults } } }) }
+        }
+        const body = init.body ? JSON.parse(init.body) : null
+        requests.push({ url, body })
+        if (body?.serviceTier === 'flex') {
+          return { ok: false, status: 503, headers: { get: () => null }, text: async () => 'flex capacity exhausted' }
+        }
+        return { ok: true, json: async () => ({ candidates: [{ content: { role: 'model', parts: [{ text: '- [0:00] 要約テキスト' }] } }] }) }
+      }
+      const posted = []
+      global.bot.createMessage = async (channelID, message) => { posted.push({ channelID, ...message }) }
+
+      await summaryBatch.checkAll()
+      assert.ok(store.summaries[100].sZMjbROyaSs)
+      assert.ok(store.summaries[100].d6BAt1Kb7c0)
+      assert.match(posted[0].content, /^<@1> 2\/2 本の動画を要約しました。/)
+      assert.doesNotMatch(posted[0].content, /⚠️|AI（Flex）が混み合っていて/)
+      assert.ok(requests.some(r => r.body?.serviceTier === 'flex'), 'tried Flex first')
+      assert.ok(requests.some(r => r.body?.serviceTier === undefined), 'fell back cleanly to standard tier')
+    })
   })
 })

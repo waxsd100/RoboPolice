@@ -397,13 +397,14 @@ async function geminiPost (path, body, options = {}) {
   }
   if (data instanceof StandardTier) {
     record({ error: data.why })
-    return geminiPost(path, data.body, { ...options, flex: false, standard: true })
+    const purpose = String(options.purpose || 'other').replace(/-flex$/, '')
+    return geminiPost(path, data.body, { ...options, purpose, flex: false, standard: true })
   }
   record({ response: data })
   return data
 }
 
-// A Flex call that is to be asked again at the standard tier (GEMINI_DEEP_FLEX_FALLBACK).
+// A Flex call that is to be asked again at the standard tier (GEMINI_DEEP_FLEX_FALLBACK or flexFallback).
 class StandardTier {
   constructor (body, why) {
     this.body = body
@@ -411,13 +412,13 @@ class StandardTier {
   }
 }
 
-async function geminiAttempts (path, body, { timeoutMs = GEMINI_TIMEOUT_MS, purpose = 'other', model = '', flex = false, stream = false, standard = false } = {}, sent = {}) {
+async function geminiAttempts (path, body, { timeoutMs = GEMINI_TIMEOUT_MS, purpose = 'other', model = '', flex = false, stream = false, standard = false, flexFallback = null, flexMaxRetries = null, standardMaxRetries = null, maxRetries = null } = {}, sent = {}) {
   const usage = currentUsage()
   // A user near their limits has every generation of their mention on Flex (mentionQuota.js), and
   // when the bot as a whole is busy every generation is, in the background too (geminiLoad.js);
   // but for image models.
   const isGenerate = /:(stream)?[gG]enerateContent/.test(path) && !/image/i.test(model)
-  const loadFlex = !flex && !usage?.flex && isGenerate && geminiLoad.flexForAll()
+  const loadFlex = !flex && !standard && !usage?.flex && isGenerate && geminiLoad.flexForAll()
   if ((usage?.flex || loadFlex) && isGenerate) flex = true
   flex = flex && !standard && flexUsable()
   if (flex && loadFlex && purpose.startsWith('mention') && usage?.onFlex) {
@@ -432,6 +433,11 @@ async function geminiAttempts (path, body, { timeoutMs = GEMINI_TIMEOUT_MS, purp
   if (flex) body = { ...body, serviceTier: 'flex' }
   sent.body = body
 
+  const tierRetries = flex ? flexMaxRetries : standardMaxRetries
+  const retries = Number.isInteger(tierRetries) && tierRetries >= 0
+    ? tierRetries
+    : (Number.isInteger(maxRetries) && maxRetries >= 0 ? maxRetries : MAX_RETRIES)
+
   let res
   for (let attempt = 0; ; attempt++) {
     if (usage) usage.requests++
@@ -443,7 +449,7 @@ async function geminiAttempts (path, body, { timeoutMs = GEMINI_TIMEOUT_MS, purp
       dispatcher: dispatcherFor(timeoutMs),
       body: JSON.stringify(body)
     })
-    if ((res.status !== 429 && !(flex && res.status === 503)) || attempt === MAX_RETRIES) break
+    if ((res.status !== 429 && !(flex && res.status === 503)) || attempt === retries) break
     const wait = retryDelayMs(res.headers?.get?.('retry-after'), attempt)
     await res.text().catch(() => {}) // let the connection be reused
     if (usage) {
@@ -452,7 +458,8 @@ async function geminiAttempts (path, body, { timeoutMs = GEMINI_TIMEOUT_MS, purp
     }
     await retryTimer.sleep(wait)
   }
-  if (!res.ok && flex && [429, 503, 524].includes(res.status) && process.env.GEMINI_DEEP_FLEX_FALLBACK === 'true') {
+  const allowStandardFallback = flexFallback !== null ? Boolean(flexFallback) : process.env.GEMINI_DEEP_FLEX_FALLBACK === 'true'
+  if (!res.ok && flex && [429, 503, 524].includes(res.status) && allowStandardFallback) {
     await res.text().catch(() => {})
     const why = res.status === 524 ? 'timed out' : 'full'
     global.logger?.info(`[GEMINI]: Flex ${why} for ${model} (HTTP ${res.status}); asking at the standard tier`)
