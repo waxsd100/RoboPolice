@@ -1,9 +1,11 @@
 // Knowledge learned from the streamer's YouTube videos (YOUTUBE_CHANNELS): every video with a
-// stored summary, plus recent finished videos without a summary via their public Japanese captions
-// and non-boilerplate descriptions. Written as pages of the unified knowledge tables with
-// source = 'youtube' (youtubeKnowledge.js in Postgres), so wikiKnowledge.js extracts characters,
-// quotes, projects, trivia and running jokes from videos and embeds both the sections and the
-// extracted facts for `describeServer` (コミュニティの知識) and `search_wiki`.
+// stored summary, plus recent finished videos without a summary via their public Japanese captions.
+// Video descriptions (`概要欄`) are intentionally excluded because YouTube descriptions are mostly
+// copy-pasted channel templates that would skew fact extraction and embeddings.
+// Written as pages of the unified knowledge tables with source = 'youtube' (youtubeKnowledge.js in
+// Postgres), so wikiKnowledge.js extracts characters, quotes, projects, trivia and running jokes
+// from actual video content and embeds both the sections and the extracted facts for
+// `describeServer` (コミュニティの知識) and `search_wiki`.
 const { knowledgeSetting } = require('../utils/knowledgeDefaults')
 const { cleanSummary } = require('../utils/textClean')
 const { looksLikeInjection } = require('../utils/untrusted')
@@ -15,21 +17,13 @@ const store = require('../../db/interfaces/postgres/youtubeKnowledge')
 
 const WATCH_PREFIX = 'https://www.youtube.com/watch?v='
 const MAX_SECTION_CHARS = 1500
-const MAX_DESCRIPTION_CHARS = 1000
-const MIN_STANDALONE_DESC_CHARS = 40
-const MIN_ACCOMPANYING_DESC_CHARS = 15
 const DEFAULT_CAPTION_VIDEOS = 25
 const MAX_CAPTION_VIDEOS = 100
 const CAPTION_MAX_UTTERANCES = 35
 const DEFAULT_CAPTION_DELAY_MS = 300
 
-const DIVIDER_LINE_RE = /^[=\-*_━─▼▲◆◇■□★☆●○〜~#・\s]{3,}$/u
-const BARE_URL_LINE_RE = /^https?:\/\/\S+$/i
-const PROMO_PREFIX_RE = /^(?:チャンネル登録|高評価|グッドボタン|メンバーシップ|サブチャンネル|メインチャンネル|再生リスト|おすすめ動画|前回の動画|次回の動画|関連動画|Twitter|X\s*[（(]?旧?\s*Twitter|Twitch|Instagram|TikTok|LINE|Discord|グッズ|スタンプ|ほしい物リスト|干し芋)/iu
-const CREDIT_LINE_RE = /^(?:BGM|SE|効果音|音楽|楽曲|使用楽曲|音源|素材|フリー素材|イラスト|立ち絵|エンディング|オープニング|ED|OP)\s*[:：]/iu
-const CREDIT_SITE_RE = /(?:DOVA-SYNDROME|魔王魂|効果音ラボ|OtoLogic|甘茶の音楽工房|MusMus|ポケットサウンド|ニコニ・コモンズ|いらすとや)/iu
-const AGENCY_FOOTER_RE = /(?:UUUM株式会社|ビジネス関係のお問い合わせ|ファンレター|プレゼント送付先|お問い合わせはこちら|提供[:：])/iu
-const MULTI_HASHTAG_LINE_RE = /^(?:#\S+\s*){2,}$/u
+// Recurring spoken intro/outro calls-to-action in captions carry no video-specific knowledge.
+const SPOKEN_PROMO_RE = /(?:チャンネル登録|高評価|グッドボタン|概要欄のリンク|メンバーシップ登録|提供でお送り)/iu
 
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms))
 
@@ -68,29 +62,6 @@ function dayOf (date) {
   return new Intl.DateTimeFormat('sv-SE', { timeZone: 'Asia/Tokyo' }).format(d)
 }
 
-// Strips recurring YouTube description boilerplate (subscribe links, social handles, BGM/SE
-// credits, agency footers, decorative dividers) while keeping video-specific explanations.
-function cleanVideoDescription (raw) {
-  const safe = sanitizeUntrustedLines(String(raw || ''))
-  if (!safe) return ''
-  const kept = []
-  for (const rawLine of safe.split('\n')) {
-    const line = rawLine.trim()
-    if (!line) {
-      if (kept.length && kept[kept.length - 1] !== '') kept.push('')
-      continue
-    }
-    if (DIVIDER_LINE_RE.test(line) || BARE_URL_LINE_RE.test(line) || MULTI_HASHTAG_LINE_RE.test(line)) continue
-    if (PROMO_PREFIX_RE.test(line) || CREDIT_LINE_RE.test(line) || CREDIT_SITE_RE.test(line) || AGENCY_FOOTER_RE.test(line)) continue
-    const withoutUrls = line.replace(/https?:\/\/\S+/gi, '').trim()
-    const plain = withoutUrls.replace(/[#@]\S+|[\s\p{P}\p{S}]/gu, '')
-    if ([...plain].length < 4) continue
-    if (looksLikeInjection(withoutUrls) || isUnsafeMinorContent(withoutUrls)) continue
-    kept.push(withoutUrls)
-  }
-  return kept.join('\n').replace(/\n{3,}/g, '\n\n').trim().slice(0, MAX_DESCRIPTION_CHARS)
-}
-
 // Splits `text` along line breaks so each part stays <= `maxChars` without slicing lines in half.
 function splitTextParts (text, maxChars = MAX_SECTION_CHARS) {
   const src = String(text || '').trim()
@@ -111,8 +82,9 @@ function splitTextParts (text, maxChars = MAX_SECTION_CHARS) {
   return out
 }
 
-// Builds knowledge_sections entries `[{ heading, text, images }]` for one video, or `[]` when an
-// unsummarized video has neither captions nor a substantive description.
+// Builds knowledge_sections entries `[{ heading, text, images }]` for one video from its actual
+// spoken/visual content (stored summary or public captions), never from `video.description`.
+// Returns `[]` when an unsummarized video has no usable captions.
 function buildVideoSections (video, { utterances = [] } = {}) {
   if (!video?.video_id) return []
   const meta = []
@@ -120,14 +92,10 @@ function buildVideoSections (video, { utterances = [] } = {}) {
   if (published) meta.push(`公開日: ${published}`)
   if (video.channel_title) meta.push(`チャンネル: ${video.channel_title}`)
   const header = meta.length ? `${meta.join(' / ')}\n` : ''
-  const desc = cleanVideoDescription(video.description)
 
   const summary = video.summary ? sanitizeUntrustedLines(cleanSummary(video.summary) || video.summary).trim() : ''
   if (summary) {
-    const blocks = []
-    if ([...desc].length >= MIN_ACCOMPANYING_DESC_CHARS) blocks.push(`概要欄:\n${desc}`)
-    blocks.push(`動画の内容（時系列記録）:\n${summary}`)
-    const parts = splitTextParts(`${header}${blocks.join('\n\n')}`, MAX_SECTION_CHARS)
+    const parts = splitTextParts(`${header}動画の内容（時系列記録）:\n${summary}`, MAX_SECTION_CHARS)
       .filter(t => !looksLikeInjection(t) && !isUnsafeMinorContent(`${video.title || ''}\n${t}`))
     return parts.map((text, i) => ({
       heading: parts.length === 1 ? '動画の内容' : `動画の内容 ${i + 1}`,
@@ -138,18 +106,14 @@ function buildVideoSections (video, { utterances = [] } = {}) {
 
   const cleanUtterances = (Array.isArray(utterances) ? utterances : [])
     .map(u => String(u || '').trim())
-    .filter(u => u && !looksLikeInjection(u) && !isUnsafeMinorContent(u))
-  if (!cleanUtterances.length && [...desc].length < MIN_STANDALONE_DESC_CHARS) return []
+    .filter(u => u && !SPOKEN_PROMO_RE.test(u) && !looksLikeInjection(u) && !isUnsafeMinorContent(u))
+  if (!cleanUtterances.length) return []
 
-  const blocks = []
-  if ([...desc].length >= MIN_ACCOMPANYING_DESC_CHARS) blocks.push(`概要欄:\n${desc}`)
-  if (cleanUtterances.length) {
-    blocks.push(`字幕からの抜粋（自動音声認識を含む場合あり）:\n${cleanUtterances.map(u => `- ${u}`).join('\n')}`)
-  }
-  const parts = splitTextParts(`${header}${blocks.join('\n\n')}`, MAX_SECTION_CHARS)
+  const body = `${header}字幕からの抜粋（自動音声認識を含む場合あり）:\n${cleanUtterances.map(u => `- ${u}`).join('\n')}`
+  const parts = splitTextParts(body, MAX_SECTION_CHARS)
     .filter(t => !looksLikeInjection(t) && !isUnsafeMinorContent(`${video.title || ''}\n${t}`))
   return parts.map((text, i) => ({
-    heading: parts.length === 1 ? '字幕・概要欄' : `字幕・概要欄 ${i + 1}`,
+    heading: parts.length === 1 ? '動画の字幕' : `動画の字幕 ${i + 1}`,
     text,
     images: []
   }))
@@ -249,7 +213,6 @@ module.exports = {
   configuredChannels,
   enabled,
   captionVideoLimit,
-  cleanVideoDescription,
   splitTextParts,
   buildVideoSections,
   ingestVideo,

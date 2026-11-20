@@ -419,10 +419,10 @@ async function recentVideosForStyle (limit = 20) {
 
 // Videos of followed channels for community-knowledge extraction (youtubeKnowledge.js): every
 // finished video with a stored summary, plus up to `unsummarizedLimit` newest finished unsummarized
-// videos (whose public captions and descriptions are read).
+// videos (whose public captions are read; template-heavy descriptions are not used).
 async function videosForKnowledge ({ unsummarizedLimit = 25 } = {}) {
   const summarized = await pool.query(
-    `SELECT v.video_id, v.channel_id, c.title AS channel_title, v.title, v.description,
+    `SELECT v.video_id, v.channel_id, c.title AS channel_title, v.title,
             v.published_at, v.duration, v.summary
      FROM youtube_videos v
      LEFT JOIN youtube_channels c ON c.channel_id = v.channel_id
@@ -432,7 +432,7 @@ async function videosForKnowledge ({ unsummarizedLimit = 25 } = {}) {
      ORDER BY v.published_at DESC NULLS LAST`)
   if (!(unsummarizedLimit > 0)) return summarized.rows
   const unsummarized = await pool.query(
-    `SELECT v.video_id, v.channel_id, c.title AS channel_title, v.title, v.description,
+    `SELECT v.video_id, v.channel_id, c.title AS channel_title, v.title,
             v.published_at, v.duration, v.summary
      FROM youtube_videos v
      LEFT JOIN youtube_channels c ON c.channel_id = v.channel_id

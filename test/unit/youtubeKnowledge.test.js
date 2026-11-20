@@ -32,25 +32,54 @@ afterEach(() => {
 })
 
 describe('youtubeKnowledge', () => {
-  test('cleanVideoDescription strips recurring promo/credit/agency footers while keeping video-specific context', () => {
-    const raw = [
-      '今回は Cities: Skylines で信号を1つも置かずに人口10万人の円形都市を作れるか検証します。',
-      '使用MOD: Traffic Manager President Edition',
-      '==============================',
-      'チャンネル登録よろしくお願いします！ https://www.youtube.com/@nobamangames',
-      'Twitter: https://twitter.com/nobamangames',
-      'BGM: DOVA-SYNDROME / 効果音ラボ',
-      'ビジネス関係のお問い合わせはこちら: UUUM株式会社',
-      '#のばまん #CitiesSkylines #ゲーム実況'
+  test('buildVideoSections excludes video.description completely and strips spoken promo lines from captions', () => {
+    const longTemplateDescription = [
+      'いつもご視聴ありがとうございます！このチャンネルでは奇妙なシミュレーションゲームを実況しています。',
+      'サブチャンネルやグッズ情報・使用機材一覧は以下をご覧ください。',
+      'チャンネル登録・高評価もぜひお願いします！'
     ].join('\n')
 
-    const cleaned = youtubeKnowledge.cleanVideoDescription(raw)
-    assert.match(cleaned, /Cities: Skylines で信号を1つも置かずに人口10万人の円形都市/)
-    assert.match(cleaned, /Traffic Manager President Edition/)
-    assert.doesNotMatch(cleaned, /チャンネル登録|Twitter|DOVA-SYNDROME|効果音ラボ|UUUM|#のばまん/)
+    // Unsummarized video without captions returns [] even when description is long.
+    assert.deepEqual(youtubeKnowledge.buildVideoSections({
+      video_id: 'vidDescOnly',
+      title: 'テスト動画',
+      description: longTemplateDescription,
+      summary: null
+    }, { utterances: [] }), [])
+
+    // Summarized video includes only the summary, never the description.
+    const sumSections = youtubeKnowledge.buildVideoSections({
+      video_id: 'vidSumOnly1',
+      title: 'テスト動画',
+      channel_title: 'のばまんゲームス',
+      published_at: new Date('2026-11-10T09:00:00Z'),
+      description: longTemplateDescription,
+      summary: '- [0:00] 円形都市の検証を開始'
+    })
+    assert.equal(sumSections.length, 1)
+    assert.equal(sumSections[0].heading, '動画の内容')
+    assert.match(sumSections[0].text, /円形都市の検証を開始/)
+    assert.doesNotMatch(sumSections[0].text, /概要欄|いつもご視聴|使用機材|チャンネル登録/)
+
+    // Caption-backed video strips spoken promo lines and excludes description.
+    const capSections = youtubeKnowledge.buildVideoSections({
+      video_id: 'vidCapOnly1',
+      title: 'テスト動画',
+      description: longTemplateDescription,
+      summary: null
+    }, {
+      utterances: [
+        '太陽の隣に木星質量のブラックホールを置くと地球が弾き飛ばされました',
+        'チャンネル登録と高評価よろしくお願いします'
+      ]
+    })
+    assert.equal(capSections.length, 1)
+    assert.equal(capSections[0].heading, '動画の字幕')
+    assert.match(capSections[0].text, /ブラックホールを置くと地球が弾き飛ばされました/)
+    assert.doesNotMatch(capSections[0].text, /チャンネル登録|いつもご視聴/)
   })
 
-  test('refresh ingests summarized and caption-backed videos, skips unchanged pages, and upgrades caption pages when a summary arrives', async (t) => {
+  test('refresh ingests summarized and caption-backed videos (ignoring descriptions), skips unchanged pages, and upgrades caption pages when a summary arrives', async (t) => {
     process.env.YOUTUBE_CHANNELS = 'UCTW2tw0Mhho72MojB1L48IQ'
     const pages = new Map()
     let saveCount = 0
@@ -80,21 +109,21 @@ describe('youtubeKnowledge', () => {
           {
             video_id: 'vidSum00001',
             title: '信号ゼロの円形都市を作る',
-            description: '高速道路を渦巻き状に接続して渋滞が消えるか実験します。\nチャンネル登録よろしく！',
+            description: '毎回使い回しのテンプレ概要欄テキストです。グッズ販売中！',
             live_status: 'none',
             published_at: new Date('2026-11-10T09:00:00Z')
           },
           {
             video_id: 'vidCap00002',
             title: 'ブラックホールで太陽系を壊す実験',
-            description: 'チャンネル登録お願いします',
+            description: '毎回使い回しのテンプレ概要欄テキストです。グッズ販売中！',
             live_status: 'none',
             published_at: new Date('2026-11-12T09:00:00Z')
           },
           {
-            video_id: 'vidEmpty003',
-            title: '短い告知',
-            description: 'Twitter https://x.com/test',
+            video_id: 'vidNoCap003',
+            title: '字幕なし未要約動画',
+            description: '毎回使い回しの長いテンプレ概要欄テキストですが字幕も要約もありません。サブチャンネルはこちら！',
             live_status: 'none',
             published_at: new Date('2026-11-13T09:00:00Z')
           }
@@ -116,20 +145,20 @@ describe('youtubeKnowledge', () => {
     }
 
     const firstSaved = await youtubeKnowledge.refresh({ fetchCaptions, delayMs: 0 })
-    assert.equal(firstSaved, 2, 'saves summarized video + caption-backed video, skipping empty no-caption video')
-    assert.deepEqual(captionCalls, ['vidEmpty003', 'vidCap00002'])
+    assert.equal(firstSaved, 2, 'saves summarized video + caption-backed video, skipping no-caption video regardless of description length')
+    assert.deepEqual(captionCalls, ['vidNoCap003', 'vidCap00002'])
 
     const sumPage = pages.get('https://www.youtube.com/watch?v=vidSum00001')
     assert.equal(sumPage.title, '信号ゼロの円形都市を作る（YouTube 動画）')
     assert.equal(sumPage.sections[0].heading, '動画の内容')
     assert.match(sumPage.sections[0].text, /ラウンドアバウトを三重に配置/)
-    assert.match(sumPage.sections[0].text, /渦巻き状に接続/)
-    assert.doesNotMatch(sumPage.sections[0].text, /チャンネル登録/)
+    assert.doesNotMatch(sumPage.sections[0].text, /テンプレ概要欄|グッズ販売中/)
 
     const capPage = pages.get('https://www.youtube.com/watch?v=vidCap00002')
-    assert.equal(capPage.sections[0].heading, '字幕・概要欄')
+    assert.equal(capPage.sections[0].heading, '動画の字幕')
     assert.match(capPage.sections[0].text, /地球の公転軌道が3日で吹き飛ぶ/)
-    assert.equal(pages.has('https://www.youtube.com/watch?v=vidEmpty003'), false)
+    assert.doesNotMatch(capPage.sections[0].text, /テンプレ概要欄/)
+    assert.equal(pages.has('https://www.youtube.com/watch?v=vidNoCap003'), false)
     assert.equal(deletedArgs.prefix, 'https://www.youtube.com/watch?v=')
     assert.equal(deletedArgs.urls.length, 3)
 
@@ -137,7 +166,7 @@ describe('youtubeKnowledge', () => {
     captionCalls.length = 0
     const secondSaved = await youtubeKnowledge.refresh({ fetchCaptions, delayMs: 0 })
     assert.equal(secondSaved, 0)
-    assert.deepEqual(captionCalls, ['vidEmpty003'], 'already-saved caption video is not re-fetched')
+    assert.deepEqual(captionCalls, ['vidNoCap003'], 'already-saved caption video is not re-fetched')
     assert.equal(saveCount, 2)
 
     // Once vidCap00002 gets a full Gemini summary, refresh upgrades its page from captions to full summary.
@@ -210,7 +239,7 @@ describe('youtubeKnowledge', () => {
     assert.equal(savedFacts[0].facts[0].name, 'フェロモン渋滞')
   })
 
-  test('searchWiki, relatedKnowledge, and describeServer surface YouTube video knowledge and related videos in streamer mode only', async (t) => {
+  test('searchWiki, relatedKnowledge, and describeServer surface YouTube video knowledge and related videos without leaking description templates', async (t) => {
     process.env.YOUTUBE_CHANNELS = 'UCTW2tw0Mhho72MojB1L48IQ'
     configureGateway()
     installEmbeddingModel()
@@ -266,8 +295,8 @@ describe('youtubeKnowledge', () => {
     assert.ok(related.some(l => l.includes('[キャラクター] ボブ市長（ボブ）')))
     assert.ok(related.some(l => l.includes('[用語・ネタ] 汚水ダム発電')))
 
-    // 3. describeServer surfaces both コミュニティの知識 and 依頼に関係しそうな動画・配信 (with timestamp links) in streamer mode,
-    //    and omits both when streamerPersona is false.
+    // 3. describeServer surfaces both コミュニティの知識 and 依頼に関係しそうな動画・配信 (without leaking description templates)
+    //    in streamer mode, and omits both when streamerPersona is false.
     const { embed, toBase64 } = require('../../src/bot/utils/embeddings')
     const [damVec, otherVec] = await embed(['ボブ市長の下水ダム水力発電の話', 'ホラー実況の話'])
     installYouTubeStore({
@@ -277,19 +306,28 @@ describe('youtubeKnowledge', () => {
           {
             video_id: 'vidDam00001',
             title: '下水で水力発電する街',
-            description: '下水ダム実験',
+            description: '毎回コピペされるテンプレ概要欄文字列XYZ',
             summary: '- [8:10] 高台に下水を溜めて1600MW発電達成、直後に決壊',
             live_status: 'none',
             published_at: new Date('2026-11-05T09:00:00Z'),
             url: 'https://www.youtube.com/watch?v=vidDam00001'
           },
           {
-            video_id: 'vidCook0002',
+            video_id: 'vidDam00002',
+            title: 'ボブ市長の下水ダム続編',
+            description: '毎回コピペされるテンプレ概要欄文字列XYZ',
+            summary: null,
+            live_status: 'none',
+            published_at: new Date('2026-11-06T09:00:00Z'),
+            url: 'https://www.youtube.com/watch?v=vidDam00002'
+          },
+          {
+            video_id: 'vidCook0003',
             title: '無関係な動画',
             description: '別の話',
             live_status: 'none',
             published_at: new Date('2026-11-01T09:00:00Z'),
-            url: 'https://www.youtube.com/watch?v=vidCook0002'
+            url: 'https://www.youtube.com/watch?v=vidCook0003'
           }
         ]
       }
@@ -298,7 +336,8 @@ describe('youtubeKnowledge', () => {
       videos: {
         100: {
           vidDam00001: toBase64(damVec),
-          vidCook0002: toBase64(otherVec)
+          vidDam00002: toBase64(damVec),
+          vidCook0003: toBase64(otherVec)
         }
       }
     })
@@ -316,6 +355,8 @@ describe('youtubeKnowledge', () => {
     assert.match(streamerProfile, /ボブ市長/)
     assert.match(streamerProfile, /### 依頼に関係しそうな動画・配信（YouTube より）/)
     assert.match(streamerProfile, /下水で水力発電する街[\s\S]*\[8:10\]\(https:\/\/www\.youtube\.com\/watch\?v=vidDam00001&t=490s\)/)
+    assert.match(streamerProfile, /ボブ市長の下水ダム続編（公開 2026-11-06）https:\/\/www\.youtube\.com\/watch\?v=vidDam00002/)
+    assert.doesNotMatch(streamerProfile, /テンプレ概要欄文字列XYZ/, 'unsummarized related video never leaks template description')
     assert.doesNotMatch(streamerProfile, /無関係な動画/)
 
     const pureBotProfile = await describeServer(guild, member, '201', {

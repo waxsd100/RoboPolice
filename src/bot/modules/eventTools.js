@@ -1223,7 +1223,6 @@ async function relatedMessages (guild, member, vectorOf, { query = '' } = {}) {
 const MAX_RELATED_VIDEOS = 2
 const MIN_VIDEO_SCORE = 0.62
 const MAX_RELATED_VIDEO_SUMMARY = 280
-const MAX_RELATED_VIDEO_DESC = 140
 async function relatedVideos (guild, vectorOf, { query = '' } = {}) {
   if (!isGatewayConfigured() || mentionsMinor(query)) return []
   if (!await embeddingStore.hasVideoEmbeddings(guild.id, embeddingModel()).catch(() => false)) return []
@@ -1248,8 +1247,8 @@ async function relatedVideos (guild, vectorOf, { query = '' } = {}) {
       const safeSummary = sanitizeUntrustedLines(v.summary).replace(/\s+/g, ' ').slice(0, MAX_RELATED_VIDEO_SUMMARY)
       if (safeSummary) return `${head}\n  内容の要約: ${linkTimestamps(safeSummary, v.video_id)}`
     }
-    const safeDesc = sanitizeUntrustedLines(v.description || '').replace(/\s+/g, ' ').slice(0, MAX_RELATED_VIDEO_DESC)
-    return safeDesc ? `${head}\n  ${safeDesc}` : head
+    // Omit `v.description`: YouTube descriptions are mostly copy-pasted channel templates.
+    return head
   })
 }
 
