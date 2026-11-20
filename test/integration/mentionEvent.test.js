@@ -1115,18 +1115,81 @@ describe('mention → event / forum post (integration)', () => {
     assert.doesNotMatch(requests[0].body.contents[0].parts[0].text, /このサーバーのルールとモデレーター/)
   })
 
-  test('chat: a server that turned the streamer off with /persona gets replies as the bot', async () => {
-    const { installReplyLengthStore } = require('../helpers/fakes')
+  test('chat: a server that turned the streamer off with /persona gets replies as pure Gemini AI matching only its server mood', async (t) => {
+    const { installReplyLengthStore, installLoreStore, installEmbeddingModel } = require('../helpers/fakes')
     const { PERSONAS } = require('../../src/bot/modules/eventDrafter')
+    const wikiKnowledge = require('../../src/bot/modules/wikiKnowledge')
+    const twitchDB = require('../../src/db/interfaces/postgres/twitch')
+    const steamDB = require('../../src/db/interfaces/postgres/steam')
     const { channel } = createChannel()
+    const ownerGuild = createGuild({ id: '9001', channels: [{ id: '910', name: 'general', readers: ['BOT'] }] })
+    ownerGuild.emojis = [{ id: '900000000000000001', name: 'nobaman_owner' }]
+    channel.guild.emojis = [{ id: '200000000000000001', name: 'local_wave' }]
+
+    const prevPersona = process.env.CHAT_PERSONA
+    const prevBotModel = process.env.BOT_MODEL_NAME
+    const prevOwner = process.env.OWNER_GUILD_IDS
+    const prevLore = process.env.SERVER_LORE
+    process.env.CHAT_PERSONA = '語尾は「だぜ」'
+    process.env.BOT_MODEL_NAME = 'nobaman llm 9'
+    process.env.OWNER_GUILD_IDS = '9001'
+    process.env.SERVER_LORE = 'true'
+
+    installEmbeddingModel()
+    const embedFetch = global.fetch
+    installYouTubeStore({
+      [channel.guild.id]: { channel: { channel_ref: '@nobaman', title: 'のばまんch', synced_at: new Date('2026-10-29T12:00:00Z'), video_count: 10 }, videos: [] }
+    })
+    const { embed, toBase64 } = require('../../src/bot/utils/embeddings')
+    const [boardgameVec] = await embed(['週末ボドゲ会'])
+    installLoreStore({
+      styles: { [channel.guild.id]: '深夜テンションでツッコミが速い' },
+      facts: { [channel.guild.id]: [{ kind: 'ネタ', name: '週末ボドゲ会', content: '週末にボードゲームで遊ぶ', week: '2026-10', embedding: toBase64(boardgameVec) }] }
+    })
+    t.mock.method(wikiKnowledge, 'searchable', () => true)
+    t.mock.method(wikiKnowledge, 'relatedKnowledge', async () => ['配信者wikiネタ'])
+    t.mock.method(twitchDB, 'getOverview', async () => [{ login: 'nobaman', display_name: 'のばまん', video_count: 5 }])
+    t.mock.method(steamDB, 'getOverview', async () => [{ persona_name: 'nobaman', account_ref: 'nobaman', steam_id: '765', stored_game_count: 5, review_count: 1, stored_wishlist_count: 0 }])
+    global.bot.guilds.set(ownerGuild.id, ownerGuild)
     installReplyLengthStore({}, { [channel.guild.id]: false })
-    try {
-      const requests = installGemini([[call('submit_chat_reply', { text: 'やあ' })]])
-      await mentionEvent.handle(mention(channel, '<@BOT> やあ'))
-      assert.ok(requests[0].body.systemInstruction.parts[0].text.includes(`## 話し方（このサーバーの設定）\n${PERSONAS.bot}\n`))
-      assert.doesNotMatch(requests[0].body.contents[0].parts[0].text, /## 話し方/)
-    } finally {
+    t.after(() => {
+      if (prevPersona === undefined) delete process.env.CHAT_PERSONA
+      else process.env.CHAT_PERSONA = prevPersona
+      if (prevBotModel === undefined) delete process.env.BOT_MODEL_NAME
+      else process.env.BOT_MODEL_NAME = prevBotModel
+      if (prevOwner === undefined) delete process.env.OWNER_GUILD_IDS
+      else process.env.OWNER_GUILD_IDS = prevOwner
+      if (prevLore === undefined) delete process.env.SERVER_LORE
+      else process.env.SERVER_LORE = prevLore
+      global.bot.guilds.delete(ownerGuild.id)
+      delete channel.guild.emojis
+      installLoreStore()
+      installYouTubeStore()
       installReplyLengthStore()
+    })
+
+    const requests = installGemini([[call('submit_chat_reply', { text: 'やあ！' })]])
+    const geminiFetch = global.fetch
+    global.fetch = (url, init) => (/embedContent|batchEmbedContents/i.test(String(url)) ? embedFetch : geminiFetch)(url, init)
+    await mentionEvent.handle(mention(channel, '<@BOT> 今度の週末ボドゲ会なにやる？'))
+    const system = requests[0].body.systemInstruction.parts[0].text
+    const prompt = requests[0].body.contents[0].parts[0].text
+    const toolNames = requests[0].body.tools[0].functionDeclarations.map(d => d.name)
+
+    assert.ok(system.includes(`## 話し方（このサーバーの設定）\n${PERSONAS.bot}\n`))
+    assert.match(system, /使っている AI・モデルの名前を聞かれたら「Gemini」と答える。/)
+    assert.match(system, /## 返事をするときの立場[\s\S]*純粋な Gemini AI/)
+    assert.doesNotMatch(system, /語尾は「だぜ」|運営者が設定したキャラクター|nobaman llm|配信者|YouTube にあるチャンネルのコミュニティ/)
+    assert.doesNotMatch(prompt, /## 話し方/)
+    assert.match(prompt, /### このサーバーのノリ（メンバーの会話から）\n深夜テンションでツッコミが速い/)
+    assert.match(prompt, /### このサーバーのこと（メンバーの会話から。身内ネタ・用語・出来事など）[\s\S]*週末ボドゲ会/)
+    assert.match(prompt, /<:local_wave:200000000000000001>/)
+    assert.doesNotMatch(prompt, /nobaman_owner|配信者wikiネタ|コミュニティの知識|### YouTube|### Twitch|### Steam/)
+    for (const gone of ['search_youtube', 'search_twitch', 'search_steam', 'search_wiki']) {
+      assert.ok(!toolNames.includes(gone), `${gone} omitted when streamerPersona=false`)
+    }
+    for (const kept of ['summarize_youtube_video', 'fetch_url', 'find_game', 'about_member']) {
+      assert.ok(toolNames.includes(kept), `${kept} retained`)
     }
   })
 

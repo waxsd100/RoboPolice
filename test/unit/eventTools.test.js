@@ -982,4 +982,82 @@ describe('describeServer: what the server is like', () => {
     assert.equal(listMock.mock.callCount(), 1)
     assert.match(fromDbProfile, /<a:yotsuron_horror:900000000000000007>/)
   })
+
+  test('streamerPersona=false omits streamer lookup tools, owner emojis, wiki knowledge, YouTube, Twitch, and Steam while keeping server mood, lore, and local emojis', async (t) => {
+    const wikiKnowledge = require('../../src/bot/modules/wikiKnowledge')
+    const twitchDB = require('../../src/db/interfaces/postgres/twitch')
+    const steamDB = require('../../src/db/interfaces/postgres/steam')
+    const { installLoreStore } = require('../helpers/fakes')
+    configureGateway()
+    installYouTubeStore({
+      200: { channel: { channel_ref: '@nobaman', title: 'のばまんゲームス', synced_at: new Date('2026-10-29T12:00:00Z'), video_count: 50 }, videos: [] }
+    })
+    installEmbeddingModel()
+
+    const prevOwner = process.env.OWNER_GUILD_IDS
+    const prevLore = process.env.SERVER_LORE
+    process.env.OWNER_GUILD_IDS = '9001'
+    process.env.SERVER_LORE = 'true'
+    t.after(() => {
+      if (prevOwner === undefined) delete process.env.OWNER_GUILD_IDS
+      else process.env.OWNER_GUILD_IDS = prevOwner
+      if (prevLore === undefined) delete process.env.SERVER_LORE
+      else process.env.SERVER_LORE = prevLore
+      installLoreStore()
+      installYouTubeStore()
+      installBot({ guilds: [guild] })
+    })
+
+    t.mock.method(wikiKnowledge, 'searchable', () => true)
+    t.mock.method(wikiKnowledge, 'relatedKnowledge', async () => ['配信者の名言: なんとかなる'])
+    t.mock.method(twitchDB, 'getOverview', async () => [{ login: 'nobaman', display_name: 'のばまん', video_count: 10 }])
+    t.mock.method(steamDB, 'getOverview', async () => [{ persona_name: 'nobaman', account_ref: 'nobaman', steam_id: '765', stored_game_count: 20, review_count: 3, stored_wishlist_count: 1 }])
+
+    const ownerGuild = createGuild({ id: '9001', channels: [{ id: '910', name: 'general', readers: ['BOT'] }] })
+    ownerGuild.emojis = [{ id: '900000000000000001', name: 'nobaman_owner' }]
+
+    const localGuild = createGuild({
+      id: '200',
+      channels: [{ id: '201', name: '雑談', readers: [REQUESTER, 'BOT'] }]
+    })
+    localGuild.description = '友人同士の雑談サーバー'
+    localGuild.emojis = [{ id: '200000000000000001', name: 'local_only' }]
+    const { embed, toBase64 } = require('../../src/bot/utils/embeddings')
+    const [movieVec] = await embed(['金曜映画会 映画'])
+    installLoreStore({
+      styles: { 200: 'みんな穏やかでダジャレが好き' },
+      facts: { 200: [{ kind: 'ネタ', name: '金曜映画会', content: '毎週金曜に映画を見る', week: '2026-10', embedding: toBase64(movieVec) }] }
+    })
+    installBot({ guilds: [ownerGuild, localGuild] })
+
+    // 1. Tools exclude streamer DB/wiki searches while preserving general tools.
+    const botTools = createTools({ guild: localGuild, member, ask: async () => '', streamerPersona: false })
+    const botToolNames = botTools.declarations.map(d => d.name)
+    for (const removed of ['search_youtube', 'search_twitch', 'search_steam', 'search_wiki']) {
+      assert.ok(!botToolNames.includes(removed), `${removed} is omitted when streamerPersona=false`)
+      const err = await botTools.call(removed, { query: 'test' })
+      assert.match(err.error, /不明なツール/)
+    }
+    for (const kept of ['fetch_url', 'summarize_youtube_video', 'find_game', 'about_member', 'list_channels', 'get_server_rules']) {
+      assert.ok(botToolNames.includes(kept), `${kept} stays available`)
+    }
+    const streamerToolNames = createTools({ guild: localGuild, member, ask: async () => '', streamerPersona: true }).declarations.map(d => d.name)
+    for (const expected of ['search_youtube', 'search_twitch', 'search_steam', 'search_wiki']) {
+      assert.ok(streamerToolNames.includes(expected), `${expected} is present in streamerPersona=true`)
+    }
+
+    // 2. describeServer keeps local server mood, lore, and local emojis while omitting Nobaman sections.
+    const full = await describeServer(localGuild, member, '201', { query: '今週の映画会どうする？', streamerPersona: false })
+    assert.match(full, /サーバー名: /)
+    assert.match(full, /説明: 友人同士の雑談サーバー/)
+    assert.match(full, /### このサーバーのノリ（メンバーの会話から）\nみんな穏やかでダジャレが好き/)
+    assert.match(full, /### このサーバーのこと（メンバーの会話から。身内ネタ・用語・出来事など）[\s\S]*金曜映画会/)
+    assert.match(full, /<:local_only:200000000000000001>/)
+    assert.doesNotMatch(full, /nobaman_owner|配信者の名言|コミュニティの知識|### YouTube|### Twitch|### Steam/)
+
+    const slim = await describeServer(localGuild, member, '201', { slim: true, streamerPersona: false })
+    assert.match(slim, /### このサーバーのノリ（メンバーの会話から）\nみんな穏やかでダジャレが好き/)
+    assert.match(slim, /<:local_only:200000000000000001>/)
+    assert.doesNotMatch(slim, /nobaman_owner|配信者の名言|コミュニティの知識|### YouTube|### Twitch|### Steam/)
+  })
 })

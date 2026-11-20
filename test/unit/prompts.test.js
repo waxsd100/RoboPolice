@@ -30,13 +30,19 @@ test('every prompt file renders, with each of its names given', () => {
 })
 
 test('fills in values as they are, and keeps sections only when set', () => {
-  const system = prompts.render('chat/system', { modelName: 'A & <B>', persona: '', uncensored: false, mature: '- M', settings: '' })
+  const system = prompts.render('chat/system', { modelName: 'A & <B>', persona: '', streamerMode: true, uncensored: false, mature: '- M', settings: '' })
   assert.match(system, /「A & <B>」と答える/)
   assert.doesNotMatch(system, /運営者が設定したキャラクター/)
   assert.doesNotMatch(system, /^\{\{!|会話の返事（メンション）のシステム指示/m)
-  const withPersona = prompts.render('chat/system', { modelName: 'A & <B>', persona: 'ござる口調', uncensored: false, mature: '- M', settings: '' })
+  const withPersona = prompts.render('chat/system', { modelName: 'A & <B>', persona: 'ござる口調', streamerMode: true, uncensored: false, mature: '- M', settings: '' })
   assert.ok(withPersona.endsWith('\n\n## 運営者が設定したキャラクター\nござる口調'))
   assert.ok(withPersona.startsWith(`${system}\n\n`))
+
+  const pureGemini = prompts.render('chat/system', { modelName: 'Gemini', persona: '', streamerMode: false, uncensored: false, mature: '- M', settings: 'S' })
+  assert.match(pureGemini, /「Gemini」と答える/)
+  assert.match(pureGemini, /## 返事をするときの立場[\s\S]*純粋な Gemini AI/)
+  assert.match(pureGemini, /このサーバーならではのノリに合わせて自然に話す/)
+  assert.doesNotMatch(pureGemini, /YouTube にあるチャンネルのコミュニティ|search_youtube|search_twitch|search_steam|search_wiki|配信者/)
 
   const r18 = prompts.render('chat/uncensored/rules', { r18Mode: true, compact: false, story: false })
   const plain = prompts.render('chat/uncensored/rules', { r18Mode: false, compact: false, story: false })
@@ -46,7 +52,7 @@ test('fills in values as they are, and keeps sections only when set', () => {
 })
 
 test('refuses a prompt with a name left out', () => {
-  assert.throws(() => prompts.render('chat/system', { modelName: 'A', uncensored: false, mature: '', settings: '' }), /chat\/system needs \{\{persona\}\}/)
+  assert.throws(() => prompts.render('chat/system', { modelName: 'A', streamerMode: true, uncensored: false, mature: '', settings: '' }), /chat\/system needs \{\{persona\}\}/)
   assert.throws(() => prompts.render('../../index'), /outside/)
 })
 
@@ -92,7 +98,7 @@ test('sokudan questions: instructions, choices in the given order, and score lev
 })
 
 test('the way of speaking chosen (streamer or BOT) decides the first person, tone and endings; the server\'s mood does not', () => {
-  const system = prompts.render('chat/system', { modelName: 'A', persona: '', uncensored: false, mature: '- M', settings: 'S' })
+  const system = prompts.render('chat/system', { modelName: 'A', persona: '', streamerMode: true, uncensored: false, mature: '- M', settings: 'S' })
   assert.match(system, /一人称・口調・語尾・口ぐせは、ここで決まる話し方だけで決めます/)
   assert.match(system, /メンバーの言い回しや語尾をまねない/)
   assert.doesNotMatch(system, /言い回し・語尾・ツッコミの温度感をこのサーバーに合わせる/, 'nothing later says to take the members\' endings')
@@ -103,7 +109,7 @@ test('the way of speaking chosen (streamer or BOT) decides the first person, ton
 })
 
 test('tools are called only when what they give is needed for the request', () => {
-  const system = prompts.render('chat/system', { modelName: 'A', persona: '', uncensored: false, mature: '- M', settings: 'S' })
+  const system = prompts.render('chat/system', { modelName: 'A', persona: '', streamerMode: true, uncensored: false, mature: '- M', settings: 'S' })
   assert.match(system, /ツールは、依頼に答えるのにその情報が要るときだけ、要るものだけを呼ぶ/)
   assert.match(system, /口調を確かめるためだけにツールを呼ばない/)
   assert.match(system, /動画や配信のことを聞いていない依頼では、テーマのチャンネルでも調べない/)

@@ -55,6 +55,8 @@ const FIND_GAME = tool('find_game', { parameters: OBJECT({ name: STRING, name_en
 
 const SEARCH_WIKI = tool('search_wiki', { parameters: OBJECT({ query: STRING }, ['query']) })
 
+const STREAMER_TOOLS = new Set(['search_youtube', 'search_twitch', 'search_steam', 'search_wiki'])
+
 const DECLARATIONS = [
   tool('fetch_url', { parameters: OBJECT({ url: STRING }, ['url']) }),
   tool('get_discord_message', { parameters: OBJECT({ link: STRING }, ['link']) }),
@@ -174,7 +176,8 @@ function messageImages (m) {
 class StopDrafting extends Error {}
 
 // progress(text): shows the requester what a slow tool is doing. Optional.
-function createTools ({ guild, member, ask, progress = () => {} }) {
+function createTools ({ guild, member, ask, progress = () => {}, streamerPersona = true }) {
+  const streamerMode = streamerPersona !== false
   const sources = []
   let questions = 0
 
@@ -429,7 +432,7 @@ function createTools ({ guild, member, ask, progress = () => {} }) {
   // Errors go back to the model as the tool result, so it can tell the user what it couldn't read
   // instead of the whole draft failing.
   async function call (name, args) {
-    if (!executors[name]) return { error: `不明なツールです: ${name}` }
+    if (!executors[name] || (!streamerMode && STREAMER_TOOLS.has(name))) return { error: `不明なツールです: ${name}` }
     try {
       const result = String(await executors[name](args || {})).slice(0, MAX_RESULT_CHARS)
       // Whatever a tool read was written by someone else: marked off as data (untrusted.js).
@@ -440,7 +443,16 @@ function createTools ({ guild, member, ask, progress = () => {} }) {
     }
   }
 
-  const declarations = [...DECLARATIONS, FIND_GAME, ABOUT_MEMBER, ...(messageEmbeddingsEnabled() ? [SEARCH_SERVER_MESSAGES] : []), ...(wikiKnowledge.searchable() ? [SEARCH_WIKI] : [])]
+  const baseDeclarations = streamerMode
+    ? DECLARATIONS
+    : DECLARATIONS.filter(d => !STREAMER_TOOLS.has(d.name))
+  const declarations = [
+    ...baseDeclarations,
+    FIND_GAME,
+    ABOUT_MEMBER,
+    ...(messageEmbeddingsEnabled() ? [SEARCH_SERVER_MESSAGES] : []),
+    ...((streamerMode && wikiKnowledge.searchable()) ? [SEARCH_WIKI] : [])
+  ]
   return { declarations, call, sources, readMessage, readThread, progress }
 }
 
@@ -1213,11 +1225,14 @@ async function relatedMessages (guild, member, vectorOf, { query = '' } = {}) {
 async function describeServer (guild, member, requestChannelID, { query = '', context = '', queryVector = null, slim = false, extraEmojis = null, streamerPersona = true } = {}) {
   // Ensure the channel cache is readable before building the profile.
   guild.channels.values()
+  const streamerMode = streamerPersona !== false
   const lines = [`サーバー名: ${guild.name}`]
-  const sharedEmojis = Array.isArray(extraEmojis) ? extraEmojis : await sharedOwnerEmojis(guild, requestChannelID)
+  const sharedEmojis = streamerMode
+    ? (Array.isArray(extraEmojis) ? extraEmojis : await sharedOwnerEmojis(guild, requestChannelID))
+    : []
   const mentioned = mentionedEmojiIDs([query, context])
   if (slim) {
-    if (streamerPersona !== false && streamerStyle.enabled()) {
+    if (streamerMode && streamerStyle.enabled()) {
       const personaLines = await streamerStyle.sectionForPrompt({ slim: true, query }).catch(() => [])
       if (personaLines.length) lines.push('', ...personaLines)
     }
@@ -1275,12 +1290,14 @@ async function describeServer (guild, member, requestChannelID, { query = '', co
     }
     return embedding
   }
-  if (streamerPersona !== false && streamerStyle.enabled()) {
+  if (streamerMode && streamerStyle.enabled()) {
     const personaLines = await streamerStyle.sectionForPrompt({ vectorOf, slim: false, query }).catch(() => [])
     if (personaLines.length) lines.push('', ...personaLines)
   }
   const knowledgeText = [theme, ...texts].filter(Boolean).join('\n')
-  const known = wikiKnowledge.searchable() ? await wikiKnowledge.relatedKnowledge(knowledgeText, await vectorOf()).catch(() => []) : []
+  const known = (streamerMode && wikiKnowledge.searchable())
+    ? await wikiKnowledge.relatedKnowledge(knowledgeText, await vectorOf()).catch(() => [])
+    : []
   if (known.length) {
     lines.push('', '### コミュニティの知識（wiki と配信者の X より。依頼に関係しそうなもの）',
       'キャラクターが何者かはここ（と search_wiki）で確かめ、絵文字の説明（見た目）から決めつけないこと。', ...known)
@@ -1295,30 +1312,32 @@ async function describeServer (guild, member, requestChannelID, { query = '', co
   const emojiLines = await emojiSection(guild, vectorOf, { sharedEmojis, mentioned })
   if (emojiLines.length) lines.push('', ...emojiLines)
 
-  const youtube = await youtubeDB.getOverview(guild.id).catch(() => null)
-  const synced = (youtube?.channels || []).filter(c => c.synced_at)
-  lines.push('', '### YouTube', synced.length
-    ? [
-        ...synced.map(c => {
-          const subs = formatCount(c.subscriber_count, '人')
-          return `${c.title}（${subs ? `登録者 ${subs}、` : ''}動画 ${c.video_count} 件を保存、取得 ${new Date(c.synced_at).toISOString()}）`
-        }),
-        '詳しくは search_youtube で調べる（題名・公開日・再生数・配信日時・要約）'
-      ].join('\n')
-    : '設定なし')
-  const twitch = await twitchDB.getOverview().catch(() => [])
-  if (twitch.length) {
-    lines.push('', '### Twitch', [
-      ...twitch.map(c => `${c.display_name || c.login}（https://www.twitch.tv/${c.login}、アーカイブ ${c.video_count} 件を保存）`),
-      '過去の配信は search_twitch で調べる'
-    ].join('\n'))
-  }
-  const steam = await steamDB.getOverview().catch(() => [])
-  if (steam.length) {
-    lines.push('', '### Steam', [
-      ...steam.map(p => `${p.persona_name || p.account_ref}（https://steamcommunity.com/${p.custom_url ? `id/${p.custom_url}` : `profiles/${p.steam_id}`}、所持・プレイ確認ゲーム ${p.stored_game_count} 本${p.game_count ? `／所持総数 ${p.game_count} 本` : ''}・レビュー ${p.review_count} 件・ウィッシュリスト ${p.stored_wishlist_count} 本を保存）`),
-      '持っているゲーム・プレイ時間・レビュー・ウィッシュリスト・おすすめのゲームは search_steam で調べる'
-    ].join('\n'))
+  if (streamerMode) {
+    const youtube = await youtubeDB.getOverview(guild.id).catch(() => null)
+    const synced = (youtube?.channels || []).filter(c => c.synced_at)
+    lines.push('', '### YouTube', synced.length
+      ? [
+          ...synced.map(c => {
+            const subs = formatCount(c.subscriber_count, '人')
+            return `${c.title}（${subs ? `登録者 ${subs}、` : ''}動画 ${c.video_count} 件を保存、取得 ${new Date(c.synced_at).toISOString()}）`
+          }),
+          '詳しくは search_youtube で調べる（題名・公開日・再生数・配信日時・要約）'
+        ].join('\n')
+      : '設定なし')
+    const twitch = await twitchDB.getOverview().catch(() => [])
+    if (twitch.length) {
+      lines.push('', '### Twitch', [
+        ...twitch.map(c => `${c.display_name || c.login}（https://www.twitch.tv/${c.login}、アーカイブ ${c.video_count} 件を保存）`),
+        '過去の配信は search_twitch で調べる'
+      ].join('\n'))
+    }
+    const steam = await steamDB.getOverview().catch(() => [])
+    if (steam.length) {
+      lines.push('', '### Steam', [
+        ...steam.map(p => `${p.persona_name || p.account_ref}（https://steamcommunity.com/${p.custom_url ? `id/${p.custom_url}` : `profiles/${p.steam_id}`}、所持・プレイ確認ゲーム ${p.stored_game_count} 本${p.game_count ? `／所持総数 ${p.game_count} 本` : ''}・レビュー ${p.review_count} 件・ウィッシュリスト ${p.stored_wishlist_count} 本を保存）`),
+        '持っているゲーム・プレイ時間・レビュー・ウィッシュリスト・おすすめのゲームは search_steam で調べる'
+      ].join('\n'))
+    }
   }
   return lines.join('\n')
 }
