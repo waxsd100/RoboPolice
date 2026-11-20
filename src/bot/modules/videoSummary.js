@@ -100,9 +100,17 @@ function summaryRequest (videoID, prompt = PROMPT, clip = null, custom = null) {
 }
 
 // flex: on Flex inference (half the price, queued for up to about 15 minutes more).
+// By default a Flex outage or rate limit falls back to the standard tier (VIDEO_SUMMARY_FLEX_FALLBACK=false
+// keeps Flex-only behavior for video calls); merging already-finished clip summaries always falls
+// back so completed batch/clip work is not discarded over a lightweight merge call.
 // Clipped YouTube URLs intermittently return a transient HTTP 400 INVALID_ARGUMENT on ingestion,
 // so a clip is retried once before stepping down to smaller parts.
 const FLEX_EXTRA_MS = 15 * 60 * 1000
+const FLEX_RETRIES = 2
+const STANDARD_RATE_RETRIES = 5
+function flexFallbackEnabled () {
+  return process.env.VIDEO_SUMMARY_FLEX_FALLBACK !== 'false'
+}
 async function askVideo (videoID, prompt, clip = null, { flex = false, guildID = null, retries = clip ? 1 : 0 } = {}) {
   const custom = guildID ? await resolveTaskConfig('summary', guildID) : null
   const { model, body } = summaryRequest(videoID, prompt, clip, custom)
@@ -112,6 +120,9 @@ async function askVideo (videoID, prompt, clip = null, { flex = false, guildID =
         timeoutMs: summaryTimeoutMs() + (flex ? FLEX_EXTRA_MS : 0),
         purpose: flex ? 'videoSummary-flex' : 'videoSummary',
         flex,
+        flexFallback: flexFallbackEnabled(),
+        flexMaxRetries: FLEX_RETRIES,
+        standardMaxRetries: STANDARD_RATE_RETRIES,
         defaultSafety: true
       })
     } catch (e) {
@@ -156,7 +167,15 @@ async function mergePartSummaries (guildID, parts, { flex = false } = {}) {
   const merged = await backgroundQueue.run(guildID, () => callGemini(lightModel(), {
     contents: [{ role: 'user', parts: [{ text: `${MERGE_PROMPT}\n\n${parts.join('\n\n')}` }] }],
     generationConfig: { temperature: 0.2 }
-  }, { timeoutMs: 2 * 60 * 1000 + (flex ? FLEX_EXTRA_MS : 0), purpose: flex ? 'videoSummary-flex' : 'videoSummary', flex, defaultSafety: true }))
+  }, {
+    timeoutMs: 2 * 60 * 1000 + (flex ? FLEX_EXTRA_MS : 0),
+    purpose: flex ? 'videoSummary-flex' : 'videoSummary',
+    flex,
+    flexFallback: true,
+    flexMaxRetries: FLEX_RETRIES,
+    standardMaxRetries: STANDARD_RATE_RETRIES,
+    defaultSafety: true
+  }))
   return cleanSummary(textOf(merged))
 }
 
