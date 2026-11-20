@@ -37,7 +37,7 @@
     "pg-format": "^1.0.4",
     "redlock": "^4.2.0",
     "sharp": "^0.35.5",
-    "superagent": "^8.1.2",
+    "superagent": "^10.4.2",
     "undici": "^6.23.0"
   },
   "devDependencies": {
