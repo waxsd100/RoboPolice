@@ -170,12 +170,24 @@ function buildSpokenUtterances (cues, { maxUtterances = 20 } = {}) {
   return Array.from({ length: maxUtterances }, (_, i) => unique[Math.floor(i * unique.length / maxUtterances)])
 }
 
+const THIRD_PARTY_SPEAKER_PREFIX_RE = /(?:視聴者|コメント|リスナー|チャット|村人|住民|市民|敵|ボス|NPC|キャラ(?:クター)?|[A-Za-zぁ-んァ-ヶ一-龠ー]{1,12}(?:さん|氏|くん|ちゃん))[がはの]\s*$/iu
+const SPEECH_ATTRIBUTION_SUFFIX_RE = /^\s*と(?:豪語|言|語|話|ツッコ|突っ込|叫|呟|つぶや|笑|嘆|喜|驚|宣言|主張|解説|説明|返|答|ボケ|ぼや|漏ら|述べ)/u
+const COLLAB_VIDEO_TITLE_RE = /コラボ|トマスコ|ぽみそしる|マルチ(?:プレイ)?|全員集合|人狼|Among\s*Us|マリオパーティ|対決|\bvs\b|feat\.|with\s/iu
+
 // Fallback when public captions are unavailable: extracts quoted direct speech (`「...」`) from
-// already-stored Gemini video summaries so zero extra API calls are spent.
+// already-stored Gemini video summaries only when followed by a speech verb and not attributed to a
+// viewer, NPC, or collab partner (preventing game titles and NPC lines from polluting the corpus).
 function extractQuotedSpeechFromSummary (summary, { maxQuotes = 6 } = {}) {
   const out = []
   const seen = new Set()
-  for (const m of String(summary || '').matchAll(/「([^「」\n]{8,120})」/g)) {
+  const src = String(summary || '')
+  for (const m of src.matchAll(/「([^「」\n]{8,120})」/g)) {
+    const start = m.index || 0
+    const end = start + m[0].length
+    const before = src.slice(Math.max(0, start - 24), start)
+    const after = src.slice(end, end + 16)
+    if (THIRD_PARTY_SPEAKER_PREFIX_RE.test(before)) continue
+    if (!SPEECH_ATTRIBUTION_SUFFIX_RE.test(after)) continue
     const cleaned = cleanSpokenChunk(m[1])
     if (!cleaned || seen.has(cleaned)) continue
     seen.add(cleaned)
@@ -185,10 +197,14 @@ function extractQuotedSpeechFromSummary (summary, { maxQuotes = 6 } = {}) {
   return out
 }
 
-// Picks recent completed videos most likely to carry clean solo/commentary captions: prefers
+// Picks recent completed solo videos most likely to carry clean first-person commentary captions:
+// skips collab/multi-speaker titles (where auto-captions mix other streamers' voices) and prefers
 // standard 2-minute to 2-hour videos ahead of shorts or multi-hour marathons.
 function selectVideosForCaptions (videos, maxVideos = 4) {
-  const valid = (videos || []).filter(v => VIDEO_ID_RE.test(String(v?.video_id || '')))
+  const valid = (videos || []).filter(v =>
+    VIDEO_ID_RE.test(String(v?.video_id || '')) &&
+    !COLLAB_VIDEO_TITLE_RE.test(String(v?.title || ''))
+  )
   const preferred = []
   const fallback = []
   for (const v of valid) {

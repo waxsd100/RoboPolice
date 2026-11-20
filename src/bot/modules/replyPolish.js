@@ -91,7 +91,7 @@ function rejected (before, after) {
 }
 
 const DISCORD_NOTE = `\n${prompts.render('polish/discord-note')}`
-const PERSONA_NOTE = '話し手固有の一人称・二人称・語尾・くだけた話し言葉・句読点の抜き差し・笑い表記（w・草など）・改行のテンポは、AI 臭い定型表現でない限り書き換えずそのまま残してください。標準的な書き言葉に均さないこと。'
+const PERSONA_NOTE = '話し手固有の一人称・二人称・語尾・くだけた話し言葉・句読点の抜き差し・笑い表記・改行のテンポは、AI 臭い定型表現でない限り書き換えずそのまま残してください。標準的な書き言葉に均さないこと。原文にないキャラ語尾（「〜だぜ」など）や「草」「w」などの笑い表記を新しく足さないこと。'
 
 // The reply rewritten, or as it was.
 async function polish (text, { guildID = null, streamerPersona = false, styleProfile = null } = {}) {
