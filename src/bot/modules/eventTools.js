@@ -24,6 +24,7 @@ const serverLore = require('./serverLore')
 const serverRules = require('./serverRules')
 const loreStore = require('../../db/interfaces/postgres/serverLore')
 const embeddingStore = require('../../db/interfaces/postgres/embeddings')
+const { isGatewayConfigured } = require('../utils/aiGateway')
 const { embeddableText } = require('../utils/messageNoise')
 const { ownerGuildIDs } = require('../utils/priority')
 
@@ -1216,6 +1217,42 @@ async function relatedMessages (guild, member, vectorOf, { query = '' } = {}) {
     })
 }
 
+// Stored YouTube videos of the bot's followed channels close in meaning to the request (`vector`),
+// surfaced in `describeServer` so casual chat about topics, experiments or trivia from videos has
+// the relevant video title, URL and timestamped summary excerpt without needing an extra tool call.
+const MAX_RELATED_VIDEOS = 2
+const MIN_VIDEO_SCORE = 0.62
+const MAX_RELATED_VIDEO_SUMMARY = 280
+const MAX_RELATED_VIDEO_DESC = 140
+async function relatedVideos (guild, vectorOf, { query = '' } = {}) {
+  if (!isGatewayConfigured() || mentionsMinor(query)) return []
+  if (!await embeddingStore.hasVideoEmbeddings(guild.id, embeddingModel()).catch(() => false)) return []
+  const vector = await vectorOf()
+  if (!vector) return []
+  const [scores, knowledge] = await Promise.all([
+    embeddingStore.videoScores(guild.id, vector, embeddingModel()).catch(() => ({})),
+    youtubeDB.getKnowledge(guild.id).catch(() => null)
+  ])
+  const syncedIds = new Set((knowledge?.channels || (knowledge?.channel ? [knowledge.channel] : [])).filter(c => c?.synced_at).map(c => c.channel_id))
+  if (!syncedIds.size) return []
+  const candidates = (knowledge?.videos || [])
+    .filter(v => syncedIds.has(v.channel_id) && typeof scores[v.video_id] === 'number')
+    .filter(v => !isUnsafeMinorContent(`${v.video_id || ''}\n${v.title}\n${v.description || ''}\n${v.summary || ''}`))
+    .map(v => ({ ...v, score: scores[v.video_id] }))
+    .sort((a, b) => b.score - a.score)
+  return relevant(candidates, { min: MIN_VIDEO_SCORE, limit: MAX_RELATED_VIDEOS }).map(v => {
+    const published = formatJstDate(v.published_at) || '?'
+    const url = v.url || `https://www.youtube.com/watch?v=${v.video_id}`
+    const head = `- ${v.title}（公開 ${published}）${url}`
+    if (v.summary) {
+      const safeSummary = sanitizeUntrustedLines(v.summary).replace(/\s+/g, ' ').slice(0, MAX_RELATED_VIDEO_SUMMARY)
+      if (safeSummary) return `${head}\n  内容の要約: ${linkTimestamps(safeSummary, v.video_id)}`
+    }
+    const safeDesc = sanitizeUntrustedLines(v.description || '').replace(/\s+/g, ' ').slice(0, MAX_RELATED_VIDEO_DESC)
+    return safeDesc ? `${head}\n  ${safeDesc}` : head
+  })
+}
+
 // The server as the requester can see it. Sent with every request, fresh each time, so questions
 // about "this server" need no lookups. query: what was asked; context: the conversation it replies
 // to (readThread), if any. In a themed channel (e.g. #のばまんの動画について語る) without a reply
@@ -1299,7 +1336,7 @@ async function describeServer (guild, member, requestChannelID, { query = '', co
     ? await wikiKnowledge.relatedKnowledge(knowledgeText, await vectorOf()).catch(() => [])
     : []
   if (known.length) {
-    lines.push('', '### コミュニティの知識（wiki と配信者の X より。依頼に関係しそうなもの）',
+    lines.push('', '### コミュニティの知識（wiki・YouTube 動画・配信者の X/Discord/Steam・Web より。依頼に関係しそうなもの）',
       'キャラクターが何者かはここ（と search_wiki）で確かめ、絵文字の説明（見た目）から決めつけないこと。', ...known)
   }
 
@@ -1324,6 +1361,12 @@ async function describeServer (guild, member, requestChannelID, { query = '', co
           '詳しくは search_youtube で調べる（題名・公開日・再生数・配信日時・要約）'
         ].join('\n')
       : '設定なし')
+    const nearVideos = synced.length
+      ? await relatedVideos(guild, vectorOf, { query: knowledgeText }).catch(() => [])
+      : []
+    if (nearVideos.length) {
+      lines.push('', '### 依頼に関係しそうな動画・配信（YouTube より）', ...nearVideos)
+    }
     const twitch = await twitchDB.getOverview().catch(() => [])
     if (twitch.length) {
       lines.push('', '### Twitch', [
@@ -1342,4 +1385,4 @@ async function describeServer (guild, member, requestChannelID, { query = '', co
   return lines.join('\n')
 }
 
-module.exports = { worthSearching, createTools, formatMessage, formatVideo, inferVideoSort, describeServer, withServerEmojis, canUseExternalEmojis, sharedOwnerEmojis, withServerChannels, namedChannels, namedMembers, requestChannelInfo, channelTheme, SHORT_TOPIC_PROMPT, searchYouTube, searchTwitch, searchSteam, MESSAGE_LINK, CHANNEL_LINK, StopDrafting }
+module.exports = { worthSearching, createTools, formatMessage, formatVideo, inferVideoSort, describeServer, relatedVideos, withServerEmojis, canUseExternalEmojis, sharedOwnerEmojis, withServerChannels, namedChannels, namedMembers, requestChannelInfo, channelTheme, SHORT_TOPIC_PROMPT, searchYouTube, searchTwitch, searchSteam, MESSAGE_LINK, CHANNEL_LINK, StopDrafting }

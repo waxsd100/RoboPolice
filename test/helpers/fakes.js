@@ -617,6 +617,15 @@ function installYouTubeStore (knowledge = {}, summaries = {}) {
     const ch = channels().find(c => c.channel_id === found.channel_id)
     return { ...found, channel_title: ch?.title || null, summary: anySummary(videoID) || found.summary || null }
   }
+  store.videosForKnowledge = async ({ unsummarizedLimit = 25 } = {}) => {
+    const chMap = new Map(channels().map(c => [c.channel_id, c.title || null]))
+    const finished = allVideos()
+      .filter(v => !['live', 'upcoming'].includes(v.live_status))
+      .map(v => ({ ...v, channel_title: chMap.get(v.channel_id) || null, summary: anySummary(v.video_id) || v.summary || null }))
+    const summarized = finished.filter(v => v.summary !== null)
+    const unsummarized = unsummarizedLimit > 0 ? finished.filter(v => v.summary === null).slice(0, unsummarizedLimit) : []
+    return [...summarized, ...unsummarized]
+  }
   store.getVideoIds = async (channelID = null) => new Set(allVideos().filter(v => !channelID || v.channel_id === channelID).map(v => v.video_id))
   store.videoIdsMissingStats = async (channelID, limit = 200) => allVideos()
     .filter(v => v.channel_id === channelID && v.stats_updated_at === null)

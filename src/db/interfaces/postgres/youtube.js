@@ -417,4 +417,32 @@ async function recentVideosForStyle (limit = 20) {
   return rows.rows
 }
 
-module.exports = { setBotChannels, getVideoIds, saveSync, getKnowledge, videosInSummaryBatch, getOverview, listChannels, listLiveEventGuilds, liveEventsOn, setLiveEvents, upsertVideos, recentVideoIds, getLiveVideoIds, getLiveEvents, saveLiveEvent, archivesToSummarize, claimArchiveToSummarize, recordArchiveAttempt, websubDue, saveWebsub, isKnownChannel, videoCards, getVideo, videoIdsMissingStats, markStatsChecked, videoDuration, getSummary, saveSummary, getOtherSummaries, recentVideosForStyle, deleteGuildYouTube }
+// Videos of followed channels for community-knowledge extraction (youtubeKnowledge.js): every
+// finished video with a stored summary, plus up to `unsummarizedLimit` newest finished unsummarized
+// videos (whose public captions and descriptions are read).
+async function videosForKnowledge ({ unsummarizedLimit = 25 } = {}) {
+  const summarized = await pool.query(
+    `SELECT v.video_id, v.channel_id, c.title AS channel_title, v.title, v.description,
+            v.published_at, v.duration, v.summary
+     FROM youtube_videos v
+     LEFT JOIN youtube_channels c ON c.channel_id = v.channel_id
+     WHERE v.channel_id IS NOT NULL
+       AND COALESCE(v.live_status, 'none') NOT IN ('live', 'upcoming')
+       AND v.summary IS NOT NULL
+     ORDER BY v.published_at DESC NULLS LAST`)
+  if (!(unsummarizedLimit > 0)) return summarized.rows
+  const unsummarized = await pool.query(
+    `SELECT v.video_id, v.channel_id, c.title AS channel_title, v.title, v.description,
+            v.published_at, v.duration, v.summary
+     FROM youtube_videos v
+     LEFT JOIN youtube_channels c ON c.channel_id = v.channel_id
+     WHERE v.channel_id IS NOT NULL
+       AND COALESCE(v.live_status, 'none') NOT IN ('live', 'upcoming')
+       AND v.summary IS NULL
+     ORDER BY v.published_at DESC NULLS LAST
+     LIMIT $1`,
+    [unsummarizedLimit])
+  return [...summarized.rows, ...unsummarized.rows]
+}
+
+module.exports = { setBotChannels, getVideoIds, saveSync, getKnowledge, videosInSummaryBatch, getOverview, listChannels, listLiveEventGuilds, liveEventsOn, setLiveEvents, upsertVideos, recentVideoIds, getLiveVideoIds, getLiveEvents, saveLiveEvent, archivesToSummarize, claimArchiveToSummarize, recordArchiveAttempt, websubDue, saveWebsub, isKnownChannel, videoCards, getVideo, videoIdsMissingStats, markStatsChecked, videoDuration, getSummary, saveSummary, getOtherSummaries, recentVideosForStyle, videosForKnowledge, deleteGuildYouTube }

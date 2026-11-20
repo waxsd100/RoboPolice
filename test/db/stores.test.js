@@ -377,6 +377,17 @@ describe('stores', { skip: !database.available && 'needs PGHOST' }, () => {
     assert.deepEqual((await q("SELECT url FROM knowledge_sections WHERE source = 'web'")).map(r => r.url), ['topic:ぽみそしる'])
   })
 
+  test('YouTube video knowledge: source = youtube, pageSectionHashes, and cleanup', async () => {
+    const ytKnowledge = require('../../src/db/interfaces/postgres/youtubeKnowledge')
+    const url = 'https://www.youtube.com/watch?v=vidKnow0001'
+    await ytKnowledge.savePage(url, '検証動画（YouTube 動画）', [{ heading: '動画の内容', text: '- [0:00] 円形都市の検証', images: [] }])
+    const hashes = await ytKnowledge.pageSectionHashes()
+    assert.equal(hashes.get(url)?.length, 1)
+    assert.deepEqual((await q("SELECT url FROM knowledge_sections WHERE source = 'youtube'")).map(r => r.url), [url])
+    assert.equal(await ytKnowledge.deletePagesExcept('https://www.youtube.com/watch?v=', []), 1)
+    assert.deepEqual(await q("SELECT url FROM knowledge_pages WHERE source = 'youtube'"), [])
+  })
+
   test('past messages read back: stored with their own time and images, a message stored live is left as it is; progress kept', async () => {
     const history = require('../../src/db/interfaces/postgres/messageHistory')
     await require('../../src/db/interfaces/postgres/create').createGuild({ id: 'g1', ownerID: 'o1' })

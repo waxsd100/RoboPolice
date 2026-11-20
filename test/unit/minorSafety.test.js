@@ -62,6 +62,7 @@ describe('wikiKnowledge minor-safety guards', () => {
   const xStore = require('../../src/db/interfaces/postgres/xKnowledge')
   const discordStore = require('../../src/db/interfaces/postgres/discordKnowledge')
   const webStore = require('../../src/db/interfaces/postgres/webKnowledge')
+  const youtubeStore = require('../../src/db/interfaces/postgres/youtubeKnowledge')
 
   test('extractPending marks Gemini-blocked wiki sections with { blocked: true, model } so their text is not embedded', async (t) => {
     configureGateway()
@@ -72,7 +73,7 @@ describe('wikiKnowledge minor-safety guards', () => {
     t.mock.method(store, 'saveFacts', async (url, position, hash, facts, opts) => {
       savedCalls.push({ url, position, hash, facts, opts })
     })
-    for (const s of [xStore, discordStore, webStore]) {
+    for (const s of [xStore, discordStore, webStore, youtubeStore]) {
       t.mock.method(s, 'sectionsToExtract', async () => [])
     }
     t.mock.method(global.logger, 'info', () => {})
@@ -108,7 +109,7 @@ describe('wikiKnowledge minor-safety guards', () => {
       savedSections.push({ url, position, vec, model })
     })
     t.mock.method(store, 'factsToEmbed', async () => [])
-    for (const s of [xStore, discordStore, webStore]) {
+    for (const s of [xStore, discordStore, webStore, youtubeStore]) {
       t.mock.method(s, 'sectionsToEmbed', async () => [])
       t.mock.method(s, 'factsToEmbed', async () => [])
     }
@@ -130,7 +131,7 @@ describe('wikiKnowledge minor-safety guards', () => {
 
     t.mock.method(store, 'hasSections', async () => true)
     t.mock.method(store, 'characterFacts', async () => [])
-    for (const s of [xStore, discordStore, webStore]) {
+    for (const s of [xStore, discordStore, webStore, youtubeStore]) {
       t.mock.method(s, 'hasSections', async () => false)
       t.mock.method(s, 'nearestFacts', async () => [])
     }

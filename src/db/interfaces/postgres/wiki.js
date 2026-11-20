@@ -2,7 +2,8 @@
 // each part (migrations/030_normalize.sql, 052_consolidate_tables.sql): knowledge_pages /
 // knowledge_sections / knowledge_facts (with knowledge_fact_aliases), one set for every source,
 // which is part of each key: the wiki (wikiKnowledge.js), the X posts (twitterKnowledge.js),
-// the streamer's Discord messages (discordKnowledge.js) and topics on the web (webKnowledge.js).
+// the streamer's Discord messages (discordKnowledge.js), topics on the web (webKnowledge.js) and
+// YouTube videos of followed channels (youtubeKnowledge.js).
 // createStore(source) works on one source.
 const crypto = require('crypto')
 const pool = require('../../clients/postgres')
@@ -222,7 +223,16 @@ function createStore (source) {
     return rows.rows.length !== 0
   }
 
-  return { savePage, deletePagesExcept, lastRead, pageLastRead, sectionsToEmbed, saveSectionEmbedding, nearestSections, characters, characterImages, sectionsToExtract, saveFacts, factsToEmbed, saveFactEmbedding, nearestFacts, characterFacts, quoteFacts, hasSections }
+  // { url => [text_hash, ...] } in section order for every page of this source, so callers with
+  // many pages (e.g. YouTube videos) can skip rewriting unchanged pages.
+  async function pageSectionHashes () {
+    const rows = await pool.query(
+      'SELECT url, array_agg(text_hash ORDER BY position) AS hashes FROM knowledge_sections WHERE source = $1 GROUP BY url',
+      [source])
+    return new Map(rows.rows.map(r => [r.url, r.hashes || []]))
+  }
+
+  return { savePage, deletePagesExcept, lastRead, pageLastRead, sectionsToEmbed, saveSectionEmbedding, nearestSections, characters, characterImages, sectionsToExtract, saveFacts, factsToEmbed, saveFactEmbedding, nearestFacts, characterFacts, quoteFacts, hasSections, pageSectionHashes }
 }
 
 // The wiki's tables.

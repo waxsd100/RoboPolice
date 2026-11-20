@@ -33,7 +33,7 @@ BOT が Gemini（と検閲なしモデル・画像モデル）に渡すプロン
 | `video/*.md` | YouTube 動画の要約・長い動画の要約のまとめ |
 | `lore/*.md` | サーバーの身内ネタ・ノリの取り出し（SERVER_LORE） |
 | `persona/*.md` | 配信者本人の話し方プロファイルの抽出と反復改善（`streamerStyle.js`） |
-| `wiki/extract.md` | wiki・X・Discord・Web のまとめからの知識の取り出し |
+| `wiki/extract.md` | wiki・YouTube 動画・X・Discord・Web のまとめからの知識の取り出し |
 | `web/topic.md` | Web 検索で調べるテーマ |
 | `stream/blurb.md` | 配信のイベント説明 |
 | `emoji/describe.md` | サーバー絵文字の説明 |
