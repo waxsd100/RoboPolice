@@ -629,6 +629,10 @@ describe('draft', () => {
     for (const p of prompts) assert.doesNotMatch(p, /## 話し方/)
     assert.match(systems[0], /「配信者として」のとき: あなたはそのチャンネルの配信者本人になりきって/)
     assert.match(systems[0], /「BOT として」のとき: あなたは配信者本人ではなく、このサーバーの BOT として[\s\S]*配信者を名乗ったり/)
+    assert.match(systems[1], /使っている AI・モデルの名前を聞かれたら「Gemini」と答える。/)
+    assert.match(systems[1], /## 返事をするときの立場[\s\S]*純粋な Gemini AI/)
+    assert.match(systems[1], /このサーバーならではのノリに合わせて自然に話す/)
+    assert.doesNotMatch(systems[1], /nobaman llm|配信者|YouTube にあるチャンネルのコミュニティ|search_youtube|search_twitch|search_steam|search_wiki/)
   })
 
   test('a reply chain goes in as the conversation the request continues', async () => {
@@ -1953,5 +1957,76 @@ describe('uncensored thinking models and SSE streaming', () => {
       'gemma-4-31B-it-The-DECKARD-HERETIC-UNCENSORED-Thinking.Q4_K_M',
       'gemma-4-31B-it-ARA-heretic.IQ4_XS'
     ], 'retries Model 2 once with minimal body, then falls back to auto-discovered Model 1')
+  })
+
+  test('streamerPersona=false omits CHAT_PERSONA and BOT_MODEL_NAME across Gemini and uncensored (remote, local compact, and minimal retry) paths', async (t) => {
+    const drafter = require('../../src/bot/modules/eventDrafter')
+    const { uncensoredState } = drafter
+    const prevPersona = process.env.CHAT_PERSONA
+    const prevBotModel = process.env.BOT_MODEL_NAME
+    const prevUrl = process.env.UNCENSORED_API_URL
+    const prevModel = process.env.UNCENSORED_MODEL
+    const prevUsable = { ...uncensoredState }
+    process.env.CHAT_PERSONA = '語尾は「だぜ」'
+    process.env.BOT_MODEL_NAME = 'nobaman llm 9'
+    const quietTools = { declarations: [], call: async () => ({}) }
+    t.after(() => {
+      if (prevPersona === undefined) delete process.env.CHAT_PERSONA
+      else process.env.CHAT_PERSONA = prevPersona
+      if (prevBotModel === undefined) delete process.env.BOT_MODEL_NAME
+      else process.env.BOT_MODEL_NAME = prevBotModel
+      if (prevUrl === undefined) delete process.env.UNCENSORED_API_URL
+      else process.env.UNCENSORED_API_URL = prevUrl
+      if (prevModel === undefined) delete process.env.UNCENSORED_MODEL
+      else process.env.UNCENSORED_MODEL = prevModel
+      Object.assign(uncensoredState, prevUsable)
+    })
+
+    // 1. Gemini path: streamerPersona=true keeps CHAT_PERSONA + BOT_MODEL_NAME; false drops both and uses Gemini.
+    let geminiReqs = installGemini([[call('submit_chat_reply', { text: 'だぜ' })]])
+    await draft({ request: 'やあ', channelName: 'general', streamerPersona: true, guild, tools: quietTools, now: NOW })
+    assert.match(geminiReqs[0].body.systemInstruction.parts[0].text, /語尾は「だぜ」/)
+    assert.match(geminiReqs[0].body.systemInstruction.parts[0].text, /「nobaman llm 9」と答える/)
+
+    geminiReqs = installGemini([[call('submit_chat_reply', { text: 'こんにちは' })]])
+    await draft({ request: 'やあ', channelName: 'general', streamerPersona: false, guild, tools: quietTools, now: NOW })
+    const geminiSys = geminiReqs[0].body.systemInstruction.parts[0].text
+    assert.doesNotMatch(geminiSys, /運営者が設定したキャラクター|語尾は「だぜ」|nobaman llm/)
+    assert.match(geminiSys, /「Gemini」と答える/)
+    assert.match(geminiSys, /## 返事をするときの立場[\s\S]*純粋な Gemini AI/)
+
+    // 2. Remote uncensored (non-compact) path: omits CHAT_PERSONA and uses pure Gemini-server mode rules.
+    process.env.UNCENSORED_API_URL = 'https://gemma-remote.example.com/v1'
+    process.env.UNCENSORED_MODEL = 'gemma-4-test'
+    uncensoredState.url = 'https://gemma-remote.example.com/v1/chat/completions'
+    uncensoredState.usable = true
+    let remoteBody = null
+    global.fetch = async (url, init) => {
+      remoteBody = JSON.parse(init.body)
+      return { ok: true, json: async () => ({ choices: [{ message: { role: 'assistant', content: '応答です' } }] }) }
+    }
+    await draft({ request: '--2 やあ', channelName: 'general', streamerPersona: false, guild, tools: quietTools, now: NOW })
+    assert.doesNotMatch(remoteBody.messages[0].content, /運営者が設定したキャラクター|語尾は「だぜ」|nobaman llm|配信者/)
+
+    // 3. Local uncensored (compact + HTTP 400 minimal retry): omits CHAT_PERSONA on both attempts when false.
+    process.env.UNCENSORED_API_URL = 'http://127.0.0.1:8080/v1'
+    uncensoredState.url = 'http://127.0.0.1:8080/v1/chat/completions'
+    uncensoredState.usable = true
+    const localBodies = []
+    global.fetch = async (url, init) => {
+      if (String(url).includes('/models')) return { ok: true, json: async () => ({ data: [{ id: 'gemma-4-test' }] }) }
+      localBodies.push(JSON.parse(init.body))
+      if (localBodies.length === 1) return { ok: false, status: 400, text: async () => 'too long' }
+      return { ok: true, json: async () => ({ choices: [{ message: { role: 'assistant', content: 'コンパクト応答' } }] }) }
+    }
+    await draft({ request: '--2 やあ', channelName: 'general', streamerPersona: false, guild, tools: quietTools, now: NOW })
+    assert.equal(localBodies.length, 2)
+    for (const body of localBodies) {
+      assert.doesNotMatch(body.messages[0].content, /運営者が設定したキャラクター|語尾は「だぜ」/)
+    }
+
+    localBodies.length = 0
+    await draft({ request: '--2 もう一度やあ', channelName: 'general', streamerPersona: true, guild, tools: quietTools, now: NOW })
+    assert.match(localBodies[1].messages[0].content, /## 運営者が設定したキャラクター\n語尾は「だぜ」/)
   })
 })

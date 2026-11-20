@@ -106,10 +106,12 @@ function modelName () {
 // (prompts/chat/uncensored/rules.md) in place of this.
 // settings: the server's way of speaking and reply length (serverSettings), also in these
 // instructions and never in the request; '' to leave them out (a story by the uncensored model).
-function systemInstruction ({ uncensored = false, safetyFilter = false, omitMature = false, settings = '' } = {}) {
+function systemInstruction ({ uncensored = false, safetyFilter = false, omitMature = false, settings = '', streamerPersona = true, model = null } = {}) {
+  const streamerMode = streamerPersona !== false
   return prompts.render('chat/system', {
-    modelName: modelName(),
-    persona: (process.env.CHAT_PERSONA || '').trim(),
+    modelName: streamerMode ? modelName() : (model || 'Gemini'),
+    persona: streamerMode ? (process.env.CHAT_PERSONA || '').trim() : '',
+    streamerMode,
     uncensored,
     mature: (uncensored || omitMature) ? '' : prompts.render(safetyFilter ? 'chat/mature/filtered' : 'chat/mature/open'),
     settings
@@ -1235,12 +1237,13 @@ const STORY_REQUEST_PATTERN = /小説|ss|物語|お話|ストーリー|シナリ
 // which goes by the uncensored model's own rules for style and length.
 // style: the streamer's synthesized speaking-style profile and compact exemplars (streamerStyle),
 // included for non-story streamerPersona chat replies even when compact mode strips server info.
-function uncensoredSystemInstruction ({ compact = false, r18Mode = false, story = false, settings = '', style = '' } = {}) {
+function uncensoredSystemInstruction ({ compact = false, r18Mode = false, story = false, settings = '', style = '', streamerPersona = true, model = null } = {}) {
+  const streamerMode = streamerPersona !== false
   const rules = prompts.render('chat/uncensored/rules', { r18Mode, compact, story })
   const chat = story ? '' : settings
-  const personaStyle = story ? '' : style
+  const personaStyle = (story || !streamerMode) ? '' : style
   if (compact) {
-    const persona = (process.env.CHAT_PERSONA || '').trim()
+    const persona = streamerMode ? (process.env.CHAT_PERSONA || '').trim() : ''
     return [
       prompts.render('chat/uncensored/role'),
       ...(persona ? ['', '## 運営者が設定したキャラクター', persona] : []),
@@ -1251,7 +1254,7 @@ function uncensoredSystemInstruction ({ compact = false, r18Mode = false, story 
     ].join('\n')
   }
   return [
-    systemInstruction({ uncensored: true, settings: chat }),
+    systemInstruction({ uncensored: true, settings: chat, streamerPersona, model }),
     ...(personaStyle ? ['', personaStyle] : []),
     '',
     rules
@@ -1901,7 +1904,9 @@ async function callUncensored (contents, declarations, allowed = null, { timeout
     r18Mode,
     story,
     settings: serverSettings(contents),
-    style: alreadyHasStyleInUser ? '' : style
+    style: alreadyHasStyleInUser ? '' : style,
+    streamerPersona: contents?.streamerPersona !== false,
+    model
   }), contents, { compact: useCompact, r18Mode })
   const replyCacheKey = useCompact ? `uncensored-reply:${hashOf(JSON.stringify({ model, messages }))}` : null
   if (replyCacheKey) {
@@ -1978,7 +1983,7 @@ async function callUncensored (contents, declarations, allowed = null, { timeout
     }
   }
   const buildMinimalBody = () => {
-    const compactMsgs = toOpenAIMessages(uncensoredSystemInstruction({ compact: true, r18Mode, story, settings: serverSettings(contents), style }), contents, { compact: true, r18Mode })
+    const compactMsgs = toOpenAIMessages(uncensoredSystemInstruction({ compact: true, r18Mode, story, settings: serverSettings(contents), style, streamerPersona: contents?.streamerPersona !== false, model }), contents, { compact: true, r18Mode })
       .map(m => m.role === 'user' && typeof m.content === 'string' && m.content.length > 2800
         ? { ...m, content: `${m.content.slice(0, 500)}\n\n${m.content.slice(-2300)}` }
         : m)
@@ -2186,7 +2191,7 @@ async function generate (contents, declarations, allowed = null, { deep = false,
   const model = deep ? deepModel() : replyModel(contents)
   const strictSafety = !!contents.safetyFilter
   const prefix = {
-    systemInstruction: { parts: [{ text: systemInstruction({ safetyFilter: !!contents.safetyFilter, omitMature: !!contents.omitMature, settings: serverSettings(contents) }) }] },
+    systemInstruction: { parts: [{ text: systemInstruction({ safetyFilter: !!contents.safetyFilter, omitMature: !!contents.omitMature, settings: serverSettings(contents), streamerPersona: contents?.streamerPersona !== false }) }] },
     tools: [{ functionDeclarations: declarations }],
     // ANY: every turn must be a tool call, so the loop always ends in a submit_* call.
     toolConfig: { functionCallingConfig: { mode: 'ANY', ...(allowed ? { allowedFunctionNames: allowed } : {}) } }

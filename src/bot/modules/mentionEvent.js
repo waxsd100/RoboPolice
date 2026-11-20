@@ -689,7 +689,8 @@ async function handle (message) {
         guild,
         member,
         ask: asker(reply, message.channel.id, message.author.id, log),
-        progress: text => reply.edit({ content: text, allowedMentions: NO_MENTIONS }).catch(() => {})
+        progress: text => reply.edit({ content: text, allowedMentions: NO_MENTIONS }).catch(() => {}),
+        streamerPersona: streamerPersona !== false
       })
       // Replying to something the bot made (or to the message saying it did) is a request to change it.
       const editTarget = repliedTo
@@ -730,7 +731,9 @@ async function handle (message) {
           global.logger.warn(`Could not read the recent talk in ${message.channel.id}: ${e.message}`)
           return []
         })
-      const emojisPromise = sharedOwnerEmojis(guild, message.channel).catch(() => [])
+      const emojisPromise = streamerPersona !== false
+        ? sharedOwnerEmojis(guild, message.channel).catch(() => [])
+        : Promise.resolve([])
       const decision = sokudan.isUsable()
         ? await sokudan.classifyMentionRequest(request, referenced?.text, theme).catch(() => null)
         : null
