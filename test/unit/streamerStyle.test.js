@@ -536,5 +536,91 @@ describe('streamerStyle synthesis, DPRF refinement, YouTube spoken corpus, Postg
     assert.match(sys, /標準的な書き言葉に均さないこと/)
     assert.match(sys, /この話し手の文体の特徴（崩さないこと）/)
     assert.match(sys, /一人称は「俺」/)
+    assert.match(sys, /原文にないキャラ語尾（「〜だぜ」など）や「草」「w」などの笑い表記を新しく足さないこと/)
+  })
+
+  test('guards against daze/kusa caricature: unbiased salience, ending/no-laugh stats, collab/NPC filtering, few-shot gating, and stale DB invalidation', async (t) => {
+    const calmScore = streamerStyle.utteranceSalience('それは普通に工場のラインを見直した方が早いよ', { source: 'discord', isReply: true })
+    const slangScore = streamerStyle.utteranceSalience('それは普通に工場のライン見直すしかないだぜ草！', { source: 'discord', isReply: true })
+    assert.equal(calmScore, slangScore, 'slang/exclamation/kusa endings receive no artificial salience boost')
+
+    const stats = streamerStyle.computeStylometrics([
+      '今日は普通の街づくりを進めていきます。',
+      'この配置だと渋滞しないんですよね',
+      'カレーにチーズを入れると美味しいです',
+      'それはさすがに予想外だったw'
+    ])
+    assert.match(stats, /です・ます調 75%/)
+    assert.match(stats, /語尾「〜だぜ／〜ぜ」0%、「〜だぞ／〜ぞ」0%/)
+    assert.match(stats, /笑い表現なし 75%、「w」25%、「草」0%/)
+
+    // Collab titles are skipped for caption extraction; NPC/viewer/title quotes in summaries are ignored.
+    const selectedVideos = youtubeCaptions.selectVideosForCaptions([
+      { video_id: 'collabVid01', title: 'トマスコ全員集合でマルチプレイ対決！', duration: 'PT25M00S' },
+      { video_id: 'collabVid02', title: 'ぽみそしるコラボ人狼', duration: 'PT30M00S' },
+      { video_id: 'soloVideo01', title: '100万人都市の渋滞を解消する実験', duration: 'PT15M00S' }
+    ], 4)
+    assert.deepEqual(selectedVideos.map(v => v.video_id), ['soloVideo01'])
+
+    const summaryQuotes = youtubeCaptions.extractQuotedSpeechFromSummary([
+      '- [00:30] 「Cities: Skylines II」を起動して新マップを開始する',
+      '- [02:15] 村人が「ここは俺たちの縄張りだぜ！」と言うイベントを見る',
+      '- [04:00] リスナーの「それはさすがに草すぎる」というコメントを読む',
+      '- [06:10] 「ご安心を、下水道の向きは完全に把握しています」と語りながら逆流させる'
+    ].join('\n'))
+    assert.deepEqual(summaryQuotes, ['ご安心を、下水道の向きは完全に把握しています'])
+
+    // Stale persisted row from an older promptHash (`deadbeef:...`) is discarded rather than warming L1.
+    const prevDiscord = process.env.DISCORD_KNOWLEDGE_USERS
+    process.env.DISCORD_KNOWLEDGE_USERS = '615170548187791365'
+    streamerStyle.clearCache()
+    installStreamerStyleStore({
+      default: {
+        profile: '- 旧プロファイル: 語尾は「〜だぜ」、文末に「草」を付ける',
+        quantitative: '',
+        exemplars: ['旧キャッシュだぜ草'],
+        dialoguePairs: [],
+        sourceHash: 'deadbeef:0123456789abcdef01234567',
+        updatedAt: Date.now()
+      }
+    })
+    t.after(() => {
+      streamerStyle.clearCache()
+      installStreamerStyleStore()
+      process.env.DISCORD_KNOWLEDGE_USERS = prevDiscord
+    })
+    assert.equal(await streamerStyle.warmCache(), null, 'outdated promptHash row in Postgres is ignored')
+
+    // Few-shot selection suppresses rare `草` / `だぜ` items when calm alternatives exist, and includes quantitative balance.
+    streamerStyle.clearCache()
+    installStreamerStyleStore({
+      default: {
+        profile: '- 一人称は「俺」か「私」、落ち着いたトーンで淡々と返す。「〜だぜ」は使わない。',
+        quantitative: [
+          '- 分析対象の発言数: 50件、1発言の長さ中央値: 約22文字、改行を含む発言: 6%',
+          '- 文末の割合: です・ます調 30%、普通体・体言止め 70%（うち語尾「〜だぜ／〜ぜ」0%、「〜だぞ／〜ぞ」0%）',
+          '- 句読点・記号を含む割合: 句点「。」24%、読点「、」32%、感嘆符「!／！」10%、疑問符「?／？」12%',
+          '- 笑い表現を含む割合: 笑い表現なし 90%、「w」6%、「草」4%、「笑」0%'
+        ].join('\n'),
+        exemplars: [
+          'それさすがに予想外すぎて草',
+          '今日はベルトコンベアの配置をずっと直してた',
+          'このゲームは序盤の電力さえ安定すればなんとかなるよ',
+          '高速道路の出口を1つ増やすだけで渋滞が消えました'
+        ],
+        dialoguePairs: [
+          { partner: 'さっきの爆発すごかった', reply: 'あれは完全に想定外で草' },
+          { partner: 'おはよう、今日も寒いね', reply: 'おはよう、暖房つけないと動けないね' },
+          { partner: 'おすすめのシム系ある？', reply: '時間を溶かしたいなら工場系が一番安定するよ' },
+          { partner: '晩ごはん何にした？', reply: '普通にカレー作って食べました' }
+        ],
+        sourceHash: 'test:clean-profile',
+        updatedAt: Date.now()
+      }
+    })
+    const rendered = (await streamerStyle.sectionForPrompt({ slim: false, query: 'おすすめのゲームある？' })).join('\n')
+    assert.match(rendered, /実測の文体バランス/)
+    assert.match(rendered, /笑い表現なし 90%/)
+    assert.doesNotMatch(rendered, /想定外で草|予想外すぎて草/, 'rare kusa items are gated out of few-shot prompt when clean items exist')
   })
 })
