@@ -734,7 +734,7 @@ async function handle (message) {
       const emojisPromise = streamerPersona !== false
         ? sharedOwnerEmojis(guild, message.channel).catch(() => [])
         : Promise.resolve([])
-      const decision = sokudan.isUsable()
+      const decision = sokudan.canDecide()
         ? await sokudan.classifyMentionRequest(request, referenced?.text, theme).catch(() => null)
         : null
       const asksForStory = typeof decision?.isStory === 'boolean' ? decision.isStory : STORY_REQUEST_PATTERN.test(request)

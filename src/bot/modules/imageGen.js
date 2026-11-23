@@ -4,7 +4,7 @@ const prompts = require('../utils/prompts')
 const { callGemini, GeminiError } = require('./eventDrafter')
 const { cropTo, SIZES } = require('../utils/imageCrop')
 
-const DEFAULT_IMAGE_MODEL = 'gemini-3.1-flash-image'
+const DEFAULT_IMAGE_MODEL = 'gemini-nano-banana-2.1'
 
 // The supported ratio closest to each target size; the result is cropped to the exact size after.
 const ASPECT_RATIOS = new Map([[SIZES.eventCover, '21:9'], [SIZES.forumImage, '16:9']])

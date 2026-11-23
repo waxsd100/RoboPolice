@@ -601,7 +601,7 @@ describe('mention → event / forum post (integration)', () => {
     assert.ok(reply.history.some(s => s.content === 'AI で画像を作成しています…'))
 
     const imageCall = requests[1]
-    assert.match(imageCall.url, /models\/gemini-3\.1-flash-image:generateContent$/)
+    assert.match(imageCall.url, /models\/gemini-nano-banana-2\.1:generateContent$/)
     assert.deepEqual(imageCall.body.generationConfig, { responseModalities: ['IMAGE'], imageConfig: { aspectRatio: '21:9' } })
     const [prompt, reference] = imageCall.body.contents[0].parts
     assert.match(prompt.text, /"秋の勉強会"[\s\S]*参加無料[\s\S]*Base it on the attached image[\s\S]*Do not draw any text/)
@@ -1245,7 +1245,7 @@ describe('mention → event / forum post (integration)', () => {
     assert.equal(hooked.mock.callCount(), 0)
   })
 
-  test('chat: the line under the reply names the models; when Argon refuses, Flash answers and that is said too', async (t) => {
+  test('chat: the line under the reply names the models; when the deep model refuses, Flash answers and that is said too', async (t) => {
     t.mock.method(global.logger, 'info', () => {})
     const { channel, replies } = createChannel()
     const requests = []
@@ -1254,21 +1254,21 @@ describe('mention → event / forum post (integration)', () => {
       requests.push({ url, body })
       const meta = { promptTokenCount: 100, candidatesTokenCount: 10 }
       if (requests.length === 1) return { ok: true, json: async () => ({ candidates: [{ content: { role: 'model', parts: [call('think_deeper', { reason: '長文' })] } }], usageMetadata: meta }) }
-      if (/gemini-4-argon/.test(url)) return { ok: true, json: async () => ({ promptFeedback: { blockReason: 'PROHIBITED_CONTENT' }, usageMetadata: meta }) }
+      if (/gemini-4-hydrogen/.test(url)) return { ok: true, json: async () => ({ promptFeedback: { blockReason: 'PROHIBITED_CONTENT' }, usageMetadata: meta }) }
       return { ok: true, json: async () => ({ candidates: [{ content: { role: 'model', parts: [call('submit_chat_reply', { text: '書いたよ' })] } }], usageMetadata: meta }) }
     }
     const { installReplyLengthStore } = require('../helpers/fakes')
     installReplyLengthStore({}, {}, { [channel.guild.id]: true })
     t.after(() => installReplyLengthStore())
     await mentionEvent.handle(mention(channel, '<@BOT> 長い話を書いて'))
-    assert.deepEqual(requests.map(r => r.url.match(/models\/([^:]+)/)[1]), ['gemini-3.8-flash', 'gemini-4-argon', 'gemini-3.8-flash'])
+    assert.deepEqual(requests.map(r => r.url.match(/models\/([^:]+)/)[1]), ['gemini-3.8-flash', 'gemini-4-hydrogen', 'gemini-3.8-flash'])
     assert.equal(requests[1].body.serviceTier, 'flex')
     assert.ok(!requests[2].body.tools[0].functionDeclarations.some(d => d.name === 'think_deeper'), 'not handed over again')
     assert.equal(requests[2].body.contents.length, 1, 'from the request again')
     const [text, footer] = replies[0].state.content.split('\n')
     assert.equal(text, '書いたよ')
-    assert.match(footer, /^-# model: gemini-3\.8-flash → gemini-4-argon \(flex\) → gemini-3\.8-flash · tokens: /)
-    assert.match(footer, / · fallback: gemini-4-argon refused \(PROHIBITED_CONTENT\) → gemini-3\.8-flash$/)
+    assert.match(footer, /^-# model: gemini-3\.8-flash → gemini-4-hydrogen \(flex\) → gemini-3\.8-flash · tokens: /)
+    assert.match(footer, / · fallback: gemini-4-hydrogen refused \(PROHIBITED_CONTENT\) → gemini-3\.8-flash$/)
   })
 
   test('chat: when Gemini refuses and UNCENSORED_API_URL is configured, DeepSeek-V4-Pro-Qwen3.5-9B-UNCENSORED-heretic answers on owner/enabled servers, and non-owner servers refuse by default', async (t) => {
@@ -1779,8 +1779,8 @@ describe('mention → event / forum post (integration)', () => {
     })
     await mentionEvent.handle(mention(channel, '<@BOT> 長い話を書いて'))
     assert.equal(replies[0].state.content, '書いたよ')
-    // 1,000 from the reply model; 1,000 at Argon's $2 (against $0.75), halved for Flex.
-    assert.equal(quota.get(`mention-tokens:5h:${REQUESTER}`), 2333)
+    // 1,000 from the reply model; 1,000 at Hydrogen's $1.50 (against $0.75), halved for Flex.
+    assert.equal(quota.get(`mention-tokens:5h:${REQUESTER}`), 2000)
   })
 
   test('near a limit every call of the mention goes to Flex (slower, half the price), and the server can set its own limits', async (t) => {

@@ -37,3 +37,18 @@ test('a model that charges more for a long prompt is counted at its long price p
   assert.equal(Math.round(long * 1e6) / 1e6, (300000 * 4 + 1000 * 18) / 1e6)
   assert.equal(usdOf({ promptTokenCount: 1e6, candidatesTokenCount: 0 }, 'gemini-2.5-flash-lite', { now }), 0.1)
 })
+
+test('latest Gemini 4, Decisions API, and Nano Banana 2.1 models have accurate prices and date transitions', () => {
+  const nov = new Date('2026-11-23T00:00:00Z')
+  const dec = new Date('2026-12-01T00:00:00Z')
+  assert.deepEqual(priceOf('gemini-4-hydrogen', nov), { input: 1.5, cached: 0.075, output: 7.5, imageOutput: 7.5 })
+  assert.deepEqual(priceOf('gemini-4-neon', nov), { input: 3, cached: 0.15, output: 15, imageOutput: 15 })
+  assert.deepEqual(priceOf('gemini-4-carbon', nov), { input: 2, cached: 0.1, output: 10, imageOutput: 10 })
+  assert.deepEqual(priceOf('gemini-4-carbon', dec), { input: 4, cached: 0.2, output: 20, imageOutput: 20 })
+  assert.deepEqual(priceOf('gemini-decision-1', nov), { input: 0.1, cached: 0.1, output: 0, imageOutput: 0 })
+  // Decisions API returns usage.total_input_tokens with zero output tokens.
+  assert.equal(usdOf({ total_input_tokens: 1e6, total_output_tokens: 0 }, 'gemini-decision-1', { now: nov }), 0.1)
+  // Nano Banana 2.1 costs half as much per image output token as gemini-3.1-flash-image ($30 vs $60).
+  const imgMeta = { promptTokenCount: 100, candidatesTokenCount: 1300, candidatesTokensDetails: [{ modality: 'TEXT', tokenCount: 10 }, { modality: 'IMAGE', tokenCount: 1290 }] }
+  assert.equal(usdOf(imgMeta, 'gemini-nano-banana-2.1', { now: nov }), (150 + 75 + 38700) / 1e6)
+})

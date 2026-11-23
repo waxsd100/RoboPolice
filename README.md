@@ -104,7 +104,7 @@ BOT がサーバーに入った瞬間から、すべてのイベントを記録�
 | `%tokenlimit` / `%tokenlimit 5h 300000` / `week 1500000` / `flex 70` / `5h default` / `unlimited on`・`off` | このサーバーのメンションのトークン上限（1人あたり、5時間・1週間）と、低速モード（Flex）に切り替える割合を表示・変更する（0 は上限なし・切り替えなし、`default` で既定に戻す）。`unlimited on` でこのサーバーの制限（上限・低速モード・1日の回数）をすべて外す。使った量はサーバーをまたいで数え、メンションしたサーバーの上限と比べる | `CREATOR_IDS` の人 |
 | `%replymodel` / `%replymodel [task] model <モデル>` / `[task] thinking <深さ>` / `[task] tier <standard\|flex>` / `[task] default` | AIタスク（`reply`: メンション返信、`summary`: 動画要約、`light`: 背景処理・整形、`extract`: 知識・文脈のJSON抽出、`rules`: ルールチャンネル判定、`blurb`: 配信イベント紹介文）ごとに、使うモデル・思考の深さ（`minimal`・`low`・`medium`・`high`）・推論ティア（`standard`・`flex`）を表示・変更する（`task`省略時は`reply`、`default`で環境変数の既定値に戻す）。選べるモデル一覧は`src/bot/utils/replyOptions.js`とPostgreSQLのenum型`reply_model`で管理されている | `CREATOR_IDS` の人 |
 | `%embeddings` / `%embeddings [messages\|emojis] <on\|off\|default>` | このサーバーでのメッセージのベクトル化（`messages`）とカスタム絵文字の説明・ベクトル化（`emojis`）のオン・オフを切り替える（対象省略時は両方まとめて変更。既定ではオーナーサーバーのみオン、それ以外のサーバーはオフ） | `CREATOR_IDS` の人 |
-| `%debugfooter on` / `off` | このサーバーのメンション返信の下に、答えたモデル・使ったトークン・フォールバックを小さい灰色の字で出す（`-# model: gemini-3.8-flash → gemini-4-argon (flex) · tokens: in … (cached …) · out … · thinking … · N Gemini calls · fallback: …`）。初期はオフ。引数なしで今の設定を表示 | `CREATOR_IDS` の人 |
+| `%debugfooter on` / `off` | このサーバーのメンション返信の下に、答えたモデル・使ったトークン・フォールバックを小さい灰色の字で出す（`-# model: gemini-3.8-flash → gemini-4-hydrogen (flex) · tokens: in … (cached …) · out … · thinking … · N Gemini calls · fallback: …`）。初期はオフ。引数なしで今の設定を表示 | `CREATOR_IDS` の人 |
 | `%eval` / `%reload` / `%reindexcommands` | 開発用 | `CREATOR_IDS` の人 |
 
 ## メンションからのチャット応答・イベント作成・フォーラム投稿
@@ -292,17 +292,17 @@ rm robopolice-key.json
 | `CLOUDFLARE_AI_GATEWAY_BYOK_ALIAS` | 任意。AI Gateway側に保存したGemini APIキー（BYOK）のエイリアス名（未設定時は`default`）。 |
 | `GEMINI_API_KEY` | AI GatewayのBYOKを使わない場合に必須となるGoogle Gemini APIキー。 |
 | `BOT_MODEL_NAME` | 任意（既定: `nobaman llm 3.9 Flash`）。モデル名を質問された際にBOTが名乗る表示名（`%debugfooter`には実際のモデル名が表示されます）。 |
-| `GEMINI_MODEL` | 任意（既定: `gemini-3.8-flash`）。メンション返信や動画要約に使用するメインモデル。 |
-| `GEMINI_THINKING_LEVEL` | 任意（既定: `high`、`minimal`/`low`/`medium`/`high`）。メンション返信時の思考レベル。 |
-| `GEMINI_DEEP_MODEL` | 任意（既定: `gemini-4-argon`）。複雑な推論や長文作成が必要な際に`think_deeper`ツールで引き継ぐ上位モデル（空文字で無効化）。 |
+| `GEMINI_MODEL` | 任意（既定: `gemini-3.8-flash`）。メンション返信や動画要約に使用するメインモデル（明示キャッシュ対応・2026年末まで半額の`gemini-3.8-flash`が既定。`gemini-4-hydrogen` / `neon` / `carbon`等も`%replymodel`や`--model`で選択可能）。 |
+| `GEMINI_THINKING_LEVEL` | 任意（既定: `high`、`minimal`/`low`/`medium`/`high`）。メンション返信時の思考レベル（Gemini 4選択時の`minimal`は自動で`low`に補正されます）。 |
+| `GEMINI_DEEP_MODEL` | 任意（既定: `gemini-4-hydrogen`）。複雑な推論や長文作成が必要な際に`think_deeper`ツールで引き継ぐ上位モデル（コスパ重視の`gemini-4-hydrogen`が既定。`gemini-4-neon`・`gemini-4-carbon`・`gemini-4-argon`も指定可、空文字で無効化）。 |
 | `GEMINI_DEEP_FLEX`, `GEMINI_DEEP_FLEX_FALLBACK`, `GEMINI_DEEP_THINKING_LEVEL` | 任意。`GEMINI_DEEP_MODEL`でFlex推論を使うか（既定オン）、Flex容量不足時に標準ティアへフォールバックするか（既定オフ）、および思考レベル（既定`high`）。 |
 | `GEMINI_LIGHT_MODEL`, `GEMINI_LIGHT_THINKING_LEVEL` | 任意（既定: `gemini-3.5-flash-lite` / `low`）。絵文字説明、配信紹介文、ゲームリンク特定、返信の自然な日本語整形（`REPLY_POLISH`）などの軽量処理に使うモデル。 |
 | `GEMINI_EXTRACT_MODEL`, `GEMINI_EXTRACT_THINKING_LEVEL` | 任意（既定: `gemini-3.1-flash-lite` / `minimal`）。Wiki・X・Discord・Webからの知識JSON抽出、サーバー知識（`SERVER_LORE`）抽出、直近の話題（`recentTopics`）選択に使う高速・低コストモデル。 |
 | `GEMINI_FLEX` | 任意（既定: オン）。`false`にするとすべてのFlex推論を無効化し標準ティアでリクエストします。 |
 | `GEMINI_STREAM` | 任意（既定: オン）。Cloudflareの100秒タイムアウト（HTTP 524）を回避するため、メンション応答を`streamGenerateContent`でストリーミング受信します。 |
-| `GEMINI_EXPLICIT_CACHE` | 任意（既定: オン）。`false`にするとシステム指示とツールの明示的キャッシュ（`cachedContents`）を無効化します。 |
+| `GEMINI_EXPLICIT_CACHE` | 任意（既定: オン）。`false`にするとシステム指示とツールの明示的キャッシュ（`cachedContents`）を無効化します（Gemini 4系は仕様上自動で暗黙キャッシュのみを使用します）。 |
 | `UNCENSORED_API_URL`, `UNCENSORED_GATEWAY_PROVIDER`, `UNCENSORED_API_KEY`, `UNCENSORED_MODEL` | 任意。R18の話題やGeminiが安全性フィルタで拒否した際に引き継ぐOpenAI互換エンドポイント設定（既定モデル: `xtools-at/DeepSeek-V4-Pro-Qwen3.5-9B-UNCENSORED-heretic`）。 |
-| `SOKUDAN_URL`, `SOKUDAN_API_KEY`, `SOKUDAN_TIMEOUT_MS`, `SOKUDAN_BOOL_THRESHOLD` | 任意。軽量日本語判断モデル [`GeneLab/sokudan-ja-310m`](https://huggingface.co/GeneLab/sokudan-ja-310m)（`Dockerfile.sokudan` / `docker-compose.yml`）のURL設定。設定時は①メンションの事前ルーティング（意図分類・長文/推論の直接`GEMINI_DEEP_MODEL`振り分け・婉曲的なR18依頼の検知・思考レベル調整）、②R18ソフト拒否/朝チュン検知の強化、③`REPLY_POLISH`（250文字以上の返信）で既に自然な日本語の返信に対するGemini推敲スキップを行います。 |
+| `SOKUDAN_URL`, `SOKUDAN_API_KEY`, `SOKUDAN_TIMEOUT_MS`, `SOKUDAN_BOOL_THRESHOLD`, `GEMINI_DECISION_API`, `GEMINI_DECISION_MODEL` | 任意。軽量日本語判断モデル [`GeneLab/sokudan-ja-310m`](https://huggingface.co/GeneLab/sokudan-ja-310m)（`Dockerfile.sokudan` / `docker-compose.yml`）のURL設定。未設定・オフライン時は自動でGoogle **Decisions API**（`gemini-decision-1`、入力$0.10/1M・**出力$0**、`GEMINI_DECISION_API=false`で無効化）へフォールバックし、①メンションの事前ルーティング（意図分類・長文/推論の直接`GEMINI_DEEP_MODEL`振り分け・婉曲的なR18依頼の検知・思考レベル調整）、②R18ソフト拒否/朝チュン検知の強化、③`REPLY_POLISH`（250文字以上の返信）で既に自然な日本語の返信に対するGemini推敲スキップを行います。 |
 | `REPLY_POLISH` | 任意（既定: オン）。AI特有の表現・記号を含む返信や250文字以上の返信を`GEMINI_LIGHT_MODEL`と`yomiyasu-pocket`で自然な日本語に整えます。 |
 | `MENTION_RECENT_TOPICS`, `MENTION_RECENT_MESSAGES`, `MENTION_RECENT_HOURS` | 任意。メンション時に同じチャンネルの直近の関連発言（既定: 過去12時間の最新50件から最大8件）を文脈として渡します。 |
 | `YOUTUBE_API_KEY`, `YOUTUBE_CHANNELS`, `YOUTUBE_AUTO_SYNC_MINUTES`, `YOUTUBE_LIVE_POLL_SECONDS`, `YOUTUBE_WEBSUB_URL`, `YOUTUBE_WEBSUB_SECRET`, `YOUTUBE_GATEWAY_PROVIDER` | 任意。YouTubeチャンネルの同期、動画要約、配信・新着動画イベント自動登録、WebSubプッシュ通知に関する設定。 |
@@ -318,7 +318,7 @@ rm robopolice-key.json
 | `HISTORY_BACKFILL`, `HISTORY_BACKFILL_DAYS`, `HISTORY_BACKFILL_SINCE`, `HISTORY_BACKFILL_MAX_MESSAGES`, `HISTORY_BACKFILL_DELAY_MS` | 任意。チャンネルの過去メッセージ履歴バックフィルの有効/無効と取得範囲・間隔の設定。 |
 | `SERVER_LORE`, `SERVER_LORE_WEEKS` | 任意。サーバーごとの定番ネタ・用語・話し方の学習（既定オフ、直近8週間分）。 |
 | `MESSAGE_EMBEDDINGS`, `EMOJI_DESCRIPTIONS`, `MESSAGE_EMBEDDING_MIN_CHARS`, `EMBEDDING_BATCH_AFTER_HOURS`, `EMBEDDING_INTERVAL_MINUTES`, `GEMINI_EMBEDDING_MODEL` | 任意。メッセージおよびカスタム絵文字のベクトル化設定、最小文字数（既定5文字）、Batch APIへの切り替え時間（既定24時間より前のメッセージ）、実行間隔（既定5分）、Embeddingモデル（`embedding_model` ENUM、既定`gemini-embedding-001` / `gemini-embedding-2-preview` / `gemini-embedding-2` / `text-embedding-004`）。 |
-| `GEMINI_IMAGE_MODEL` | 任意（既定: `gemini-3.1-flash-image`）。イベントやフォーラム投稿のカバー画像生成・編集に使用する画像モデル。 |
+| `GEMINI_IMAGE_MODEL` | 任意（既定: `gemini-nano-banana-2.1`）。イベントやフォーラム投稿のカバー画像生成・編集に使用する画像モデル（画像出力が旧既定`gemini-3.1-flash-image`の半額・高品質。`gemini-3.1-flash-lite-image`も選択可）。 |
 | `CHAT_PERSONA` | 任意。チャット返信に追加するキャラクター設定・口調メモ。 |
 | `GCP_SECRETS`, `GCP_SERVICE_ACCOUNT_KEY`, `GCP_PROJECT_ID` | 任意。起動時にGoogle Cloud Secret Managerからシークレットを読み込む設定。 |
 

@@ -12,6 +12,10 @@
 const PRICES = [
   { model: 'gemini-3.8-flash', input: 0.75, cached: 0.075, output: 3.75 },
   { model: 'gemini-3.8-flash', from: '2027-01-01', input: 1.5, cached: 0.15, output: 7.5 },
+  { model: 'gemini-4-hydrogen', input: 1.5, cached: 0.075, output: 7.5 },
+  { model: 'gemini-4-neon', input: 3, cached: 0.15, output: 15 },
+  { model: 'gemini-4-carbon', input: 2, cached: 0.1, output: 10 },
+  { model: 'gemini-4-carbon', from: '2026-12-01', input: 4, cached: 0.2, output: 20 },
   { model: 'gemini-4-argon', input: 2, cached: 0.1, output: 10 },
   { model: 'gemini-4-argon', from: '2026-12-01', input: 4, cached: 0.2, output: 20 },
   { model: 'gemini-3.6-flash', input: 0.75, cached: 0.075, output: 3.75 },
@@ -22,6 +26,7 @@ const PRICES = [
   { model: 'gemini-3.5-flash-lite', input: 0.3, cached: 0.03, output: 2.5 },
   { model: 'gemini-3.1-flash-lite', input: 0.25, cached: 0.025, output: 1.5 },
   { model: 'gemini-2.5-flash-lite', input: 0.1, cached: 0.01, output: 0.4 },
+  { model: 'gemini-decision-1', input: 0.1, cached: 0.1, output: 0 },
   { model: 'gemini-3.1-flash-image', input: 0.5, output: 3, imageOutput: 60 },
   { model: 'gemini-3.1-flash-lite-image', input: 0.25, output: 1.5, imageOutput: 30 },
   { model: 'gemini-nano-banana-2.1', input: 1.5, output: 7.5, imageOutput: 30 },
@@ -94,12 +99,13 @@ function priceOf (model, now = new Date()) {
 // What one response cost in USD, from its usageMetadata.
 function usdOf (meta, model, { flex = false, now = new Date() } = {}) {
   if (!meta) return 0
-  const prompt = meta.promptTokenCount || 0
+  const prompt = meta.promptTokenCount ?? meta.total_input_tokens ?? 0
   const listed = priceOf(model, now)
   const price = listed.long && prompt > listed.long.above ? { ...listed, ...listed.long } : listed
   const cached = Math.min(meta.cachedContentTokenCount || 0, prompt)
   const images = (meta.candidatesTokensDetails || []).filter(d => d.modality === 'IMAGE').reduce((n, d) => n + (d.tokenCount || 0), 0)
-  const text = Math.max(0, (meta.candidatesTokenCount || 0) - images) + (meta.thoughtsTokenCount || 0)
+  const outputTokens = meta.candidatesTokenCount ?? meta.total_output_tokens ?? 0
+  const text = Math.max(0, outputTokens - images) + (meta.thoughtsTokenCount || 0)
   const usd = ((prompt - cached) * price.input + cached * price.cached + text * price.output + images * price.imageOutput) / 1e6
   return flex ? usd / 2 : usd
 }

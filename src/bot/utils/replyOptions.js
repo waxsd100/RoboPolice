@@ -6,6 +6,9 @@
 // The models a task can be run with (%replymodel): text models with a price in geminiPrices.js.
 const REPLY_MODELS = Object.freeze([
   'gemini-3.8-flash',
+  'gemini-4-hydrogen',
+  'gemini-4-neon',
+  'gemini-4-carbon',
   'gemini-4-argon',
   'gemini-3.5-flash-lite',
   'gemini-3.1-flash-lite',

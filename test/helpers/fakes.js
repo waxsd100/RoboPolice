@@ -801,8 +801,9 @@ function configureGateway () {
   delete process.env.VIDEO_SUMMARY_THINKING_LEVEL
   delete process.env.GEMINI_LIGHT_THINKING_LEVEL
   delete process.env.GEMINI_EXTRACT_THINKING_LEVEL
-  // Tests script each Gemini call; the explicit cache is tested on its own (eventDrafter.test.js).
+  // Tests script each Gemini call; the explicit cache and Decisions API are tested on their own.
   process.env.GEMINI_EXPLICIT_CACHE = 'false'
+  process.env.GEMINI_DECISION_API = 'false'
   delete process.env.VIDEO_SUMMARY_FPS
   delete process.env.SOKUDAN_URL
   delete process.env.SOKUDAN_API_KEY
