@@ -419,7 +419,7 @@ async function geminiAttempts (path, body, { timeoutMs = GEMINI_TIMEOUT_MS, purp
   // A user near their limits has every generation of their mention on Flex (mentionQuota.js), and
   // when the bot as a whole is busy every generation is, in the background too (geminiLoad.js);
   // but for image models.
-  const isGenerate = /:(stream)?[gG]enerateContent/.test(path) && !/image/i.test(model)
+  const isGenerate = /:(stream)?[gG]enerateContent/.test(path) && !/(?:image|nano-banana)/i.test(model)
   const loadFlex = !flex && !standard && !usage?.flex && isGenerate && geminiLoad.flexForAll()
   if ((usage?.flex || loadFlex) && isGenerate) flex = true
   flex = flex && !standard && flexUsable()
@@ -526,16 +526,33 @@ const STRICT_SAFETY_SETTINGS = [
   { category: 'HARM_CATEGORY_DANGEROUS_CONTENT', threshold: 'BLOCK_MEDIUM_AND_ABOVE' },
   { category: 'HARM_CATEGORY_CIVIC_INTEGRITY', threshold: 'BLOCK_MEDIUM_AND_ABOVE' }
 ]
+const isImageModel = model => /(?:image|nano-banana)/i.test(String(model || ''))
+const isGemini4 = model => /^gemini-4(?:-|$)/i.test(String(model || ''))
+const normalizeThinkingLevel = (model, level) => (level === 'minimal' && isGemini4(model) ? 'low' : level)
+
 function withSafetySettings (model, body, { strict = false } = {}) {
-  if (body.safetySettings || /image/i.test(model)) return body
+  if (body.safetySettings || isImageModel(model)) return body
   return { ...body, safetySettings: strict ? STRICT_SAFETY_SETTINGS : SAFETY_SETTINGS }
 }
 
 async function callGemini (model, body, options) {
   if (!options?.defaultSafety) body = withSafetySettings(model, body, { strict: !!options?.strictSafety })
-  if (!body.generationConfig?.thinkingConfig && !/image/i.test(model)) {
+  if (!body.generationConfig?.thinkingConfig && !isImageModel(model)) {
     const thinking = thinkingConfig(model, { setting: 'GEMINI_LIGHT_THINKING_LEVEL', fallback: 'low' })
     if (thinking.thinkingConfig) body = { ...body, generationConfig: { ...body.generationConfig, ...thinking } }
+  }
+  // Gemini 4 migration docs specify omitting temperature/topP/topK sampling parameters.
+  if (isGemini4(model) && body.generationConfig) {
+    const gc = { ...body.generationConfig }
+    delete gc.temperature
+    delete gc.topP
+    delete gc.topK
+    if (Object.keys(gc).length) body = { ...body, generationConfig: gc }
+    else {
+      const copy = { ...body }
+      delete copy.generationConfig
+      body = copy
+    }
   }
   const data = await geminiRequest(model, 'generateContent', body, options)
   const candidate = data.candidates?.[0]
@@ -549,17 +566,19 @@ async function callGemini (model, body, options) {
   return content
 }
 
-// How much Gemini 3 thinks before answering (minimal, low, medium or high), billed as answer
+// How much Gemini 3/4 thinks before answering (minimal, low, medium or high), billed as answer
 // tokens: `setting` names the environment variable, `fallback` the level without it. Mention
 // replies and drafts think at high (GEMINI_THINKING_LEVEL), video summaries at low
-// (VIDEO_SUMMARY_THINKING_LEVEL), and everything else at low (GEMINI_LIGHT_THINKING_LEVEL). Only sent to Gemini 3 models (older ones refuse the setting).
+// (VIDEO_SUMMARY_THINKING_LEVEL), and everything else at low (GEMINI_LIGHT_THINKING_LEVEL).
+// Only sent to Gemini 3+ models (older ones refuse the setting). Gemini 4 rejects `minimal`,
+// so it is clamped to `low` for Gemini 4 models.
 const { REPLY_MODELS, THINKING_LEVELS, SERVICE_TIERS } = require('../utils/replyOptions')
 const replySettings = () => require('../../db/interfaces/postgres/replySettings')
 
 function thinkingConfig (model, { setting = 'GEMINI_THINKING_LEVEL', fallback = 'high' } = {}) {
   if (!/gemini-[3-9]/.test(model)) return {}
   const level = String(process.env[setting] || fallback).toLowerCase()
-  return THINKING_LEVELS.includes(level) ? { thinkingConfig: { thinkingLevel: level } } : {}
+  return THINKING_LEVELS.includes(level) ? { thinkingConfig: { thinkingLevel: normalizeThinkingLevel(model, level) } } : {}
 }
 
 function defaultTaskConfig (task) {
@@ -592,7 +611,7 @@ async function resolveTaskConfig (task, guildID = null) {
   const custom = await replySettings().getTaskModel?.(guildID, task)?.catch?.(() => null)
   const model = custom?.model || def.model
   const thinking = custom?.thinking && THINKING_LEVELS.includes(custom.thinking)
-    ? (/gemini-[3-9]/.test(model) ? { thinkingConfig: { thinkingLevel: custom.thinking } } : {})
+    ? (/gemini-[3-9]/.test(model) ? { thinkingConfig: { thinkingLevel: normalizeThinkingLevel(model, custom.thinking) } } : {})
     : thinkingConfig(model, { setting: def.thinkingSetting, fallback: def.thinkingFallback })
   const tier = custom?.tier && SERVICE_TIERS.includes(custom.tier) ? custom.tier : def.tier
   return { model, thinking, tier, flex: tier === 'flex' }
@@ -711,7 +730,7 @@ function flushCachePurge () {
 // The name of a cache holding `prefix` (systemInstruction, tools, toolConfig) for `model`, made if
 // needed and shared across workers in Redis; null when there is none to use.
 async function cachedPrefix (model, prefix, now = Date.now()) {
-  if (!explicitCacheEnabled()) return null
+  if (!explicitCacheEnabled() || isGemini4(model)) return null
   const key = hashOf(`${model}\n${JSON.stringify(prefix)}`)
   const redisKey = `gemini-cache:${key}`
   const version = promptVersion(prefix)
@@ -763,12 +782,13 @@ function forgetCache (name) {
 }
 
 // Requests that need much reasoning or a long text are answered by a stronger model
-// (GEMINI_DEEP_MODEL, by default gemini-4-argon; empty to turn this off), which the model hands
-// over to by calling think_deeper first. If it refuses (its safety filters or policy), the usual
-// model answers instead, from the request again. It runs on Flex inference (half the price, but queued
-// for up to about 15 minutes; GEMINI_DEEP_FLEX=false for the standard tier) and thinks at
-// GEMINI_DEEP_THINKING_LEVEL (default high), caching its instructions and tools via cachedPrefix.
-const DEFAULT_DEEP_MODEL = 'gemini-4-argon'
+// (GEMINI_DEEP_MODEL, by default gemini-4-hydrogen at $1.50/$7.50 per 1M; empty to turn this off),
+// which the model hands over to by calling think_deeper first. If it refuses (its safety filters
+// or policy), the usual model answers instead, from the request again. It runs on Flex inference
+// (half the price, but queued for up to about 15 minutes; GEMINI_DEEP_FLEX=false for the standard
+// tier) and thinks at GEMINI_DEEP_THINKING_LEVEL (default high), relying on Gemini 4 implicit
+// caching (95% discount from 4,096 tokens) rather than explicit cachedContents.
+const DEFAULT_DEEP_MODEL = 'gemini-4-hydrogen'
 const DEEP_TIMEOUT_MS = 20 * 60 * 1000
 const DEEP_PROGRESS = 'じっくり考えています…（強いモデルで考えるため、数分かかることがあります）'
 function deepModel () {
@@ -819,11 +839,11 @@ function uncensoredModel (contents = null) {
 }
 
 // Explicit model directive at the start or end of a mention request (or in a replied-to message):
-//   --model <1|2|uncensored|r18|deep|flash|lite|model-name>
+//   --model <1|2|uncensored|r18|deep|hydrogen|argon|neon|carbon|flash|lite|model-name>
 //   -m <...> / model:<...> / [model:<...>] / [r18] / 【R18】
-//   --1 / --2 / --uncensored / --r18 / --deep / --flash / --lite (also supports smart dashes — / – / ― or doubled ー / －)
-const DIRECTIVE_ALIASES = '1|2|uncensored|fallback|heretic|r-?18|deckard|deep|argon|flash|lite'
-const BRACKET_DIRECTIVE_ALIASES = 'uncensored|fallback|heretic|r-?18|deckard|deep|argon|flash|lite'
+//   --1 / --2 / --uncensored / --r18 / --deep / --hydrogen / --argon / --neon / --carbon / --flash / --lite
+const DIRECTIVE_ALIASES = '1|2|uncensored|fallback|heretic|r-?18|deckard|deep|argon|hydrogen|neon|carbon|flash|lite'
+const BRACKET_DIRECTIVE_ALIASES = 'uncensored|fallback|heretic|r-?18|deckard|deep|argon|hydrogen|neon|carbon|flash|lite'
 const LEADING_DIRECTIVE_PATTERN = new RegExp(
   `^((?:<@!?[\\w-]+>|<@&[\\w-]+>\\s*)*)\\s*(?:(?:(?:--|[—–―]{1,2}|[ー－]{2})model(?:=|:|\\s+)|-m(?:=|:|\\s+)|model\\s*[:=]\\s*)(\\S+)|\\[model\\s*[:=]\\s*([^\\]]+)\\]|(?:\\[(${BRACKET_DIRECTIVE_ALIASES})\\]|【(?:model\\s*[:=]\\s*)?(${BRACKET_DIRECTIVE_ALIASES})】)(?!\\s*(?:とは|って|の(?:意味|設定|チャンネル|ゲーム|配信|動画|基準|タグ|マーク)|チャンネル|設定))|(?:--|[—–―]{1,2}|[ー－]{2})(${DIRECTIVE_ALIASES})(?=\\s|$))\\s*`,
   'i'
@@ -834,7 +854,11 @@ const TRAILING_DIRECTIVE_PATTERN = new RegExp(
 )
 const GEMINI_DIRECTIVE_ALIASES = {
   flash: 'gemini-3.8-flash',
-  lite: 'gemini-3.5-flash-lite'
+  lite: 'gemini-3.5-flash-lite',
+  hydrogen: 'gemini-4-hydrogen',
+  argon: 'gemini-4-argon',
+  neon: 'gemini-4-neon',
+  carbon: 'gemini-4-carbon'
 }
 
 function normalizeDirectiveValue (raw) {
@@ -1041,7 +1065,7 @@ function applyModelDirective (contents, directive, { inherited = false } = {}) {
   if (!directive || !contents) return false
   const normalized = normalizeDirectiveValue(directive)
   const lower = normalized.toLowerCase()
-  if (lower === 'deep' || lower === 'argon') {
+  if (lower === 'deep') {
     if (deepModel()) {
       contents.deep = true
       contents.uncensored = false
@@ -1052,10 +1076,9 @@ function applyModelDirective (contents, directive, { inherited = false } = {}) {
   }
   if (GEMINI_DIRECTIVE_ALIASES[lower] || /^gemini-/i.test(normalized)) {
     const canonical = (GEMINI_DIRECTIVE_ALIASES[lower] || normalized).toLowerCase()
-    if (/image/i.test(canonical)) return false
+    if (isImageModel(canonical)) return false
     const deep = deepModel()
-    if (canonical === 'gemini-4-argon' || (deep && canonical === deep.toLowerCase())) {
-      if (!deep) return false
+    if (deep && canonical === deep.toLowerCase()) {
       contents.deep = true
       contents.uncensored = false
       contents.explicitDirective = !inherited
@@ -1226,13 +1249,13 @@ const SEXUAL_REFUSAL_PATTERN = /(?:性的|成人向け|アダルト|r-?18|18禁|
 async function refusalKind (text, { checkSokudan = true, requestText = '' } = {}) {
   if (typeof text !== 'string') return null
   if (SEXUAL_REFUSAL_PATTERN.test(text)) return 'sexual'
-  if (checkSokudan && sokudan.isUsable() && (await sokudan.detectRefusalReply(text, requestText)).refused) return 'sexual'
+  if (checkSokudan && sokudan.canDecide() && (await sokudan.detectRefusalReply(text, requestText)).refused) return 'sexual'
   return isRefusalReply(text) ? 'other' : null
 }
 
 async function isRefusalReplyAsync (text, requestText = '') {
   if (isRefusalReply(text)) return true
-  if (!sokudan.isUsable()) return false
+  if (!sokudan.canDecide()) return false
   const res = await sokudan.detectRefusalReply(text, requestText)
   return !!res?.refused
 }
@@ -2203,18 +2226,26 @@ async function generate (contents, declarations, allowed = null, { deep = false,
     // ANY: every turn must be a tool call, so the loop always ends in a submit_* call.
     toolConfig: { functionCallingConfig: { mode: 'ANY', ...(allowed ? { allowedFunctionNames: allowed } : {}) } }
   }
-  const generationConfig = { temperature: temperature(), ...thinkingConfig(model, deep ? { setting: 'GEMINI_DEEP_THINKING_LEVEL', fallback: 'high' } : undefined) }
+  const generationConfig = {
+    ...(isGemini4(model) ? {} : { temperature: temperature() }),
+    ...thinkingConfig(model, deep ? { setting: 'GEMINI_DEEP_THINKING_LEVEL', fallback: 'high' } : undefined)
+  }
   // The server's own thinking level (%replymodel), for the usual model only; otherwise scale
   // thinking effort with request complexity unless GEMINI_THINKING_LEVEL was set explicitly.
   if (!deep && generationConfig.thinkingConfig) {
     if (contents.thinking) {
-      generationConfig.thinkingConfig = { thinkingLevel: contents.thinking }
+      generationConfig.thinkingConfig = { thinkingLevel: normalizeThinkingLevel(model, contents.thinking) }
     } else if (!process.env.GEMINI_THINKING_LEVEL && process.env.GEMINI_ADAPTIVE_THINKING !== 'false') {
-      generationConfig.thinkingConfig = { ...generationConfig.thinkingConfig, thinkingLevel: adaptiveThinkingLevel(contents) }
+      generationConfig.thinkingConfig = { ...generationConfig.thinkingConfig, thinkingLevel: normalizeThinkingLevel(model, adaptiveThinkingLevel(contents)) }
     }
   }
   // The busier the bot as a whole, the less a reply thinks (geminiLoad.js).
-  if (generationConfig.thinkingConfig) generationConfig.thinkingConfig = { ...generationConfig.thinkingConfig, thinkingLevel: geminiLoad.cappedThinking(generationConfig.thinkingConfig.thinkingLevel) }
+  if (generationConfig.thinkingConfig) {
+    generationConfig.thinkingConfig = {
+      ...generationConfig.thinkingConfig,
+      thinkingLevel: normalizeThinkingLevel(model, geminiLoad.cappedThinking(generationConfig.thinkingConfig.thinkingLevel))
+    }
+  }
   const wireContents = compactContentsForWire(contents)
   const callOptions = deep
     ? { purpose: 'mention-deep', timeoutMs: DEEP_TIMEOUT_MS, flex: process.env.GEMINI_DEEP_FLEX !== 'false', stream: true, strictSafety }
@@ -2662,7 +2693,7 @@ async function draft ({ request, referenced, recent = [], channelName, channelID
   // for every request; `decision` when the caller already asked (null: it gave no answer). Kept
   // with the conversation: the thinking level and how the uncensored model is written to go by it.
   if (decision === undefined) {
-    decision = sokudan.isUsable()
+    decision = sokudan.canDecide()
       ? await sokudan.classifyMentionRequest(request, referenced?.text, eventTools().channelTheme(channelID, guild, channelName))
       : null
   }
@@ -2734,7 +2765,7 @@ async function revise (conversation, correction) {
       : (conversation.contents.deep ? deepModel() : replyModel(conversation.contents))
     global.logger?.info(`[GEMINI]: Explicit model directive "${parsed.directive}" in revision; using ${chosen}`)
   } else if (allowUncensored && !conversation.contents.minorTerm && !conversation.contents.uncensored && isUncensoredConfigured()) {
-    const decision = sokudan.isUsable() ? await sokudan.classifyMentionRequest(correction) : null
+    const decision = sokudan.canDecide() ? await sokudan.classifyMentionRequest(correction) : null
     if (decision) conversation.contents.sokudanDecision = decision
     const r18 = r18Route({ request: correction, decision })
     if (r18.maybe) conversation.contents.r18Maybe = true

@@ -867,3 +867,102 @@ test('a refusal or a block goes to the uncensored model only when it may be abou
     await uncensoredSrv.close()
   }
 })
+
+test('Gemini Decisions API (gemini-decision-1) serves as System-1 fallback when SOKUDAN_URL is unset', async () => {
+  configureGateway()
+  resetSokudanEnv()
+  delete process.env.GEMINI_DECISION_API
+  sokudan.decisionState.usable = null
+  sokudan.decisionState.checkedAt = 0
+  sokudan.decisionState.error = null
+  sokudan.decisionState.model = null
+
+  const { tokenCounts, trackUsage } = require('../../src/bot/utils/geminiUsage')
+  const { usdOf } = require('../../src/bot/utils/geminiPrices')
+
+  const calls = []
+  let mode = 'normal'
+  const origFetch = global.fetch
+  global.fetch = async (url, init) => {
+    const body = JSON.parse(init.body)
+    calls.push({ url: String(url), headers: init.headers, body })
+    if (mode === 'safety-block') {
+      return { ok: false, status: 400, text: async () => JSON.stringify({ error: { code: 'safety', message: 'blocked' } }) }
+    }
+    if (mode === 'server-error') {
+      return { ok: false, status: 503, text: async () => 'service unavailable' }
+    }
+    return {
+      ok: true,
+      json: async () => ({
+        answers: {
+          intent: { type: 'choice', choice: 'chat', confidence: 0.96 },
+          needs_deep: { type: 'noul', noul: 0.88, confidence: 0.88 },
+          is_r18: { type: 'noul', noul: 0.03, confidence: 0.97 },
+          is_story: { type: 'noul', noul: 0.85, confidence: 0.85 },
+          complexity: { type: 'score', score: 1.72, confidence: 0.86 },
+          refusal: { type: 'noul', noul: 0.82, confidence: 0.82 },
+          stiffness: { type: 'score', score: 0.25, confidence: 0.85 },
+          needs_rewrite: { type: 'noul', noul: 0.12, confidence: 0.88 }
+        },
+        usage: { total_input_tokens: 200, total_output_tokens: 0, total_tokens: 200 }
+      })
+    }
+  }
+
+  try {
+    assert.equal(sokudan.isConfigured(), false)
+    assert.equal(sokudan.isUsable(), false)
+    assert.equal(sokudan.canDecide(), true)
+
+    let trackedCost = 0
+    const decision = await trackUsage(async u => {
+      const res = await sokudan.classifyMentionRequest('長編小説を書いてください')
+      trackedCost = u.cost
+      return res
+    })
+    assert.equal(decision.source, 'gemini-decision')
+    assert.equal(decision.needsDeep, true)
+    assert.equal(decision.isStory, true)
+    assert.equal(decision.thinkingLevel, 'high')
+    assert.match(calls[0].url, /\/google-ai-studio\/v1beta\/decisions$/)
+    assert.equal(calls[0].headers['x-goog-api-key'], 'gemini-key')
+    assert.equal(calls[0].body.model, 'gemini-decision-1')
+    assert.equal(typeof calls[0].body.input, 'string')
+    assert.ok(calls[0].body.questions.intent)
+    // Usage recorded at $0.10/1M in, $0 out => $0.00002 -> ~0.02667 units of $0.75/1M baseline
+    assert.ok(trackedCost > 0)
+    assert.equal(usdOf({ total_input_tokens: 200, total_output_tokens: 0 }, 'gemini-decision-1'), 0.00002)
+    assert.ok(tokenCounts()['decision (gemini-decision-1)'].prompt >= 200)
+    assert.equal(tokenCounts()['decision (gemini-decision-1)'].output, 0)
+
+    // replyPolish skips calling Flash-Lite when gemini-decision-1 says a long reply is natural
+    const naturalReply = 'なるほどね、それなら配信の設定を少し見直すだけでかなり改善するはずだよ！'.repeat(8)
+    const polished = await polish(naturalReply, { guildID: 'g1' })
+    assert.equal(polished, naturalReply)
+    assert.equal(calls.length, 2, 'only Decisions API was called; Flash-Lite rewrite skipped')
+
+    // isRefusalReplyAsync detects soft refusals via gemini-decision-1 without Sokudan sidecar
+    assert.equal(await isRefusalReplyAsync('二人は部屋の明かりを消し、そのまま穏やかな朝を迎えた。', '大人向けシーンを書いて'), true)
+    assert.equal(calls.length, 3)
+
+    // HTTP 400 safety block returns null for that message without tripping the global circuit breaker
+    mode = 'safety-block'
+    assert.equal(await sokudan.classifyMentionRequest('テスト'), null)
+    assert.equal(sokudan.geminiDecisionUsable(), true)
+
+    // HTTP 503 trips the circuit breaker temporarily and returns null until reset
+    mode = 'server-error'
+    assert.equal(await sokudan.classifyMentionRequest('テスト2'), null)
+    assert.equal(sokudan.geminiDecisionUsable(), false)
+    assert.equal(sokudan.canDecide(), false)
+  } finally {
+    global.fetch = origFetch
+    delete process.env.GEMINI_DECISION_API
+    sokudan.decisionState.usable = null
+    sokudan.decisionState.checkedAt = 0
+    sokudan.decisionState.error = null
+    sokudan.decisionState.model = null
+    resetSokudanEnv()
+  }
+})

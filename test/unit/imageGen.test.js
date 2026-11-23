@@ -35,9 +35,13 @@ describe('generateCover', () => {
     }
   })
 
-  test('sends the source as an inline JPEG reference', async () => {
+  test('uses gemini-nano-banana-2.1 by default without thinking/safety/flex overrides and sends source as inline JPEG', async () => {
     const requests = installGemini([[{ inlineData: { mimeType: 'image/png', data: (await generated()).toString('base64') } }]])
     await generateCover({ title: 'A', source: Buffer.from('jpeg-bytes'), size: SIZES.eventCover })
+    assert.match(requests[0].url, /models\/gemini-nano-banana-2\.1:generateContent$/)
+    assert.equal(requests[0].body.generationConfig.thinkingConfig, undefined)
+    assert.equal(requests[0].body.safetySettings, undefined)
+    assert.equal(requests[0].body.serviceTier, undefined)
     assert.deepEqual(requests[0].body.contents[0].parts[1], { inlineData: { mimeType: 'image/jpeg', data: Buffer.from('jpeg-bytes').toString('base64') } })
     assert.deepEqual(requests[0].body.generationConfig.imageConfig, { aspectRatio: '21:9' })
   })

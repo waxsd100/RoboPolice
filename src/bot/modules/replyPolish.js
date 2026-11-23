@@ -97,7 +97,7 @@ const PERSONA_NOTE = '話し手固有の一人称・二人称・語尾・くだ�
 async function polish (text, { guildID = null, streamerPersona = false, styleProfile = null } = {}) {
   const before = String(text || '')
   if (!enabled() || !needsPolish(before, { streamerPersona })) return before
-  if (!AI_PATTERNS.test(before) && sokudan.isUsable()) {
+  if (!AI_PATTERNS.test(before) && sokudan.canDecide()) {
     const check = await sokudan.detectStiffAiReply(before)
     if (check && check.needsPolish === false) {
       global.logger?.info(`[POLISH]: Skipped polishing a natural reply in ${guildID} (sokudan score=${check.score?.toFixed?.(2) ?? 'n/a'}, p=${check.probability?.toFixed?.(2) ?? 'n/a'})`)

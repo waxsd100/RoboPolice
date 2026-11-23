@@ -265,7 +265,7 @@ describe('draft', () => {
     ])
     const result = await draft({ request: '詳しく解説して', channelName: 'general', guild, tools: deepTools, now: NOW })
     assert.equal(result.text, 'じっくり考えた答え')
-    assert.match(requests[1].url, /models\/gemini-4-argon:streamGenerateContent\?alt=sse$/)
+    assert.match(requests[1].url, /models\/gemini-4-hydrogen:streamGenerateContent\?alt=sse$/)
     assert.equal(requests[1].body.serviceTier, 'flex')
     assert.equal(requests[1].body.cachedContent, undefined)
     assert.deepEqual(requests[1].body.generationConfig.thinkingConfig, { thinkingLevel: 'high', includeThoughts: true })
@@ -292,7 +292,7 @@ describe('draft', () => {
     const result = await draft({ request: '計算して', channelName: 'general', guild, tools, now: NOW })
     assert.equal(result.text, '答え')
     assert.equal(requests.filter(r => r.body.serviceTier === 'flex').length, 4, 'tried and retried at Flex')
-    assert.equal(requests.filter(r => /gemini-4-argon/.test(r.url) && r.body.serviceTier === undefined).length, 0, 'never at the standard tier')
+    assert.equal(requests.filter(r => /gemini-4-hydrogen/.test(r.url) && r.body.serviceTier === undefined).length, 0, 'never at the standard tier')
     assert.match(requests.at(-1).url, /gemini-3\.8-flash/)
     assert.ok(!requests.at(-1).body.tools[0].functionDeclarations.some(d => d.name === 'think_deeper'), 'not handed over again')
   })
@@ -315,7 +315,7 @@ describe('draft', () => {
       assert.equal(result.text, '書いたよ')
       assert.equal(requests.filter(r => r.body.serviceTier === 'flex').length, 1, 'a 524 is not retried at Flex')
       assert.equal(requests.at(-1).body.serviceTier, undefined)
-      assert.match(requests.at(-1).url, /gemini-4-argon:streamGenerateContent/)
+      assert.match(requests.at(-1).url, /gemini-4-hydrogen:streamGenerateContent/)
     } finally {
       delete process.env.GEMINI_DEEP_FLEX_FALLBACK
     }
@@ -329,7 +329,7 @@ describe('draft', () => {
       const result = await draft({ request: '長い話を書いて', channelName: 'general', guild, tools, now: NOW })
       assert.equal(result.text, '書いたよ')
       assert.match(requests[0].url, /^https:\/\/ai-gateway\.example\.com\/google-ai-studio\/v1beta\/models\/gemini-3\.8-flash:/)
-      assert.match(requests[1].url, /^https:\/\/gateway\.ai\.cloudflare\.com\/v1\/acct\/gw\/google-ai-studio\/v1beta\/models\/gemini-4-argon:/)
+      assert.match(requests[1].url, /^https:\/\/gateway\.ai\.cloudflare\.com\/v1\/acct\/gw\/google-ai-studio\/v1beta\/models\/gemini-4-hydrogen:/)
       assert.equal(requests[1].body.serviceTier, 'flex')
       process.env.GEMINI_FLEX = 'false'
       const standard = installGemini([[call('think_deeper', { reason: '長文' })], [call('submit_chat_reply', { text: '書いたよ' })]])
@@ -1538,18 +1538,15 @@ describe('explicit cache and thinking', () => {
     assert.equal(fallbackToGemini.text, 'Geminiが代わりに答えるよ')
   })
 
-  test('gemini-4-argon (deep) caches its systemInstruction and tools via cachedPrefix and reuses it across turns', async () => {
+  test('gemini-4 models skip explicit cachedContents (implicit cache only) and omit temperature across turns', async () => {
     const requests = []
     let turn = 0
     global.fetch = async (url, init = {}) => {
       const method = init.method || 'GET'
       const body = init.body ? JSON.parse(init.body) : null
       requests.push({ url, method, body })
-      if (method === 'GET' && /\/cachedContents\?/.test(url)) {
-        return { ok: true, json: async () => ({ cachedContents: [] }) }
-      }
       if (url.endsWith('/cachedContents')) {
-        return { ok: true, json: async () => ({ name: `cachedContents/deep-${requests.length}`, expireTime: new Date(Date.now() + 3600e3).toISOString() }) }
+        throw new Error('Gemini 4 must not call cachedContents (HTTP 400 in production)')
       }
       turn++
       if (turn === 1) {
@@ -1564,15 +1561,14 @@ describe('explicit cache and thinking', () => {
     const res = await draft({ request: '--deep 詳しく解説して', channelName: 'general', guild, tools: deepTools, now: NOW })
     assert.equal(res.text, '深い考察の答え')
     const cacheCreates = requests.filter(r => r.url.endsWith('/cachedContents'))
-    assert.equal(cacheCreates.length, 1, 'cached once for gemini-4-argon and reused on step 2')
-    assert.equal(cacheCreates[0].body.model, 'models/gemini-4-argon')
-    assert.ok(!cacheCreates[0].body.tools[0].functionDeclarations.some(d => d.name === 'think_deeper'))
-    const deepCalls = requests.filter(r => /models\/gemini-4-argon:streamGenerateContent/.test(r.url))
+    assert.equal(cacheCreates.length, 0, 'explicit cachedContents is skipped for Gemini 4 models')
+    const deepCalls = requests.filter(r => /models\/gemini-4-hydrogen:streamGenerateContent/.test(r.url))
     assert.equal(deepCalls.length, 2)
     for (const c of deepCalls) {
-      assert.match(c.body.cachedContent, /^cachedContents\/deep-/)
-      assert.equal(c.body.systemInstruction, undefined)
-      assert.equal(c.body.tools, undefined)
+      assert.equal(c.body.cachedContent, undefined)
+      assert.ok(c.body.systemInstruction)
+      assert.ok(c.body.tools)
+      assert.equal(c.body.generationConfig.temperature, undefined, 'temperature omitted on Gemini 4')
     }
   })
 
@@ -2028,5 +2024,50 @@ describe('uncensored thinking models and SSE streaming', () => {
     localBodies.length = 0
     await draft({ request: '--2 もう一度やあ', channelName: 'general', streamerPersona: true, guild, tools: quietTools, now: NOW })
     assert.match(localBodies[1].messages[0].content, /## 運営者が設定したキャラクター\n語尾は「だぜ」/)
+  })
+
+  test('gemini-4 directives (--hydrogen/--neon/--carbon/--argon) omit sampling params and clamp minimal thinking to low; Nano Banana skips text overrides', async () => {
+    const { thinkingConfig, callGemini, resolveTaskConfig, parseModelDirective } = require('../../src/bot/modules/eventDrafter')
+    assert.deepEqual(parseModelDirective('--hydrogen 教えて'), { directive: 'hydrogen', text: '教えて' })
+    assert.deepEqual(parseModelDirective('--neon 詳しく'), { directive: 'neon', text: '詳しく' })
+    assert.deepEqual(parseModelDirective('--carbon 監査して'), { directive: 'carbon', text: '監査して' })
+    assert.deepEqual(thinkingConfig('gemini-4-hydrogen', { fallback: 'minimal' }), { thinkingConfig: { thinkingLevel: 'low' } })
+    assert.deepEqual(thinkingConfig('gemini-4-carbon', { fallback: 'minimal' }), { thinkingConfig: { thinkingLevel: 'low' } })
+
+    const { installReplyLengthStore } = require('../helpers/fakes')
+    installReplyLengthStore({}, {}, {}, {}, { [guild.id]: { model: 'gemini-4-neon', thinking: 'minimal' } })
+    try {
+      const cfg = await resolveTaskConfig('reply', guild.id)
+      assert.equal(cfg.model, 'gemini-4-neon')
+      assert.deepEqual(cfg.thinking, { thinkingConfig: { thinkingLevel: 'low' } })
+    } finally {
+      installReplyLengthStore()
+    }
+
+    // Bare greeting normally picks adaptive minimal, which must clamp to low for gemini-4-* and omit temperature.
+    const reqs = installGemini([
+      [call('submit_chat_reply', { text: 'やあ' })],
+      [call('submit_chat_reply', { text: 'ok' })],
+      [{ text: 'ok' }],
+      [{ text: 'img' }]
+    ])
+    await draft({ request: '--carbon やあ', channelName: 'general', guild, tools: quietTools, now: NOW })
+    assert.match(reqs[0].url, /models\/gemini-4-carbon:streamGenerateContent/)
+    assert.equal(reqs[0].body.generationConfig.temperature, undefined)
+    assert.equal(reqs[0].body.generationConfig.thinkingConfig.thinkingLevel, 'low')
+
+    // Nano Banana image directive is rejected in mention --model directives and callGemini leaves image requests untouched.
+    await draft({ request: '--model gemini-nano-banana-2.1 こんにちは', channelName: 'general', guild, tools: quietTools, now: NOW })
+    assert.match(reqs[1].url, /models\/gemini-3\.8-flash:streamGenerateContent/)
+
+    await callGemini('gemini-4-neon', { contents: [], generationConfig: { temperature: 0.4, topP: 0.9, topK: 40, responseMimeType: 'application/json' } })
+    assert.equal(reqs[2].body.generationConfig.temperature, undefined)
+    assert.equal(reqs[2].body.generationConfig.topP, undefined)
+    assert.equal(reqs[2].body.generationConfig.topK, undefined)
+    assert.equal(reqs[2].body.generationConfig.responseMimeType, 'application/json')
+
+    await callGemini('gemini-nano-banana-2.1', { contents: [] }, { purpose: 'image', flex: true })
+    assert.equal(reqs[3].body.generationConfig, undefined)
+    assert.equal(reqs[3].body.safetySettings, undefined)
   })
 })

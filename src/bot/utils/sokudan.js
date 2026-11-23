@@ -180,6 +180,109 @@ async function systemOne (state, questions, options = {}) {
   }
 }
 
+// Fallback System-1 decision backend using Google's Decisions API (`POST /v1beta/decisions`,
+// model `gemini-decision-1`: $0.10/1M input tokens, $0 output tokens) when the local Sokudan
+// sidecar is unconfigured or offline. Uses the exact same question schema (`noul`/`choice`/`score`).
+const DEFAULT_GEMINI_DECISION_MODEL = 'gemini-decision-1'
+const DECISION_RETRY_AFTER_MS = 5 * 60 * 1000
+const decisionState = {
+  usable: null,
+  checkedAt: 0,
+  error: null,
+  model: null
+}
+
+function geminiDecisionModel () {
+  return (process.env.GEMINI_DECISION_MODEL || DEFAULT_GEMINI_DECISION_MODEL).trim() || DEFAULT_GEMINI_DECISION_MODEL
+}
+
+function isDecisionApiEnabled () {
+  if (process.env.GEMINI_DECISION_API === 'false') return false
+  return require('./aiGateway').isGatewayConfigured()
+}
+
+function geminiDecisionUsable () {
+  if (!isDecisionApiEnabled()) return false
+  if (decisionState.usable === false && decisionState.checkedAt && Date.now() - decisionState.checkedAt < DECISION_RETRY_AFTER_MS) {
+    return false
+  }
+  return true
+}
+
+function canDecide () {
+  return isUsable() || geminiDecisionUsable()
+}
+
+function geminiDecisionHeaders () {
+  const headers = { 'Content-Type': 'application/json', ...require('./aiGateway').gatewayAuthHeaders() }
+  if (process.env.GEMINI_API_KEY) headers['x-goog-api-key'] = process.env.GEMINI_API_KEY
+  if (process.env.CLOUDFLARE_AI_GATEWAY_BYOK_ALIAS) headers['cf-aig-byok-alias'] = process.env.CLOUDFLARE_AI_GATEWAY_BYOK_ALIAS
+  return headers
+}
+
+async function callGeminiDecision (state, questions, options = {}) {
+  if (!geminiDecisionUsable()) return null
+  const cleaned = cleanState(state)
+  if (!cleaned) return null
+  const model = geminiDecisionModel()
+  const { gatewayURL } = require('./aiGateway')
+  const url = gatewayURL('google-ai-studio/v1beta/decisions')
+  const timeout = options.timeoutMs || Math.max(timeoutMs(), 5000)
+  try {
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: geminiDecisionHeaders(),
+      body: JSON.stringify({ model, input: cleaned, questions }),
+      signal: AbortSignal.timeout(timeout)
+    })
+    if (!res.ok) {
+      const body = await res.text().catch(() => '')
+      // 400 may be a safety block on one input; trip circuit breaker only on infrastructure/auth failures.
+      if (res.status >= 500 || res.status === 429 || res.status === 401 || res.status === 403 || res.status === 404) {
+        decisionState.usable = false
+        decisionState.checkedAt = Date.now()
+        decisionState.error = `HTTP ${res.status}`
+      }
+      global.logger?.debug?.(`[GEMINI-DECISION]: /v1beta/decisions returned HTTP ${res.status}: ${body.slice(0, 200)}`)
+      return null
+    }
+    const data = await res.json()
+    decisionState.usable = true
+    decisionState.checkedAt = Date.now()
+    decisionState.error = null
+    decisionState.model = model
+    if (data?.usage) {
+      const meta = {
+        promptTokenCount: data.usage.total_input_tokens ?? data.usage.promptTokenCount ?? 0,
+        candidatesTokenCount: data.usage.total_output_tokens ?? data.usage.candidatesTokenCount ?? 0,
+        cachedContentTokenCount: 0
+      }
+      const geminiUsage = require('./geminiUsage')
+      geminiUsage.recordTokens('decision', model, meta)
+      geminiUsage.addTokens(meta, { model })
+      require('./geminiLoad').record(require('./mentionQuota').costOf(meta, model))
+    }
+    return data && typeof data.answers === 'object' ? { ...data, source: 'gemini-decision' } : null
+  } catch (e) {
+    decisionState.usable = false
+    decisionState.checkedAt = Date.now()
+    decisionState.error = e.message
+    global.logger?.debug?.(`[GEMINI-DECISION]: /v1beta/decisions request failed, falling back: ${e.message}`)
+    return null
+  }
+}
+
+async function decideState (state, questions, options = {}) {
+  if (isUsable()) {
+    const sidecar = await systemOne(state, questions, options)
+    if (sidecar) return sidecar
+  }
+  if (geminiDecisionUsable()) {
+    return callGeminiDecision(state, questions, options)
+  }
+  return null
+}
+
 function scoreToThinkingLevel (score, intent) {
   if (intent === 'event' || intent === 'forum') return 'high'
   if (!Number.isFinite(score)) return null
@@ -210,7 +313,7 @@ const STIFFNESS_QUESTIONS = () => prompts.questions('stiffness', {
 // - isStory (whether the request asks for a story or other fiction to be written, or continued)
 // - complexityScore (0..2) and thinkingLevel ('minimal' | 'low' | 'medium' | 'high')
 async function classifyMentionRequest (request, referencedText = '', channelContext = '') {
-  if (!isUsable()) return null
+  if (!canDecide()) return null
   const reqClean = cleanState(request, 900)
   if (!reqClean) return null
   const rawChan = cleanState(channelContext, 120)
@@ -228,7 +331,7 @@ async function classifyMentionRequest (request, referencedText = '', channelCont
     : reqClean
 
   // The questions are in prompts/sokudan/mention.md (with the notes on how to write them).
-  const data = await systemOne(state, MENTION_QUESTIONS())
+  const data = await decideState(state, MENTION_QUESTIONS())
   if (!data?.answers) return null
 
   const intentAns = data.answers.intent
@@ -258,14 +361,15 @@ async function classifyMentionRequest (request, referencedText = '', channelCont
     isStory: storyProb === null ? null : storyProb >= boolThreshold('SOKUDAN_STORY_THRESHOLD'),
     storyProb,
     complexityScore,
-    thinkingLevel: scoreToThinkingLevel(complexityScore, intent)
+    thinkingLevel: scoreToThinkingLevel(complexityScore, intent),
+    source: data.source || 'sokudan'
   }
 }
 
 // Use Case 2b: Screens a chat reply from Gemini to detect soft refusals or fade-to-morning
 // ("朝チュン") evasions on R18 requests when paraphrased wording evades regex.
 async function detectRefusalReply (text, requestText = '') {
-  if (!isUsable()) return { refused: false, probability: 0 }
+  if (!canDecide()) return { refused: false, probability: 0 }
   const cleaned = cleanState(text, MAX_STATE_CHARS)
   if ([...cleaned].length < MIN_REFUSAL_CHECK_CHARS) return { refused: false, probability: 0 }
   const reqClean = cleanState(requestText, 300)
@@ -274,7 +378,7 @@ async function detectRefusalReply (text, requestText = '') {
     ? `依頼メッセージ:\n${reqClean}\n\nBOTの返事:\n${replyClean}`
     : cleaned
 
-  const data = await systemOne(state, REFUSAL_QUESTIONS())
+  const data = await decideState(state, REFUSAL_QUESTIONS())
   const prob = Number.isFinite(data?.answers?.refusal?.noul) ? data.answers.refusal.noul : 0
   const threshold = boolThreshold('SOKUDAN_REFUSAL_THRESHOLD', DEFAULT_REFUSAL_THRESHOLD)
   return {
@@ -285,14 +389,14 @@ async function detectRefusalReply (text, requestText = '') {
 
 // Use Case 3: Evaluates whether a >= 250-char chat reply actually sounds stiff / AI-translated
 // before spending a Gemini round-trip in replyPolish.js.
-// Returns `null` when Sokudan is unconfigured or unreachable so replyPolish falls back to its
-// existing behavior.
+// Returns `null` when Sokudan and Gemini Decisions API are both unconfigured or unreachable so
+// replyPolish falls back to its existing behavior.
 async function detectStiffAiReply (text) {
-  if (!isUsable()) return null
+  if (!canDecide()) return null
   const cleaned = cleanState(text, MAX_STATE_CHARS)
   if (!cleaned) return null
 
-  const data = await systemOne(cleaned, STIFFNESS_QUESTIONS())
+  const data = await decideState(cleaned, STIFFNESS_QUESTIONS())
   if (!data?.answers) return null
 
   const score = Number.isFinite(data.answers.stiffness?.score) ? data.answers.stiffness.score : null
@@ -314,6 +418,11 @@ module.exports = {
   sokudanEndpoint,
   isConfigured,
   isUsable,
+  canDecide,
+  geminiDecisionModel,
+  isDecisionApiEnabled,
+  geminiDecisionUsable,
+  decisionState,
   sokudanState,
   checkConnection,
   startSokudanCheck,
@@ -321,6 +430,8 @@ module.exports = {
   boolThreshold,
   polishScoreThreshold,
   systemOne,
+  callGeminiDecision,
+  decideState,
   scoreToThinkingLevel,
   classifyMentionRequest,
   detectRefusalReply,
