@@ -69,10 +69,12 @@ test('reuses cached embeddings of recent messages across mentions, embedding onl
   assert.deepEqual(batches.map(b => b.requests.map(r => r.content.parts[0].text)), [], 'loaded from Redis without re-embedding messages, and the same query not embedded again')
 })
 
-test('nothing when nothing is close, the request says nothing, or it is turned off', async () => {
+test('nothing when nothing is close, the request says nothing, queryVector is null, or it is turned off', async () => {
   configureGateway()
-  installEmbeddingModel()
+  const batches = installEmbeddingModel()
   const getMessages = async () => [msg('1', 1, '今日の晩ごはん何にしよ')]
+  assert.deepEqual(await relatedRecent(mention, 'こんにちは', { now: NOW, getMessages, queryVector: async () => null }), [])
+  assert.equal(batches.length, 0, 'does not embed candidate channel messages when queryVector returns null')
   assert.deepEqual(await relatedRecent(mention, 'ホラーゲームのおすすめある？', { now: NOW, getMessages }), [])
   assert.deepEqual(await relatedRecent(mention, 'w', { now: NOW, getMessages: async () => { throw new Error('not read') } }), [])
   process.env.MENTION_RECENT_TOPICS = 'false'

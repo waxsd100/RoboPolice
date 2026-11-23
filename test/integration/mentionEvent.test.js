@@ -2178,6 +2178,33 @@ describe('mention → event / forum post (integration)', () => {
       }
     })
 
+    test('skips sokudan pre-routing on standalone trivial greetings and explicit model directives', async (t) => {
+      const sokudan = require('../../src/bot/utils/sokudan')
+      process.env.GEMINI_DECISION_API = 'true'
+      sokudan.decisionState.usable = null
+      sokudan.decisionState.checkedAt = 0
+      const classified = t.mock.method(sokudan, 'classifyMentionRequest', async () => ({
+        intent: 'chat', needsDeep: false, isR18: false, isStory: false, thinkingLevel: null, source: 'gemini-decision'
+      }))
+      try {
+        const { channel } = createChannel()
+        installGemini([
+          [call('submit_chat_reply', { text: 'おはよう！' })],
+          [call('submit_chat_reply', { text: '詳細計画です。' })],
+          [call('submit_chat_reply', { text: '面白かったよ！' })]
+        ])
+        await mentionEvent.handle(mention(channel, '<@BOT> こんにちは'))
+        await mentionEvent.handle(mention(channel, '<@BOT> --deep 複雑な計画を立てて'))
+        assert.equal(classified.mock.calls.length, 0, 'skips sokudan for greetings and explicit directives')
+        await mentionEvent.handle(mention(channel, '<@BOT> 昨日の配信どうだった？'))
+        assert.equal(classified.mock.calls.length, 1, 'calls sokudan once for normal mentions')
+      } finally {
+        process.env.GEMINI_DECISION_API = 'false'
+        sokudan.decisionState.usable = null
+        sokudan.decisionState.checkedAt = 0
+      }
+    })
+
     test('lets a CREATOR_IDS user make an event and a forum post without the permissions', async () => {
       process.env.CREATOR_IDS = `9, ${REQUESTER}`
       try {

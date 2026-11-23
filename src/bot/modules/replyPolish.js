@@ -50,7 +50,7 @@ function instruction () {
 }
 
 function enabled () {
-  return process.env.REPLY_POLISH !== 'false' && !!instruction()
+  return process.env.REPLY_POLISH === 'true' && !!instruction()
 }
 
 // What a Discord reply must keep for the rewrite to be used: mentions, channel links, custom

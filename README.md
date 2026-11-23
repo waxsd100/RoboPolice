@@ -123,7 +123,7 @@ BOT がサーバーに入った瞬間から、すべてのイベントを記録�
 - なりきるのは口調やキャラクター性のみであり、保存データにない配信予定・告知・約束などを配信者本人の発言として捏造することはありません。`CHAT_PERSONA`で運営者独自のキャラクター補足を設定することもできます。
 - イベントやフォーラム投稿を作ろうとしたものの情報が足りない場合（日時がない、リンク先が無関係など）は、雑談返信ではなくエラー（`⚠️ 作成できませんでした`）として返します。
 - 成人向け（R18）の話題や、Google Geminiが安全性ポリシー（`PROHIBITED_CONTENT`、`SAFETY`など）で回答を拒否した場合は、自動的に（または`hand_over_r18`ツール経由で）OpenAI互換の無検閲モデル（`UNCENSORED_MODEL`、SSEストリーミング対応）へ処理を引き継いで回答します。
-- `REPLY_POLISH`が有効（既定）のとき、AI特有の硬い表現や記号（「重要なのは」「——」など）が含まれる返信や250文字以上の長文返信は、`GEMINI_LIGHT_MODEL`（思考レベル`minimal`）と[yomiyasu-pocket](https://github.com/nanaism/yomiyasu-pocket)を使って一度だけ自然な日本語に整えられます（短文や問題のない返信ではスキップしてトークンと応答時間を節約します）。
+- `REPLY_POLISH=true`のとき、AI特有の硬い表現や記号（「重要なのは」「——」など）が含まれる返信や250文字以上の長文返信は、`GEMINI_LIGHT_MODEL`（思考レベル`minimal`）と[yomiyasu-pocket](https://github.com/nanaism/yomiyasu-pocket)を使って一度だけ自然な日本語に整えられます（既定はオフで2回目のAI呼び出しを省略します）。
 
 ### 会話の継続と直近の話題
 
@@ -182,9 +182,9 @@ BOT がサーバーに入った瞬間から、すべてのイベントを記録�
 ### 配信・新着動画のDiscordイベント自動登録
 
 `/youtube liveevents enabled:True`を有効にすると、YouTubeの配信枠や新着動画（ショート動画を除く）をDiscordの予定イベントとして自動登録・更新・開始・終了します（`src/bot/modules/liveWatcher.js`）。
-- イベント説明文の先頭には、タイトル・概要欄・サムネイルからGeminiが生成した2〜3文の紹介文が付きます（`LIVE_EVENT_AI_DESCRIPTION=false`で無効化可能）。
-- ゲーム配信の場合はプレイするゲーム名を特定し、Steamストアページまたは公式サイト・各ストアページのリンクを自動で添えます（`src/bot/modules/gameLinks.js`、`GAME_LINKS=false`で無効化可能）。またチャット内では`find_game`ツールでDiscordのゲームメンション（`<@$APPLICATION_ID>`）も利用できます。
-- 配信終了後は30分後からアーカイブ動画の自動要約を試行し、メンションで配信内容を質問された際に答えられるようにします（`LIVE_ARCHIVE_SUMMARY=false`で無効化可能）。
+- `LIVE_EVENT_AI_DESCRIPTION=true`を設定すると、イベント説明文の先頭にタイトル・概要欄・サムネイルからGeminiが生成した2〜3文の紹介文が付きます（既定はオフで、タイトル・概要欄・サムネイル・URLのみを使ってAI呼び出しを行いません）。
+- ゲーム配信の場合は`LIVE_EVENT_AI_DESCRIPTION=true`（かつ`GAME_LINKS`が`false`でない場合）にプレイするゲーム名を特定し、Steamストアページまたは公式サイト・各ストアページのリンクを自動で添えます（`src/bot/modules/gameLinks.js`）。またチャット内では`find_game`ツールでDiscordのゲームメンション（`<@$APPLICATION_ID>`）も利用できます。
+- 配信終了後はYouTube字幕などの知識ソースのみを同期し、アーカイブ動画の自動要約は既定でオフです（`LIVE_ARCHIVE_SUMMARY=true`にすると終了30分後から自動で要約・保存します。通常は`/youtube summarize`やメンションでの要約依頼時にのみ動画AI要約を実行します）。
 
 ### 意味検索（ベクトル検索 / Embeddings）
 
@@ -302,10 +302,11 @@ rm robopolice-key.json
 | `GEMINI_STREAM` | 任意（既定: オン）。Cloudflareの100秒タイムアウト（HTTP 524）を回避するため、メンション応答を`streamGenerateContent`でストリーミング受信します。 |
 | `GEMINI_EXPLICIT_CACHE` | 任意（既定: オン）。`false`にするとシステム指示とツールの明示的キャッシュ（`cachedContents`）を無効化します（Gemini 4系は仕様上自動で暗黙キャッシュのみを使用します）。 |
 | `UNCENSORED_API_URL`, `UNCENSORED_GATEWAY_PROVIDER`, `UNCENSORED_API_KEY`, `UNCENSORED_MODEL` | 任意。R18の話題やGeminiが安全性フィルタで拒否した際に引き継ぐOpenAI互換エンドポイント設定（既定モデル: `xtools-at/DeepSeek-V4-Pro-Qwen3.5-9B-UNCENSORED-heretic`）。 |
-| `SOKUDAN_URL`, `SOKUDAN_API_KEY`, `SOKUDAN_TIMEOUT_MS`, `SOKUDAN_BOOL_THRESHOLD`, `GEMINI_DECISION_API`, `GEMINI_DECISION_MODEL` | 任意。軽量日本語判断モデル [`GeneLab/sokudan-ja-310m`](https://huggingface.co/GeneLab/sokudan-ja-310m)（`Dockerfile.sokudan` / `docker-compose.yml`）のURL設定。未設定・オフライン時は自動でGoogle **Decisions API**（`gemini-decision-1`、入力$0.10/1M・**出力$0**、`GEMINI_DECISION_API=false`で無効化）へフォールバックし、①メンションの事前ルーティング（意図分類・長文/推論の直接`GEMINI_DEEP_MODEL`振り分け・婉曲的なR18依頼の検知・思考レベル調整）、②R18ソフト拒否/朝チュン検知の強化、③`REPLY_POLISH`（250文字以上の返信）で既に自然な日本語の返信に対するGemini推敲スキップを行います。 |
-| `REPLY_POLISH` | 任意（既定: オン）。AI特有の表現・記号を含む返信や250文字以上の返信を`GEMINI_LIGHT_MODEL`と`yomiyasu-pocket`で自然な日本語に整えます。 |
+| `SOKUDAN_URL`, `SOKUDAN_API_KEY`, `SOKUDAN_TIMEOUT_MS`, `SOKUDAN_BOOL_THRESHOLD`, `GEMINI_DECISION_API`, `GEMINI_DECISION_MODEL` | 任意。軽量日本語判断モデル [`GeneLab/sokudan-ja-310m`](https://huggingface.co/GeneLab/sokudan-ja-310m)（`Dockerfile.sokudan` / `docker-compose.yml`）のURL設定。`SOKUDAN_URL`設定時は①メンション事前ルーティング、②R18ソフト拒否/朝チュン検知強化、③`REPLY_POLISH`判定を行います（既定では有料の`GEMINI_DECISION_API`フォールバックはオフで、`GEMINI_DECISION_API=true`にした場合のみGoogle **Decisions API** `gemini-decision-1` 入力\$0.10/1M・出力\$0を使用）。 |
+| `REPLY_POLISH` | 任意（既定: オフ）。`REPLY_POLISH=true`にすると、AI特有の表現・記号を含む返信や250文字以上の返信を`GEMINI_LIGHT_MODEL`と`yomiyasu-pocket`で自然な日本語に整えます。 |
+| `SERVER_RULES_AI` | 任意（既定: オフ）。サーバーのルールチャンネル探索で、Discord公式ルールチャンネル設定やチャンネル名（`#ルール`/`#rules`）から特定できないときにGeminiへ推測させる場合は`true`。 |
 | `MENTION_RECENT_TOPICS`, `MENTION_RECENT_MESSAGES`, `MENTION_RECENT_HOURS` | 任意。メンション時に同じチャンネルの直近の関連発言（既定: 過去12時間の最新50件から最大8件）を文脈として渡します。 |
-| `YOUTUBE_API_KEY`, `YOUTUBE_CHANNELS`, `YOUTUBE_AUTO_SYNC_MINUTES`, `YOUTUBE_LIVE_POLL_SECONDS`, `YOUTUBE_WEBSUB_URL`, `YOUTUBE_WEBSUB_SECRET`, `YOUTUBE_GATEWAY_PROVIDER` | 任意。YouTubeチャンネルの同期、動画要約、配信・新着動画イベント自動登録、WebSubプッシュ通知に関する設定。 |
+| `YOUTUBE_API_KEY`, `YOUTUBE_CHANNELS`, `YOUTUBE_AUTO_SYNC_MINUTES`, `YOUTUBE_LIVE_POLL_SECONDS`, `YOUTUBE_WEBSUB_URL`, `YOUTUBE_WEBSUB_SECRET`, `YOUTUBE_GATEWAY_PROVIDER`, `LIVE_EVENT_AI_DESCRIPTION`, `LIVE_ARCHIVE_SUMMARY` | 任意。YouTubeチャンネルの同期、動画要約、配信・新着動画イベント自動登録、WebSubプッシュ通知に関する設定。`LIVE_EVENT_AI_DESCRIPTION=true`で配信イベント開始時のAI紹介文生成・ゲーム検索、`LIVE_ARCHIVE_SUMMARY=true`で配信終了30分後のアーカイブ自動要約を有効化します（いずれも既定オフ）。 |
 | `VIDEO_SUMMARY_BATCH`, `VIDEO_SUMMARY_FLEX_SECONDS`, `VIDEO_SUMMARY_FLEX_FALLBACK`, `VIDEO_SUMMARY_CONCURRENCY`, `VIDEO_SUMMARY_TIMEOUT_MINUTES`, `VIDEO_SUMMARY_THINKING_LEVEL`, `VIDEO_SUMMARY_FPS` | 任意。動画要約のBatch API利用、Flex推論の対象秒数（既定300秒以下と最新動画）、Flex混雑・制限時の標準ティアへのフォールバック（既定オン）、同時実行数、タイムアウト、思考レベル、フレームレート（既定`0.2` fps）。 |
 | `TWITCH_CHANNELS`, `TWITCH_CLIENT_ID`, `TWITCH_CLIENT_SECRET`, `TWITCH_SYNC_MINUTES` | 任意。フォローするTwitchチャンネル（カンマ区切り）とAPI認証情報、同期周期（既定60分）。 |
 | `STEAM_ACCOUNTS`, `STEAM_API_KEY`, `STEAM_SYNC_MINUTES` | 任意。同期するSteamアカウント（既定: `nobaman`）、任意のSteam Web APIキー、同期周期（既定360分）。 |

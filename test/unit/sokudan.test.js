@@ -397,6 +397,7 @@ test('Use Case 3: replyPolish skips Gemini call when Sokudan judges a >=250-char
   const origFetch = global.fetch
   let geminiPolishCalls = 0
   try {
+    process.env.REPLY_POLISH = 'true'
     process.env.SOKUDAN_URL = sokudanSrv.url
     global.fetch = async (url, init) => {
       if (String(url).startsWith(sokudanSrv.url)) return origFetch(url, init)
@@ -425,6 +426,7 @@ test('Use Case 3: replyPolish skips Gemini call when Sokudan judges a >=250-char
     assert.match(out2, /^書き直された文章です。/)
   } finally {
     global.fetch = origFetch
+    delete process.env.REPLY_POLISH
     resetSokudanEnv()
     await sokudanSrv.close()
   }
@@ -913,6 +915,10 @@ test('Gemini Decisions API (gemini-decision-1) serves as System-1 fallback when 
   try {
     assert.equal(sokudan.isConfigured(), false)
     assert.equal(sokudan.isUsable(), false)
+    assert.equal(sokudan.canDecide(), false, 'Decisions API is off by default when SOKUDAN_URL and GEMINI_DECISION_API are unset')
+
+    process.env.GEMINI_DECISION_API = 'true'
+    process.env.REPLY_POLISH = 'true'
     assert.equal(sokudan.canDecide(), true)
 
     let trackedCost = 0
@@ -959,6 +965,7 @@ test('Gemini Decisions API (gemini-decision-1) serves as System-1 fallback when 
   } finally {
     global.fetch = origFetch
     delete process.env.GEMINI_DECISION_API
+    delete process.env.REPLY_POLISH
     sokudan.decisionState.usable = null
     sokudan.decisionState.checkedAt = 0
     sokudan.decisionState.error = null

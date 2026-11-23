@@ -54,6 +54,21 @@ test('without Gemini, or when the pick fails, channels named like rules that @ev
   assert.deepEqual((await serverRules.rulesChannels(guildWith(channels))).map(c => c.id), ['2'])
   serverRules.reset()
   t.mock.method(drafter, 'isConfigured', () => true)
+  t.mock.method(serverRules, 'pick', serverRules.askModel)
+  let asked = 0
+  t.mock.method(drafter, 'callGemini', async () => { asked++; return { parts: [{ text: '1' }] } })
+  delete process.env.SERVER_RULES_AI
+  assert.deepEqual((await serverRules.rulesChannels(guildWith(channels, '1'))).map(c => c.id), ['1', '2'])
+  assert.equal(asked, 0, 'does not call Gemini by default unless SERVER_RULES_AI=true')
+  serverRules.reset()
+  process.env.SERVER_RULES_AI = 'true'
+  try {
+    await serverRules.rulesChannels(guildWith(channels, '1'))
+    assert.equal(asked, 1, 'calls Gemini when SERVER_RULES_AI=true')
+  } finally {
+    delete process.env.SERVER_RULES_AI
+  }
+  serverRules.reset()
   let tries = 0
   const failing = async () => { tries++; throw new Error('HTTP 503') }
   assert.deepEqual((await serverRules.rulesChannels(guildWith(channels), { pick: failing, now: 0 })).map(c => c.id), ['2'])

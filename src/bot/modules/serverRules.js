@@ -76,9 +76,20 @@ async function askModel (guild, channels) {
   return [...new Set(answer.match(/\d{15,21}/g) || [])].filter(id => known.has(id)).slice(0, MAX_CHANNELS)
 }
 
-// The server's rules channels, the one set in Discord first. Resolves to channels.
-async function rulesChannels (guild, { now = Date.now(), pick = module.exports.pick } = {}) {
+// The server's rules channels, the one set in Discord first. Uses Discord's configured
+// rulesChannelID and channel-name matching (byName) without calling AI by default; set
+// SERVER_RULES_AI=true to scan non-matching channels with the light model.
+async function rulesChannels (guild, options = {}) {
+  const { now = Date.now() } = options
+  const hasExplicitPick = Object.prototype.hasOwnProperty.call(options, 'pick')
+  const pick = hasExplicitPick ? options.pick : module.exports.pick
   const channels = candidates(guild)
+  if (!hasExplicitPick && process.env.SERVER_RULES_AI !== 'true') {
+    const ids = byName(channels)
+    const set = guild.rulesChannelID && guild.channels?.get(guild.rulesChannelID)
+    const combined = [...new Set([...(set ? [set.id] : []), ...ids])].slice(0, MAX_CHANNELS)
+    return combined.map(id => guild.channels.get(id)).filter(Boolean)
+  }
   const signature = signatureOf(channels)
   let known = picks.get(guild.id)
   if (!known) {
