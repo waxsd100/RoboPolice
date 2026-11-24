@@ -1,6 +1,6 @@
 const Eris = require('eris')
 const { randomUUID: uuidv4 } = require('crypto')
-const { draft, revise, isConfigured, isUncensoredUsable, isUncensoredDirective, rememberThreadModel, r18Route, STORY_REQUEST_PATTERN, ENTITY_TYPES } = require('./eventDrafter')
+const { draft, revise, isConfigured, isUncensoredUsable, isUncensoredDirective, rememberThreadModel, r18Route, STORY_REQUEST_PATTERN, ENTITY_TYPES, parseModelDirective } = require('./eventDrafter')
 const { createTools, describeServer, worthSearching, withServerEmojis, sharedOwnerEmojis, withServerChannels, channelTheme, SHORT_TOPIC_PROMPT, StopDrafting } = require('./eventTools')
 const { embedQuery } = require('../utils/embeddings')
 const sokudan = require('../utils/sokudan')
@@ -725,7 +725,7 @@ async function handle (message) {
       // Started together, as none needs another: what was just said in the channel, the emojis
       // shared from the owner's servers, and how sokudan reads the request (asked once here and
       // passed on to draft; null when it is not set up or gave no answer, and the patterns decide).
-      const recentPromise = (edit || referenced)
+      const recentPromise = (edit || referenced || !worthSearching(request))
         ? Promise.resolve([])
         : relatedRecent(message, request, { queryVector }).catch(e => {
           global.logger.warn(`Could not read the recent talk in ${message.channel.id}: ${e.message}`)
@@ -734,7 +734,10 @@ async function handle (message) {
       const emojisPromise = streamerPersona !== false
         ? sharedOwnerEmojis(guild, message.channel).catch(() => [])
         : Promise.resolve([])
-      const decision = sokudan.canDecide()
+      const explicitDirective = Boolean(parseModelDirective(request).directive)
+      const trivialGreeting = !referenced && !attached.length && !embedded.length &&
+        /^(?:おはよう(?:ございます)?|こんにちは|こんばんは|おやすみ(?:なさい)?|ハロー|草+|w+|lol|お疲れ様?(?:です)?|ありがとう(?:ございます)?)[!！。.~〜]*$/i.test(request.trim())
+      const decision = (sokudan.canDecide() && !edit && !explicitDirective && !trivialGreeting)
         ? await sokudan.classifyMentionRequest(request, referenced?.text, theme).catch(() => null)
         : null
       const asksForStory = typeof decision?.isStory === 'boolean' ? decision.isStory : STORY_REQUEST_PATTERN.test(request)

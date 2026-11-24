@@ -197,7 +197,7 @@ function geminiDecisionModel () {
 }
 
 function isDecisionApiEnabled () {
-  if (process.env.GEMINI_DECISION_API === 'false') return false
+  if (process.env.GEMINI_DECISION_API !== 'true') return false
   return require('./aiGateway').isGatewayConfigured()
 }
 

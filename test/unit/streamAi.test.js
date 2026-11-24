@@ -21,11 +21,14 @@ const video = (extra = {}) => ({
 
 const GATEWAY = ['CLOUDFLARE_ACCOUNT_ID', 'CLOUDFLARE_AI_GATEWAY_ID', 'GEMINI_API_KEY']
 afterEach(() => {
-  for (const name of [...GATEWAY, 'LIVE_EVENT_AI_DESCRIPTION', 'LIVE_ARCHIVE_SUMMARY']) delete process.env[name]
+  for (const name of [...GATEWAY, 'LIVE_EVENT_AI_DESCRIPTION', 'LIVE_ARCHIVE_SUMMARY', 'YOUTUBE_API_KEY']) delete process.env[name]
 })
 
 describe('describeStream', () => {
-  beforeEach(() => configureGateway())
+  beforeEach(() => {
+    configureGateway()
+    process.env.LIVE_EVENT_AI_DESCRIPTION = 'true'
+  })
 
   test('asks Gemini with the title, the description and the thumbnail, for a line and the games played', async (t) => {
     const requests = installGemini([[{ text: JSON.stringify({ blurb: 'ゲストと一緒にマイクラで城を建てる配信。（20文字）', games: [{ name: 'マインクラフト', name_en: 'Minecraft' }, { name: ' ' }] }) }]])
@@ -40,14 +43,19 @@ describe('describeStream', () => {
     assert.deepEqual(image, { inlineData: { mimeType: 'image/jpeg', data: Buffer.from('jpeg').toString('base64') } })
   })
 
-  test('gives nothing when Gemini fails, when turned off, or without a gateway', async (t) => {
+  test('gives nothing by default, when Gemini fails, when turned off, or without a gateway', async (t) => {
     t.mock.method(global.logger, 'warn', () => {})
     installGemini([new Error('boom')])
     assert.equal(await describeStream(video()), null)
-    process.env.LIVE_EVENT_AI_DESCRIPTION = 'false'
-    const requests = installGemini([])
-    assert.equal(await describeStream(video()), null)
+
     delete process.env.LIVE_EVENT_AI_DESCRIPTION
+    const requests = installGemini([])
+    assert.equal(await describeStream(video()), null, 'off by default without LIVE_EVENT_AI_DESCRIPTION=true')
+
+    process.env.LIVE_EVENT_AI_DESCRIPTION = 'false'
+    assert.equal(await describeStream(video()), null)
+
+    process.env.LIVE_EVENT_AI_DESCRIPTION = 'true'
     for (const name of GATEWAY) delete process.env[name]
     assert.equal(await describeStream(video()), null)
     assert.equal(requests.length, 0)
@@ -55,20 +63,98 @@ describe('describeStream', () => {
 })
 
 describe('the event of a stream', () => {
-  test('starts with what the AI says and the games\' pages, then the stream\'s own description and its URL', async (t) => {
+  test('makes zero Gemini calls by default without LIVE_EVENT_AI_DESCRIPTION=true', async (t) => {
     configureGateway()
+    delete process.env.LIVE_EVENT_AI_DESCRIPTION
+    t.mock.method(urlFetcher, 'fetchImage', async () => { throw new Error('no thumbnail here') })
+    const requests = installGemini([])
+    const calls = []
+    global.bot = { requestHandler: { request: async (method, url, auth, body) => { calls.push(body); return { id: 'EV0' } } } }
+    try {
+      await liveWatcher.follow({ id: '100' }, video(), undefined, new Date('2026-11-01T00:00:00Z'))
+      assert.equal(requests.length, 0)
+      assert.equal(calls[0].description, '今日はみんなで城づくり。ゲスト：〇〇さん\n\nhttps://www.youtube.com/watch?v=live0000001')
+    } finally {
+      delete global.bot
+    }
+  })
+
+  test('with LIVE_EVENT_AI_DESCRIPTION=true, starts with what the AI says and the games\' pages, then the stream\'s own description and its URL', async (t) => {
+    configureGateway()
+    process.env.LIVE_EVENT_AI_DESCRIPTION = 'true'
     t.mock.method(urlFetcher, 'fetchImage', async () => { throw new Error('no thumbnail here') })
     t.mock.method(gameLinks, 'linksFor', async () => [{ name: 'マインクラフト', url: 'https://store.steampowered.com/app/1/' }])
     installGemini([[{ text: JSON.stringify({ blurb: 'マイクラで城を建てる配信。', games: [{ name: 'マインクラフト' }] }) }]])
     const calls = []
     global.bot = { requestHandler: { request: async (method, url, auth, body) => { calls.push(body); return { id: 'EV1' } } } }
-    await liveWatcher.follow({ id: '100' }, video(), undefined, new Date('2026-11-01T00:00:00Z'))
-    assert.equal(calls[0].description, 'マイクラで城を建てる配信。\n\n🎮 マインクラフト: https://store.steampowered.com/app/1/\n\n今日はみんなで城づくり。ゲスト：〇〇さん\n\nhttps://www.youtube.com/watch?v=live0000001')
-    delete global.bot
+    try {
+      await liveWatcher.follow({ id: '100' }, video(), undefined, new Date('2026-11-01T00:00:00Z'))
+      assert.equal(calls[0].description, 'マイクラで城を建てる配信。\n\n🎮 マインクラフト: https://store.steampowered.com/app/1/\n\n今日はみんなで城づくり。ゲスト：〇〇さん\n\nhttps://www.youtube.com/watch?v=live0000001')
+    } finally {
+      delete global.bot
+    }
+  })
+
+  test('with LIVE_EVENT_AI_DESCRIPTION=true, checkChannel calls Gemini at most once per stream across multiple guilds', async (t) => {
+    configureGateway()
+    process.env.LIVE_EVENT_AI_DESCRIPTION = 'true'
+    process.env.YOUTUBE_API_KEY = 'k'
+    const UC = 'UC' + 'f'.repeat(22)
+    installYouTubeStore({
+      100: { channel: { channel_ref: '@x', channel_id: UC, live_events: true }, videos: [] },
+      200: { channel: { channel_ref: '@x', channel_id: UC, live_events: true }, videos: [] }
+    })
+    t.mock.method(urlFetcher, 'fetchImage', async () => { throw new Error('no thumbnail here') })
+    t.mock.method(gameLinks, 'linksFor', async () => [{ name: 'マインクラフト', url: 'https://store.steampowered.com/app/1/' }])
+
+    const origFetch = global.fetch
+    const geminiRequests = installGemini([[{ text: JSON.stringify({ blurb: 'マイクラで城を建てる配信。', games: [{ name: 'マインクラフト' }] }) }]])
+    const geminiFetch = global.fetch
+    global.fetch = async (url, init) => {
+      const s = String(url)
+      if (s.includes('/feeds/videos.xml')) return { ok: true, text: async () => '<yt:videoId>live0000001</yt:videoId>' }
+      if (s.includes('googleapis.com/youtube/v3/videos')) {
+        return {
+          ok: true,
+          json: async () => ({
+            items: [{
+              id: 'live0000001',
+              snippet: { title: '【マイクラ】城を建てる', description: '今日はみんなで城づくり', publishedAt: '2026-11-01T00:00:00Z', liveBroadcastContent: 'upcoming', thumbnails: {} },
+              liveStreamingDetails: { scheduledStartTime: '2099-01-01T00:00:00Z' }
+            }]
+          })
+        }
+      }
+      return geminiFetch(url, init)
+    }
+    const created = []
+    const makeGuild = id => ({ id, members: new Map([['BOT', { permissions: { has: p => p === 'manageEvents' } }]]) })
+    global.bot = {
+      user: { id: 'BOT' },
+      guilds: new Map([['100', makeGuild('100')], ['200', makeGuild('200')]]),
+      requestHandler: {
+        async request (method, url, auth, body) {
+          created.push({ url, description: body.description })
+          return { id: `EV${created.length}` }
+        }
+      }
+    }
+    try {
+      const changed = await liveWatcher.checkChannel(UC, ['100', '200'], new Date('2026-11-01T00:00:00Z'))
+      assert.equal(changed, 2)
+      assert.equal(created.length, 2)
+      assert.equal(geminiRequests.length, 1, 'Gemini is called once and shared across all watched guilds')
+      assert.match(created[0].description, /^マイクラで城を建てる配信。/)
+      assert.equal(created[0].description, created[1].description)
+    } finally {
+      global.fetch = origFetch
+      delete global.bot
+    }
   })
 
   test('with EVENT_GAME_MENTIONS=true, the games also get their Discord game mention', async (t) => {
     configureGateway()
+    process.env.LIVE_EVENT_AI_DESCRIPTION = 'true'
     process.env.EVENT_GAME_MENTIONS = 'true'
     try {
       t.mock.method(gameLinks, 'linksFor', async () => [{ name: 'エーペックスレジェンズ', url: 'https://store.steampowered.com/app/1172470/' }])
@@ -101,7 +187,8 @@ describe('summarizing a stream\'s archive', () => {
     store = installYouTubeStore({ 100: { channel: { channel_ref: '@x', channel_id: 'UC' + 'f'.repeat(22) }, videos: [] } })
   })
 
-  test('a completed stream is summarized like any video, once', async (t) => {
+  test('when LIVE_ARCHIVE_SUMMARY=true, a completed stream is summarized like any video, once', async (t) => {
+    process.env.LIVE_ARCHIVE_SUMMARY = 'true'
     t.mock.method(global.logger, 'info', () => {})
     await require('../../src/db/interfaces/postgres/youtube').saveLiveEvent('100', 'live0000001', { eventID: 'EV1', status: 'completed' })
     const requests = installGemini([[{ text: '配信の要約' }]])
@@ -113,6 +200,7 @@ describe('summarizing a stream\'s archive', () => {
   })
 
   test('a failure counts as a try, and three tries are the most', async (t) => {
+    process.env.LIVE_ARCHIVE_SUMMARY = 'true'
     t.mock.method(global.logger, 'warn', () => {})
     await require('../../src/db/interfaces/postgres/youtube').saveLiveEvent('100', 'live0000002', { eventID: 'EV2', status: 'completed' })
     installGemini([new Error('not ready'), new Error('not ready'), new Error('not ready')])
@@ -123,10 +211,12 @@ describe('summarizing a stream\'s archive', () => {
     assert.equal(requests.length, 0)
   })
 
-  test('nothing is summarized when it is turned off', async () => {
+  test('nothing is summarized by default or when turned off', async () => {
     await require('../../src/db/interfaces/postgres/youtube').saveLiveEvent('100', 'live0000003', { eventID: 'EV3', status: 'completed' })
-    process.env.LIVE_ARCHIVE_SUMMARY = 'false'
+    delete process.env.LIVE_ARCHIVE_SUMMARY
     const requests = installGemini([])
+    assert.equal(await liveWatcher.summarizeArchives('100'), null, 'off by default')
+    process.env.LIVE_ARCHIVE_SUMMARY = 'false'
     assert.equal(await liveWatcher.summarizeArchives('100'), null)
     assert.equal(requests.length, 0)
   })

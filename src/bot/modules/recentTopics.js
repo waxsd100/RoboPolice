@@ -100,10 +100,9 @@ async function relatedRecent (message, request, {
       }
     }
   }
-  const [query, fresh] = await Promise.all([
-    typeof queryVector === 'function' ? queryVector() : embedQuery(request),
-    missingTexts.length ? embed(missingTexts) : Promise.resolve([])
-  ])
+  const query = await (typeof queryVector === 'function' ? queryVector() : embedQuery(request))
+  if (!query) return []
+  const fresh = missingTexts.length ? await embed(missingTexts) : []
   for (let i = 0; i < missingKeys.length; i++) rememberVector(missingKeys[i], fresh[i])
   if (missingKeys.length) {
     await aiCache.mset(missingKeys.map((k, i) => [redisKeyOf(k), toBase64(fresh[i])]), REDIS_TTL_SECONDS)

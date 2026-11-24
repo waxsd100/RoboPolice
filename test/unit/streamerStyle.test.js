@@ -518,25 +518,30 @@ describe('streamerStyle synthesis, DPRF refinement, YouTube spoken corpus, Postg
 
   test('replyPolish raises length threshold for streamerPersona and passes style profile when polishing AI-isms', async () => {
     configureGateway()
-    const casual300 = 'いやそれ俺も昨日やってたんだけどマジで時間が溶けるんだよなw '.repeat(11)
-    assert.ok([...casual300].length >= 250 && [...casual300].length < 600)
-    assert.equal(needsPolish(casual300, { streamerPersona: false }), true)
-    assert.equal(needsPolish(casual300, { streamerPersona: true }), false)
+    process.env.REPLY_POLISH = 'true'
+    try {
+      const casual300 = 'いやそれ俺も昨日やってたんだけどマジで時間が溶けるんだよなw '.repeat(11)
+      assert.ok([...casual300].length >= 250 && [...casual300].length < 600)
+      assert.equal(needsPolish(casual300, { streamerPersona: false }), true)
+      assert.equal(needsPolish(casual300, { streamerPersona: true }), false)
 
-    const aiSounding = '重要なのは、まず最初の街の道路網をしっかり整理すること——つまり高速道路の渋滞対策が一番大事なんだよなw'
-    assert.equal(needsPolish(aiSounding, { streamerPersona: true }), true)
+      const aiSounding = '重要なのは、まず最初の街の道路網をしっかり整理すること——つまり高速道路の渋滞対策が一番大事なんだよなw'
+      assert.equal(needsPolish(aiSounding, { streamerPersona: true }), true)
 
-    const calls = installGemini([[{ text: 'まず最初の街の道路をしっかり整理して、高速道路の渋滞をなくすのが一番大事なんだよなw' }]])
-    const out = await polish(aiSounding, {
-      streamerPersona: true,
-      styleProfile: '- 一人称は「俺」、語尾は「〜なんだよなw」'
-    })
-    assert.equal(out, 'まず最初の街の道路をしっかり整理して、高速道路の渋滞をなくすのが一番大事なんだよなw')
-    const sys = calls[0].body.systemInstruction.parts[0].text
-    assert.match(sys, /標準的な書き言葉に均さないこと/)
-    assert.match(sys, /この話し手の文体の特徴（崩さないこと）/)
-    assert.match(sys, /一人称は「俺」/)
-    assert.match(sys, /原文にないキャラ語尾（「〜だぜ」など）や「草」「w」などの笑い表記を新しく足さないこと/)
+      const calls = installGemini([[{ text: 'まず最初の街の道路をしっかり整理して、高速道路の渋滞をなくすのが一番大事なんだよなw' }]])
+      const out = await polish(aiSounding, {
+        streamerPersona: true,
+        styleProfile: '- 一人称は「俺」、語尾は「〜なんだよなw」'
+      })
+      assert.equal(out, 'まず最初の街の道路をしっかり整理して、高速道路の渋滞をなくすのが一番大事なんだよなw')
+      const sys = calls[0].body.systemInstruction.parts[0].text
+      assert.match(sys, /標準的な書き言葉に均さないこと/)
+      assert.match(sys, /この話し手の文体の特徴（崩さないこと）/)
+      assert.match(sys, /一人称は「俺」/)
+      assert.match(sys, /原文にないキャラ語尾（「〜だぜ」など）や「草」「w」などの笑い表記を新しく足さないこと/)
+    } finally {
+      delete process.env.REPLY_POLISH
+    }
   })
 
   test('guards against daze/kusa caricature: unbiased salience, ending/no-laugh stats, collab/NPC filtering, few-shot gating, and stale DB invalidation', async (t) => {

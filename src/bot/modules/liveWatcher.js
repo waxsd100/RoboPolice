@@ -103,11 +103,11 @@ function eventDescription (video, blurb, games = []) {
   return `${head}${excerpt}${tail}`.trim()
 }
 
-async function createEvent (guild, video, start, { upload = false, length = DEFAULT_LENGTH_MS } = {}) {
+async function createEvent (guild, video, start, { upload = false, length = DEFAULT_LENGTH_MS, describe = describeStream } = {}) {
   const end = new Date(start.getTime() + length)
   const thumbnail = await thumbnailOf(video)
   // An upload is already out: its own description says what it is, with no AI line.
-  const described = upload ? null : await describeStream(video, thumbnail, guild.id)
+  const described = upload ? null : await describe(video, thumbnail, guild.id)
   const created = await request('POST', `/guilds/${guild.id}/scheduled-events`, {
     name: `${upload ? '📺 新着動画: ' : ''}${video.title}`.slice(0, 100),
     description: eventDescription(video, described?.blurb, described?.games),
@@ -134,17 +134,17 @@ const isFinished = e => /Cannot update a finished event|180000/.test(String(e?.m
 // Moves one stream's event along. `record` is what is stored for it (or undefined), `video` its
 // current state from YouTube (or null if it is gone). Resolves to the record to store, or null when
 // nothing changed.
-async function follow (guild, video, record, now = new Date()) {
+async function follow (guild, video, record, now = new Date(), { describe } = {}) {
   const state = !video ? 'gone' : video.liveStatus
   if (!record) {
     if (state === 'upcoming') {
       const wanted = video.scheduledStart ? new Date(video.scheduledStart) : now
       const start = new Date(Math.max(wanted.getTime(), now.getTime() + START_MARGIN_MS))
-      const { eventID, scheduledEnd } = await createEvent(guild, video, start)
+      const { eventID, scheduledEnd } = await createEvent(guild, video, start, { describe })
       return { eventID, status: 'scheduled', scheduledStart: video.scheduledStart, scheduledEnd }
     }
     if (state === 'live') {
-      const { eventID, scheduledEnd } = await createEvent(guild, video, new Date(now.getTime() + START_MARGIN_MS))
+      const { eventID, scheduledEnd } = await createEvent(guild, video, new Date(now.getTime() + START_MARGIN_MS), { describe })
       await setStatus(guild, eventID, 'active')
       return { eventID, status: 'active', scheduledStart: video.scheduledStart, scheduledEnd }
     }
@@ -251,8 +251,20 @@ async function checkChannel (channelID, guildIDs, now = new Date()) {
     if (ids.length === 0) return 0
     const videos = await fetchVideos(ids, process.env.YOUTUBE_API_KEY)
     await youtubeDB.upsertVideos(channelID, videos)
+    const streamDescriptions = new Map()
+    const describe = (video, thumbnail, guildID) => {
+      if (!video?.id) return describeStream(video, thumbnail, guildID)
+      if (!streamDescriptions.has(video.id)) {
+        streamDescriptions.set(video.id, describeStream(video, thumbnail, guildID).catch(e => {
+          streamDescriptions.delete(video.id)
+          throw e
+        }))
+      }
+      return streamDescriptions.get(video.id)
+    }
     let changed = 0
-    for (const guild of guilds) changed += await updateGuild(guild, ids, new Map(videos.map(v => [v.id, v])), recordsOf.get(guild.id), now)
+    const byId = new Map(videos.map(v => [v.id, v]))
+    for (const guild of guilds) changed += await updateGuild(guild, ids, byId, recordsOf.get(guild.id), now, { describe })
     return changed
   } finally {
     checkingChannels.delete(channelID)
@@ -274,7 +286,7 @@ function canMakeEvents (guild) {
 }
 
 // One server's events for the channel's videos `ids` (byId: their current state from YouTube).
-async function updateGuild (guild, ids, byId, records, now = new Date()) {
+async function updateGuild (guild, ids, byId, records, now = new Date(), { describe } = {}) {
   if (!canMakeEvents(guild)) return 0
   let changed = 0
   for (const id of ids) {
@@ -286,7 +298,7 @@ async function updateGuild (guild, ids, byId, records, now = new Date()) {
     try {
       const next = upload
         ? (record ? await endUpload(guild, video, record, now) : await announceUpload(guild, video, now))
-        : await follow(guild, video, record, now)
+        : await follow(guild, video, record, now, { describe })
       if (next) {
         await youtubeDB.saveLiveEvent(guild.id, id, next)
         changed++
@@ -320,12 +332,12 @@ async function watchedGuilds () {
 }
 
 // Once a stream is over and YouTube has its archive, what was said in it is summarized and stored
-// like any video summary, for the mention assistant (LIVE_ARCHIVE_SUMMARY=false turns it off).
+// like any video summary when LIVE_ARCHIVE_SUMMARY=true, for the mention assistant.
 // An archive is first tried 30 minutes after the stream ends, then hourly, at most three times.
 // One at a time per worker, in the background: a summary takes minutes and the poll must go on.
 let summarizingArchive = false
 function archiveSummariesEnabled () {
-  return isGatewayConfigured() && process.env.LIVE_ARCHIVE_SUMMARY !== 'false'
+  return isGatewayConfigured() && process.env.LIVE_ARCHIVE_SUMMARY === 'true'
 }
 
 async function summarizeGuildArchive (guildID) {

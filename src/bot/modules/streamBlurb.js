@@ -38,7 +38,7 @@ const SCHEMA = {
 }
 
 function enabled () {
-  return isGatewayConfigured() && process.env.LIVE_EVENT_AI_DESCRIPTION !== 'false'
+  return isGatewayConfigured() && process.env.LIVE_EVENT_AI_DESCRIPTION === 'true'
 }
 
 // { blurb, games: [{ name, url }] }: the line, and the pages of the games played (gameLinks.js), or

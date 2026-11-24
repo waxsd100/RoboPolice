@@ -2,7 +2,21 @@ const { test } = require('node:test')
 const assert = require('node:assert/strict')
 const fs = require('fs')
 const path = require('path')
-const { needsPolish, rejected, keptParts, keptNumbers, POCKET_DIR } = require('../../src/bot/modules/replyPolish')
+const { configureGateway, installGemini } = require('../helpers/fakes')
+const { polish, enabled, needsPolish, rejected, keptParts, keptNumbers, POCKET_DIR } = require('../../src/bot/modules/replyPolish')
+
+test('replyPolish is off by default and skips Gemini unless REPLY_POLISH=true', async () => {
+  configureGateway()
+  delete process.env.REPLY_POLISH
+  assert.equal(enabled(), false)
+  const calls = installGemini([])
+  const input = '重要なのは、まず最初の道路の渋滞を解消すること——つまりインターチェンジの配置が一番のカギだよ！'
+  assert.equal(await polish(input, { guildID: '1' }), input)
+  assert.equal(calls.length, 0)
+  process.env.REPLY_POLISH = 'true'
+  assert.equal(enabled(), true)
+  delete process.env.REPLY_POLISH
+})
 
 test('the vendored yomiyasu-pocket is there, with its version and licence', () => {
   const text = fs.readFileSync(path.join(POCKET_DIR, 'yomiyasu-pocket.txt'), 'utf8')
