@@ -2,22 +2,21 @@
 // (migrations/025_reply_length.sql, /replylength), whether it speaks as the streamer
 // (026_streamer_persona.sql, /persona), whether its replies end with the debug line
 // (029_debug_footer.sql, %debugfooter), its own mention token limits (031_guild_token_limits.sql,
-// %tokenlimit), its own model, thinking level and service tier per task (036_guild_reply_model.sql,
-// 040_guild_ai_models.sql, %replymodel), and what its moderators ask the assistant to keep to
-// (037_guild_assistant_rules.sql, /assistantrules).
+// %tokenlimit), and its own model, thinking level and service tier per task
+// (036_guild_reply_model.sql, 040_guild_ai_models.sql, %replymodel).
 const pool = require('../../clients/postgres')
 const { AI_TASKS } = require('../../../bot/utils/replyOptions')
 const { isOwnerGuild } = require('../../../bot/utils/priority')
 
 // { replyLength: 'long' | 'normal' | 'short' | null, streamerPersona: boolean, debugFooter: boolean,
 // tokenLimits: { '5h', week, flexAt, unlimited }, replyModel and replyThinking (null for the
-// default), aiModels: { [task]: { model, thinking, tier } }, assistantRules (text or null),
+// default), aiModels: { [task]: { model, thinking, tier } },
 // embeddings: { messages: boolean | null, emojis: boolean | null }, embedMessages: boolean,
 // embedEmojis: boolean, safety: { filter: boolean | null, uncensored: boolean | null },
 // safetyFilter: boolean, uncensoredR18: boolean }.
 async function getReplySettings (guildID) {
   const [rows, taskRows] = await Promise.all([
-    pool.query('SELECT reply_length, streamer_persona, debug_footer, token_limit_5h, token_limit_week, token_flex_at, token_unlimited, assistant_rules, embed_messages, embed_emojis, safety_filter, uncensored_r18 FROM guilds WHERE id = $1', [guildID]),
+    pool.query('SELECT reply_length, streamer_persona, debug_footer, token_limit_5h, token_limit_week, token_flex_at, token_unlimited, embed_messages, embed_emojis, safety_filter, uncensored_r18 FROM guilds WHERE id = $1', [guildID]),
     pool.query('SELECT task, model, thinking, tier FROM guild_ai_models WHERE guild_id = $1', [guildID])
   ])
   const row = rows.rows[0]
@@ -34,7 +33,6 @@ async function getReplySettings (guildID) {
     replyModel: aiModels.reply?.model || null,
     replyThinking: aiModels.reply?.thinking || null,
     aiModels,
-    assistantRules: row?.assistant_rules || null,
     embeddings: {
       messages: row?.embed_messages ?? null,
       emojis: row?.embed_emojis ?? null
@@ -160,10 +158,4 @@ async function setReplyModel (guildID, which, value) {
   return setTaskModel(guildID, 'reply', which, value)
 }
 
-// Sets what the server's moderators ask the assistant to keep to; null for nothing.
-async function setAssistantRules (guildID, text) {
-  await ensureGuild(guildID)
-  await pool.query('UPDATE guilds SET assistant_rules = $2 WHERE id = $1', [guildID, text])
-}
-
-module.exports = { setAssistantRules, setReplyModel, setTaskModel, getTaskModel, setTokenLimit, getReplySettings, getReplyLength, setReplyLength, setStreamerPersona, setDebugFooter, setEmbedding, isEmbedMessagesEnabled, isEmbedEmojisEnabled, setSafety }
+module.exports = { setReplyModel, setTaskModel, getTaskModel, setTokenLimit, getReplySettings, getReplyLength, setReplyLength, setStreamerPersona, setDebugFooter, setEmbedding, isEmbedMessagesEnabled, isEmbedEmojisEnabled, setSafety }

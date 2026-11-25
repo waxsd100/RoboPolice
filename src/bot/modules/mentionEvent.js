@@ -665,7 +665,7 @@ async function handle (message) {
       // /replylength, /persona, %debugfooter, %tokenlimit, %safety; without them (or the database) as by default.
       const { isOwnerGuild } = require('../utils/priority')
       const owner = isOwnerGuild(guild.id)
-      const { replyLength, streamerPersona, debugFooter, tokenLimits, replyModel, replyThinking, aiModels, assistantRules, safetyFilter = !owner, uncensoredR18 = owner } = await replySettingsStore.getReplySettings(guild.id)
+      const { replyLength, streamerPersona, debugFooter, tokenLimits, replyModel, replyThinking, aiModels, safetyFilter = !owner, uncensoredR18 = owner } = await replySettingsStore.getReplySettings(guild.id)
         .catch(() => ({ replyLength: null, streamerPersona: true, debugFooter: false, tokenLimits: {}, safetyFilter: !owner, uncensoredR18: owner }))
       // The same as draft: with the safety filter on, nothing goes to the uncensored model.
       const allowUncensored = Boolean(uncensoredR18) && !safetyFilter
@@ -714,7 +714,6 @@ async function handle (message) {
       // Knowledge is looked up by what the members said, not the bot's own earlier replies.
       // What was just being talked about in the channel, as far as it bears on the request
       // (recentTopics.js); not when something the bot made is being changed.
-      // The server's rules and what its moderators asked of the assistant (serverRules.js).
       const theme = channelTheme(message.channel.id, guild, message.channel.name)
       let queryVecPromise = null
       const queryVector = () => {
@@ -723,8 +722,8 @@ async function handle (message) {
         return queryVecPromise
       }
       // Started together, as none needs another: what was just said in the channel, the emojis
-      // shared from the owner's servers, and how sokudan reads the request (asked once here and
-      // passed on to draft; null when it is not set up or gave no answer, and the patterns decide).
+      // shared from the owner's servers, and how Google Decisions API reads the request (asked once
+      // here and passed on to draft; null when it is not enabled or gave no answer, and the patterns decide).
       const recentPromise = (edit || referenced || !worthSearching(request))
         ? Promise.resolve([])
         : relatedRecent(message, request, { queryVector }).catch(e => {
@@ -773,7 +772,6 @@ async function handle (message) {
         streamerPersona,
         safetyFilter: !!safetyFilter,
         uncensoredR18: allowUncensored,
-        rules: { moderators: assistantRules || null, channels: [] },
         model: replyModel || null,
         thinking: replyThinking || null,
         tier: aiModels?.reply?.tier || null,

@@ -1,6 +1,6 @@
 // Shared Redis cache for AI artifacts across workers and restarts: recent message embeddings
-// (recentTopics.js), Gemini explicit context caches (eventDrafter.js), picked server rules channels
-// (serverRules.js), and resolved game store URLs (gameLinks.js).
+// (recentTopics.js), Gemini explicit context caches (eventDrafter.js), and resolved game store
+// URLs (gameLinks.js).
 //
 // If Redis is unreachable, every read returns null/empty and every write is ignored, so a Redis
 // outage never stops a reply or background task.

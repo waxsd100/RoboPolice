@@ -52,8 +52,7 @@ function buildOnboardingEmbed (channel, me) {
         name: '🤖 AIアシスタント（@メンション）',
         value: [
           '・どのチャンネルでも BOT に `@メンション` すると、会話・質問応答、**予定イベントの作成**、**フォーラム投稿の作成**が使えます',
-          '・`/setup assistant` — 話し方（配信者／BOT）・返事の長さ・YouTube配信の自動イベント登録を設定',
-          '・`/assistantrules` — AI に守ってほしいサーバー独自のルール・注意事項を設定'
+          '・`/setup assistant` — 話し方（配信者／BOT）・返事の長さ・YouTube配信の自動イベント登録を設定'
         ].join('\n')
       },
       {

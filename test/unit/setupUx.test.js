@@ -199,7 +199,6 @@ test('/setup status diagnoses permissions, shows overview, and lets creators tog
   const state = {
     replyLength: 'normal',
     streamerPersona: true,
-    assistantRules: 'ネタバレ禁止',
     embedMessages: false,
     embedEmojis: false,
     safetyFilter: true,
@@ -226,7 +225,6 @@ test('/setup status diagnoses permissions, shows overview, and lets creators tog
     user: { id: 'bot', avatarURL: 'a', dynamicAvatarURL: () => 'a', username: 'b', discriminator: '0' },
     guilds: new Map([['g1', {
       id: 'g1',
-      rulesChannelID: 'c-rules',
       roles: new Map(),
       members: new Map([['bot', { permissions: { has: () => false } }]])
     }]]),
@@ -261,7 +259,7 @@ test('/setup status diagnoses permissions, shows overview, and lets creators tog
   assert.match(firstEmbed.title, /設定ステータス/)
   assert.equal(firstEmbed.fields.length, 4, 'logging, assistant, permissions, and creator settings')
   assert.match(firstEmbed.fields[0].value, /メッセージ削除、メッセージ編集/)
-  assert.match(firstEmbed.fields[1].value, /<#c-rules>/)
+  assert.match(firstEmbed.fields[1].value, /配信者として話す/)
   assert.match(firstEmbed.fields[2].value, /ウェブフックの管理/)
   assert.equal(state.safetyFilter, false, 'creator menu toggled safety to relaxed')
   assert.equal(state.uncensoredR18, true)

@@ -35,16 +35,14 @@ BOT が Gemini（と検閲なしモデル・画像モデル）に渡すプロン
 | `persona/*.md` | 配信者本人の話し方プロファイルの抽出と反復改善（`streamerStyle.js`） |
 | `wiki/extract.md` | wiki・YouTube 動画・X・Discord・Web のまとめからの知識の取り出し |
 | `web/topic.md` | Web 検索で調べるテーマ |
-| `stream/blurb.md` | 配信のイベント説明 |
 | `emoji/describe.md` | サーバー絵文字の説明 |
 | `image/cover.md`、`image/edit.md` | イベント・フォーラム投稿のカバー画像（英語） |
 | `chat/pictures/*.md` | 依頼と一緒に見せる絵文字・添付画像の前置き |
 | `chat/uncensored/describe-images.md` | 検閲なしモデルへ引き継ぐ前の、添付画像の説明の依頼 |
 | `tools/<ツール名>.md` | AI が呼べるツール（調べ物・質問・下書きの提出など）の説明。最初の段落がツールの説明、`## 引数名` の節がその引数の説明（コードの `prompts.tool()`） |
 | `tools/shared/image-instruction.md` | 下書きの提出ツールに共通の `image_instruction` 引数の説明 |
-| `sokudan/*.md` | sokudan（軽い判定モデル）への質問。`## 質問名` の節ごとに本文が指示、`- キー: 説明` が選択肢、`1. 説明` が段階（コードの `prompts.questions()`） |
+| `sokudan/*.md` | Google Decisions API（`gemini-decision-1`）への質問。`## 質問名` の節ごとに本文が指示、`- キー: 説明` が選択肢、`1. 説明` が段階（コードの `prompts.questions()`） |
 | `game/official-page.md` | ゲームの公式ページ探し |
-| `rules/pick-channels.md` | ルールが書かれていそうなチャンネル選び |
 
 ## 書くときの決まり
 

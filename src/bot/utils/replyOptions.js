@@ -33,13 +33,11 @@ const THINKING_LEVELS = Object.freeze(['minimal', 'low', 'medium', 'high'])
 const SERVICE_TIERS = Object.freeze(['standard', 'flex'])
 
 // Per-server configurable AI tasks (%replymodel <task> ...).
-const AI_TASKS = Object.freeze(['reply', 'rules', 'blurb', 'light', 'extract', 'summary'])
+const AI_TASKS = Object.freeze(['reply', 'light', 'extract', 'summary'])
 
 const AI_TASK_LABELS = Object.freeze({
   reply: 'メンション返信・下書き作成',
-  rules: '初回メンション時のルール選定',
-  blurb: '配信開始前のイベント告知文・ゲームURL',
-  light: '絵文字説明・定期Web検索',
+  light: '絵文字説明・定期Web検索・ゲームURL',
   extract: 'Wiki / X / Steam / Web 知識抽出・内輪ネタ抽出',
   summary: '配信アーカイブ自動要約'
 })

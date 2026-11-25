@@ -135,15 +135,6 @@ describe('list_channels', () => {
   })
 })
 
-describe('get_server_rules', () => {
-  test('reads the server rules channel on demand', async (t) => {
-    const serverRules = require('../../src/bot/modules/serverRules')
-    t.mock.method(serverRules, 'readRules', async () => [{ channelID: '201', text: '1. 仲良くすること' }])
-    const res = await tools().call('get_server_rules')
-    assert.match(res.result, /### <#201> より\n1\. 仲良くすること/)
-  })
-})
-
 describe('list_forums', () => {
   test('describes the forums both can post in, via the API', async () => {
     const g = createGuild({ channels: [{ id: '205', name: '募集', type: 15, posters: [REQUESTER, 'BOT'] }] })
@@ -202,7 +193,7 @@ describe('declarations', () => {
 
   test('omit parameters for tools without arguments', () => {
     const byName = Object.fromEntries(tools().declarations.map(d => [d.name, d]))
-    for (const name of ['list_channels', 'list_forums', 'list_scheduled_events', 'get_server_rules']) {
+    for (const name of ['list_channels', 'list_forums', 'list_scheduled_events']) {
       assert.equal(byName[name].parameters, undefined, name)
     }
   })
@@ -391,7 +382,6 @@ describe('describeServer', () => {
       'サーバー名: のばまんサーバー',
       '説明: ゲーム好きの集まり',
       'メンバー数: 12000',
-      'ルールチャンネル: <#11>（内容は get_server_rules で読む）',
       '',
       '### サーバー絵文字（返事で使うときは、この書き方のまま書く）',
       '<:nobaman_wave:31> <a:party:32>',
@@ -1038,7 +1028,7 @@ describe('describeServer: what the server is like', () => {
       const err = await botTools.call(removed, { query: 'test' })
       assert.match(err.error, /不明なツール/)
     }
-    for (const kept of ['fetch_url', 'summarize_youtube_video', 'find_game', 'about_member', 'list_channels', 'get_server_rules']) {
+    for (const kept of ['fetch_url', 'summarize_youtube_video', 'find_game', 'about_member', 'list_channels']) {
       assert.ok(botToolNames.includes(kept), `${kept} stays available`)
     }
     const streamerToolNames = createTools({ guild: localGuild, member, ask: async () => '', streamerPersona: true }).declarations.map(d => d.name)

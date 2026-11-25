@@ -71,11 +71,10 @@ BOT がサーバーに入った瞬間から、すべてのイベントを記録�
 |---|---|---|
 | `/youtube sync` | BOT が見ているチャンネルを読み直し、新しい動画と配信の状態を取り込む（普段は自動。オーナーのサーバーからのみ） | サーバーの管理 |
 | `/youtube summarize count:<1〜50> force:<True/False> url:<動画リンク>` | まだ要約していない動画を新しい順に `count` 本（初期値 3）要約する。Gemini の Batch API にまとめて依頼し（料金は半分、終わるまで数分〜最大24時間）、終わったらコマンドを使ったチャンネルで知らせる。各チャンネルの最新の動画と5分以内の短い動画（`VIDEO_SUMMARY_FLEX_SECONDS`）は、Flex 推論でその場で要約する。`force:True` で要約済みも作り直す。`url` を指定するとその1本だけを要約し、終わったら内容を表示する（保存済みならすぐ表示。他のチャンネルの動画でも可）。`VIDEO_SUMMARY_BATCH=false` なら、その場で3本ずつ（`VIDEO_SUMMARY_CONCURRENCY`）要約する | サーバーの管理 |
-| `/youtube liveevents enabled:<True/False>` | 配信をサーバーのイベントとして自動で登録する（予定の枠で作成、開始で開催中、終了で終了）。説明の先頭に AI が配信内容の紹介を書き、終了後はアーカイブを自動で要約する。新しく投稿された動画も「📺 新着動画」として投稿から24時間イベントにする | サーバーの管理（BOT にイベントの管理） |
+| `/youtube liveevents enabled:<True/False>` | 配信をサーバーのイベントとして自動で登録する（予定の枠で作成、開始で開催中、終了で終了）。新しく投稿された動画も「📺 新着動画」として投稿から24時間イベントにする | サーバーの管理（BOT にイベントの管理） |
 | `/youtube show` | 設定しているチャンネル、保存している動画の数、配信の予定、配信のイベント登録の有無を表示する | サーバーの管理 |
 | `/replylength length:<long/normal/short>` | メンションへの返事の長さをサーバーごとに決める。`long`（初期値）は長くても500文字程度、`normal` は内容に合わせて（あいさつは1〜2文、説明は400文字程度まで）、`short` は答えだけを短く（200文字程度まで）。`length` を省くと今の設定を表示する | サーバーの管理 |
 | `/persona streamer:<True/False>` | メンションへの返事で、YouTube チャンネルの配信者本人になりきるか（`True`、初期値）、配信者にはなりきらずサーバーの BOT として話すか（`False`）をサーバーごとに決める。`streamer` を省くと今の設定を表示する | サーバーの管理 |
-| `/assistantrules text:<お願い> clear:<True>` | メンションの返事で AI に守ってほしいこと（避ける話題、使わない言葉、ネタバレの扱いなど、2000文字まで）をサーバーごとに決める。この設定は毎回のリクエストに含まれ、さらにサーバーのルールチャンネル（Discord設定のルールチャンネルおよび、`@everyone`が閲覧できるチャンネルからAIまたはチャンネル名で「ルール・必読・はじめに・お願い」等と判定した最大3チャンネル）の本文も必要なときに`get_server_rules`ツールで参照して返事をする（システムの指示より厳しくする方向だけ）。省くと今の内容を表示、`clear:True` で消す | サーバーの管理 |
 | `/setup status` | 現在のログ出力・AI設定状況と必要な権限の診断を表示し、ボタンから各設定メニューへ移動する（`CREATOR_IDS` の開発者にはベクトル化・セーフティ・デバッグ表示の切り替えメニューも表示） | サーバーの管理・チャンネルの管理・Webhook の管理のいずれか |
 | `/setup via_presets` | よく使うログをまとめて有効にする。まだ何も出力していないチャンネルでは最初から「すべて」を選んであり、「このまま保存」で全イベントを記録する（`via_individual_event` も同じ） | Webhook の管理・チャンネルの管理・監査ログの表示 |
 | `/setup via_individual_event` | ログの種類を1つずつ選んで有効にする | 同上 |
@@ -102,7 +101,7 @@ BOT がサーバーに入った瞬間から、すべてのイベントを記録�
 | `%reset` | サーバーのログ設定をすべて消す（`yes` と返信して確定） | 管理者 |
 | `%help` / `%info` / `%invite` / `%ping` / `%serverinfo` / `%userinfo` / `%clearmydata` | ヘルプ・BOT の情報・招待リンクなど | だれでも |
 | `%tokenlimit` / `%tokenlimit 5h 300000` / `week 1500000` / `flex 70` / `5h default` / `unlimited on`・`off` | このサーバーのメンションのトークン上限（1人あたり、5時間・1週間）と、低速モード（Flex）に切り替える割合を表示・変更する（0 は上限なし・切り替えなし、`default` で既定に戻す）。`unlimited on` でこのサーバーの制限（上限・低速モード・1日の回数）をすべて外す。使った量はサーバーをまたいで数え、メンションしたサーバーの上限と比べる | `CREATOR_IDS` の人 |
-| `%replymodel` / `%replymodel [task] model <モデル>` / `[task] thinking <深さ>` / `[task] tier <standard\|flex>` / `[task] default` | AIタスク（`reply`: メンション返信、`summary`: 動画要約、`light`: 背景処理・整形、`extract`: 知識・文脈のJSON抽出、`rules`: ルールチャンネル判定、`blurb`: 配信イベント紹介文）ごとに、使うモデル・思考の深さ（`minimal`・`low`・`medium`・`high`）・推論ティア（`standard`・`flex`）を表示・変更する（`task`省略時は`reply`、`default`で環境変数の既定値に戻す）。選べるモデル一覧は`src/bot/utils/replyOptions.js`とPostgreSQLのenum型`reply_model`で管理されている | `CREATOR_IDS` の人 |
+| `%replymodel` / `%replymodel [task] model <モデル>` / `[task] thinking <深さ>` / `[task] tier <standard\|flex>` / `[task] default` | AIタスク（`reply`: メンション返信、`light`: 絵文字説明・定期Web検索・ゲームURL、`extract`: 知識・文脈のJSON抽出、`summary`: 動画要約）ごとに、使うモデル・思考の深さ（`minimal`・`low`・`medium`・`high`）・推論ティア（`standard`・`flex`）を表示・変更する（`task`省略時は`reply`、`default`で環境変数の既定値に戻す）。選べるモデル一覧は`src/bot/utils/replyOptions.js`とPostgreSQLのenum型`reply_model`で管理されている | `CREATOR_IDS` の人 |
 | `%embeddings` / `%embeddings [messages\|emojis] <on\|off\|default>` | このサーバーでのメッセージのベクトル化（`messages`）とカスタム絵文字の説明・ベクトル化（`emojis`）のオン・オフを切り替える（対象省略時は両方まとめて変更。既定ではオーナーサーバーのみオン、それ以外のサーバーはオフ） | `CREATOR_IDS` の人 |
 | `%debugfooter on` / `off` | このサーバーのメンション返信の下に、答えたモデル・使ったトークン・フォールバックを小さい灰色の字で出す（`-# model: gemini-3.8-flash → gemini-4-hydrogen (flex) · tokens: in … (cached …) · out … · thinking … · N Gemini calls · fallback: …`）。初期はオフ。引数なしで今の設定を表示 | `CREATOR_IDS` の人 |
 | `%eval` / `%reload` / `%reindexcommands` | 開発用 | `CREATOR_IDS` の人 |
@@ -153,13 +152,13 @@ BOT がサーバーに入った瞬間から、すべてのイベントを記録�
 - **ユーザーごとのトークン上限（`src/bot/utils/mentionQuota.js`）**:
   メンションの利用量はRedis上でユーザーごとに全サーバー合算でカウントされます。5時間枠（`MENTION_TOKEN_LIMIT_5H`、既定150,000トークン）と1週間枠（`MENTION_TOKEN_LIMIT_WEEK`、既定750,000トークン）があり、モデルごとの単価（`src/bot/utils/geminiPrices.js`、Gemini 3.8 Flashの入力トークン換算）に応じて加算されます。どちらかの枠の`MENTION_FLEX_AT_PERCENT`（既定95%）を超えると自動的にFlex推論（料金半額・低速）に切り替わり、100%に達するとリセット時刻を案内します。`%tokenlimit`でサーバーごとに上限を変更できます。
 - **優先度付きバックグラウンドキュー（`src/bot/utils/backgroundQueue.js`）**:
-  動画・配信アーカイブの要約、絵文字の説明生成、配信イベントの紹介文生成などのバックグラウンドAI処理は、ワーカーあたり同時`AI_BACKGROUND_CONCURRENCY`件（既定3件）のキューを通ります。常にオーナーサーバー（`OWNER_GUILD_IDS`）の処理が最優先され、他サーバーの処理はオーナーサーバーの待ちがなくなるまで待機します。
+  動画・配信アーカイブの要約や絵文字の説明生成などのバックグラウンドAI処理は、ワーカーあたり同時`AI_BACKGROUND_CONCURRENCY`件（既定3件）のキューを通ります。常にオーナーサーバー（`OWNER_GUILD_IDS`）の処理が最優先され、他サーバーの処理はオーナーサーバーの待ちがなくなるまで待機します。
 
 ### ツール呼び出しとサーバープロフィール
 
 メンション処理は読み取り専用ツール群（`src/bot/modules/eventTools.js`）を使ったGeminiのFunction Callingループ（`src/bot/modules/eventDrafter.js`）で動作します。
-- 毎回のリクエストに添付されるサーバープロフィールには、トークン消費を抑えるため**最小限の基本情報**（サーバー名・説明、配信者/YouTube/Twitch/Steamの1行概要、カスタム絵文字最大15件、`/assistantrules`の指示）のみを含めます。
-- チャンネル一覧（`list_channels`）、予定イベント一覧（`list_scheduled_events`）、フォーラム一覧とタグ・ガイドライン（`list_forums`）、サーバールール（`get_server_rules`）、チャンネルの直近メッセージ（`get_recent_messages`）、保存済みメッセージ履歴検索（`search_channel_history` / `search_server_messages`）、Webページ取得（`fetch_webpage`）、Discordメッセージ取得（`get_discord_message`）などは、**必要なときだけツールとして呼び出します**。
+- 毎回のリクエストに添付されるサーバープロフィールには、トークン消費を抑えるため**最小限の基本情報**（サーバー名・説明、配信者/YouTube/Twitch/Steamの1行概要、カスタム絵文字最大15件）のみを含めます。
+- チャンネル一覧（`list_channels`）、予定イベント一覧（`list_scheduled_events`）、フォーラム一覧とタグ・ガイドライン（`list_forums`）、チャンネルの直近メッセージ（`get_recent_messages`）、保存済みメッセージ履歴検索（`search_channel_history` / `search_server_messages`）、Webページ取得（`fetch_url`）、Discordメッセージ取得（`get_discord_message`）、ゲーム検索（`find_game`）などは、**必要なときだけツールとして呼び出します**。
 - すべてのDiscord読み取りツールは「そのサーバー内」かつ「依頼者とBOTの双方が閲覧できるチャンネル」に厳密に制限されているため、依頼者が見られない非公開チャンネルの情報がメンション経由で漏洩することはありません。Webページ取得時もプライベートIPやループバックアドレスは拒否されます。
 
 ### サーバーの空気感の学習 (`SERVER_LORE`)
@@ -182,8 +181,7 @@ BOT がサーバーに入った瞬間から、すべてのイベントを記録�
 ### 配信・新着動画のDiscordイベント自動登録
 
 `/youtube liveevents enabled:True`を有効にすると、YouTubeの配信枠や新着動画（ショート動画を除く）をDiscordの予定イベントとして自動登録・更新・開始・終了します（`src/bot/modules/liveWatcher.js`）。
-- `LIVE_EVENT_AI_DESCRIPTION=true`を設定すると、イベント説明文の先頭にタイトル・概要欄・サムネイルからGeminiが生成した2〜3文の紹介文が付きます（既定はオフで、タイトル・概要欄・サムネイル・URLのみを使ってAI呼び出しを行いません）。
-- ゲーム配信の場合は`LIVE_EVENT_AI_DESCRIPTION=true`（かつ`GAME_LINKS`が`false`でない場合）にプレイするゲーム名を特定し、Steamストアページまたは公式サイト・各ストアページのリンクを自動で添えます（`src/bot/modules/gameLinks.js`）。またチャット内では`find_game`ツールでDiscordのゲームメンション（`<@$APPLICATION_ID>`）も利用できます。
+- 予定イベントはYouTubeのタイトル・概要欄・サムネイル・URLからAI呼び出しなしで作成します。なおチャット内では`find_game`ツールでDiscordのゲームメンション（`<@$APPLICATION_ID>`）やSteam・公式ページリンク（`src/bot/modules/gameLinks.js`、`GAME_LINKS=false`で無効化）を利用できます。
 - 配信終了後はYouTube字幕などの知識ソースのみを同期し、アーカイブ動画の自動要約は既定でオフです（`LIVE_ARCHIVE_SUMMARY=true`にすると終了30分後から自動で要約・保存します。通常は`/youtube summarize`やメンションでの要約依頼時にのみ動画AI要約を実行します）。
 
 ### 意味検索（ベクトル検索 / Embeddings）
@@ -296,17 +294,16 @@ rm robopolice-key.json
 | `GEMINI_THINKING_LEVEL` | 任意（既定: `high`、`minimal`/`low`/`medium`/`high`）。メンション返信時の思考レベル（Gemini 4選択時の`minimal`は自動で`low`に補正されます）。 |
 | `GEMINI_DEEP_MODEL` | 任意（既定: `gemini-4-hydrogen`）。複雑な推論や長文作成が必要な際に`think_deeper`ツールで引き継ぐ上位モデル（コスパ重視の`gemini-4-hydrogen`が既定。`gemini-4-neon`・`gemini-4-carbon`・`gemini-4-argon`も指定可、空文字で無効化）。 |
 | `GEMINI_DEEP_FLEX`, `GEMINI_DEEP_FLEX_FALLBACK`, `GEMINI_DEEP_THINKING_LEVEL` | 任意。`GEMINI_DEEP_MODEL`でFlex推論を使うか（既定オン）、Flex容量不足時に標準ティアへフォールバックするか（既定オフ）、および思考レベル（既定`high`）。 |
-| `GEMINI_LIGHT_MODEL`, `GEMINI_LIGHT_THINKING_LEVEL` | 任意（既定: `gemini-3.5-flash-lite` / `low`）。絵文字説明、配信紹介文、ゲームリンク特定、返信の自然な日本語整形（`REPLY_POLISH`）などの軽量処理に使うモデル。 |
+| `GEMINI_LIGHT_MODEL`, `GEMINI_LIGHT_THINKING_LEVEL` | 任意（既定: `gemini-3.5-flash-lite` / `low`）。絵文字説明、ゲームリンク特定（`find_game`）、返信の自然な日本語整形（`REPLY_POLISH`）などの軽量処理に使うモデル。 |
 | `GEMINI_EXTRACT_MODEL`, `GEMINI_EXTRACT_THINKING_LEVEL` | 任意（既定: `gemini-3.1-flash-lite` / `minimal`）。Wiki・X・Discord・Webからの知識JSON抽出、サーバー知識（`SERVER_LORE`）抽出、直近の話題（`recentTopics`）選択に使う高速・低コストモデル。 |
 | `GEMINI_FLEX` | 任意（既定: オン）。`false`にするとすべてのFlex推論を無効化し標準ティアでリクエストします。 |
 | `GEMINI_STREAM` | 任意（既定: オン）。Cloudflareの100秒タイムアウト（HTTP 524）を回避するため、メンション応答を`streamGenerateContent`でストリーミング受信します。 |
 | `GEMINI_EXPLICIT_CACHE` | 任意（既定: オン）。`false`にするとシステム指示とツールの明示的キャッシュ（`cachedContents`）を無効化します（Gemini 4系は仕様上自動で暗黙キャッシュのみを使用します）。 |
 | `UNCENSORED_API_URL`, `UNCENSORED_GATEWAY_PROVIDER`, `UNCENSORED_API_KEY`, `UNCENSORED_MODEL` | 任意。R18の話題やGeminiが安全性フィルタで拒否した際に引き継ぐOpenAI互換エンドポイント設定（既定モデル: `xtools-at/DeepSeek-V4-Pro-Qwen3.5-9B-UNCENSORED-heretic`）。 |
-| `SOKUDAN_URL`, `SOKUDAN_API_KEY`, `SOKUDAN_TIMEOUT_MS`, `SOKUDAN_BOOL_THRESHOLD`, `GEMINI_DECISION_API`, `GEMINI_DECISION_MODEL` | 任意。軽量日本語判断モデル [`GeneLab/sokudan-ja-310m`](https://huggingface.co/GeneLab/sokudan-ja-310m)（`Dockerfile.sokudan` / `docker-compose.yml`）のURL設定。`SOKUDAN_URL`設定時は①メンション事前ルーティング、②R18ソフト拒否/朝チュン検知強化、③`REPLY_POLISH`判定を行います（既定では有料の`GEMINI_DECISION_API`フォールバックはオフで、`GEMINI_DECISION_API=true`にした場合のみGoogle **Decisions API** `gemini-decision-1` 入力\$0.10/1M・出力\$0を使用）。 |
+| `GEMINI_DECISION_API`, `GEMINI_DECISION_MODEL`, `GEMINI_DECISION_TIMEOUT_MS`, `GEMINI_DECISION_BOOL_THRESHOLD` | 任意（既定: オフ）。`GEMINI_DECISION_API=true`にするとGoogle **Decisions API**（既定`gemini-decision-1`、入力\$0.10/1M・出力\$0）を直接呼び出し、①メンション事前ルーティング（挨拶・明示モデル指定・編集を除く）、②R18ソフト拒否/朝チュン検知強化、③`REPLY_POLISH`判定を行います。 |
 | `REPLY_POLISH` | 任意（既定: オフ）。`REPLY_POLISH=true`にすると、AI特有の表現・記号を含む返信や250文字以上の返信を`GEMINI_LIGHT_MODEL`と`yomiyasu-pocket`で自然な日本語に整えます。 |
-| `SERVER_RULES_AI` | 任意（既定: オフ）。サーバーのルールチャンネル探索で、Discord公式ルールチャンネル設定やチャンネル名（`#ルール`/`#rules`）から特定できないときにGeminiへ推測させる場合は`true`。 |
 | `MENTION_RECENT_TOPICS`, `MENTION_RECENT_MESSAGES`, `MENTION_RECENT_HOURS` | 任意。メンション時に同じチャンネルの直近の関連発言（既定: 過去12時間の最新50件から最大8件）を文脈として渡します。 |
-| `YOUTUBE_API_KEY`, `YOUTUBE_CHANNELS`, `YOUTUBE_AUTO_SYNC_MINUTES`, `YOUTUBE_LIVE_POLL_SECONDS`, `YOUTUBE_WEBSUB_URL`, `YOUTUBE_WEBSUB_SECRET`, `YOUTUBE_GATEWAY_PROVIDER`, `LIVE_EVENT_AI_DESCRIPTION`, `LIVE_ARCHIVE_SUMMARY` | 任意。YouTubeチャンネルの同期、動画要約、配信・新着動画イベント自動登録、WebSubプッシュ通知に関する設定。`LIVE_EVENT_AI_DESCRIPTION=true`で配信イベント開始時のAI紹介文生成・ゲーム検索、`LIVE_ARCHIVE_SUMMARY=true`で配信終了30分後のアーカイブ自動要約を有効化します（いずれも既定オフ）。 |
+| `YOUTUBE_API_KEY`, `YOUTUBE_CHANNELS`, `YOUTUBE_AUTO_SYNC_MINUTES`, `YOUTUBE_LIVE_POLL_SECONDS`, `YOUTUBE_WEBSUB_URL`, `YOUTUBE_WEBSUB_SECRET`, `YOUTUBE_GATEWAY_PROVIDER`, `LIVE_ARCHIVE_SUMMARY` | 任意。YouTubeチャンネルの同期、動画要約、配信・新着動画イベント自動登録、WebSubプッシュ通知に関する設定。`LIVE_ARCHIVE_SUMMARY=true`で配信終了30分後のアーカイブ自動要約を有効化します（既定オフ）。 |
 | `VIDEO_SUMMARY_BATCH`, `VIDEO_SUMMARY_FLEX_SECONDS`, `VIDEO_SUMMARY_FLEX_FALLBACK`, `VIDEO_SUMMARY_CONCURRENCY`, `VIDEO_SUMMARY_TIMEOUT_MINUTES`, `VIDEO_SUMMARY_THINKING_LEVEL`, `VIDEO_SUMMARY_FPS` | 任意。動画要約のBatch API利用、Flex推論の対象秒数（既定300秒以下と最新動画）、Flex混雑・制限時の標準ティアへのフォールバック（既定オン）、同時実行数、タイムアウト、思考レベル、フレームレート（既定`0.2` fps）。 |
 | `TWITCH_CHANNELS`, `TWITCH_CLIENT_ID`, `TWITCH_CLIENT_SECRET`, `TWITCH_SYNC_MINUTES` | 任意。フォローするTwitchチャンネル（カンマ区切り）とAPI認証情報、同期周期（既定60分）。 |
 | `STEAM_ACCOUNTS`, `STEAM_API_KEY`, `STEAM_SYNC_MINUTES` | 任意。同期するSteamアカウント（既定: `nobaman`）、任意のSteam Web APIキー、同期周期（既定360分）。 |

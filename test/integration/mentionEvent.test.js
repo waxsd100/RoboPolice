@@ -1084,37 +1084,6 @@ describe('mention → event / forum post (integration)', () => {
     assert.equal(reply.body.generationConfig.thinkingConfig.thinkingLevel, 'high')
   })
 
-  test('chat: what moderators asked (/assistantrules) goes with the request, and the rules channel is read on demand via get_server_rules', async () => {
-    const { installReplyLengthStore } = require('../helpers/fakes')
-    const serverRules = require('../../src/bot/modules/serverRules')
-    const { channel } = createChannel()
-    installReplyLengthStore({}, {}, {}, {}, {}, { [channel.guild.id]: 'ネタバレ禁止' })
-    guild.rulesChannelID = '202'
-    serverRules.reset()
-    try {
-      const requests = installGemini([
-        [call('get_server_rules')],
-        body => {
-          assert.match(lastToolResponses(body)[0].response.result, /### <#202> より\nスタッフ会議 11\/5 20時/)
-          return [call('submit_chat_reply', { text: 'やあ' })]
-        }
-      ])
-      await mentionEvent.handle(mention(channel, '<@BOT> ルール教えて'))
-      const prompt = requests[0].body.contents[0].parts[0].text
-      assert.match(prompt, /## このサーバーのルールとモデレーターからのお願い（返事・下書きはこれに従う）\n### モデレーターから AI へのお願い\n<untrusted source="rules">\nネタバレ禁止\n<\/untrusted>/)
-      assert.doesNotMatch(prompt, /スタッフ会議 11\/5 20時/, 'rules channel is not dumped into every prompt')
-      assert.ok(prompt.indexOf('## このサーバーのルール') < prompt.indexOf('## 依頼メッセージ'))
-    } finally {
-      delete guild.rulesChannelID
-      serverRules.reset()
-      installReplyLengthStore()
-    }
-    // Neither: no section.
-    const requests = installGemini([[call('submit_chat_reply', { text: 'やあ' })]])
-    await mentionEvent.handle(mention(channel, '<@BOT> やあ'))
-    assert.doesNotMatch(requests[0].body.contents[0].parts[0].text, /このサーバーのルールとモデレーター/)
-  })
-
   test('chat: a server that turned the streamer off with /persona gets replies as pure Gemini AI matching only its server mood', async (t) => {
     const { installReplyLengthStore, installLoreStore, installEmbeddingModel } = require('../helpers/fakes')
     const { PERSONAS } = require('../../src/bot/modules/eventDrafter')

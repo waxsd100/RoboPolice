@@ -5,7 +5,6 @@ const replySettings = require('../../db/interfaces/postgres/replySettings')
 const youtubeDB = require('../../db/interfaces/postgres/youtube')
 const emojiDescriber = require('../modules/emojiDescriber')
 const { DEFAULT_REPLY_LENGTH } = require('../modules/eventDrafter')
-const { rulesChannels } = require('../modules/serverRules')
 const cacheGuild = require('../utils/cacheGuild')
 const { EMBED_COLORS, PRESET_EVENT_MAP, ALL_EVENTS } = require('../utils/constants')
 const { getEmbedFooter, getAuthorField } = require('../utils/embeds')
@@ -932,7 +931,6 @@ async function handleStatusSetup (interaction, { asEdit = false, initialNote = n
       asEdit = true
     }
     const guildID = interaction.guildID
-    const guild = global.bot.guilds?.get?.(guildID)
     const guildSettings = await ensureGuildSettings(guildID)
     const groupedLogs = groupLogsByChannel(guildSettings, lang)
     const ignored = guildSettings?.ignoredChannels || []
@@ -942,12 +940,6 @@ async function handleStatusSetup (interaction, { asEdit = false, initialNote = n
     const liveOn = process.env.YOUTUBE_API_KEY
       ? await youtubeDB.liveEventsOn(guildID).catch(() => false)
       : null
-    let detectedRules = []
-    if (guild?.channels?.size) {
-      detectedRules = (await rulesChannels(guild).catch(() => [])).map(c => c.id)
-    } else if (guild?.rulesChannelID) {
-      detectedRules = [guild.rulesChannelID]
-    }
 
     const personaText = ai.streamerPersona !== false
       ? pick(interaction, { ja: '配信者として話す', en: 'As the streamer' })
@@ -965,13 +957,7 @@ async function handleStatusSetup (interaction, { asEdit = false, initialNote = n
             ja: `・配信・新着動画の自動イベント登録: **${liveOn ? '有効' : '無効'}**`,
             en: `・Streams & uploads as events: **${liveOn ? 'On' : 'Off'}**`
           })]
-        : []),
-      ai.assistantRules
-        ? pick(interaction, { ja: `・AI へのお願い（\`/assistantrules\`）: 設定あり（${[...ai.assistantRules].length} 文字）`, en: `・Moderator rules (\`/assistantrules\`): Set (${[...ai.assistantRules].length} chars)` })
-        : pick(interaction, { ja: '・AI へのお願い（`/assistantrules`）: 未設定', en: '・Moderator rules (`/assistantrules`): None' }),
-      detectedRules.length
-        ? pick(interaction, { ja: `・サーバールール参照: ${detectedRules.map(id => `<#${id}>`).join('・')}`, en: `・Rules channel(s): ${detectedRules.map(id => `<#${id}>`).join(', ')}` })
-        : pick(interaction, { ja: '・サーバールール参照: ルールチャンネル未検出', en: '・Rules channel(s): None detected' })
+        : [])
     ]
 
     const logSummary = groupedLogs.length

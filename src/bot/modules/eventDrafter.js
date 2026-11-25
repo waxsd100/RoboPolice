@@ -161,17 +161,9 @@ const replyLengthOf = length => REPLY_LENGTHS[length] ? length : DEFAULT_REPLY_L
 // what stays the same from one request to the next (the server's setting and information) leads,
 // so a prompt cache can cover as much as possible, and what is new each time (the time, the
 // conversation, the request) follows.
-// rules: { moderators, channels } (serverRules.js): what the server's moderators asked of the
-// assistant (/assistantrules) and its rules channels' text ([{ channelID, text }]); either may be
-// missing.
-function buildPrompt ({ request, referenced, recent = [], channelName, channelID, channelInfo = null, server, forum, images, edit, channels = [], people = [], rules = null, now }) {
+function buildPrompt ({ request, referenced, recent = [], channelName, channelID, channelInfo = null, server, forum, images, edit, channels = [], people = [], now }) {
   const lines = []
-  if (rules?.moderators || rules?.channels?.length) {
-    lines.push('## このサーバーのルールとモデレーターからのお願い（返事・下書きはこれに従う）')
-    if (rules.moderators) lines.push('### モデレーターから AI へのお願い', wrap('rules', rules.moderators))
-    for (const channel of rules.channels || []) lines.push(`### サーバーのルール（<#${channel.channelID}> より）`, wrap('rules', channel.text))
-  }
-  if (server) lines.push(...(lines.length ? [''] : []), '## このサーバーの情報（最新）', wrap('server', server))
+  if (server) lines.push('## このサーバーの情報（最新）', wrap('server', server))
   if (channels.length) lines.push(...(lines.length ? [''] : []), '## 依頼や会話に出てくるチャンネル', wrap('channels', channels.join('\n')))
   lines.push(...(lines.length ? [''] : []), `依頼されたチャンネル: ${channelInfo || `#${channelName}${channelID ? `（ID: ${channelID}）` : ''}`}`)
   // Who asked and who the request names, so the reply knows who is who (names are the members' own).
@@ -485,7 +477,7 @@ async function geminiAttempts (path, body, { timeoutMs = GEMINI_TIMEOUT_MS, purp
   return data
 }
 
-// The lighter, cheaper model for work in the background (describing emojis, short blurbs):
+// The lighter, cheaper model for work in the background (describing emojis, web search, game links):
 // GEMINI_LIGHT_MODEL, by default gemini-3.5-flash-lite; empty to use GEMINI_MODEL for everything.
 const DEFAULT_LIGHT_MODEL = 'gemini-3.5-flash-lite'
 function lightModel () {
@@ -493,9 +485,8 @@ function lightModel () {
   return light || process.env.GEMINI_MODEL || DEFAULT_GEMINI_MODEL
 }
 
-// The ultra-light model for structured extraction and picking (taking knowledge out of pages and
-// server history, picking rules channels): GEMINI_EXTRACT_MODEL, by default gemini-3.1-flash-lite;
-// empty to use lightModel().
+// The ultra-light model for structured extraction (taking knowledge out of pages and server
+// history): GEMINI_EXTRACT_MODEL, by default gemini-3.1-flash-lite; empty to use lightModel().
 const DEFAULT_EXTRACT_MODEL = 'gemini-3.1-flash-lite'
 function extractModel () {
   const extract = (process.env.GEMINI_EXTRACT_MODEL ?? DEFAULT_EXTRACT_MODEL).trim()
@@ -503,7 +494,7 @@ function extractModel () {
 }
 
 // One generateContent call through the gateway. Returns the first candidate's content. A call that
-// says nothing of thinking (background work: knowledge, emojis, blurbs, …) thinks at low
+// says nothing of thinking (background work: knowledge, emojis, …) thinks at low
 // (GEMINI_LIGHT_THINKING_LEVEL); image models are left as they are.
 // The safety filters of every request: off but for civic integrity (election misinformation and
 // the like), which blocks from a medium probability. What Google never allows (such as anything
@@ -590,10 +581,6 @@ function defaultTaskConfig (task) {
     tier
   })
   switch (task) {
-    case 'rules':
-      return entry(extractModel(), 'GEMINI_EXTRACT_THINKING_LEVEL', 'minimal', 'standard')
-    case 'blurb':
-      return entry(lightModel(), 'GEMINI_LIGHT_THINKING_LEVEL', 'low', 'standard')
     case 'light':
       return entry(lightModel(), 'GEMINI_LIGHT_THINKING_LEVEL', 'low', 'flex')
     case 'extract':
@@ -1188,12 +1175,12 @@ function isImageGenerationRequest (text) {
   return IMAGE_GENERATION_REQUEST_PATTERN.test(s) && !/小説|ss|物語|お話/i.test(s)
 }
 
-// How sure sokudan has to be to send a story/scene request to the uncensored model on its own,
-// without a word of R18_PATTERN (SOKUDAN_R18_ROUTE_THRESHOLD, 0-1).
+// How sure the decision model has to be to send a story/scene request to the uncensored model on
+// its own, without a word of R18_PATTERN (GEMINI_DECISION_R18_ROUTE_THRESHOLD, 0-1).
 const DEFAULT_R18_ROUTE_THRESHOLD = 0.85
 function r18RouteThreshold () {
-  const n = Number(process.env.SOKUDAN_R18_ROUTE_THRESHOLD)
-  return process.env.SOKUDAN_R18_ROUTE_THRESHOLD && n > 0 && n <= 1 ? n : DEFAULT_R18_ROUTE_THRESHOLD
+  const n = Number(process.env.GEMINI_DECISION_R18_ROUTE_THRESHOLD)
+  return process.env.GEMINI_DECISION_R18_ROUTE_THRESHOLD && n > 0 && n <= 1 ? n : DEFAULT_R18_ROUTE_THRESHOLD
 }
 
 // Whether a request goes to the uncensored model before Gemini sees it (`route`, with why), and
@@ -1213,18 +1200,18 @@ function r18Route ({ request, referenced = null, decision = null }) {
   const wantsStory = typeof decision?.isStory === 'boolean'
     ? (decision.isStory || isCont)
     : STORY_OR_SCENE_REQUEST_PATTERN.test(req)
-  const sokudanSays = !!decision?.isR18
+  const decisionSays = !!decision?.isR18
   const sure = Number.isFinite(decision?.r18Prob) && decision.r18Prob >= r18RouteThreshold()
   let why = null
   if (!nonChatIntent && !lookupAsk && !imageAsk) {
     if (isExplicitR18Text(req)) why = 'explicit R18 writing request'
-    else if (wantsStory && sokudanSays && (isR18Text(req) || (isCont && isR18Text(ref)))) why = `R18 story and sokudan (p=${decision.r18Prob.toFixed(2)})`
-    else if (wantsStory && sure) why = `sokudan R18 story (p=${decision.r18Prob.toFixed(2)})`
+    else if (wantsStory && decisionSays && (isR18Text(req) || (isCont && isR18Text(ref)))) why = `R18 story and decision (p=${decision.r18Prob.toFixed(2)})`
+    else if (wantsStory && sure) why = `decision R18 story (p=${decision.r18Prob.toFixed(2)})`
   }
   let maybe
   if (nonChatIntent || lookupAsk) {
     maybe = false
-  } else if (why || sokudanSays) {
+  } else if (why || decisionSays) {
     maybe = true
   } else if (decision) {
     maybe = false
@@ -2623,7 +2610,7 @@ const eventTools = () => require('./eventTools')
 
 // model, thinking, tier: the server's own model, thinking level and tier (%replymodel); null for the default.
 
-async function draft ({ request, referenced, recent = [], channelName, channelID, server, forum = null, images = [], pictures = [], edit = null, replyLength = null, streamerPersona = true, safetyFilter = false, uncensoredR18 = true, rules = null, model = null, thinking = null, tier = null, decision, guild, member, tools, now = new Date() }) {
+async function draft ({ request, referenced, recent = [], channelName, channelID, server, forum = null, images = [], pictures = [], edit = null, replyLength = null, streamerPersona = true, safetyFilter = false, uncensoredR18 = true, model = null, thinking = null, tier = null, decision, guild, member, tools, now = new Date() }) {
   const parsed = parseModelDirective(request)
   const attachedPics = pictures.filter(p => p.attachment)
   if (parsed.directive) {
@@ -2654,7 +2641,7 @@ async function draft ({ request, referenced, recent = [], channelName, channelID
     : []
   const shown = [...emojiShown, ...attachedShown]
   const conversation = {
-    contents: [{ role: 'user', parts: [{ text: buildPrompt({ request, referenced, recent, channelName, channelID, channelInfo: channelID ? eventTools().requestChannelInfo(channelID, guild) : null, server, forum, images, edit, channels: member ? eventTools().namedChannels([request, referenced?.text], guild, member) : [], people: member ? eventTools().namedMembers([request, referenced?.text], guild, member) : [], rules, now }) }, ...shown] }],
+    contents: [{ role: 'user', parts: [{ text: buildPrompt({ request, referenced, recent, channelName, channelID, channelInfo: channelID ? eventTools().requestChannelInfo(channelID, guild) : null, server, forum, images, edit, channels: member ? eventTools().namedChannels([request, referenced?.text], guild, member) : [], people: member ? eventTools().namedMembers([request, referenced?.text], guild, member) : [], now }) }, ...shown] }],
     guild,
     member,
     tools,
@@ -2689,9 +2676,10 @@ async function draft ({ request, referenced, recent = [], channelName, channelID
   const minorTerm = mentionsMinor(request, referenced?.text)
   conversation.contents.minorTerm = minorTerm
   if (minorTerm) conversation.contents.omitMature = true
-  // How sokudan reads the request (what is asked for, a story, R18, how much thought), asked once
-  // for every request; `decision` when the caller already asked (null: it gave no answer). Kept
-  // with the conversation: the thinking level and how the uncensored model is written to go by it.
+  // How Google Decisions API reads the request (what is asked for, a story, R18, how much thought),
+  // asked once for every request; `decision` when the caller already asked (null: it gave no
+  // answer). Kept with the conversation: the thinking level and how the uncensored model is written
+  // to go by it.
   if (decision === undefined) {
     decision = sokudan.canDecide()
       ? await sokudan.classifyMentionRequest(request, referenced?.text, eventTools().channelTheme(channelID, guild, channelName))
@@ -2722,7 +2710,7 @@ async function draft ({ request, referenced, recent = [], channelName, channelID
   } else if (decision) {
     if (decision.needsDeep && deepModel() && !edit && decision.intent === 'chat') {
       conversation.contents.deep = true
-      global.logger?.info(`[SOKUDAN]: Deep reasoning/creative request detected (p=${decision.deepProb.toFixed(2)}); routing directly to ${deepModel()}`)
+      global.logger?.info(`[GEMINI-DECISION]: Deep reasoning/creative request detected (p=${decision.deepProb.toFixed(2)}); routing directly to ${deepModel()}`)
       await tools?.progress?.(DEEP_PROGRESS)
     }
   }

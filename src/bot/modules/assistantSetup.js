@@ -1,14 +1,13 @@
 // /setup assistant: the mention assistant's settings for the server in one place, as select menus
 // that show the current choice and save a new one at once: how it speaks (/persona), how long its
 // replies are (/replylength) and, when the bot reads YouTube, whether streams and new uploads become
-// server events (/youtube liveevents). Also displays current /assistantrules, detected server rules
-// channels, and Manage Events permission readiness. Needs Manage Server, like the commands it gathers.
+// server events (/youtube liveevents). Also displays Manage Events permission readiness. Needs
+// Manage Server, like the commands it gathers.
 const Eris = require('eris')
 const { randomUUID: uuidv4 } = require('crypto')
 const replySettings = require('../../db/interfaces/postgres/replySettings')
 const youtubeDB = require('../../db/interfaces/postgres/youtube')
 const { DEFAULT_REPLY_LENGTH } = require('./eventDrafter')
-const { rulesChannels } = require('./serverRules')
 const { EMBED_COLORS } = require('../utils/constants')
 const { isCreator } = require('../utils/creatorIds')
 const { hasStaffAccess } = require('../utils/staffAccess')
@@ -27,16 +26,10 @@ const TEXT = {
       persona: '話し方',
       length: '返事の長さ',
       live: '配信・新着動画のイベント登録',
-      eventPerm: 'イベント作成権限',
-      rules: 'AI へのお願い・ルール参照'
+      eventPerm: 'イベント作成権限'
     },
     eventPermOk: '✅ 有効（「イベントの管理」あり）',
     eventPermMissing: '💡 未付与（予定イベント作成には BOT に「イベントの管理」が必要）',
-    rulesNone: '独自ルール: なし（`/assistantrules text:` で設定可）',
-    rulesSet: preview => `独自ルール: ${preview}\n（変更: \`/assistantrules text:\` / 削除: \`/assistantrules clear:True\`）`,
-    rulesChannelsInfo: channels => channels.length
-      ? `サーバールール参照: ${channels.map(id => `<#${id}>`).join('・')}`
-      : 'サーバールール参照: ルールチャンネル未検出',
     saved: '✅ 保存しました。',
     savedDetail: (field, choice) => `✅ **${field}** を「**${choice}**」に保存しました。`,
     noManageEvents: '⚠️ BOT に「イベントの管理」権限がないため、配信をイベントに登録できません。権限を付けてからもう一度選んでください。',
@@ -53,16 +46,10 @@ const TEXT = {
       persona: 'How it speaks',
       length: 'Reply length',
       live: 'Streams and uploads as events',
-      eventPerm: 'Event permission',
-      rules: 'Moderator rules & rules channel'
+      eventPerm: 'Event permission'
     },
     eventPermOk: '✅ Ready (Manage Events granted)',
     eventPermMissing: '💡 Missing (grant Manage Events to create events)',
-    rulesNone: 'Custom rules: None (set with `/assistantrules text:`)',
-    rulesSet: preview => `Custom rules: ${preview}\n(Edit: \`/assistantrules text:\` / Clear: \`/assistantrules clear:True\`)`,
-    rulesChannelsInfo: channels => channels.length
-      ? `Server rules read from: ${channels.map(id => `<#${id}>`).join(', ')}`
-      : 'Server rules channel: None detected',
     saved: '✅ Saved.',
     savedDetail: (field, choice) => `✅ Saved **${field}**: **${choice}**.`,
     noManageEvents: '⚠️ The bot does not have Manage Events, so it cannot make events for streams. Give it the permission and choose again.',
@@ -96,27 +83,14 @@ function clampStr (str, max) {
   return `${cut}…`
 }
 
-function truncate (str, max = 140) {
-  const chars = [...String(str || '').replace(/\s+/g, ' ').trim()]
-  return chars.length > max ? `${chars.slice(0, max)}…` : chars.join('')
-}
-
 async function current (guildID) {
-  const { replyLength, streamerPersona, assistantRules } = await replySettings.getReplySettings(guildID)
+  const { replyLength, streamerPersona } = await replySettings.getReplySettings(guildID)
   const guild = global.bot?.guilds?.get?.(guildID)
   const hasManageEvents = Boolean(guild?.members?.get?.(global.bot?.user?.id)?.permissions?.has?.('manageEvents'))
-  let detectedRules = []
-  if (guild?.channels?.size) {
-    detectedRules = (await rulesChannels(guild).catch(() => [])).map(c => c.id)
-  } else if (guild?.rulesChannelID) {
-    detectedRules = [guild.rulesChannelID]
-  }
   return {
     persona: streamerPersona !== false ? 'streamer' : 'bot',
     length: replyLength || DEFAULT_REPLY_LENGTH,
     live: youtubeOn() && await youtubeDB.liveEventsOn(guildID) ? 'on' : 'off',
-    assistantRules: assistantRules || null,
-    detectedRules,
     hasManageEvents
   }
 }
@@ -150,9 +124,6 @@ function embedColorForNote (note) {
 
 function embed (text, settings, note) {
   const label = which => text[which][settings[which]][0]
-  const rulesText = settings.assistantRules
-    ? text.rulesSet(truncate(settings.assistantRules))
-    : text.rulesNone
   const rawDesc = note ? `${text.description}\n\n${note}` : text.description
   return {
     title: text.title,
@@ -162,8 +133,7 @@ function embed (text, settings, note) {
       { name: text.fields.persona, value: clampStr(label('persona'), 1024), inline: true },
       { name: text.fields.length, value: clampStr(label('length'), 1024), inline: true },
       ...(youtubeOn() ? [{ name: text.fields.live, value: clampStr(label('live'), 1024), inline: true }] : []),
-      { name: text.fields.eventPerm, value: clampStr(settings.hasManageEvents ? text.eventPermOk : text.eventPermMissing, 1024), inline: false },
-      { name: text.fields.rules, value: clampStr(`${rulesText}\n${text.rulesChannelsInfo(settings.detectedRules || [])}`, 1024), inline: false }
+      { name: text.fields.eventPerm, value: clampStr(settings.hasManageEvents ? text.eventPermOk : text.eventPermMissing, 1024), inline: false }
     ]
   }
 }

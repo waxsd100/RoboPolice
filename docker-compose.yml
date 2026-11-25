@@ -23,25 +23,6 @@ services:
       timeout: 5s
       retries: 10
 
-  sokudan:
-    build:
-      context: .
-      dockerfile: Dockerfile.sokudan
-    restart: unless-stopped
-    ports:
-      - "127.0.0.1:8000:8000"
-    environment:
-      SOKUDAN_HOST: 0.0.0.0
-      SOKUDAN_PORT: "8000"
-      SOKUDAN_BACKEND: auto
-      SOKUDAN_DEVICE: auto
-    healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=4).read()"]
-      interval: 30s
-      timeout: 5s
-      retries: 3
-      start_period: 20s
-
   bot:
     build:
       context: .
@@ -52,13 +33,10 @@ services:
     environment:
       PGHOST: ${COMPOSE_PGHOST:-postgres}
       REDIS_HOST: ${COMPOSE_REDIS_HOST:-redis}
-      SOKUDAN_URL: http://sokudan:8000
     depends_on:
       postgres:
         condition: service_healthy
       redis:
-        condition: service_healthy
-      sokudan:
         condition: service_healthy
 
 volumes:

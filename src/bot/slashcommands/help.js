@@ -24,7 +24,6 @@ const TEXT = {
         '・`/setup status` — 設定状況・必要な権限の診断・クイック設定メニュー',
         '・`/setup via_presets` / `via_individual_event` — ログ出力の設定',
         '・`/setup assistant` — AI の話し方・返事の長さ・配信イベント登録',
-        '・`/assistantrules` — AI に守ってほしい独自ルールの設定',
         '・`/invite` — 用途別の招待リンク（推奨権限つき）'
       ].join('\n')
     ],
@@ -50,7 +49,6 @@ const TEXT = {
       '__サーバーごとの AI 設定（要: サーバーの管理）__',
       [
         '・`/setup assistant` — 話し方（配信者として／BOTとして）、返事の長さ、YouTube配信・新着動画の自動イベント登録をメニューで設定',
-        '・`/assistantrules` — ネタバレ禁止など AI に守ってほしいお願いを設定（Discord のルールチャンネルも自動で参照します）',
         '・`/youtube show` / `/youtube summarize` — フォロー中の YouTube チャンネル確認・動画要約'
       ].join('\n')
     ],
@@ -79,7 +77,6 @@ const TEXT = {
         '・`/setup status` — Check current setup, diagnose permissions, and open setup menus',
         '・`/setup via_presets` / `via_individual_event` — Choose logged events',
         '・`/setup assistant` — Configure AI persona, reply length, and stream events',
-        '・`/assistantrules` — Set custom rules for the AI assistant',
         '・`/invite` — Invite links with recommended permissions'
       ].join('\n')
     ],
@@ -105,7 +102,6 @@ const TEXT = {
       '__Per-server AI settings (needs Manage Server)__',
       [
         '・`/setup assistant` — Menu for persona (streamer / bot), reply length, and automatic stream/upload events',
-        '・`/assistantrules` — Set moderator rules for the AI (server rules channels are also read automatically)',
         '・`/youtube show` / `/youtube summarize` — View followed YouTube channels and summarize videos'
       ].join('\n')
     ],

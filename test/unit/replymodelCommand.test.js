@@ -9,16 +9,14 @@ function run (suffix) {
   return command.func(message, suffix).then(() => said[0])
 }
 
-test('%replymodel shows, sets and resets the server\'s model, thinking level and tier across all 6 tasks; only for the bot\'s developers', async () => {
+test('%replymodel shows, sets and resets the server\'s model, thinking level and tier across all 4 tasks; only for the bot\'s developers', async () => {
   const { models } = installReplyLengthStore()
   const { resolveTaskConfig } = require('../../src/bot/modules/eventDrafter')
   try {
     assert.equal(command.type, 'creator')
     const initial = await run('')
     assert.match(initial, /- モデル: gemini-3\.8-flash（既定）\n- 思考の深さ: high（既定）\n- 推論ティア: standard（既定）/)
-    assert.match(initial, /- `rules`（初回メンション時のルール選定）: gemini-3\.1-flash-lite（既定） \/ 思考:minimal（既定） \/ ティア:standard（既定）/)
-    assert.match(initial, /- `blurb`（配信開始前のイベント告知文・ゲームURL）: gemini-3\.5-flash-lite（既定） \/ 思考:low（既定） \/ ティア:standard（既定）/)
-    assert.match(initial, /- `light`（絵文字説明・定期Web検索）: gemini-3\.5-flash-lite（既定） \/ 思考:low（既定） \/ ティア:flex（既定）/)
+    assert.match(initial, /- `light`（絵文字説明・定期Web検索・ゲームURL）: gemini-3\.5-flash-lite（既定） \/ 思考:low（既定） \/ ティア:flex（既定）/)
     assert.match(initial, /- `extract`（Wiki \/ X \/ Steam \/ Web 知識抽出・内輪ネタ抽出）: gemini-3\.1-flash-lite（既定） \/ 思考:minimal（既定） \/ ティア:flex（既定）/)
     assert.match(initial, /- `summary`（配信アーカイブ自動要約）: gemini-3\.8-flash（既定） \/ 思考:low（既定） \/ ティア:flex（既定）/)
     assert.match(await run('model gemini-4-argon'), /- モデル: gemini-4-argon（このサーバーの設定）/)

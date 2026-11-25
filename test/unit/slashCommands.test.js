@@ -27,7 +27,7 @@ test('the language Discord sends is kept on the interaction (Eris drops it)', ()
 test('every slash command has a handler, and its descriptions and choices in English and Japanese within Discord\'s limits', () => {
   const handlers = fs.readdirSync(path.resolve('src', 'bot', 'slashcommands')).map(f => require(path.resolve('src', 'bot', 'slashcommands', f)).name)
   for (const command of commands) assert.ok(handlers.includes(command.name), command.name)
-  for (const gone of ['ping', 'serverinfo', 'userinfo']) assert.ok(!commands.some(c => c.name === gone), `/${gone} is gone`)
+  for (const gone of ['ping', 'serverinfo', 'userinfo', 'assistantrules']) assert.ok(!commands.some(c => c.name === gone), `/${gone} is gone`)
   const check = (item, where) => {
     assert.ok(item.description && item.description.length <= 100, `${where}: description`)
     assert.ok(item.description_localizations?.ja && item.description_localizations.ja.length <= 100, `${where}: Japanese description`)

@@ -21,7 +21,6 @@ const { relevant } = require('../utils/relevance')
 const { mentionsMinor, isUnsafeMinorContent, sanitizeUntrustedLines, MAX_MINOR_RELATED_ITEMS } = require('../utils/minorSafety')
 const streamerStyle = require('./streamerStyle')
 const serverLore = require('./serverLore')
-const serverRules = require('./serverRules')
 const loreStore = require('../../db/interfaces/postgres/serverLore')
 const embeddingStore = require('../../db/interfaces/postgres/embeddings')
 const { isGatewayConfigured } = require('../utils/aiGateway')
@@ -68,7 +67,6 @@ const DECLARATIONS = [
   tool('summarize_youtube_video', { parameters: OBJECT({ url: STRING }, ['url']) }),
   tool('search_channel_history', { parameters: OBJECT({ channel_id: STRING, query: STRING }, ['channel_id']) }),
   tool('list_channels'),
-  tool('get_server_rules'),
   tool('list_forums'),
   tool('ask_user', {
     view: { maxOptions: MAX_OPTIONS },
@@ -349,12 +347,6 @@ function createTools ({ guild, member, ask, progress = () => {}, streamerPersona
           return `${c.id}: ${c.name}（${CHANNEL_TYPES[c.type] || c.type}）${category ? ` [${category}]` : ''}${topic}`
         })
         .join('\n')
-    },
-    async get_server_rules () {
-      const rules = await serverRules.readRules(guild)
-      if (!rules?.length) return 'このサーバーのルールチャンネルは見つかりませんでした'
-      for (const r of rules) sources.push(`<#${r.channelID}>`)
-      return rules.map(r => `### <#${r.channelID}> より\n${r.text}`).join('\n\n')
     },
     async list_forums () {
       return describeForums(guild, member)
@@ -1295,7 +1287,6 @@ async function describeServer (guild, member, requestChannelID, { query = '', co
   }
   if (guild.description) lines.push(`説明: ${guild.description}`)
   if (guild.memberCount) lines.push(`メンバー数: ${guild.memberCount}`)
-  if (guild.rulesChannelID) lines.push(`ルールチャンネル: <#${guild.rulesChannelID}>（内容は get_server_rules で読む）`)
 
   // What the knowledge and the emojis are chosen for: the request, and the conversation it replies
   // to, which counts more (a reply such as "それの続きは？" is about what came before). The latest

@@ -1,19 +1,18 @@
-// Client for GeneLab/sokudan-ja-310m (`sokudan serve`), a lightweight Japanese System-1 decision
-// model (~310M parameters, single forward pass, zero text generation) used for:
+// Client for Google's Decisions API (`POST /v1beta/decisions`, model `gemini-decision-1`:
+// $0.10/1M input tokens, $0 output tokens), a lightweight System-1 decision model (single forward
+// pass, zero text generation) used for:
 // 1. Mention pre-routing (intent classification, deep-reasoning detection, R18 detection, thinking level)
-// 2. Prompt injection screening and soft-refusal / fade-out (朝チュン) detection
+// 2. Soft-refusal / fade-out (朝チュン) detection on R18 / story replies
 // 3. Pre-screening long replies in replyPolish to skip unnecessary Gemini rewrites when already natural
 //
-// When SOKUDAN_URL is unset or the sidecar container is unreachable, every helper falls back
-// gracefully so existing regex / Gemini logic continues unchanged.
+// Off by default unless GEMINI_DECISION_API=true; when disabled or unreachable, every helper falls
+// back gracefully so existing regex / Gemini logic continues unchanged.
 
 const prompts = require('./prompts')
 
-const DEFAULT_TIMEOUT_MS = 3000
-const DEFAULT_HEALTH_TIMEOUT_MS = 5000
-const DEFAULT_RETRY_INTERVAL_MS = 30 * 1000
-// GeneLab/sokudan-ja-310m under-predicts P(true) on `noul` (mean ~0.20 vs 0.30 base rate while
-// AUROC is ~0.88-0.91); 0.35 gives strong recall without sacrificing precision.
+const DEFAULT_TIMEOUT_MS = 5000
+const DEFAULT_GEMINI_DECISION_MODEL = 'gemini-decision-1'
+const DECISION_RETRY_AFTER_MS = 5 * 60 * 1000
 const DEFAULT_BOOL_THRESHOLD = 0.35
 const DEFAULT_R18_THRESHOLD = 0.55
 const DEFAULT_REFUSAL_THRESHOLD = 0.65
@@ -24,16 +23,15 @@ const MIN_REFUSAL_CHECK_CHARS = 10
 const ADULT_CHANNEL_LABEL_PATTERN = /(?:^|[^a-z0-9])(?:r-?18|nsfw)(?:$|[^a-z0-9])|18禁|成人向け|アダルト|えっち|エッチ|エロ|官能|下ネタ|年齢制限/i
 const CONTEXT_DEPENDENT_REQUEST_PATTERN = /続き|続編|その後|その先|それ|これ|あれ|さっき|前の|今の|もっと|さらに|そのまま|書き直|変えて/i
 
-const sokudanState = {
+const decisionState = {
   usable: null,
-  url: null,
   checkedAt: 0,
   error: null,
   model: null
 }
 
 function timeoutMs () {
-  const n = Number(process.env.SOKUDAN_TIMEOUT_MS)
+  const n = Number(process.env.GEMINI_DECISION_TIMEOUT_MS)
   return Number.isFinite(n) && n > 0 ? n : DEFAULT_TIMEOUT_MS
 }
 
@@ -42,55 +40,16 @@ function boolThreshold (envName = null, fallback = DEFAULT_BOOL_THRESHOLD) {
     const custom = Number(process.env[envName])
     if (Number.isFinite(custom) && custom > 0 && custom < 1) return custom
   }
-  const n = Number(process.env.SOKUDAN_BOOL_THRESHOLD)
+  const n = Number(process.env.GEMINI_DECISION_BOOL_THRESHOLD)
   return Number.isFinite(n) && n > 0 && n < 1 ? n : fallback
 }
 
 function polishScoreThreshold () {
-  const n = Number(process.env.SOKUDAN_POLISH_SCORE_THRESHOLD)
+  const n = Number(process.env.GEMINI_DECISION_POLISH_SCORE_THRESHOLD)
   return Number.isFinite(n) && n >= 0 && n <= 2 ? n : DEFAULT_POLISH_SCORE_THRESHOLD
 }
 
-function sokudanEndpoint () {
-  const raw = String(process.env.SOKUDAN_URL || '').trim()
-  if (!raw) return null
-  const withProto = /^https?:\/\//i.test(raw) ? raw : `http://${raw}`
-  const baseUrl = withProto
-    .replace(/\/+$/, '')
-    .replace(/\/v1\/systemone$/i, '')
-    .replace(/\/v1$/i, '')
-    .replace(/\/health$/i, '')
-  return {
-    baseUrl,
-    systemOneUrl: `${baseUrl}/v1/systemone`,
-    healthUrl: `${baseUrl}/health`
-  }
-}
-
-function isConfigured () {
-  return !!sokudanEndpoint()
-}
-
-function isUsable () {
-  const endpoint = sokudanEndpoint()
-  if (!endpoint) return false
-  if (sokudanState.url === endpoint.baseUrl && sokudanState.usable === false) {
-    if (sokudanState.checkedAt && Date.now() - sokudanState.checkedAt < DEFAULT_RETRY_INTERVAL_MS) {
-      return false
-    }
-  }
-  return true
-}
-
-function sokudanHeaders () {
-  const headers = { 'Content-Type': 'application/json' }
-  const key = String(process.env.SOKUDAN_API_KEY || '').trim()
-  if (key) headers.Authorization = `Bearer ${key}`
-  return headers
-}
-
-// Normalizes Discord markup and trims `text` to a concise plain string (GeneLab/sokudan-ja-310m
-// expects a plain string `state` rather than a JSON object).
+// Normalizes Discord markup and trims `text` to a concise plain string.
 function cleanState (text, maxChars = MAX_STATE_CHARS) {
   if (typeof text !== 'string') return ''
   return text
@@ -102,94 +61,6 @@ function cleanState (text, maxChars = MAX_STATE_CHARS) {
     .replace(/\n{3,}/g, '\n\n')
     .trim()
     .slice(0, maxChars)
-}
-
-async function checkConnection () {
-  const endpoint = sokudanEndpoint()
-  if (!endpoint) return false
-  sokudanState.url = endpoint.baseUrl
-  try {
-    const res = await fetch(endpoint.healthUrl, {
-      method: 'GET',
-      headers: sokudanHeaders(),
-      signal: AbortSignal.timeout(DEFAULT_HEALTH_TIMEOUT_MS)
-    })
-    if (!res.ok) {
-      const body = await res.text().catch(() => '')
-      throw new Error(`HTTP ${res.status}: ${body.slice(0, 200)}`)
-    }
-    const data = await res.json().catch(() => ({}))
-    sokudanState.usable = true
-    sokudanState.checkedAt = Date.now()
-    sokudanState.error = null
-    sokudanState.model = data?.model || 'GeneLab/sokudan-ja-310m'
-    global.logger?.info(`[SOKUDAN]: Connected to ${endpoint.baseUrl} (model: ${sokudanState.model}, backend: ${data?.backend || 'unknown'}, device: ${data?.device || 'unknown'})`)
-    return true
-  } catch (e) {
-    sokudanState.usable = false
-    sokudanState.checkedAt = Date.now()
-    sokudanState.error = e.message
-    global.logger?.warn(`[SOKUDAN]: Health check failed for ${endpoint.baseUrl}: ${e.message}`)
-    return false
-  }
-}
-
-function startSokudanCheck () {
-  if (!isConfigured()) return
-  checkConnection().catch(() => {})
-}
-
-// Sends a single System-1 decision query to `POST /v1/systemone`.
-// `state` MUST be a plain string; `questions` maps question IDs to `{ type, instructions, criteria }`.
-async function systemOne (state, questions, options = {}) {
-  const endpoint = sokudanEndpoint()
-  if (!endpoint || !isUsable()) return null
-  const cleaned = cleanState(state, options.maxStateChars || MAX_STATE_CHARS)
-  if (!cleaned || !questions || typeof questions !== 'object' || !Object.keys(questions).length) return null
-  try {
-    const res = await fetch(endpoint.systemOneUrl, {
-      method: 'POST',
-      headers: sokudanHeaders(),
-      body: JSON.stringify({ state: cleaned, questions }),
-      signal: AbortSignal.timeout(options.timeoutMs || timeoutMs())
-    })
-    if (!res.ok) {
-      const body = await res.text().catch(() => '')
-      if (res.status >= 500 || res.status === 429 || res.status === 401 || res.status === 403 || res.status === 404) {
-        sokudanState.url = endpoint.baseUrl
-        sokudanState.usable = false
-        sokudanState.checkedAt = Date.now()
-        sokudanState.error = `HTTP ${res.status}`
-      }
-      global.logger?.warn(`[SOKUDAN]: /v1/systemone returned HTTP ${res.status}: ${body.slice(0, 200)}`)
-      return null
-    }
-    const data = await res.json()
-    sokudanState.url = endpoint.baseUrl
-    sokudanState.usable = true
-    sokudanState.checkedAt = Date.now()
-    sokudanState.error = null
-    return data && typeof data.answers === 'object' ? data : null
-  } catch (e) {
-    sokudanState.url = endpoint.baseUrl
-    sokudanState.usable = false
-    sokudanState.checkedAt = Date.now()
-    sokudanState.error = e.message
-    global.logger?.debug?.(`[SOKUDAN]: /v1/systemone request failed, falling back: ${e.message}`)
-    return null
-  }
-}
-
-// Fallback System-1 decision backend using Google's Decisions API (`POST /v1beta/decisions`,
-// model `gemini-decision-1`: $0.10/1M input tokens, $0 output tokens) when the local Sokudan
-// sidecar is unconfigured or offline. Uses the exact same question schema (`noul`/`choice`/`score`).
-const DEFAULT_GEMINI_DECISION_MODEL = 'gemini-decision-1'
-const DECISION_RETRY_AFTER_MS = 5 * 60 * 1000
-const decisionState = {
-  usable: null,
-  checkedAt: 0,
-  error: null,
-  model: null
 }
 
 function geminiDecisionModel () {
@@ -209,8 +80,16 @@ function geminiDecisionUsable () {
   return true
 }
 
+function isConfigured () {
+  return isDecisionApiEnabled()
+}
+
+function isUsable () {
+  return geminiDecisionUsable()
+}
+
 function canDecide () {
-  return isUsable() || geminiDecisionUsable()
+  return geminiDecisionUsable()
 }
 
 function geminiDecisionHeaders () {
@@ -220,14 +99,15 @@ function geminiDecisionHeaders () {
   return headers
 }
 
+// Sends a single System-1 decision query directly to Google's Decisions API (`POST /v1beta/decisions`).
 async function callGeminiDecision (state, questions, options = {}) {
   if (!geminiDecisionUsable()) return null
-  const cleaned = cleanState(state)
-  if (!cleaned) return null
+  const cleaned = cleanState(state, options.maxStateChars || MAX_STATE_CHARS)
+  if (!cleaned || !questions || typeof questions !== 'object' || !Object.keys(questions).length) return null
   const model = geminiDecisionModel()
   const { gatewayURL } = require('./aiGateway')
   const url = gatewayURL('google-ai-studio/v1beta/decisions')
-  const timeout = options.timeoutMs || Math.max(timeoutMs(), 5000)
+  const timeout = options.timeoutMs || timeoutMs()
   try {
     const res = await fetch(url, {
       method: 'POST',
@@ -273,14 +153,7 @@ async function callGeminiDecision (state, questions, options = {}) {
 }
 
 async function decideState (state, questions, options = {}) {
-  if (isUsable()) {
-    const sidecar = await systemOne(state, questions, options)
-    if (sidecar) return sidecar
-  }
-  if (geminiDecisionUsable()) {
-    return callGeminiDecision(state, questions, options)
-  }
-  return null
+  return callGeminiDecision(state, questions, options)
 }
 
 function scoreToThinkingLevel (score, intent) {
@@ -344,12 +217,12 @@ async function classifyMentionRequest (request, referencedText = '', channelCont
   const intentConfidence = Number.isFinite(intentAns?.confidence) ? intentAns.confidence : 0
   const deepProb = Number.isFinite(deepAns?.noul) ? deepAns.noul : 0
   const r18Prob = Number.isFinite(r18Ans?.noul) ? r18Ans.noul : 0
-  // null when the sidecar did not answer this one: the caller then judges by its own pattern.
+  // null when the model did not answer this one: the caller then judges by its own pattern.
   const storyProb = Number.isFinite(storyAns?.noul) ? storyAns.noul : null
   const complexityScore = Number.isFinite(compAns?.score) ? compAns.score : null
 
-  const r18Thresh = boolThreshold('SOKUDAN_R18_THRESHOLD', DEFAULT_R18_THRESHOLD)
-  const deepThresh = boolThreshold('SOKUDAN_DEEP_THRESHOLD')
+  const r18Thresh = boolThreshold('GEMINI_DECISION_R18_THRESHOLD', DEFAULT_R18_THRESHOLD)
+  const deepThresh = boolThreshold('GEMINI_DECISION_DEEP_THRESHOLD')
 
   return {
     intent,
@@ -358,11 +231,11 @@ async function classifyMentionRequest (request, referencedText = '', channelCont
     deepProb,
     isR18: r18Prob >= r18Thresh,
     r18Prob,
-    isStory: storyProb === null ? null : storyProb >= boolThreshold('SOKUDAN_STORY_THRESHOLD'),
+    isStory: storyProb === null ? null : storyProb >= boolThreshold('GEMINI_DECISION_STORY_THRESHOLD'),
     storyProb,
     complexityScore,
     thinkingLevel: scoreToThinkingLevel(complexityScore, intent),
-    source: data.source || 'sokudan'
+    source: data.source || 'gemini-decision'
   }
 }
 
@@ -380,7 +253,7 @@ async function detectRefusalReply (text, requestText = '') {
 
   const data = await decideState(state, REFUSAL_QUESTIONS())
   const prob = Number.isFinite(data?.answers?.refusal?.noul) ? data.answers.refusal.noul : 0
-  const threshold = boolThreshold('SOKUDAN_REFUSAL_THRESHOLD', DEFAULT_REFUSAL_THRESHOLD)
+  const threshold = boolThreshold('GEMINI_DECISION_REFUSAL_THRESHOLD', DEFAULT_REFUSAL_THRESHOLD)
   return {
     refused: prob >= threshold,
     probability: prob
@@ -389,8 +262,8 @@ async function detectRefusalReply (text, requestText = '') {
 
 // Use Case 3: Evaluates whether a >= 250-char chat reply actually sounds stiff / AI-translated
 // before spending a Gemini round-trip in replyPolish.js.
-// Returns `null` when Sokudan and Gemini Decisions API are both unconfigured or unreachable so
-// replyPolish falls back to its existing behavior.
+// Returns `null` when Gemini Decisions API is disabled or unreachable so replyPolish falls back to
+// its existing behavior.
 async function detectStiffAiReply (text) {
   if (!canDecide()) return null
   const cleaned = cleanState(text, MAX_STATE_CHARS)
@@ -403,7 +276,7 @@ async function detectStiffAiReply (text) {
   const prob = Number.isFinite(data.answers.needs_rewrite?.noul) ? data.answers.needs_rewrite.noul : null
   if (score === null && prob === null) return null
 
-  const threshold = boolThreshold('SOKUDAN_POLISH_THRESHOLD')
+  const threshold = boolThreshold('GEMINI_DECISION_POLISH_THRESHOLD')
   const scoreThresh = polishScoreThreshold()
   const needsPolish = (prob !== null && prob >= threshold) || (score !== null && score >= scoreThresh)
 
@@ -415,7 +288,6 @@ async function detectStiffAiReply (text) {
 }
 
 module.exports = {
-  sokudanEndpoint,
   isConfigured,
   isUsable,
   canDecide,
@@ -423,13 +295,9 @@ module.exports = {
   isDecisionApiEnabled,
   geminiDecisionUsable,
   decisionState,
-  sokudanState,
-  checkConnection,
-  startSokudanCheck,
   cleanState,
   boolThreshold,
   polishScoreThreshold,
-  systemOne,
   callGeminiDecision,
   decideState,
   scoreToThinkingLevel,
