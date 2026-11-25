@@ -928,4 +928,110 @@ describe('stores', { skip: !database.available && 'needs PGHOST' }, () => {
       assert.ok(!list.some(v => v.video_id === 'styleVid002'))
     })
   })
+
+  describe('altDetection', () => {
+    test('stores per-guild flag, member snapshots, message/embedding lookups, and alert cooldown history', async () => {
+      require('../helpers/fakes').restoreAltDetectionStore()
+      const altDB = require('../../src/db/interfaces/postgres/altDetection')
+      const { toStoredContent } = require('../../src/db/interfaces/postgres/create')
+      await require('../../src/db/interfaces/postgres/create').createGuild({ id: 'g_alt', ownerID: 'o1' })
+      altDB.resetCache()
+
+      assert.equal(await altDB.isAltDetectionEnabled('g_alt'), false)
+      assert.equal(await altDB.setAltDetection('g_alt', true), true)
+      assert.equal(await altDB.isAltDetectionEnabled('g_alt'), true)
+      altDB.resetCache('g_alt')
+      assert.equal(await altDB.isAltDetectionEnabled('g_alt'), true)
+
+      const banTime = new Date('2026-11-20T10:00:00Z')
+      await altDB.upsertMemberProfile('g_alt', {
+        userID: 'u_banned',
+        username: 'troll_main',
+        globalName: 'トロール',
+        avatarHash: 'hash_abc',
+        inviteCode: 'INV01',
+        joinedAt: new Date('2026-11-01T00:00:00Z'),
+        status: 'active'
+      })
+      await altDB.markMemberStatus('g_alt', 'u_banned', 'banned', { reason: '荒らし', at: banTime })
+      await altDB.markMemberStatus('g_alt', 'u_restricted', 'restricted', {
+        reason: '違反者ロール付与',
+        at: banTime,
+        profile: { username: 'muted_user' }
+      })
+      await altDB.upsertMemberProfile('g_alt', {
+        userID: 'u_suspect',
+        username: 'troll_sub2',
+        inviteCode: 'INV01',
+        joinedAt: new Date('2026-11-20T10:20:00Z'),
+        status: 'active'
+      })
+
+      const bannedProf = await altDB.getMemberProfile('g_alt', 'u_banned')
+      assert.equal(bannedProf.status, 'banned')
+      assert.equal(bannedProf.moderationReason, '荒らし')
+      assert.equal(bannedProf.inviteCode, 'INV01', 'upsert preserves existing invite_code')
+
+      const candidates = await altDB.getCandidateProfiles('g_alt', 'u_suspect')
+      assert.equal(candidates[0].userID, 'u_banned')
+      assert.equal(candidates[1].userID, 'u_restricted')
+      assert.equal(candidates[1].status, 'restricted')
+
+      const unitVec = `[${['1', ...Array(511).fill('0')].join(',')}]`
+      await q(`INSERT INTO messages (id, author_id, content, ts, channel_id, guild_id, embedding, embedding_model) VALUES
+        ('alt_m1', 'u_banned', $1, now() - interval '2 days', 'c1', 'g_alt', $4::halfvec, 'gemini-embedding-001'),
+        ('alt_m2', 'u_banned', $2, now() - interval '1 day', 'c1', 'g_alt', $4::halfvec, 'gemini-embedding-001'),
+        ('alt_m3', 'u_banned', $3, now() - interval '12 hours', 'c1', 'g_alt', $4::halfvec, 'gemini-embedding-001')`, [
+        toStoredContent('それマジ草なんだが'),
+        toStoredContent('いや普通に草でしょ'),
+        toStoredContent('今日も寝不足で草'),
+        unitVec
+      ])
+      const msgs = await altDB.getMemberMessages('g_alt', 'u_banned')
+      assert.equal(msgs.length, 3)
+      assert.equal(msgs[0].content, '今日も寝不足で草')
+
+      const recentMap = await altDB.getRecentAuthorsMessages('g_alt', 'u_suspect')
+      assert.equal(recentMap.get('u_banned')?.length, 3)
+
+      const centroid = await altDB.getAuthorEmbeddingCentroid('g_alt', 'u_banned')
+      assert.equal(centroid.length, 512)
+      assert.ok(Math.abs(centroid[0] - 1) < 0.01)
+
+      assert.equal(await altDB.hasRecentAlert('g_alt', 'u_suspect', 'u_banned', 24), false)
+      const recorded = await altDB.recordAlert('g_alt', {
+        suspectUserID: 'u_suspect',
+        candidateUserID: 'u_banned',
+        trigger: 'join',
+        heuristicScore: 82,
+        aiConfidence: 91,
+        verdict: 'likely_alt',
+        summary: 'BAN直後に同一招待コードで参加',
+        signals: ['BANから20分後']
+      })
+      assert.ok(recorded.id)
+      const recordedMsg = await altDB.recordAlert('g_alt', {
+        suspectUserID: 'u_suspect',
+        candidateUserID: 'u_restricted',
+        trigger: 'messages',
+        heuristicScore: 74,
+        aiConfidence: 80,
+        verdict: 'possible_alt',
+        summary: '違反者ロール持ちと文体一致',
+        signals: ['文体一致']
+      })
+      assert.ok(recordedMsg.id)
+      assert.equal(await altDB.hasRecentAlert('g_alt', 'u_suspect', 'u_banned', 24), true)
+      const history = await altDB.getRecentAlerts('g_alt')
+      assert.equal(history.length, 2)
+      assert.equal(history[0].trigger, 'messages')
+      assert.equal(history[1].suspectUsername, 'troll_sub2')
+      assert.equal(history[1].candidateUsername, 'troll_main')
+      assert.equal(history[1].aiConfidence, 91)
+      assert.deepEqual(history[1].signals, ['BANから20分後'])
+
+      await q("DELETE FROM guilds WHERE id = 'g_alt'")
+      assert.deepEqual(await altDB.getRecentAlerts('g_alt'), [], 'deleting guild cascades alt_alerts')
+    })
+  })
 })

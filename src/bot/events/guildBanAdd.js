@@ -1,9 +1,14 @@
 const send = require('../modules/webhooksender')
+const altDetector = require('../modules/altDetector')
 
 module.exports = {
   name: 'guildBanAdd',
   type: 'on',
   handle: async (guild, user) => {
+    const bannedAt = new Date()
+    altDetector.onMemberBan(guild, user, { reason: null, at: bannedAt }).catch(e => {
+      global.logger?.warn(`[ALT]: onMemberBan failed in ${guild.id}: ${e.message}`)
+    })
     const guildBanAddEvent = {
       guildID: guild.id,
       eventName: 'guildBanAdd',
@@ -58,7 +63,10 @@ module.exports = {
       }
       const perp = log.user
       if (perp) {
-        if (log.reason) guildBanAddEvent.embeds[0].fields[1].value = log.reason
+        if (log.reason) {
+          guildBanAddEvent.embeds[0].fields[1].value = log.reason
+          altDetector.onMemberBan(guild, user, { reason: log.reason, at: bannedAt }).catch(() => {})
+        }
         guildBanAddEvent.embeds[0].fields[2].value = `\`\`\`ini\nユーザー = ${user.id}\n実行者 = ${perp.id}\`\`\``
         guildBanAddEvent.embeds[0].footer = {
           text: `${perp.username}#${perp.discriminator}`,

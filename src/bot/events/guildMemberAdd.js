@@ -1,5 +1,6 @@
 const send = require('../modules/webhooksender')
 const inviteCache = require('../modules/invitecache')
+const altDetector = require('../modules/altDetector')
 
 module.exports = {
   name: 'guildMemberAdd',
@@ -36,6 +37,7 @@ module.exports = {
     if (!member.username) { // No username? nope.
       return
     }
+    let usedInviteCode = null
     const botPerms = guild.members.get(global.bot.user.id)?.permissions?.json
     if (botPerms?.manageGuild && botPerms?.manageChannels) {
       let guildInvites
@@ -65,6 +67,7 @@ module.exports = {
           }
         }
         if (usedInvite) {
+          usedInviteCode = usedInvite.code || null
           GMAEvent.embeds[0].fields.push({
             name: '使用された招待',
             value: `${usedInvite.code}（使用回数 ${usedInvite.uses.toLocaleString()}）`,
@@ -82,6 +85,9 @@ module.exports = {
       value: `\`\`\`ini\nメンバー = ${member.id}\nサーバー = ${guild.id}\`\`\``
     })
     await send(GMAEvent)
+    altDetector.onMemberJoin(guild, member, { inviteCode: usedInviteCode }).catch(e => {
+      global.logger?.warn(`[ALT]: onMemberJoin failed in ${guild.id}: ${e.message}`)
+    })
   }
 }
 

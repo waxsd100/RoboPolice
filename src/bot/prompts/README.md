@@ -43,6 +43,7 @@ BOT が Gemini（と検閲なしモデル・画像モデル）に渡すプロン
 | `tools/shared/image-instruction.md` | 下書きの提出ツールに共通の `image_instruction` 引数の説明 |
 | `sokudan/*.md` | Google Decisions API（`gemini-decision-1`）への質問。`## 質問名` の節ごとに本文が指示、`- キー: 説明` が選択肢、`1. 説明` が段階（コードの `prompts.questions()`） |
 | `game/official-page.md` | ゲームの公式ページ探し |
+| `alt/analyze.md` | AI サブ垢検知（第2段階の Gemini 精密判定・アバター比較、`altDetector.js`） |
 
 ## 書くときの決まり
 

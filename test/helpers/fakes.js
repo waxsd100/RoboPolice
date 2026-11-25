@@ -965,6 +965,110 @@ function installMentionLogStore (logs = []) {
 }
 installMentionLogStore()
 
+const realAltDetectionStore = { ...require('../../src/db/interfaces/postgres/altDetection') }
+function restoreAltDetectionStore () {
+  Object.assign(require('../../src/db/interfaces/postgres/altDetection'), realAltDetectionStore)
+}
+function installAltDetectionStore ({ enabled = {}, profiles = [], messages = [], centroids = {}, alerts = [] } = {}) {
+  const store = require('../../src/db/interfaces/postgres/altDetection')
+  const state = {
+    enabled: { ...enabled },
+    profiles: new Map(profiles.map(p => [`${p.guildID}:${p.userID}`, { ...p }])),
+    messages: messages.map(m => ({ ...m })),
+    centroids: { ...centroids },
+    alerts: alerts.map(a => ({ ...a }))
+  }
+  store.resetCache = () => {}
+  store.isAltDetectionEnabled = async guildID => Boolean(state.enabled[guildID])
+  store.setAltDetection = async (guildID, val) => {
+    state.enabled[guildID] = Boolean(val)
+    return state.enabled[guildID]
+  }
+  store.upsertMemberProfile = async (guildID, profile) => {
+    if (!guildID || !profile?.userID) return
+    const key = `${guildID}:${profile.userID}`
+    const prev = state.profiles.get(key) || {}
+    state.profiles.set(key, {
+      ...prev,
+      guildID,
+      userID: profile.userID,
+      username: profile.username ?? prev.username ?? null,
+      globalName: profile.globalName ?? prev.globalName ?? null,
+      nick: profile.nick ?? prev.nick ?? null,
+      avatarHash: profile.avatarHash ?? prev.avatarHash ?? null,
+      avatarURL: profile.avatarURL ?? prev.avatarURL ?? null,
+      accountCreatedAt: profile.accountCreatedAt ? new Date(profile.accountCreatedAt) : (prev.accountCreatedAt || null),
+      joinedAt: profile.joinedAt ? new Date(profile.joinedAt) : (prev.joinedAt || null),
+      inviteCode: profile.inviteCode ?? prev.inviteCode ?? null,
+      status: profile.status || prev.status || 'active',
+      statusAt: profile.statusAt ? new Date(profile.statusAt) : (prev.statusAt || null),
+      moderationReason: profile.moderationReason ?? prev.moderationReason ?? null,
+      updatedAt: new Date()
+    })
+  }
+  store.markMemberStatus = async (guildID, userID, status, { reason = null, at = new Date(), profile = {} } = {}) => {
+    return store.upsertMemberProfile(guildID, { ...profile, userID, status, statusAt: at, moderationReason: reason })
+  }
+  store.getMemberProfile = async (guildID, userID) => state.profiles.get(`${guildID}:${userID}`) || null
+  store.getCandidateProfiles = async (guildID, excludeUserID, { limit = 200 } = {}) => {
+    const rank = s => (s === 'banned' ? 0 : s === 'kicked' ? 1 : s === 'restricted' ? 2 : s === 'left' ? 3 : 4)
+    return [...state.profiles.values()]
+      .filter(p => p.guildID === guildID && p.userID !== excludeUserID)
+      .sort((a, b) => rank(a.status) - rank(b.status))
+      .slice(0, limit)
+  }
+  store.getMemberMessages = async (guildID, userID, { limit = 60 } = {}) => state.messages
+    .filter(m => m.guildID === guildID && m.authorID === userID && m.content)
+    .sort((a, b) => new Date(b.ts) - new Date(a.ts))
+    .slice(0, limit)
+  store.getRecentAuthorsMessages = async (guildID, excludeUserID, { authorLimit = 30, perAuthor = 30, days = 30 } = {}) => {
+    const since = Date.now() - days * 86400 * 1000
+    const byAuthor = new Map()
+    for (const m of state.messages) {
+      if (m.guildID !== guildID || m.authorID === excludeUserID || !m.content) continue
+      if (new Date(m.ts).getTime() < since) continue
+      if (!byAuthor.has(m.authorID)) byAuthor.set(m.authorID, [])
+      byAuthor.get(m.authorID).push(m)
+    }
+    const grouped = new Map()
+    for (const [authorID, list] of byAuthor) {
+      if (list.length < 3) continue
+      grouped.set(authorID, list.sort((a, b) => new Date(b.ts) - new Date(a.ts)).slice(0, perAuthor))
+      if (grouped.size >= authorLimit) break
+    }
+    return grouped
+  }
+  store.getAuthorEmbeddingCentroid = async (guildID, userID) => state.centroids[`${guildID}:${userID}`] || null
+  store.hasRecentAlert = async (guildID, suspectUserID, candidateUserID, cooldownHours = 24) => {
+    const since = Date.now() - cooldownHours * 3600 * 1000
+    return state.alerts.some(a =>
+      a.guildID === guildID &&
+      a.suspectUserID === suspectUserID &&
+      a.candidateUserID === candidateUserID &&
+      new Date(a.createdAt).getTime() >= since
+    )
+  }
+  store.recordAlert = async (guildID, entry) => {
+    const row = {
+      id: state.alerts.length + 1,
+      guildID,
+      ...entry,
+      createdAt: new Date()
+    }
+    state.alerts.push(row)
+    return { id: row.id, created_at: row.createdAt }
+  }
+  store.getRecentAlerts = async (guildID, { limit = 10 } = {}) => state.alerts
+    .filter(a => a.guildID === guildID)
+    .slice()
+    .reverse()
+    .slice(0, limit)
+  return state
+}
+installAltDetectionStore()
+
 module.exports.installEmbeddingModel = installEmbeddingModel
 module.exports.installReplyLengthStore = installReplyLengthStore
 module.exports.installMentionLogStore = installMentionLogStore
+module.exports.installAltDetectionStore = installAltDetectionStore
+module.exports.restoreAltDetectionStore = restoreAltDetectionStore

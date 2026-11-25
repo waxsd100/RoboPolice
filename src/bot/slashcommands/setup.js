@@ -3,6 +3,7 @@ const { randomUUID: uuidv4 } = require('crypto')
 const update = require('../../db/interfaces/postgres/update')
 const replySettings = require('../../db/interfaces/postgres/replySettings')
 const youtubeDB = require('../../db/interfaces/postgres/youtube')
+const altDB = require('../../db/interfaces/postgres/altDetection')
 const emojiDescriber = require('../modules/emojiDescriber')
 const { DEFAULT_REPLY_LENGTH } = require('../modules/eventDrafter')
 const cacheGuild = require('../utils/cacheGuild')
@@ -940,6 +941,7 @@ async function handleStatusSetup (interaction, { asEdit = false, initialNote = n
     const liveOn = process.env.YOUTUBE_API_KEY
       ? await youtubeDB.liveEventsOn(guildID).catch(() => false)
       : null
+    const altOn = await altDB.isAltDetectionEnabled(guildID).catch(() => false)
 
     const personaText = ai.streamerPersona !== false
       ? pick(interaction, { ja: '配信者として話す', en: 'As the streamer' })
@@ -952,6 +954,10 @@ async function handleStatusSetup (interaction, { asEdit = false, initialNote = n
     }
     const aiLines = [
       pick(interaction, { ja: `・話し方: **${personaText}** ／ 返事の長さ: **${lengthMap[lengthKey] || lengthKey}**`, en: `・Persona: **${personaText}** / Length: **${lengthMap[lengthKey] || lengthKey}**` }),
+      pick(interaction, {
+        ja: `・AI サブ垢自動検知（通知のみ）: **${altOn ? '有効' : '無効'}**（変更は \`/altcheck config\`）`,
+        en: `・AI alt-account auto-detection (alert-only): **${altOn ? 'On' : 'Off'}** (change via \`/altcheck config\`)`
+      }),
       ...(liveOn !== null
         ? [pick(interaction, {
             ja: `・配信・新着動画の自動イベント登録: **${liveOn ? '有効' : '無効'}**`,

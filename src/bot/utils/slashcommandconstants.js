@@ -3,7 +3,7 @@
 // (description_localizations, name_localizations); the replies follow the client's language too
 // (utils/i18n.js).
 const ERIS_CONSTANTS = require('eris').Constants
-const { STRING, INTEGER, BOOLEAN, CHANNEL, SUB_COMMAND } = ERIS_CONSTANTS.ApplicationCommandOptionTypes
+const { STRING, INTEGER, BOOLEAN, USER, CHANNEL, SUB_COMMAND } = ERIS_CONSTANTS.ApplicationCommandOptionTypes
 
 // A description in English and Japanese.
 const describe = (en, ja) => ({ description: en, description_localizations: { ja } })
@@ -213,6 +213,87 @@ exports.commands = [
         type: SUB_COMMAND,
         name: 'show',
         ...describe('Show what is stored', '保存している内容を表示する')
+      }
+    ]
+  },
+  {
+    name: 'altcheck',
+    dm_permission: false,
+    ...describe('Find potential alt accounts, compare two accounts with AI, and manage auto-detection', 'サブ垢候補の探索・サーバー内スキャン・2アカウントのAI比較・自動検知の設定'),
+    options: [
+      {
+        type: SUB_COMMAND,
+        name: 'find',
+        ...describe('Search for potential alt accounts matching a user (banned/kicked/left or active)', '特定ユーザーに一致するサブ垢候補を探す（BAN・キック・退出済み・既存メンバー対象）'),
+        options: [{
+          type: USER,
+          name: 'user',
+          ...describe('Target user (you can also paste a raw user ID for banned/left accounts)', '調査対象のユーザー（BAN・退出済みアカウントはユーザーIDの直接入力も可）'),
+          required: true
+        }]
+      },
+      {
+        type: SUB_COMMAND,
+        name: 'scan',
+        ...describe('Scan the server to find suspicious alt-account pairs (BAN evasion & active members)', 'サーバー内をスキャンしてサブ垢・同一人物の疑いがあるペアを探す'),
+        options: [{
+          type: STRING,
+          name: 'scope',
+          ...describe('Which accounts to scan (default: all)', 'スキャンする対象範囲（初期値: すべて）'),
+          required: false,
+          choices: [
+            choice('all', 'All (BAN/kick evasion + existing members)', 'すべて（BAN・キック回避＋既存メンバー同士）'),
+            choice('ban_evasion', 'BAN/kick/leave evasion only', 'BAN・キック・退出アカウントとの照合のみ'),
+            choice('members', 'Existing server members only', '既存メンバー同士の同一人物チェックのみ')
+          ]
+        }, {
+          type: INTEGER,
+          name: 'limit',
+          ...describe('Maximum candidate pairs to show (1-10, default 5)', '表示する候補ペアの最大件数（1〜10、初期値 5）'),
+          min_value: 1,
+          max_value: 10,
+          required: false
+        }]
+      },
+      {
+        type: SUB_COMMAND,
+        name: 'compare',
+        ...describe('Directly compare two accounts with heuristics and AI precision analysis', '2つのアカウントを直接比較して同一人物・サブ垢かAIで精密判定する'),
+        options: [{
+          type: USER,
+          name: 'user1',
+          ...describe('First account to compare (mention or raw user ID)', '比較するアカウント A（メンションまたはユーザーID）'),
+          required: true
+        }, {
+          type: USER,
+          name: 'user2',
+          ...describe('Second account to compare (mention or raw user ID)', '比較するアカウント B（メンションまたはユーザーID）'),
+          required: true
+        }]
+      },
+      {
+        type: SUB_COMMAND,
+        name: 'config',
+        ...describe('View or toggle automatic alt-account detection alerts for this server', 'このサーバーの自動サブ垢検知アラートのオン／オフを確認・切り替える'),
+        options: [{
+          type: BOOLEAN,
+          name: 'enabled',
+          ...describe('True to enable automatic alerts, False to disable (omit to view)', 'True で自動検知をオン、False でオフ（省略すると現在の設定を表示）'),
+          required: false
+        }]
+      },
+      {
+        type: SUB_COMMAND,
+        name: 'alerts',
+        ...describe('Show recent alt-account detection alerts recorded in this server', 'このサーバーで記録された最近のサブ垢検知アラート履歴を表示する'),
+        options: [{
+          type: INTEGER,
+          name: 'limit',
+          ...describe('How many recent alerts to show (1-15, default 10)', '表示する件数（1〜15、初期値 10）'),
+          min_value: 1,
+          max_value: 15,
+          required: false
+        }]
       }
     ]
   },
