@@ -267,11 +267,19 @@ async function handleConfig (interaction, guild, sub) {
     ? (lang === 'en' ? '✅ **Enabled**' : '✅ **有効（オン）**')
     : (lang === 'en' ? '⬜ **Disabled**' : '⬜ **無効（オフ）**')
 
+  const offenderRoles = [...altDetector.offenderRoleIds()]
+  const offenderRolesText = offenderRoles.length
+    ? offenderRoles.map(id => `<@&${id}> (\`${id}\`)`).join(', ')
+    : (lang === 'en' ? 'None' : 'なし')
+
   const lines = [
     lang === 'en' ? `Automatic alt-account detection: ${statusText}` : `自動サブ垢検知: ${statusText}`,
     lang === 'en'
       ? `Alert destination: ${alertChannelId ? `<#${alertChannelId}>` : '⚠️ No log channel configured (run `/setup via_presets` first)'}`
       : `アラート通知先: ${alertChannelId ? `<#${alertChannelId}>` : '⚠️ ログチャンネル未設定（先に `/setup via_presets` を実行してください）'}`,
+    lang === 'en'
+      ? `Offender roles (treated like BAN/kick): ${offenderRolesText}`
+      : `違反者扱いロール（BAN/キック同等に照合）: ${offenderRolesText}`,
     lang === 'en'
       ? `AI precision review: ${isGatewayConfigured() ? 'Available (2-stage hybrid)' : 'Unavailable (heuristic-only fallback)'}`
       : `AI 精密判定: ${isGatewayConfigured() ? '利用可能（第1段階ルール＋第2段階Geminiのハイブリッド方式）' : '未接続（ルール判定フォールバックのみ）'}`,

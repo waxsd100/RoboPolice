@@ -13,7 +13,7 @@ const urlFetcher = require('../../src/bot/utils/urlFetcher')
 
 const ENV_KEYS = [
   'CLOUDFLARE_ACCOUNT_ID', 'CLOUDFLARE_AI_GATEWAY_ID', 'GEMINI_API_KEY',
-  'ALT_DETECTION', 'ALT_JOIN_AI_THRESHOLD', 'ALT_MESSAGE_AI_THRESHOLD',
+  'ALT_DETECTION', 'ALT_OFFENDER_ROLE_IDS', 'ALT_JOIN_AI_THRESHOLD', 'ALT_MESSAGE_AI_THRESHOLD',
   'ALT_ALERT_CONFIDENCE', 'ALT_ALERT_COOLDOWN_HOURS', 'ALT_MESSAGE_WATCH_DAYS'
 ]
 
@@ -465,13 +465,89 @@ describe('altDetector Stage 2 Gemini analysis, event hooks, and /altcheck comman
     ])
     assert.match(sameMsg.content, /同じアカウント同士は比較できません/)
 
-    // 5. /altcheck config toggles auto-detection
+    // 5. /altcheck config toggles auto-detection and shows offender role 882586674717138954
     const cfgOn = await runCmd('config', [{ name: 'enabled', value: true }])
     assert.match(cfgOn.embeds[0].description, /有効（オン）/)
+    assert.match(cfgOn.embeds[0].description, /882586674717138954/)
 
     // 6. /altcheck alerts lists history
     const alertsMsg = await runCmd('alerts', [{ name: 'limit', value: 5 }])
     assert.match(alertsMsg.embeds[0].title, /直近 1 件/)
     assert.match(alertsMsg.embeds[0].description, /BAN直後の再参加/)
+  })
+
+  test('members with offender role 882586674717138954 are treated as restricted offenders like banned/kicked accounts', async (t) => {
+    delete process.env.ALT_OFFENDER_ROLE_IDS
+    const now = new Date('2026-11-24T12:00:00Z')
+    const restrictedAt = new Date('2026-11-24T11:30:00Z')
+    const guild = createGuild({ id: 'g_off' })
+    const executed = makeBotWithLogs(guild)
+    t.mock.method(webhookCache, 'getWebhook', async () => 'wh1|tok1')
+    const storeState = installAltDetectionStore({ enabled: { g_off: true } })
+
+    const offenderMember = {
+      id: '300000000000000001',
+      username: 'muted_main',
+      roles: ['882586674717138954'],
+      user: { id: '300000000000000001', username: 'muted_main' }
+    }
+    const oldMember = {
+      id: '300000000000000001',
+      username: 'muted_main',
+      roles: [],
+      user: { id: '300000000000000001', username: 'muted_main' }
+    }
+
+    // 1. Granting role 882586674717138954 marks member as restricted
+    const upd = await altDetector.onMemberUpdate(guild, offenderMember, oldMember, { at: restrictedAt })
+    assert.equal(upd.updated, true)
+    assert.equal(upd.status, 'restricted')
+    assert.equal(storeState.profiles.get('g_off:300000000000000001').status, 'restricted')
+
+    // 2. Leaving while holding the offender role preserves restricted status (doesn't downgrade to left)
+    await altDetector.onMemberLeave(guild, offenderMember, { kicked: false, at: restrictedAt })
+    assert.equal(storeState.profiles.get('g_off:300000000000000001').status, 'restricted')
+
+    // 3. New alt joining 30 min later with similar name & fresh account triggers evasion alert (even with AI unconfigured fallback >= 70)
+    delete process.env.CLOUDFLARE_ACCOUNT_ID
+    delete process.env.CLOUDFLARE_AI_GATEWAY_ID
+    const altMember = {
+      id: '300000000000000002',
+      username: 'muted_sub2',
+      roles: [],
+      user: { id: '300000000000000002', username: 'muted_sub2', createdAt: new Date('2026-11-24T11:45:00Z').getTime() },
+      joinedAt: now.getTime()
+    }
+    guild.members.set(altMember.id, altMember)
+    const joinRes = await altDetector.onMemberJoin(guild, altMember, { now })
+    assert.equal(joinRes.alerted, true)
+    assert.ok(joinRes.candidate.heuristic.signals.some(s => s.includes('違反者ロール付与')))
+    assert.equal(executed.length, 1)
+
+    // 4. scanServer(scope: 'ban_evasion') also matches live members currently holding role 882586674717138954
+    guild.members.set('300000000000000003', {
+      id: '300000000000000003',
+      username: 'live_offender_main',
+      roles: ['882586674717138954'],
+      user: { id: '300000000000000003', username: 'live_offender_main' }
+    })
+    guild.members.set('300000000000000004', {
+      id: '300000000000000004',
+      username: 'live_offender_sub',
+      roles: [],
+      user: { id: '300000000000000004', username: 'live_offender_sub' }
+    })
+    const scanRes = await altDetector.scanServer(guild, { scope: 'ban_evasion', aiVerifyTop: 0 })
+    assert.ok(scanRes.pairs.some(p =>
+      p.suspectProfile.userID === '300000000000000004' &&
+      p.candidateProfile.userID === '300000000000000003' &&
+      p.candidateProfile.status === 'restricted'
+    ))
+
+    // 5. Removing offender role restores active status
+    const cleared = await altDetector.onMemberUpdate(guild, oldMember, offenderMember, { at: now })
+    assert.equal(cleared.updated, true)
+    assert.equal(cleared.status, 'active')
+    assert.equal(storeState.profiles.get('g_off:300000000000000001').status, 'active')
   })
 })

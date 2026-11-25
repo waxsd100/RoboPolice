@@ -18,7 +18,7 @@ CREATE TABLE IF NOT EXISTS member_activity_profiles (
   account_created_at TIMESTAMPTZ,
   joined_at TIMESTAMPTZ,
   invite_code TEXT,
-  status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'left', 'kicked', 'banned')),
+  status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'restricted', 'left', 'kicked', 'banned')),
   status_at TIMESTAMPTZ,
   moderation_reason TEXT,
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
@@ -30,7 +30,7 @@ CREATE INDEX IF NOT EXISTS member_activity_profiles_guild_status
 CREATE INDEX IF NOT EXISTS member_activity_profiles_guild_joined
   ON member_activity_profiles (guild_id, joined_at DESC);
 
-COMMENT ON TABLE member_activity_profiles IS 'サブ垢検知・BAN/キック回避照合用のサーバー別メンバープロフィール・入退室/処罰履歴スナップショット';
+COMMENT ON TABLE member_activity_profiles IS 'サブ垢検知・BAN/キック/違反者ロール回避照合用のサーバー別メンバープロフィール・入退室/処罰履歴スナップショット';
 COMMENT ON COLUMN member_activity_profiles.guild_id IS 'DiscordサーバーID';
 COMMENT ON COLUMN member_activity_profiles.user_id IS 'DiscordユーザーID';
 COMMENT ON COLUMN member_activity_profiles.username IS '記録時点のDiscordユーザー名';
@@ -41,9 +41,9 @@ COMMENT ON COLUMN member_activity_profiles.avatar_url IS '記録時点のアバ�
 COMMENT ON COLUMN member_activity_profiles.account_created_at IS 'Discordアカウントの作成日時';
 COMMENT ON COLUMN member_activity_profiles.joined_at IS 'このサーバーへの参加日時';
 COMMENT ON COLUMN member_activity_profiles.invite_code IS '参加時に使用された招待コード';
-COMMENT ON COLUMN member_activity_profiles.status IS '現在の状態（active / left / kicked / banned）';
-COMMENT ON COLUMN member_activity_profiles.status_at IS '退出・キック・BANが発生した日時';
-COMMENT ON COLUMN member_activity_profiles.moderation_reason IS 'BANまたはキック時の理由（監査ログ由来）';
+COMMENT ON COLUMN member_activity_profiles.status IS '現在の状態（active / restricted / left / kicked / banned）';
+COMMENT ON COLUMN member_activity_profiles.status_at IS '退出・キック・BAN・違反者ロール付与が発生した日時';
+COMMENT ON COLUMN member_activity_profiles.moderation_reason IS 'BAN・キック・違反者ロール付与時の理由';
 COMMENT ON COLUMN member_activity_profiles.updated_at IS 'レコードの最終更新日時';
 
 CREATE TABLE IF NOT EXISTS alt_alerts (

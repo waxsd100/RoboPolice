@@ -1011,7 +1011,7 @@ function installAltDetectionStore ({ enabled = {}, profiles = [], messages = [],
   }
   store.getMemberProfile = async (guildID, userID) => state.profiles.get(`${guildID}:${userID}`) || null
   store.getCandidateProfiles = async (guildID, excludeUserID, { limit = 200 } = {}) => {
-    const rank = s => (s === 'banned' ? 0 : s === 'kicked' ? 1 : s === 'left' ? 2 : 3)
+    const rank = s => (s === 'banned' ? 0 : s === 'kicked' ? 1 : s === 'restricted' ? 2 : s === 'left' ? 3 : 4)
     return [...state.profiles.values()]
       .filter(p => p.guildID === guildID && p.userID !== excludeUserID)
       .sort((a, b) => rank(a.status) - rank(b.status))

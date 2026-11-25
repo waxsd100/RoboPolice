@@ -111,13 +111,13 @@ async function getMemberProfile (guildID, userID) {
   return rowToProfile(rows[0])
 }
 
-// Prioritizes banned/kicked/left accounts first, then recently updated active accounts.
+// Prioritizes banned/kicked/restricted/left accounts first, then recently updated active accounts.
 async function getCandidateProfiles (guildID, excludeUserID, { limit = 200 } = {}) {
   const { rows } = await pool.query(
     `SELECT * FROM member_activity_profiles
      WHERE guild_id = $1 AND user_id <> $2
      ORDER BY
-       CASE status WHEN 'banned' THEN 0 WHEN 'kicked' THEN 1 WHEN 'left' THEN 2 ELSE 3 END,
+       CASE status WHEN 'banned' THEN 0 WHEN 'kicked' THEN 1 WHEN 'restricted' THEN 2 WHEN 'left' THEN 3 ELSE 4 END,
        COALESCE(status_at, joined_at, updated_at) DESC
      LIMIT $3`,
     [guildID, excludeUserID, limit]

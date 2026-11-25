@@ -2,6 +2,7 @@ const send = require('../modules/webhooksender')
 const cacheGuild = require('../utils/cacheGuild')
 const arrayCompare = require('../utils/arraycompare')
 const markdownEscape = require('markdown-escape')
+const altDetector = require('../modules/altDetector')
 
 const canUseExternal = guild => {
   const logChannelID = global.bot.guildSettingsCache[guild.id]?.event_logs?.guildMemberUpdate
@@ -20,6 +21,9 @@ module.exports = {
     if (!guild || !member || !global.bot.guilds.get(guild.id)) { // don't try to log something when the bot isn't in the guild
       return
     }
+    altDetector.onMemberUpdate(guild, member, oldMember).catch(e => {
+      global.logger?.warn(`[ALT]: onMemberUpdate failed in ${guild.id}: ${e.message}`)
+    })
     if (!global.bot.guildSettingsCache[guild.id]) {
       await cacheGuild(guild.id)
     }

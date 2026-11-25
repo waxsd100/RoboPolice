@@ -22,7 +22,8 @@ const DISCORD_EPOCH = 1420070400000
 const MESSAGE_MILESTONES = [5, 15]
 const MAX_COUNTER_ENTRIES = 10000
 const SIMULTANEOUS_WINDOW_MS = 15 * 1000
-const MOD_STATUSES = new Set(['banned', 'kicked'])
+const DEFAULT_OFFENDER_ROLE_IDS = ['882586674717138954']
+const MOD_STATUSES = new Set(['banned', 'kicked', 'restricted'])
 const ALERT_EVENT_PRIORITY = ['guildBanAdd', 'guildMemberKick', 'guildMemberAdd', 'guildMemberRemove', ...ALL_EVENTS]
 
 const ALT_RESPONSE_SCHEMA = {
@@ -54,6 +55,22 @@ function envNumber (name, fallback, min = 0, max = Infinity) {
 
 function isGlobalEnabled () {
   return process.env.ALT_DETECTION !== 'false'
+}
+
+// Role IDs treated as offenders (same evasion/priority rules as banned/kicked accounts).
+// Unset uses DEFAULT_OFFENDER_ROLE_IDS; set to empty string to disable.
+function offenderRoleIds () {
+  const raw = process.env.ALT_OFFENDER_ROLE_IDS
+  if (raw === undefined) return new Set(DEFAULT_OFFENDER_ROLE_IDS)
+  return new Set(String(raw).split(',').map(s => s.trim()).filter(Boolean))
+}
+
+function hasOffenderRole (member) {
+  const roles = member?.roles
+  if (!Array.isArray(roles) || roles.length === 0) return false
+  const ids = offenderRoleIds()
+  if (ids.size === 0) return false
+  return roles.some(r => ids.has(String(r)))
 }
 
 function joinAiThreshold (isModCandidate = true) {
@@ -124,6 +141,7 @@ function profileFromMember (member, extra = {}) {
     ? new Date(user.createdAt)
     : (member.createdAt ? new Date(member.createdAt) : snowflakeToDate(userID))
   const joinedAt = member.joinedAt ? new Date(member.joinedAt) : null
+  const restricted = hasOffenderRole(member)
   return {
     userID,
     username: user.username || member.username || null,
@@ -134,9 +152,10 @@ function profileFromMember (member, extra = {}) {
     accountCreatedAt: createdAt,
     joinedAt,
     inviteCode: null,
-    status: 'active',
+    status: restricted ? 'restricted' : 'active',
     statusAt: null,
-    moderationReason: null,
+    moderationReason: restricted ? '違反者ロール付与' : null,
+    _hasKnownRoles: Array.isArray(member.roles),
     ...extra
   }
 }
@@ -404,7 +423,9 @@ function scorePair ({
     if (delta >= -60 * 1000) {
       const clampedDelta = Math.max(0, delta)
       if (candIsMod) {
-        const actionLabel = candidateProfile.status === 'banned' ? 'BAN' : 'キック'
+        const actionLabel = candidateProfile.status === 'banned'
+          ? 'BAN'
+          : (candidateProfile.status === 'kicked' ? 'キック' : '違反者ロール付与')
         if (clampedDelta <= 2 * 3600 * 1000) {
           raw += 35
           signals.push(`候補の${actionLabel}から${formatDurationJa(clampedDelta)}後に参加（極めて近接）`)
@@ -425,7 +446,7 @@ function scorePair ({
     }
   }
 
-  // 2. Account age at join & creation right after BAN/kick
+  // 2. Account age at join & creation right after BAN/kick/offender-role
   if (createdAt) {
     const refTime = joinedAt ? joinedAt.getTime() : now.getTime()
     const ageMs = Math.max(0, refTime - createdAt.getTime())
@@ -446,7 +467,7 @@ function scorePair ({
       if (createdAfter >= -60 * 1000 && createdAfter <= 14 * 86400 * 1000) {
         metrics.createdAfterMod = true
         raw += 10
-        signals.push('候補のBAN/キック後に新規作成されたアカウント')
+        signals.push('候補のBAN/キック/違反者ロール付与後に新規作成されたアカウント')
       }
     }
   }
@@ -567,6 +588,12 @@ function scorePair ({
 function mergeProfiles (dbProfile, liveProfile) {
   if (!dbProfile) return liveProfile
   if (!liveProfile) return dbProfile
+  let status = liveProfile.status || dbProfile.status
+  if (liveProfile.status === 'restricted') {
+    status = 'restricted'
+  } else if (dbProfile.status === 'restricted' && !liveProfile._hasKnownRoles) {
+    status = 'restricted'
+  }
   return {
     ...dbProfile,
     username: liveProfile.username || dbProfile.username,
@@ -576,8 +603,11 @@ function mergeProfiles (dbProfile, liveProfile) {
     avatarURL: liveProfile.avatarURL || dbProfile.avatarURL,
     accountCreatedAt: dbProfile.accountCreatedAt || liveProfile.accountCreatedAt,
     joinedAt: dbProfile.joinedAt || liveProfile.joinedAt,
-    // Keep moderation status from DB if user is no longer active; live member means active.
-    status: liveProfile.status || dbProfile.status
+    status,
+    statusAt: status === 'restricted' ? (dbProfile.statusAt || liveProfile.statusAt) : (liveProfile.statusAt || dbProfile.statusAt),
+    moderationReason: status === 'restricted'
+      ? (dbProfile.moderationReason || liveProfile.moderationReason || '違反者ロール付与')
+      : (dbProfile.moderationReason || liveProfile.moderationReason)
   }
 }
 
@@ -736,6 +766,7 @@ function statusLabelJa (status) {
   switch (status) {
     case 'banned': return 'BAN済み'
     case 'kicked': return 'キック済み'
+    case 'restricted': return '違反者ロール付与'
     case 'left': return '退出済み'
     case 'active': return '在籍中'
     default: return '不明'
@@ -746,6 +777,7 @@ function statusLabelEn (status) {
   switch (status) {
     case 'banned': return 'Banned'
     case 'kicked': return 'Kicked'
+    case 'restricted': return 'Restricted (offender role)'
     case 'left': return 'Left'
     case 'active': return 'Active'
     default: return 'Unknown'
@@ -918,8 +950,8 @@ function verdictLabel (verdict, lang = 'ja') {
 
 function triggerLabel (trigger, lang = 'ja') {
   const map = lang === 'en'
-    ? { join: 'Member join (auto)', message: 'Post-join messages (auto)', manual: 'Manual check (/altcheck)' }
-    : { join: '参加時自動検知', message: '参加後発言の自動検知', manual: '手動調査 (/altcheck)' }
+    ? { join: 'Member join (auto)', messages: 'Post-join messages (auto)', message: 'Post-join messages (auto)', manual: 'Manual check (/altcheck)' }
+    : { join: '参加時自動検知', messages: '参加後発言の自動検知', message: '参加後発言の自動検知', manual: '手動調査 (/altcheck)' }
   return map[trigger] || trigger
 }
 
@@ -1060,21 +1092,56 @@ async function onMemberLeave (guild, member, { kicked = false, reason = null, at
   if (!guild?.id || !member) return
   const userID = member.id || member.user?.id
   if (!userID || member.bot || member.user?.bot) return
-  await altDB.markMemberStatus(guild.id, userID, kicked ? 'kicked' : 'left', {
-    reason: reason || null,
+  const restricted = hasOffenderRole(member)
+  const status = kicked ? 'kicked' : (restricted ? 'restricted' : 'left')
+  const effectiveReason = reason || (status === 'restricted' ? '違反者ロール付与のまま退出' : null)
+  await altDB.markMemberStatus(guild.id, userID, status, {
+    reason: effectiveReason,
     at,
     profile: profileFromMember(member) || { userID }
   })
+}
+
+async function onMemberUpdate (guild, member, oldMember, { at = new Date() } = {}) {
+  if (!guild?.id || !member) return { updated: false }
+  const userID = member.id || member.user?.id
+  if (!userID || member.bot || member.user?.bot) return { updated: false }
+  const hadOffender = oldMember ? hasOffenderRole(oldMember) : null
+  const hasOffender = hasOffenderRole(member)
+
+  if (hasOffender && hadOffender !== true) {
+    if (hadOffender === null) {
+      const existing = await altDB.getMemberProfile(guild.id, userID).catch(() => null)
+      if (existing?.status === 'restricted') return { updated: false }
+    }
+    await altDB.markMemberStatus(guild.id, userID, 'restricted', {
+      reason: '違反者ロール付与',
+      at,
+      profile: profileFromMember(member, { status: 'restricted' }) || { userID }
+    })
+    return { updated: true, status: 'restricted' }
+  }
+
+  if (!hasOffender && hadOffender === true) {
+    await altDB.markMemberStatus(guild.id, userID, 'active', {
+      reason: null,
+      at,
+      profile: profileFromMember(member, { status: 'active' }) || { userID }
+    })
+    return { updated: true, status: 'active' }
+  }
+  return { updated: false }
 }
 
 async function onMemberJoin (guild, member, { inviteCode = null, now = new Date() } = {}) {
   if (!guild?.id || !member) return { checked: false }
   const user = member.user || member
   if (member.bot || user?.bot) return { checked: false }
+  const initialStatus = hasOffenderRole(member) ? 'restricted' : 'active'
   const profile = profileFromMember(member, {
     joinedAt: member.joinedAt ? new Date(member.joinedAt) : now,
     inviteCode: inviteCode || null,
-    status: 'active',
+    status: initialStatus,
     statusAt: now
   })
   if (!profile) return { checked: false }
@@ -1176,7 +1243,7 @@ async function onMessage (message, { now = new Date() } = {}) {
 
   if (suspectMessages.length < 3) return { checked: true, alerted: false }
 
-  const candidates = await findCandidates(resolvedGuild, suspectProfile, suspectMessages, { trigger: 'message', now, limit: 3 })
+  const candidates = await findCandidates(resolvedGuild, suspectProfile, suspectMessages, { trigger: 'messages', now, limit: 3 })
   if (!candidates.length) return { checked: true, alerted: false }
 
   const threshold = messageAiThreshold()
@@ -1199,7 +1266,7 @@ async function onMessage (message, { now = new Date() } = {}) {
         candidateProfile: cand.candidateProfile,
         heuristic: cand.heuristic,
         ai,
-        trigger: 'message'
+        trigger: 'messages'
       })
       return { checked: true, alerted: true, candidate: cand, ai, delivery }
     }
@@ -1468,7 +1535,10 @@ async function scanServer (guild, { scope = 'all', limit = 5, aiVerifyTop = 2, m
 
 module.exports = {
   MESSAGE_MILESTONES,
+  DEFAULT_OFFENDER_ROLE_IDS,
   isGlobalEnabled,
+  offenderRoleIds,
+  hasOffenderRole,
   joinAiThreshold,
   messageAiThreshold,
   alertConfidence,
@@ -1502,6 +1572,7 @@ module.exports = {
   sendAltAlert,
   onMemberBan,
   onMemberLeave,
+  onMemberUpdate,
   onMemberJoin,
   onMessage,
   investigateUser,

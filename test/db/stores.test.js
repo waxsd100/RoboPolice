@@ -954,6 +954,11 @@ describe('stores', { skip: !database.available && 'needs PGHOST' }, () => {
         status: 'active'
       })
       await altDB.markMemberStatus('g_alt', 'u_banned', 'banned', { reason: '荒らし', at: banTime })
+      await altDB.markMemberStatus('g_alt', 'u_restricted', 'restricted', {
+        reason: '違反者ロール付与',
+        at: banTime,
+        profile: { username: 'muted_user' }
+      })
       await altDB.upsertMemberProfile('g_alt', {
         userID: 'u_suspect',
         username: 'troll_sub2',
@@ -969,6 +974,8 @@ describe('stores', { skip: !database.available && 'needs PGHOST' }, () => {
 
       const candidates = await altDB.getCandidateProfiles('g_alt', 'u_suspect')
       assert.equal(candidates[0].userID, 'u_banned')
+      assert.equal(candidates[1].userID, 'u_restricted')
+      assert.equal(candidates[1].status, 'restricted')
 
       const unitVec = `[${['1', ...Array(511).fill('0')].join(',')}]`
       await q(`INSERT INTO messages (id, author_id, content, ts, channel_id, guild_id, embedding, embedding_model) VALUES
@@ -1003,13 +1010,25 @@ describe('stores', { skip: !database.available && 'needs PGHOST' }, () => {
         signals: ['BANから20分後']
       })
       assert.ok(recorded.id)
+      const recordedMsg = await altDB.recordAlert('g_alt', {
+        suspectUserID: 'u_suspect',
+        candidateUserID: 'u_restricted',
+        trigger: 'messages',
+        heuristicScore: 74,
+        aiConfidence: 80,
+        verdict: 'possible_alt',
+        summary: '違反者ロール持ちと文体一致',
+        signals: ['文体一致']
+      })
+      assert.ok(recordedMsg.id)
       assert.equal(await altDB.hasRecentAlert('g_alt', 'u_suspect', 'u_banned', 24), true)
       const history = await altDB.getRecentAlerts('g_alt')
-      assert.equal(history.length, 1)
-      assert.equal(history[0].suspectUsername, 'troll_sub2')
-      assert.equal(history[0].candidateUsername, 'troll_main')
-      assert.equal(history[0].aiConfidence, 91)
-      assert.deepEqual(history[0].signals, ['BANから20分後'])
+      assert.equal(history.length, 2)
+      assert.equal(history[0].trigger, 'messages')
+      assert.equal(history[1].suspectUsername, 'troll_sub2')
+      assert.equal(history[1].candidateUsername, 'troll_main')
+      assert.equal(history[1].aiConfidence, 91)
+      assert.deepEqual(history[1].signals, ['BANから20分後'])
 
       await q("DELETE FROM guilds WHERE id = 'g_alt'")
       assert.deepEqual(await altDB.getRecentAlerts('g_alt'), [], 'deleting guild cascades alt_alerts')
