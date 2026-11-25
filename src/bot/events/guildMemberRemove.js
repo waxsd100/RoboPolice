@@ -1,5 +1,6 @@
 const send = require('../modules/webhooksender')
 const { User } = require('eris')
+const altDetector = require('../modules/altDetector')
 
 module.exports = {
   name: 'guildMemberRemove',
@@ -68,6 +69,9 @@ module.exports = {
         name: 'ID',
         value: `\`\`\`ini\nユーザー = ${member.id}\n実行者 = ${user.id}\`\`\``
       })
+      altDetector.onMemberLeave(guild, member, { kicked: true, reason: log.reason || null }).catch(e => {
+        global.logger?.warn(`[ALT]: onMemberLeave(kick) failed in ${guild.id}: ${e.message}`)
+      })
       return send(event)
     } else {
       // TODO: redo purge audit log stuff eventually (update: copy from patron bot eventually)
@@ -95,6 +99,9 @@ module.exports = {
       }, {
         name: 'ID',
         value: `\`\`\`ini\nユーザー = ${member.id}\`\`\``
+      })
+      altDetector.onMemberLeave(guild, member, { kicked: false }).catch(e => {
+        global.logger?.warn(`[ALT]: onMemberLeave failed in ${guild.id}: ${e.message}`)
       })
       return send(event)
     }

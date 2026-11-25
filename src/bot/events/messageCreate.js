@@ -1,6 +1,7 @@
 const commandHandler = require('../modules/commandhandler')
 const mentionEvent = require('../modules/mentionEvent')
 const discordKnowledge = require('../modules/discordKnowledge')
+const altDetector = require('../modules/altDetector')
 const cacheMessage = require('../../db/interfaces/postgres/create').cacheMessage
 const cacheGuild = require('../utils/cacheGuild')
 
@@ -13,6 +14,7 @@ module.exports = {
       await commandHandler(message)
       mentionEvent.handle(message).catch(e => global.logger.error(e))
       discordKnowledge.onMessage(message).catch(e => global.logger.warn(`[DISCORD]: ${e.message}`))
+      altDetector.onMessage(message).catch(e => global.logger.warn(`[ALT]: ${e.message}`))
     }
     if (message.author.id === global.bot.user.id) return // dump logs made by the bot
     let guildSettings = global.bot.guildSettingsCache[message.channel.guild.id]

@@ -36,6 +36,7 @@ Curtis Fowler氏による[Logger v3](https://github.com/curtisf/logger)からの
 | メッセージID、送信者ID、チャンネルID、サーバーID、タイムスタンプ、メッセージ本文（平文）、添付画像URL（受信時およびチャンネル履歴バックフィルで取得したもの） | PostgreSQL `messages`, `message_attachments`（および各チャンネルの取得進捗を記録する`discord_channels`） | `MESSAGE_HISTORY_DAYS`日間（未設定時は無期限）。メッセージ削除時、`/clearmydata`請求時、およびBOTがサーバーから退出した際にも削除されます |
 | BOTへのメンション（または返信）時のリクエスト本文、参照先メッセージ本文、BOTの応答テキスト、依頼者ID・表示名、使用モデル・トークン数 | PostgreSQL `mention_logs` | `MESSAGE_HISTORY_DAYS`日間（未設定時は無期限）。元メッセージの削除時、`/clearmydata`請求時、およびBOTのサーバー退出時にも削除されます |
 | サーバーごとの設定（ログ出力先チャンネル、無視するチャンネル、AI返信・モデル設定など）、サーバー名、アイコンURL、メンバー数、BOT参加日時、カスタム絵文字とAIによる説明文 | PostgreSQL `guilds`, `guild_emojis`, `guild_event_logs`, `guild_ai_models`, `discord_channels` | BOTがサーバーから退出するまで |
+| サブ垢検知用のメンバー参加・退出・キック・BANプロファイルスナップショット（ユーザー名・表示名・アバターハッシュ・参加日時・招待コード・ステータス）および検知アラート履歴 | PostgreSQL `member_activity_profiles`, `alt_alerts` | BOTがサーバーから退出するまで（サーバー削除時にカスケード削除） |
 | 招待リンクの使用回数カウンタ（招待コードは`AES_KEY`で暗号化）、Webhookハンドル、サーバー設定キャッシュ、メンション利用量のトークン集計 | Redis | キャッシュは3時間（トークン集計は5時間および7日間ウィンドウ） |
 | `SERVER_LORE=true`のときのみ: `@everyone`が閲覧できるチャンネルの保存メッセージから抽出したサーバー内の定番ネタ・用語・出来事・話し方の傾向（個人に関する記録は除外） | PostgreSQL `guild_lore_chunks`, `guild_lore_facts`（話し方の傾向は`guilds.lore_style`カラム） | 直近`SERVER_LORE_WEEKS`週間分（既定8週間）。メッセージが変更・削除されると再抽出され、BOTがサーバーから退出するとすべて削除されます |
 | BOTがフォローしているYouTubeチャンネル（`YOUTUBE_CHANNELS`）の情報・動画一覧・動画要約・配信イベント紐付け、Twitch配信アーカイブ（`TWITCH_CHANNELS`）、Steamプロフィール・所持ゲーム・レビュー・ウィッシュリスト（`STEAM_ACCOUNTS`）、Wiki・X・Web・対象ユーザーのDiscord発言から構築した知識データ | PostgreSQL `youtube_channels`, `youtube_videos`, `youtube_live_events`, `gemini_batches`, `twitch_channels`, `twitch_videos`, `steam_profiles`, `steam_apps`, `steam_games`, `x_posts`, `discord_posts`, `knowledge_pages`, `knowledge_sections`, `knowledge_facts`, `knowledge_fact_aliases` | フォロー対象または設定が維持されている間 |
@@ -83,6 +84,11 @@ BOT がサーバーに入った瞬間から、すべてのイベントを記録�
 | `/stoplogging channel:<チャンネル>` | 指定したチャンネルへのログ出力を止める（`other` ですべて止める） | Webhook の管理・チャンネルの管理 |
 | `/ignorechannel channel-to-ignore:<チャンネル>` | 指定したチャンネルの出来事をログに出さない／出すを切り替える（`optional` で一覧・リセット） | Webhook の管理・チャンネルの管理 |
 | `/logbots` | 他の BOT の操作もログに出すかを切り替える（初期値: 出さない） | Webhook の管理・チャンネルの管理 |
+| `/altcheck find user:<対象>` | 指定したユーザー（BAN・退出済みはユーザーID直接入力可）に対して、過去のBAN/キック/退出アカウントおよび既存メンバーからサブ垢候補を探索し、上位候補を AI で精密判定する | メンバーをBAN |
+| `/altcheck scan scope:<範囲> limit:<1〜10>` | サーバー内を横断スキャンし、BAN/キック回避や既存メンバー同士の同一人物候補ペアを一覧抽出＋上位候補を AI で精密判定する | メンバーをBAN |
+| `/altcheck compare user1:<A> user2:<B>` | 指定した2つのアカウントを直接比較し、ルール・文体・活動時間帯・アバター画像をもとに AI で同一人物か精密判定する | メンバーをBAN |
+| `/altcheck config enabled:<True/False>` | このサーバーの自動サブ垢検知アラート（通知のみ・自動処罰なし）のオン／オフを確認・切り替える（初期値: オフ） | サーバーの管理 |
+| `/altcheck alerts limit:<1〜15>` | このサーバーで記録された最近のサブ垢検知アラート履歴を表示する | メンバーをBAN |
 | `/clearmydata` | 保存データの削除の方法を表示する | なし |
 | `/invite` | 用途別（推奨の全機能・招待追跡・最小権限）の招待リンクとボタンを表示する | なし |
 | `/help event:<イベント> guide:<項目>` | 初期設定・ログ・AIメンションのヘルプを表示する（タブ切り替え対応） | なし |
@@ -214,6 +220,14 @@ YouTube動画（タイトル・概要欄・要約）、各種知識データ（W
 
 さらに「**画像を指示で変更**」ボタンやメンションでの指示（例: `@ロボポリス 画像を夕焼けにして`）により、AIで画像を編集・差し替えることも可能です（1つの下書きにつき最大5回まで）。
 - **エラー時の機密情報マスク（`src/bot/utils/redact.js`）**: エラー表示やエラーWebhook送信時には、環境変数のトークン・APIキー・パスワード・Webhook URLなどが自動的にマスクされます。
+
+### AI サブ垢検知システム（`src/bot/modules/altDetector.js`）
+
+BAN・キック回避の再参加および既存メンバー間の同一人物アカウントを検知する**2段階ハイブリッド方式**の補助機能です（サーバーごとにオプトイン、既定オフ。`/altcheck config enabled:True` で有効化）。誤検知による誤処罰を避けるため**自動BAN・キック・タイムアウトは一切行わず**、スタッフ向けログチャンネルへのアラート通知およびモデレーター向けコマンド（エフェメラル応答）のみを提供します。
+
+- **第1段階（AIコストゼロ・決定論的スコアリング）**: アカウント作成からの日数、BAN/キック/退出からの経過時間、同一招待コード、カスタムアバターハッシュ一致、ユーザー名・表示名・ニックネームの類似度、日本語・Discord特有の文体特徴（語尾・句読点・笑い表現・文字種比率）、文字3-gram、活動時間帯（JST）、発言チャンネル重複、および任意のpgvector発言意味ベクトル重心を組み合わせて0〜100点でスコアリングします。同時刻（15秒以内）に複数回やり取りしているペアには誤検知抑止ペナルティ（反証シグナル）を自動適用します。
+- **第2段階（Gemini 精密検証）**: 第1段階スコアがしきい値（`ALT_JOIN_AI_THRESHOLD` / `ALT_MESSAGE_AI_THRESHOLD`）を超えた候補または手動 `/altcheck` 実行時のみ、プロンプトインジェクション防御（`<untrusted>`）を施した上で Gemini による根拠・反証付きのJSON判定（必要に応じてアバター画像の視覚的類似比較を含む）を行います。
+- **手動探索・比較コマンド**: `/altcheck find`（特定ユーザーのサブ垢候補探索）、`/altcheck scan`（サーバー内横断スキャン）、`/altcheck compare`（2アカウントの直接比較）、`/altcheck alerts`（アラート履歴）をモデレーター（`メンバーをBAN`権限）がいつでも利用できます。
 
 ## 動作要件
 

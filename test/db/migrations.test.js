@@ -144,7 +144,7 @@ describe('migrations', { skip: !database.available && 'needs PGHOST' }, () => {
       assert.equal((await q('SELECT to_regclass($1) AS t', [old]))[0].t, null, old)
     }
     const tableCount = (await q("SELECT count(*)::int AS n FROM pg_tables WHERE schemaname = 'public'"))[0].n
-    assert.equal(tableCount, 34)
+    assert.equal(tableCount, 36)
   })
 
   test('lists in columns become rows, in order; names are kept once; IDs refer to their rows', async () => {
@@ -216,7 +216,7 @@ describe('migrations', { skip: !database.available && 'needs PGHOST' }, () => {
       { id: 'g2', log_bots: false, lore_style: null, lore_source_hash: null }
     ])
     const columns = (await q("SELECT column_name FROM information_schema.columns WHERE table_name = 'guilds' ORDER BY column_name")).map(r => r.column_name)
-    assert.deepEqual(columns, ['debug_footer', 'details_updated_at', 'embed_emojis', 'embed_messages', 'icon_url', 'id', 'joined_at', 'log_bots', 'lore_source_hash', 'lore_style', 'lore_updated_at', 'member_count', 'name', 'owner_id', 'reply_length', 'safety_filter', 'streamer_persona', 'token_flex_at', 'token_limit_5h', 'token_limit_week', 'token_unlimited', 'uncensored_r18', 'youtube_live_events'])
+    assert.deepEqual(columns, ['alt_detection', 'debug_footer', 'details_updated_at', 'embed_emojis', 'embed_messages', 'icon_url', 'id', 'joined_at', 'log_bots', 'lore_source_hash', 'lore_style', 'lore_updated_at', 'member_count', 'name', 'owner_id', 'reply_length', 'safety_filter', 'streamer_persona', 'token_flex_at', 'token_limit_5h', 'token_limit_week', 'token_unlimited', 'uncensored_r18', 'youtube_live_events'])
     assert.deepEqual(await q("SELECT task, model, thinking, tier FROM guild_ai_models WHERE guild_id = 'g1' ORDER BY task"), [
       { task: 'reply', model: 'gemini-3.8-flash', thinking: 'high', tier: 'standard' },
       { task: 'light', model: 'gemini-3.5-flash-lite', thinking: 'low', tier: 'flex' },
@@ -334,7 +334,7 @@ describe('migrations', { skip: !database.available && 'needs PGHOST' }, () => {
     const views = (await q("SELECT viewname FROM pg_views WHERE schemaname = 'public' ORDER BY viewname")).map(r => r.viewname)
     assert.ok(views.every(v => v.startsWith('v_')))
     assert.deepEqual(views, [
-      'v_discord_channels', 'v_discord_posts', 'v_gemini_batches', 'v_guild_ai_models',
+      'v_alt_alerts', 'v_discord_channels', 'v_discord_posts', 'v_gemini_batches', 'v_guild_ai_models',
       'v_guild_emojis', 'v_guild_lore', 'v_guilds', 'v_knowledge_facts',
       'v_knowledge_sections', 'v_mention_ai_calls', 'v_mention_ai_messages', 'v_mention_log_events', 'v_mention_logs', 'v_mention_threads', 'v_messages', 'v_steam_games',
       'v_twitch_videos', 'v_youtube_live_events', 'v_youtube_videos'

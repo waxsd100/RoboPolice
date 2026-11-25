@@ -24,6 +24,7 @@ const TEXT = {
         '・`/setup status` — 設定状況・必要な権限の診断・クイック設定メニュー',
         '・`/setup via_presets` / `via_individual_event` — ログ出力の設定',
         '・`/setup assistant` — AI の話し方・返事の長さ・配信イベント登録',
+        '・`/altcheck` — AI サブ垢候補の探索（`find`/`scan`）・2アカウント比較（`compare`）・自動検知設定',
         '・`/invite` — 用途別の招待リンク（推奨権限つき）'
       ].join('\n')
     ],
@@ -77,6 +78,7 @@ const TEXT = {
         '・`/setup status` — Check current setup, diagnose permissions, and open setup menus',
         '・`/setup via_presets` / `via_individual_event` — Choose logged events',
         '・`/setup assistant` — Configure AI persona, reply length, and stream events',
+        '・`/altcheck` — AI alt-account search (`find`/`scan`), account comparison (`compare`), and auto-alerts',
         '・`/invite` — Invite links with recommended permissions'
       ].join('\n')
     ],
