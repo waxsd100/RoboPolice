@@ -100,7 +100,7 @@ async function polish (text, { guildID = null, streamerPersona = false, stylePro
   if (!AI_PATTERNS.test(before) && sokudan.canDecide()) {
     const check = await sokudan.detectStiffAiReply(before)
     if (check && check.needsPolish === false) {
-      global.logger?.info(`[POLISH]: Skipped polishing a natural reply in ${guildID} (sokudan score=${check.score?.toFixed?.(2) ?? 'n/a'}, p=${check.probability?.toFixed?.(2) ?? 'n/a'})`)
+      global.logger?.info(`[POLISH]: Skipped polishing a natural reply in ${guildID} (decision score=${check.score?.toFixed?.(2) ?? 'n/a'}, p=${check.probability?.toFixed?.(2) ?? 'n/a'})`)
       return before
     }
   }

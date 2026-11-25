@@ -33,7 +33,7 @@ async function steamPage (name, { fetchImpl = fetch } = {}) {
 
 // An official page of the game found with Google Search through Gemini, or null.
 async function officialPage (name, { guildID = null } = {}) {
-  const { model: m, thinking, flex } = await resolveTaskConfig('blurb', guildID)
+  const { model: m, thinking } = await resolveTaskConfig('light', guildID)
   const content = await callGemini(m, {
     contents: [{
       role: 'user',
@@ -41,7 +41,7 @@ async function officialPage (name, { guildID = null } = {}) {
     }],
     tools: [{ google_search: {} }],
     generationConfig: { temperature: 0, ...thinking }
-  }, { timeoutMs: 30 * 1000, purpose: 'gameLinks', ...(flex ? { flex: true } : {}) })
+  }, { timeoutMs: 30 * 1000, purpose: 'gameLinks' })
   const url = content.parts.map(p => p.text || '').join('').match(/https?:\/\/[^\s)」"'<>]+/)?.[0]
   if (!url) return null
   // Only a page that opens: a model can name a URL that does not exist.

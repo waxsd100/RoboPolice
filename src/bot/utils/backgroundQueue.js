@@ -1,5 +1,5 @@
-// The AI work not answering someone right away (video summaries, emoji descriptions, stream
-// blurbs, archive summaries) goes through one queue per worker, AI_BACKGROUND_CONCURRENCY jobs at a
+// The AI work not answering someone right away (video summaries, emoji descriptions, archive
+// summaries) goes through one queue per worker, AI_BACKGROUND_CONCURRENCY jobs at a
 // time (default 3). Jobs of the owner's servers (priority.js), and jobs for no server in
 // particular, always start before those of other servers; within each, first come first served.
 const { isOwnerGuild } = require('./priority')

@@ -283,7 +283,7 @@ installStreamerStyleStore()
 // { guildID: true } for servers that show the debug line, tokenLimits { guildID: { '5h', week,
 // flexAt } } for a server's own limits. Installed when this file loads, so no test reaches a real
 // database.
-function installReplyLengthStore (lengths = {}, personas = {}, debugFooters = {}, tokenLimits = {}, models = {}, rules = {}, aiModels = {}, embeddings = {}, safety = {}) {
+function installReplyLengthStore (lengths = {}, personas = {}, debugFooters = {}, tokenLimits = {}, models = {}, aiModels = {}, embeddings = {}, safety = {}) {
   const store = require('../../src/db/interfaces/postgres/replySettings')
   const { isOwnerGuild } = require('../../src/bot/utils/priority')
   const taskModelsOf = guildID => {
@@ -306,7 +306,6 @@ function installReplyLengthStore (lengths = {}, personas = {}, debugFooters = {}
       replyModel: tasks.reply?.model || null,
       replyThinking: tasks.reply?.thinking || null,
       aiModels: tasks,
-      assistantRules: rules[guildID] || null,
       embeddings: emb,
       embedMessages: emb.messages ?? owner,
       embedEmojis: emb.emojis ?? owner,
@@ -358,14 +357,13 @@ function installReplyLengthStore (lengths = {}, personas = {}, debugFooters = {}
     if (!aiModels[guildID][task].model && !aiModels[guildID][task].thinking && !aiModels[guildID][task].tier) delete aiModels[guildID][task]
     if (task === 'reply') models[guildID] = { ...models[guildID], [which]: value }
   }
-  store.setAssistantRules = async (guildID, text) => { rules[guildID] = text }
   store.setReplyModel = async (guildID, which, value) => store.setTaskModel(guildID, 'reply', which, value)
   store.setTokenLimit = async (guildID, which, value) => { tokenLimits[guildID] = { ...tokenLimits[guildID], [which]: value } }
   store.getReplyLength = async guildID => lengths[guildID] || null
   store.setReplyLength = async (guildID, length) => { lengths[guildID] = length }
   store.setStreamerPersona = async (guildID, enabled) => { personas[guildID] = enabled }
   store.setDebugFooter = async (guildID, enabled) => { debugFooters[guildID] = enabled }
-  return { lengths, personas, debugFooters, tokenLimits, models, rules, aiModels, embeddings, safety }
+  return { lengths, personas, debugFooters, tokenLimits, models, aiModels, embeddings, safety }
 }
 installReplyLengthStore()
 
@@ -519,13 +517,6 @@ function installSteamStore ({ profiles = [], apps = new Map(), games = {}, revie
   return { profiles, apps, games, reviews, wishlist }
 }
 installSteamStore()
-
-// Rules channels are picked by their names in tests (serverRules.js), not by Gemini, so no test's
-// scripted Gemini turns are taken by it.
-{
-  const serverRules = require('../../src/bot/modules/serverRules')
-  serverRules.pick = async (guild, channels) => serverRules.byName(channels)
-}
 
 // The bot's load over the past hour (geminiLoad.js), in memory: counts { key: number }. Installed
 // when this file loads, so no test reaches Redis.
@@ -805,9 +796,8 @@ function configureGateway () {
   process.env.GEMINI_EXPLICIT_CACHE = 'false'
   process.env.GEMINI_DECISION_API = 'false'
   delete process.env.VIDEO_SUMMARY_FPS
-  delete process.env.SOKUDAN_URL
-  delete process.env.SOKUDAN_API_KEY
-  delete process.env.SOKUDAN_BOOL_THRESHOLD
+  delete process.env.GEMINI_DECISION_TIMEOUT_MS
+  delete process.env.GEMINI_DECISION_BOOL_THRESHOLD
   installAiCacheStore()
 }
 

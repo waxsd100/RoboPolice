@@ -21,7 +21,6 @@ const { fetchVideos, durationSeconds } = require('../utils/youtube')
 const { feedVideoIds } = require('./youtubeSync')
 const urlFetcher = require('../utils/urlFetcher')
 const { cropTo, SIZES } = require('../utils/imageCrop')
-const { describeStream } = require('./streamBlurb')
 const { ownerFirst } = require('../utils/priority')
 const { isGatewayConfigured } = require('../utils/aiGateway')
 
@@ -91,26 +90,21 @@ async function coverOf (thumbnail) {
   }
 }
 
-// What the AI says the stream is about (when it can), the pages of the games played (games:
-// [{ name, url }]), then as much of the stream's description as fits, then its URL.
-function eventDescription (video, blurb, games = []) {
+// As much of the stream's description as fits, then its URL.
+function eventDescription (video) {
   const tail = `\n\n${video.url}`
-  const gameLines = games.map(g => `🎮 ${g.mention ? `${g.mention} ` : ''}${g.name}${g.url ? `: ${g.url}` : ''}`).join('\n')
-  const head = [blurb, gameLines].filter(Boolean).map(part => `${part}\n\n`).join('')
-  const room = Math.max(MAX_DESCRIPTION - head.length - tail.length, 0)
+  const room = Math.max(MAX_DESCRIPTION - tail.length, 0)
   const own = (video.description || '').trim()
   const excerpt = own.length > room ? `${own.slice(0, Math.max(room - 1, 0))}…` : own
-  return `${head}${excerpt}${tail}`.trim()
+  return `${excerpt}${tail}`.trim()
 }
 
-async function createEvent (guild, video, start, { upload = false, length = DEFAULT_LENGTH_MS, describe = describeStream } = {}) {
+async function createEvent (guild, video, start, { upload = false, length = DEFAULT_LENGTH_MS } = {}) {
   const end = new Date(start.getTime() + length)
   const thumbnail = await thumbnailOf(video)
-  // An upload is already out: its own description says what it is, with no AI line.
-  const described = upload ? null : await describe(video, thumbnail, guild.id)
   const created = await request('POST', `/guilds/${guild.id}/scheduled-events`, {
     name: `${upload ? '📺 新着動画: ' : ''}${video.title}`.slice(0, 100),
-    description: eventDescription(video, described?.blurb, described?.games),
+    description: eventDescription(video),
     privacy_level: 2,
     entity_type: 3,
     entity_metadata: { location: video.url.slice(0, 100) },
@@ -134,17 +128,17 @@ const isFinished = e => /Cannot update a finished event|180000/.test(String(e?.m
 // Moves one stream's event along. `record` is what is stored for it (or undefined), `video` its
 // current state from YouTube (or null if it is gone). Resolves to the record to store, or null when
 // nothing changed.
-async function follow (guild, video, record, now = new Date(), { describe } = {}) {
+async function follow (guild, video, record, now = new Date()) {
   const state = !video ? 'gone' : video.liveStatus
   if (!record) {
     if (state === 'upcoming') {
       const wanted = video.scheduledStart ? new Date(video.scheduledStart) : now
       const start = new Date(Math.max(wanted.getTime(), now.getTime() + START_MARGIN_MS))
-      const { eventID, scheduledEnd } = await createEvent(guild, video, start, { describe })
+      const { eventID, scheduledEnd } = await createEvent(guild, video, start)
       return { eventID, status: 'scheduled', scheduledStart: video.scheduledStart, scheduledEnd }
     }
     if (state === 'live') {
-      const { eventID, scheduledEnd } = await createEvent(guild, video, new Date(now.getTime() + START_MARGIN_MS), { describe })
+      const { eventID, scheduledEnd } = await createEvent(guild, video, new Date(now.getTime() + START_MARGIN_MS))
       await setStatus(guild, eventID, 'active')
       return { eventID, status: 'active', scheduledStart: video.scheduledStart, scheduledEnd }
     }
@@ -251,20 +245,9 @@ async function checkChannel (channelID, guildIDs, now = new Date()) {
     if (ids.length === 0) return 0
     const videos = await fetchVideos(ids, process.env.YOUTUBE_API_KEY)
     await youtubeDB.upsertVideos(channelID, videos)
-    const streamDescriptions = new Map()
-    const describe = (video, thumbnail, guildID) => {
-      if (!video?.id) return describeStream(video, thumbnail, guildID)
-      if (!streamDescriptions.has(video.id)) {
-        streamDescriptions.set(video.id, describeStream(video, thumbnail, guildID).catch(e => {
-          streamDescriptions.delete(video.id)
-          throw e
-        }))
-      }
-      return streamDescriptions.get(video.id)
-    }
     let changed = 0
     const byId = new Map(videos.map(v => [v.id, v]))
-    for (const guild of guilds) changed += await updateGuild(guild, ids, byId, recordsOf.get(guild.id), now, { describe })
+    for (const guild of guilds) changed += await updateGuild(guild, ids, byId, recordsOf.get(guild.id), now)
     return changed
   } finally {
     checkingChannels.delete(channelID)
@@ -286,7 +269,7 @@ function canMakeEvents (guild) {
 }
 
 // One server's events for the channel's videos `ids` (byId: their current state from YouTube).
-async function updateGuild (guild, ids, byId, records, now = new Date(), { describe } = {}) {
+async function updateGuild (guild, ids, byId, records, now = new Date()) {
   if (!canMakeEvents(guild)) return 0
   let changed = 0
   for (const id of ids) {
@@ -298,7 +281,7 @@ async function updateGuild (guild, ids, byId, records, now = new Date(), { descr
     try {
       const next = upload
         ? (record ? await endUpload(guild, video, record, now) : await announceUpload(guild, video, now))
-        : await follow(guild, video, record, now, { describe })
+        : await follow(guild, video, record, now)
       if (next) {
         await youtubeDB.saveLiveEvent(guild.id, id, next)
         changed++
