@@ -41,9 +41,64 @@ const ALT_RESPONSE_SCHEMA = {
 // Bounded in-memory counter so normal guild traffic never queries Postgres on every message.
 // Key: `${guildID}:${userID}` -> { count: number, checked: Set<number> }
 const messageCounters = new Map()
+// Bounded in-memory cache of recently seen non-bot messages so deletions/edits in audit-ignored
+// channels (or before messageBatcher flushes) are still captured for alt detection.
+const MAX_SEEN_MESSAGES = 5000
+const recentSeenMessages = new Map() // messageID -> { id, guildID, authorID, channelID, content, ts }
+// Recent deleted messages per guild for real-time cross-account delete->repost detection.
+const MAX_RECENT_DELETED_PER_GUILD = 100
+const RECENT_DELETED_TTL_MS = 30 * 60 * 1000
+const recentDeletedByGuild = new Map() // guildID -> Array<{ id, authorID, channelID, content, originalTs, deletedTs, deletedBy, moderatorID }>
+// Tracks Discord MESSAGE_DELETE (actionType 72) audit log extra.count so repeat deletions by the
+// same moderator of the same author in the same channel are recognized accurately.
+const MAX_AUDIT_COUNT_ENTRIES = 1000
+const lastModDeleteCounts = new Map() // `${guildID}:${entryID}` -> number
 
 function resetRuntimeState () {
   messageCounters.clear()
+  recentSeenMessages.clear()
+  recentDeletedByGuild.clear()
+  lastModDeleteCounts.clear()
+}
+
+function rememberSeenMessage ({ id, guildID, authorID, channelID = null, content, ts = new Date() }) {
+  const clean = String(content || '').trim()
+  if (!id || !guildID || !authorID || !clean) return
+  if (recentSeenMessages.has(id)) recentSeenMessages.delete(id)
+  if (recentSeenMessages.size >= MAX_SEEN_MESSAGES) {
+    const oldest = recentSeenMessages.keys().next().value
+    recentSeenMessages.delete(oldest)
+  }
+  recentSeenMessages.set(id, {
+    id,
+    guildID,
+    authorID,
+    channelID: channelID || null,
+    content: clean,
+    ts: ts instanceof Date ? ts : new Date(ts)
+  })
+}
+
+function rememberDeletedMessage (guildID, entry, now = new Date()) {
+  if (!guildID || !entry?.authorID || !entry?.content) return null
+  const cutoff = now.getTime() - RECENT_DELETED_TTL_MS
+  const list = (recentDeletedByGuild.get(guildID) || []).filter(e => e.deletedTs.getTime() >= cutoff)
+  const record = {
+    id: entry.id || entry.messageID || null,
+    authorID: entry.authorID,
+    channelID: entry.channelID || null,
+    content: String(entry.content).trim(),
+    originalTs: entry.originalTs ? new Date(entry.originalTs) : (entry.ts ? new Date(entry.ts) : now),
+    deletedTs: entry.deletedTs ? new Date(entry.deletedTs) : now,
+    deletedBy: entry.deletedBy || 'unknown',
+    moderatorID: entry.moderatorID || null
+  }
+  list.push(record)
+  if (list.length > MAX_RECENT_DELETED_PER_GUILD) {
+    list.splice(0, list.length - MAX_RECENT_DELETED_PER_GUILD)
+  }
+  recentDeletedByGuild.set(guildID, list)
+  return record
 }
 
 function envNumber (name, fallback, min = 0, max = Infinity) {
@@ -579,8 +634,164 @@ function scorePair ({
     }
   }
 
+  // 7. Delete-and-repost anti-evasion (works even with < 3 messages per account)
+  const crossDeleteReposts = detectCrossAccountDeleteRepost(suspectMessages, candidateMessages)
+  metrics.crossAccountDeleteReposts = crossDeleteReposts.length
+  if (crossDeleteReposts.length > 0) {
+    const best = crossDeleteReposts[0]
+    raw += 45
+    const delKind = best.deletionActor === 'moderator'
+      ? 'モデレーター削除→別アカウントで再投稿'
+      : (best.deletionActor === 'self' ? '本人削除→別アカウントで再投稿' : '削除→別アカウントで再投稿')
+    signals.push(`アカウント間での「${delKind}」を検知（${formatDurationJa(Math.max(60000, best.deltaMs))}以内に類似度${Math.round(best.similarity * 100)}%の内容を再投稿）`)
+  }
+
+  const suspectDel = analyzeSelfDeleteBehavior(suspectMessages)
+  const candDel = analyzeSelfDeleteBehavior(candidateMessages)
+  metrics.deletedMessageCount = suspectDel.deletedCount + candDel.deletedCount
+  metrics.modDeletedMessageCount = suspectDel.modDeletedCount + candDel.modDeletedCount
+  metrics.selfDeleteRepostCount = suspectDel.selfDeleteRepostCount
+  metrics.rapidDeleteCount = suspectDel.rapidDeleteCount
+  metrics.modDeletedRepostCount = suspectDel.modDeletedRepostCount
+  if (suspectDel.selfDeleteRepostCount >= 2 || suspectDel.rapidDeleteCount >= 3) {
+    if (raw >= 15) raw += 8
+    signals.push(`調査対象に本人削除→再投稿・投稿直後の自己削除を複数回確認（本人削除等 ${suspectDel.selfOrUnknownDeletedCount} 件 / 履歴隠滅・検知回避の傾向）`)
+  }
+  if (suspectDel.modDeletedCount > 0 || candDel.modDeletedCount > 0) {
+    const parts = []
+    if (suspectDel.modDeletedCount > 0) parts.push(`調査対象 ${suspectDel.modDeletedCount} 件`)
+    if (candDel.modDeletedCount > 0) parts.push(`候補 ${candDel.modDeletedCount} 件`)
+    signals.push(`モデレーターによる削除済み発言を照合対象に含めています（${parts.join('・')}）`)
+  }
+
   const score = Math.max(0, Math.min(100, Math.round(raw)))
   return { score, signals, counterSignals, metrics }
+}
+
+const CROSS_DELETE_REPOST_WINDOW_MS = 10 * 60 * 1000
+const SELF_DELETE_REPOST_WINDOW_MS = 3 * 60 * 1000
+const RAPID_DELETE_WINDOW_MS = 5 * 60 * 1000
+
+function normalizeForRepost (text) {
+  return stripNoise(text)
+    .normalize('NFKC')
+    .toLowerCase()
+    .replace(/[\s、。,.!?！？「」『』()（）[\]【】~〜ー\-_・…]/g, '')
+}
+
+function repostTextSimilarity (textA, textB) {
+  const a = normalizeForRepost(textA)
+  const b = normalizeForRepost(textB)
+  if (a.length < 6 || b.length < 6) return 0
+  if (a === b) return 1
+  return diceSimilarity(a, b)
+}
+
+function msgTimeMs (m) {
+  const d = m?.ts instanceof Date ? m.ts : new Date(m?.ts)
+  return Number.isNaN(d.getTime()) ? null : d.getTime()
+}
+
+function deleteTimeMs (m) {
+  const d = m?.eventTs instanceof Date ? m.eventTs : (m?.eventTs ? new Date(m.eventTs) : null)
+  if (d && !Number.isNaN(d.getTime())) return d.getTime()
+  return msgTimeMs(m)
+}
+
+// Detects when one account's message was deleted (by self or by a moderator) and the other account
+// posted identical or near-identical text within 10 minutes.
+function detectCrossAccountDeleteRepost (msgsA = [], msgsB = [], windowMs = CROSS_DELETE_REPOST_WINDOW_MS) {
+  const matches = []
+  const scan = (deletedSource, postedSource) => {
+    const deletedList = (deletedSource || []).filter(m => m?.deleted && m.content)
+    const postedList = (postedSource || []).filter(m => m?.content)
+    for (const del of deletedList) {
+      const delAt = deleteTimeMs(del)
+      if (delAt == null) continue
+      for (const post of postedList) {
+        const postAt = msgTimeMs(post)
+        if (postAt == null) continue
+        const delta = postAt - delAt
+        if (delta < -30 * 1000 || delta > windowMs) continue
+        const sim = repostTextSimilarity(del.content, post.content)
+        if (sim >= 0.75) {
+          matches.push({
+            deletedBy: del.authorID || null,
+            deletionActor: del.deletedBy || 'unknown',
+            repostedBy: post.authorID || null,
+            similarity: Number(sim.toFixed(3)),
+            deltaMs: Math.abs(delta),
+            excerpt: String(post.content).slice(0, 80)
+          })
+          break
+        }
+      }
+    }
+  }
+  scan(msgsA, msgsB)
+  scan(msgsB, msgsA)
+  matches.sort((a, b) => b.similarity - a.similarity || a.deltaMs - b.deltaMs)
+  return matches
+}
+
+// Separates moderator-deleted messages from self-deleted messages so moderator cleanup of
+// rule-breaking posts is never misattributed as self-scrubbing evasion.
+function analyzeSelfDeleteBehavior (messages = []) {
+  let deletedCount = 0
+  let modDeletedCount = 0
+  let selfOrUnknownDeletedCount = 0
+  let editedCount = 0
+  let rapidDeleteCount = 0
+  let selfDeleteRepostCount = 0
+  let modDeletedRepostCount = 0
+  const selfDeletedList = []
+  const modDeletedList = []
+  const liveList = []
+  for (const m of messages || []) {
+    if (!m) continue
+    if (m.deleted) {
+      deletedCount++
+      if (m.deletedBy === 'moderator') {
+        modDeletedCount++
+        modDeletedList.push(m)
+      } else {
+        selfOrUnknownDeletedCount++
+        selfDeletedList.push(m)
+        const orig = msgTimeMs(m)
+        const delAt = m.eventTs ? new Date(m.eventTs).getTime() : null
+        if (orig != null && delAt != null && delAt >= orig && (delAt - orig) <= RAPID_DELETE_WINDOW_MS) {
+          rapidDeleteCount++
+        }
+      }
+    } else if (m.editedBefore) {
+      editedCount++
+    } else {
+      liveList.push(m)
+    }
+  }
+  const hasQuickRepost = del => {
+    const delAt = deleteTimeMs(del)
+    if (delAt == null) return false
+    return liveList.some(post => {
+      const postAt = msgTimeMs(post)
+      return postAt != null && postAt >= delAt - 10 * 1000 && (postAt - delAt) <= SELF_DELETE_REPOST_WINDOW_MS
+    })
+  }
+  for (const del of selfDeletedList) {
+    if (hasQuickRepost(del)) selfDeleteRepostCount++
+  }
+  for (const del of modDeletedList) {
+    if (hasQuickRepost(del)) modDeletedRepostCount++
+  }
+  return {
+    deletedCount,
+    modDeletedCount,
+    selfOrUnknownDeletedCount,
+    editedCount,
+    rapidDeleteCount,
+    selfDeleteRepostCount,
+    modDeletedRepostCount
+  }
 }
 
 // --- Candidate discovery ---
@@ -637,7 +848,117 @@ async function resolveProfile (guild, userID) {
   }
 }
 
-async function findCandidates (guild, suspectProfile, suspectMessages = [], { trigger = 'manual', now = new Date(), limit = 5, includeGuildMembers = true } = {}) {
+// Text, voice (its text chat), announcement, stage, and threads.
+const READABLE_CHANNEL_TYPES = [0, 2, 5, 10, 11, 12, 13]
+const SKIPPED_MESSAGE_TYPES = [23, 24] // automod
+
+function canBotReadChannel (channel) {
+  if (!channel || !READABLE_CHANNEL_TYPES.includes(channel.type)) return false
+  if (channel.lastMessageID === null) return false
+  const botId = global.bot?.user?.id
+  if (!botId || typeof channel.permissionsOf !== 'function') return false
+  try {
+    const perms = channel.permissionsOf(botId)
+    if (!perms) return false
+    const view = typeof perms.has === 'function' ? perms.has('viewChannel') : Boolean(perms.json?.viewChannel)
+    const history = typeof perms.has === 'function' ? perms.has('readMessageHistory') : Boolean(perms.json?.readMessageHistory)
+    return view && history
+  } catch (_) {
+    return false
+  }
+}
+
+// Collects every readable channel and active thread in the server (including audit-ignored and
+// private channels the bot has access to) for moderator /altcheck investigations.
+async function readableChannelsOf (guild) {
+  const byId = new Map()
+  const add = ch => {
+    if (ch?.id && !byId.has(ch.id) && canBotReadChannel(ch)) byId.set(ch.id, ch)
+  }
+  if (guild?.channels) {
+    for (const ch of guild.channels.values()) add(ch)
+  }
+  if (guild?.threads) {
+    for (const th of guild.threads.values()) add(th)
+  }
+  if (typeof guild?.getActiveThreads === 'function') {
+    const res = await guild.getActiveThreads().catch(() => null)
+    const list = Array.isArray(res?.threads) ? res.threads : (Array.isArray(res) ? res : [])
+    for (const th of list) add(th)
+  }
+  return [...byId.values()]
+}
+
+function mergeMessageLists (listA = [], listB = [], limit = 60) {
+  const byId = new Map()
+  for (const m of [...listA, ...listB]) {
+    if (!m || !m.content) continue
+    const key = m.id || `${m.authorID}:${m.channelID}:${new Date(m.ts).getTime()}:${m.content.slice(0, 30)}`
+    if (!byId.has(key)) byId.set(key, m)
+  }
+  return [...byId.values()]
+    .sort((a, b) => new Date(b.ts).getTime() - new Date(a.ts).getTime())
+    .slice(0, limit)
+}
+
+async function fetchAllGuildChannelMessages (guild, { perChannel = 100, concurrency = 4 } = {}) {
+  const byAuthor = new Map()
+  const authors = new Map()
+  if (!guild || typeof global.bot?.getMessages !== 'function') {
+    return { byAuthor, authors, channelsScanned: 0, totalMessages: 0 }
+  }
+  const channels = await readableChannelsOf(guild)
+  if (!channels.length) return { byAuthor, authors, channelsScanned: 0, totalMessages: 0 }
+
+  let channelsScanned = 0
+  let totalMessages = 0
+  let cursor = 0
+
+  const worker = async () => {
+    while (cursor < channels.length) {
+      const ch = channels[cursor++]
+      const raw = await global.bot.getMessages(ch.id, { limit: perChannel }).catch(() => null)
+      if (!Array.isArray(raw)) continue
+      channelsScanned++
+      for (const m of raw) {
+        if (!m || SKIPPED_MESSAGE_TYPES.includes(m.type)) continue
+        const author = m.author
+        if (!author?.id || author.bot) continue
+        const content = String(m.content || '').trim()
+        if (!content) continue
+        totalMessages++
+        if (!authors.has(author.id)) {
+          authors.set(author.id, profileFromUser(author, { status: 'active' }))
+        }
+        if (!byAuthor.has(author.id)) byAuthor.set(author.id, [])
+        byAuthor.get(author.id).push({
+          id: m.id,
+          authorID: author.id,
+          channelID: ch.id,
+          content,
+          ts: m.timestamp ? new Date(m.timestamp) : new Date(0)
+        })
+      }
+    }
+  }
+
+  const workers = Array.from({ length: Math.min(concurrency, channels.length) }, () => worker())
+  await Promise.all(workers)
+
+  for (const [authorID, msgs] of byAuthor) {
+    byAuthor.set(authorID, msgs.sort((a, b) => new Date(b.ts).getTime() - new Date(a.ts).getTime()))
+  }
+  return { byAuthor, authors, channelsScanned, totalMessages }
+}
+
+async function findCandidates (guild, suspectProfile, suspectMessages = [], {
+  trigger = 'manual',
+  now = new Date(),
+  limit = 5,
+  includeGuildMembers = true,
+  liveMessagesByAuthor = null,
+  liveAuthors = null
+} = {}) {
   const stored = await altDB.getCandidateProfiles(guild.id, suspectProfile.userID, { limit: 200 }).catch(() => [])
   const candidateMap = new Map()
   for (const p of stored) {
@@ -656,30 +977,47 @@ async function findCandidates (guild, suspectProfile, suspectMessages = [], { tr
     }
   }
 
+  if (liveAuthors) {
+    for (const [authorID, authorProfile] of liveAuthors) {
+      if (!authorID || authorID === suspectProfile.userID || !authorProfile) continue
+      const existing = candidateMap.get(authorID)
+      candidateMap.set(authorID, existing ? mergeProfiles(existing, authorProfile) : authorProfile)
+    }
+  }
+
   let recentMsgsByAuthor = new Map()
-  if (suspectMessages.length >= 3) {
+  if (suspectMessages.length >= 1) {
     recentMsgsByAuthor = await altDB.getRecentAuthorsMessages(guild.id, suspectProfile.userID, {
       authorLimit: 30,
       perAuthor: 30,
       days: 30
     }).catch(() => new Map())
-    for (const authorID of recentMsgsByAuthor.keys()) {
-      if (!candidateMap.has(authorID) && authorID !== suspectProfile.userID) {
-        candidateMap.set(authorID, {
-          userID: authorID,
-          username: null,
-          globalName: null,
-          nick: null,
-          avatarHash: null,
-          avatarURL: null,
-          accountCreatedAt: snowflakeToDate(authorID),
-          joinedAt: null,
-          inviteCode: null,
-          status: 'active',
-          statusAt: null,
-          moderationReason: null
-        })
-      }
+  }
+
+  if (liveMessagesByAuthor) {
+    for (const [authorID, liveMsgs] of liveMessagesByAuthor) {
+      if (!authorID || authorID === suspectProfile.userID) continue
+      const merged = mergeMessageLists(recentMsgsByAuthor.get(authorID) || [], liveMsgs, 50)
+      if (merged.length) recentMsgsByAuthor.set(authorID, merged)
+    }
+  }
+
+  for (const authorID of recentMsgsByAuthor.keys()) {
+    if (!candidateMap.has(authorID) && authorID !== suspectProfile.userID) {
+      candidateMap.set(authorID, {
+        userID: authorID,
+        username: null,
+        globalName: null,
+        nick: null,
+        avatarHash: null,
+        avatarURL: null,
+        accountCreatedAt: snowflakeToDate(authorID),
+        joinedAt: null,
+        inviteCode: null,
+        status: 'active',
+        statusAt: null,
+        moderationReason: null
+      })
     }
   }
 
@@ -697,16 +1035,16 @@ async function findCandidates (guild, suspectProfile, suspectMessages = [], { tr
     scored.push({ candidateProfile, candidateMessages: msgs, heuristic })
   }
 
-  // When the suspect has messages, also check historical messages of top banned/kicked/left
-  // accounts whose messages may be older than 30 days (not included in recentMsgsByAuthor).
-  if (suspectMessages.length >= 3) {
+  // When the suspect has messages, also check historical (including deleted) messages of top
+  // banned/kicked/restricted/left accounts whose messages may be older than 30 days.
+  if (suspectMessages.length >= 1) {
     const modToEnrich = scored
       .filter(item => item.candidateProfile.status !== 'active' && item.candidateMessages.length === 0)
       .sort((a, b) => b.heuristic.score - a.heuristic.score)
       .slice(0, 5)
     for (const item of modToEnrich) {
       const msgs = await altDB.getMemberMessages(guild.id, item.candidateProfile.userID, { limit: 40 }).catch(() => [])
-      if (msgs.length >= 3) {
+      if (msgs.length >= 1) {
         item.candidateMessages = msgs
         item.heuristic = scorePair({
           suspectProfile,
@@ -805,8 +1143,16 @@ function formatMessagesBlock (messages, source) {
   if (!Array.isArray(messages) || messages.length === 0) return '（保存された発言サンプルなし）'
   const sample = messages.slice(0, 25).map(m => {
     const ts = m.ts ? formatDateIso(m.ts) : '不明'
+    let tag = ''
+    if (m.deleted) {
+      tag = m.deletedBy === 'moderator'
+        ? '[モデレーター削除済み] '
+        : (m.deletedBy === 'self' ? '[本人削除済み] ' : '[削除済み] ')
+    } else if (m.editedBefore) {
+      tag = '[編集前] '
+    }
     const text = String(m.content || '').replace(/\s+/g, ' ').trim().slice(0, 200)
-    return `[${ts}] (ch:${m.channelID || '?'}) ${text}`
+    return `[${ts}] ${tag}(ch:${m.channelID || '?'}) ${text}`
   }).join('\n')
   untrusted.reportInjection(`altDetector:${source}`, sample)
   return untrusted.wrap(source, sample)
@@ -1199,12 +1545,339 @@ function bumpMessageCounter (guildID, userID) {
   return entry
 }
 
+function findRecentCrossDeleteMatch (guildID, authorID, content, now = new Date()) {
+  const list = recentDeletedByGuild.get(guildID)
+  if (!list || !list.length) return null
+  const nowMs = now.getTime()
+  let best = null
+  for (let i = list.length - 1; i >= 0; i--) {
+    const del = list[i]
+    if (!del || del.authorID === authorID) continue
+    const delta = nowMs - del.deletedTs.getTime()
+    if (delta < -30 * 1000 || delta > CROSS_DELETE_REPOST_WINDOW_MS) continue
+    const sim = repostTextSimilarity(del.content, content)
+    if (sim >= 0.75 && (!best || sim > best.similarity)) {
+      best = { entry: del, similarity: sim, deltaMs: Math.max(0, delta) }
+    }
+  }
+  return best
+}
+
+function recordAuditDeleteCount (key, count) {
+  if (lastModDeleteCounts.has(key)) lastModDeleteCounts.delete(key)
+  if (lastModDeleteCounts.size >= MAX_AUDIT_COUNT_ENTRIES) {
+    const oldest = lastModDeleteCounts.keys().next().value
+    lastModDeleteCounts.delete(oldest)
+  }
+  lastModDeleteCounts.set(key, count)
+}
+
+// Determines whether a single message deletion was performed by a moderator (Discord audit log
+// MESSAGE_DELETE, actionType 72) or by the author themselves (no audit log entry is emitted when
+// users delete their own messages). Handles Discord's extra.count batching for repeat mod deletes.
+async function detectDeletionActorFromAuditLog (guild, { authorID, channelID = null, at = new Date() } = {}) {
+  if (!guild || !authorID || typeof guild.getAuditLog !== 'function') {
+    return { deletedBy: 'unknown', moderatorID: null }
+  }
+  const canViewAudit = guild.members?.get?.(global.bot?.user?.id)?.permissions?.has?.('viewAuditLog') !== false
+  if (!canViewAudit) return { deletedBy: 'unknown', moderatorID: null }
+
+  const logs = await guild.getAuditLog({ limit: 5, actionType: 72 }).catch(() => null)
+  if (!logs || !Array.isArray(logs.entries)) return { deletedBy: 'unknown', moderatorID: null }
+
+  const atMs = at instanceof Date ? at.getTime() : new Date(at).getTime()
+  for (const e of logs.entries) {
+    if (!e || e.targetID !== authorID) continue
+    const entryChannelID = e.extra?.channel?.id || e.options?.channel_id || e.channelID || null
+    if (channelID && entryChannelID && entryChannelID !== channelID) continue
+    const count = Math.max(1, Number(e.extra?.count ?? e.options?.count ?? 1) || 1)
+    const key = `${guild.id}:${e.id}`
+    const prevCount = lastModDeleteCounts.get(key)
+    const entryTs = snowflakeToDate(e.id)?.getTime()
+    const isFresh = entryTs != null && Math.abs(atMs - entryTs) < 20 * 1000
+    const isCountIncrement = prevCount !== undefined && count > prevCount
+    const isFirstSeenFresh = prevCount === undefined && isFresh
+
+    if (isCountIncrement || isFirstSeenFresh) {
+      recordAuditDeleteCount(key, count)
+      const modID = e.user?.id || e.userID || null
+      if (modID && modID === authorID) {
+        return { deletedBy: 'self', moderatorID: null }
+      }
+      return { deletedBy: 'moderator', moderatorID: modID }
+    }
+    if (prevCount === undefined) recordAuditDeleteCount(key, count)
+  }
+  return { deletedBy: 'self', moderatorID: null }
+}
+
+async function onMessageDelete (message, cachedMessage = null, { at = new Date(), auditDelayMs = 800 } = {}) {
+  if (!message?.id) return { saved: false }
+  const seen = recentSeenMessages.get(message.id) || null
+  recentSeenMessages.delete(message.id)
+
+  const guildID = cachedMessage?.guild_id || seen?.guildID || message.channel?.guild?.id || message.guildID || message.guildId || null
+  const authorID = cachedMessage?.author_id || seen?.authorID || message.author?.id || null
+  const channelID = cachedMessage?.channel_id || seen?.channelID || message.channel?.id || message.channelID || null
+  const content = String(cachedMessage?.content || seen?.content || message.content || '').trim()
+  const isBot = Boolean(message.author?.bot)
+  if (isBot) return { saved: false }
+
+  const guild = message.channel?.guild || (guildID ? global.bot?.guilds?.get?.(guildID) : null)
+  const applyActor = async (targetGuildID, targetMsgID, targetAuthorID, targetChannelID, memRecord) => {
+    const targetGuild = guild || (targetGuildID ? global.bot?.guilds?.get?.(targetGuildID) : null)
+    const actor = await detectDeletionActorFromAuditLog(targetGuild, {
+      authorID: targetAuthorID,
+      channelID: targetChannelID,
+      at
+    })
+    if (memRecord) {
+      memRecord.deletedBy = actor.deletedBy
+      memRecord.moderatorID = actor.moderatorID
+    }
+    if (actor.deletedBy !== 'unknown') {
+      await altDB.updateSnapshotDeletionActor(targetGuildID, targetMsgID, actor).catch(() => {})
+    }
+    return actor
+  }
+
+  const scheduleOrRunActor = async (targetGuildID, targetMsgID, targetAuthorID, targetChannelID, memRecord) => {
+    if (auditDelayMs <= 0) {
+      return applyActor(targetGuildID, targetMsgID, targetAuthorID, targetChannelID, memRecord)
+    }
+    const timer = setTimeout(() => {
+      applyActor(targetGuildID, targetMsgID, targetAuthorID, targetChannelID, memRecord).catch(() => {})
+    }, auditDelayMs)
+    timer.unref?.()
+    return { deletedBy: 'unknown', moderatorID: null }
+  }
+
+  if (guildID && authorID && content) {
+    const origRaw = cachedMessage?.ts || seen?.ts || message.timestamp || null
+    const originalTs = origRaw ? new Date(origRaw) : null
+    const memRecord = rememberDeletedMessage(guildID, {
+      id: message.id,
+      authorID,
+      channelID,
+      content,
+      originalTs,
+      deletedTs: at,
+      deletedBy: 'unknown'
+    }, at)
+    await altDB.recordMessageSnapshot(guildID, {
+      messageID: message.id,
+      authorID,
+      channelID,
+      eventType: 'deleted',
+      deletedBy: 'unknown',
+      content,
+      originalTs,
+      eventTs: at
+    }).catch(e => global.logger?.warn?.(`[ALT]: recordMessageSnapshot(delete) failed: ${e.message}`))
+    const actor = await scheduleOrRunActor(guildID, message.id, authorID, channelID, memRecord)
+    return { saved: true, guildID, authorID, deletedBy: actor.deletedBy, moderatorID: actor.moderatorID }
+  }
+
+  // Fallback for messages not in memory (e.g. older messages in ignored channels): copy from DB
+  // right before `deleteMessage` removes the row.
+  const copied = await altDB.snapshotMessagesBeforeDelete([message.id], { deletedBy: 'unknown', eventTs: at }).catch(() => [])
+  let lastActor = { deletedBy: 'unknown', moderatorID: null }
+  for (const row of copied) {
+    const memRecord = rememberDeletedMessage(row.guildID, {
+      id: row.id,
+      authorID: row.authorID,
+      channelID: row.channelID,
+      content: row.content,
+      originalTs: row.ts,
+      deletedTs: at,
+      deletedBy: 'unknown'
+    }, at)
+    lastActor = await scheduleOrRunActor(row.guildID, row.id, row.authorID, row.channelID, memRecord)
+  }
+  return { saved: copied.length > 0, copied: copied.length, deletedBy: lastActor.deletedBy, moderatorID: lastActor.moderatorID }
+}
+
+async function onMessageDeleteBulk (messages, { at = new Date() } = {}) {
+  if (!Array.isArray(messages) || messages.length === 0) return { saved: 0 }
+  const ids = messages.map(m => m?.id).filter(Boolean)
+  let saved = 0
+
+  // Bulk deletion requires Manage Messages (moderator purge / BAN message delete), so classify as moderator.
+  const copied = await altDB.snapshotMessagesBeforeDelete(ids, { deletedBy: 'moderator', eventTs: at }).catch(() => [])
+  const copiedIds = new Set()
+  for (const row of copied) {
+    copiedIds.add(row.id)
+    saved++
+    rememberDeletedMessage(row.guildID, {
+      id: row.id,
+      authorID: row.authorID,
+      channelID: row.channelID,
+      content: row.content,
+      originalTs: row.ts,
+      deletedTs: at,
+      deletedBy: 'moderator'
+    }, at)
+  }
+
+  // Also capture messages still only in our in-memory ring buffer (e.g. ignored channels or
+  // deleted before messageBatcher flushed).
+  for (const m of messages) {
+    if (!m?.id || copiedIds.has(m.id)) continue
+    const seen = recentSeenMessages.get(m.id) || null
+    recentSeenMessages.delete(m.id)
+    if (m.author?.bot) continue
+    const guildID = seen?.guildID || m.channel?.guild?.id || m.guildID || m.guildId || null
+    const authorID = seen?.authorID || m.author?.id || null
+    const channelID = seen?.channelID || m.channel?.id || m.channelID || null
+    const content = String(seen?.content || m.content || '').trim()
+    if (!guildID || !authorID || !content) continue
+    const originalTs = seen?.ts || (m.timestamp ? new Date(m.timestamp) : null)
+    rememberDeletedMessage(guildID, {
+      id: m.id,
+      authorID,
+      channelID,
+      content,
+      originalTs,
+      deletedTs: at,
+      deletedBy: 'moderator'
+    }, at)
+    const ok = await altDB.recordMessageSnapshot(guildID, {
+      messageID: m.id,
+      authorID,
+      channelID,
+      eventType: 'deleted',
+      deletedBy: 'moderator',
+      content,
+      originalTs,
+      eventTs: at
+    }).catch(() => false)
+    if (ok) saved++
+  }
+  return { saved }
+}
+
+async function onMessageEdit (newMessage, oldMessage = null, { at = new Date() } = {}) {
+  if (!newMessage?.id || newMessage.author?.bot) return { saved: false }
+  const guildID = newMessage.channel?.guild?.id || newMessage.guildID || null
+  const authorID = newMessage.author?.id || oldMessage?.author_id || oldMessage?.author?.id || null
+  const channelID = newMessage.channel?.id || oldMessage?.channel_id || null
+  if (!guildID || !authorID) return { saved: false }
+
+  const seen = recentSeenMessages.get(newMessage.id) || null
+  const oldContent = String(oldMessage?.content || seen?.content || '').trim()
+  const newContent = String(newMessage.content || '').trim()
+
+  if (newContent) {
+    rememberSeenMessage({
+      id: newMessage.id,
+      guildID,
+      authorID,
+      channelID,
+      content: newContent,
+      ts: seen?.ts || (newMessage.timestamp ? new Date(newMessage.timestamp) : at)
+    })
+  }
+
+  if (!oldContent || oldContent === newContent) return { saved: false }
+  const origRaw = oldMessage?.ts || seen?.ts || newMessage.timestamp || null
+  const originalTs = origRaw ? new Date(origRaw) : null
+  const saved = await altDB.recordMessageSnapshot(guildID, {
+    messageID: newMessage.id,
+    authorID,
+    channelID,
+    eventType: 'edited',
+    content: oldContent,
+    originalTs,
+    eventTs: at
+  }).catch(e => {
+    global.logger?.warn?.(`[ALT]: recordMessageSnapshot(edit) failed: ${e.message}`)
+    return false
+  })
+  return { saved: Boolean(saved) }
+}
+
 async function onMessage (message, { now = new Date() } = {}) {
   const guild = message?.channel?.guild
   const guildID = guild?.id || message?.guildID
   if (!guildID || !message?.author?.id || message.author.bot) return { checked: false }
-  if (!String(message.content || '').trim()) return { checked: false }
+  const content = String(message.content || '').trim()
+  if (!content) return { checked: false }
+
+  // Always cache recently seen non-bot messages in memory so subsequent deletions/edits
+  // (including mod-deleted dangerous words and self-deletes in ignored channels) are captured.
+  rememberSeenMessage({
+    id: message.id || `live-${now.getTime()}`,
+    guildID,
+    authorID: message.author.id,
+    channelID: message.channel?.id || null,
+    content,
+    ts: message.timestamp ? new Date(message.timestamp) : now
+  })
+
   if (!isGlobalEnabled()) return { checked: false }
+
+  const resolvedGuild = guild || global.bot?.guilds?.get?.(guildID)
+
+  // Real-time anti-evasion check: if another account's message was just deleted (by self or mod)
+  // within 10m and this account reposted near-identical text, verify immediately.
+  const crossMatch = findRecentCrossDeleteMatch(guildID, message.author.id, content, now)
+  if (crossMatch && resolvedGuild && (await altDB.isAltDetectionEnabled(guildID))) {
+    const candID = crossMatch.entry.authorID
+    if (!(await altDB.hasRecentAlert(guildID, message.author.id, candID, alertCooldownHours()))) {
+      const [suspectProfile, candidateProfile, dbSuspectMsgs, dbCandMsgs] = await Promise.all([
+        resolveProfile(resolvedGuild, message.author.id),
+        resolveProfile(resolvedGuild, candID),
+        altDB.getMemberMessages(guildID, message.author.id, { limit: 40 }).catch(() => []),
+        altDB.getMemberMessages(guildID, candID, { limit: 40 }).catch(() => [])
+      ])
+      const liveMsg = {
+        id: message.id || `live-${now.getTime()}`,
+        authorID: message.author.id,
+        channelID: message.channel?.id || null,
+        content,
+        ts: message.timestamp ? new Date(message.timestamp) : now,
+        deleted: false,
+        deletedBy: null,
+        editedBefore: false,
+        eventTs: null
+      }
+      const deletedMsg = {
+        id: `${crossMatch.entry.id || 'del'}:deleted`,
+        authorID: candID,
+        channelID: crossMatch.entry.channelID,
+        content: crossMatch.entry.content,
+        ts: crossMatch.entry.originalTs,
+        deleted: true,
+        deletedBy: crossMatch.entry.deletedBy || 'unknown',
+        moderatorID: crossMatch.entry.moderatorID || null,
+        editedBefore: false,
+        eventTs: crossMatch.entry.deletedTs
+      }
+      const suspectMessages = mergeMessageLists([liveMsg], dbSuspectMsgs, 40)
+      const candidateMessages = mergeMessageLists([deletedMsg], dbCandMsgs, 40)
+      const heuristic = scorePair({ suspectProfile, candidateProfile, suspectMessages, candidateMessages, now })
+      const ai = await analyzeWithGemini({
+        guildID,
+        suspectProfile,
+        candidateProfile,
+        suspectMessages,
+        candidateMessages,
+        heuristic,
+        background: true
+      })
+      if (shouldAlertFromResult({ ai, heuristic, candidateProfile })) {
+        const delivery = await sendAltAlert(resolvedGuild, {
+          suspectProfile,
+          candidateProfile,
+          heuristic,
+          ai,
+          trigger: 'messages'
+        })
+        return { checked: true, alerted: true, reason: 'cross_delete_repost', candidate: { candidateProfile, heuristic }, ai, delivery }
+      }
+      return { checked: true, alerted: false, reason: 'cross_delete_repost', heuristic, ai }
+    }
+  }
 
   const member = message.member
   if (member?.joinedAt) {
@@ -1220,7 +1893,6 @@ async function onMessage (message, { now = new Date() } = {}) {
   }
   entry.checked.add(entry.count)
 
-  const resolvedGuild = guild || global.bot?.guilds?.get?.(guildID)
   if (!resolvedGuild) return { checked: false }
 
   const suspectProfile = await resolveProfile(resolvedGuild, message.author.id)
@@ -1237,7 +1909,7 @@ async function onMessage (message, { now = new Date() } = {}) {
         id: message.id || `live-${now.getTime()}`,
         authorID: message.author.id,
         channelID: message.channel?.id || null,
-        content: message.content,
+        content,
         ts: message.timestamp ? new Date(message.timestamp) : now
       }, ...storedMsgs]
 
@@ -1276,10 +1948,24 @@ async function onMessage (message, { now = new Date() } = {}) {
 
 // --- Manual moderator investigations (/altcheck) ---
 
-async function investigateUser (guild, userID, { now = new Date() } = {}) {
-  const suspectProfile = await resolveProfile(guild, userID)
-  const suspectMessages = await altDB.getMemberMessages(guild.id, userID, { limit: 50 }).catch(() => [])
-  const candidates = await findCandidates(guild, suspectProfile, suspectMessages, { trigger: 'manual', now, limit: 5 })
+async function investigateUser (guild, userID, { now = new Date(), fetchLiveChannels = true } = {}) {
+  const [baseProfile, dbMessages, liveScan] = await Promise.all([
+    resolveProfile(guild, userID),
+    altDB.getMemberMessages(guild.id, userID, { limit: 50 }).catch(() => []),
+    fetchLiveChannels
+      ? fetchAllGuildChannelMessages(guild)
+      : Promise.resolve({ byAuthor: new Map(), authors: new Map(), channelsScanned: 0, totalMessages: 0 })
+  ])
+  const liveAuthor = liveScan.authors.get(userID) || null
+  const suspectProfile = liveAuthor ? mergeProfiles(baseProfile, liveAuthor) : baseProfile
+  const suspectMessages = mergeMessageLists(dbMessages, liveScan.byAuthor.get(userID) || [], 60)
+  const candidates = await findCandidates(guild, suspectProfile, suspectMessages, {
+    trigger: 'manual',
+    now,
+    limit: 5,
+    liveMessagesByAuthor: liveScan.byAuthor,
+    liveAuthors: liveScan.authors
+  })
   const topCandidate = candidates[0] || null
   let ai = null
   if (topCandidate && topCandidate.heuristic.score >= 15) {
@@ -1296,19 +1982,28 @@ async function investigateUser (guild, userID, { now = new Date() } = {}) {
   return {
     suspectProfile,
     suspectMessageCount: suspectMessages.length,
+    channelsScanned: liveScan.channelsScanned,
     candidates,
     topCandidate,
     ai
   }
 }
 
-async function compareUsers (guild, userID1, userID2, { now = new Date() } = {}) {
-  const [suspectProfile, candidateProfile, suspectMessages, candidateMessages] = await Promise.all([
+async function compareUsers (guild, userID1, userID2, { now = new Date(), fetchLiveChannels = true } = {}) {
+  const [baseSuspect, baseCandidate, dbSuspectMsgs, dbCandidateMsgs, liveScan] = await Promise.all([
     resolveProfile(guild, userID1),
     resolveProfile(guild, userID2),
     altDB.getMemberMessages(guild.id, userID1, { limit: 50 }).catch(() => []),
-    altDB.getMemberMessages(guild.id, userID2, { limit: 50 }).catch(() => [])
+    altDB.getMemberMessages(guild.id, userID2, { limit: 50 }).catch(() => []),
+    fetchLiveChannels
+      ? fetchAllGuildChannelMessages(guild)
+      : Promise.resolve({ byAuthor: new Map(), authors: new Map(), channelsScanned: 0, totalMessages: 0 })
   ])
+  const suspectProfile = liveScan.authors.get(userID1) ? mergeProfiles(baseSuspect, liveScan.authors.get(userID1)) : baseSuspect
+  const candidateProfile = liveScan.authors.get(userID2) ? mergeProfiles(baseCandidate, liveScan.authors.get(userID2)) : baseCandidate
+  const suspectMessages = mergeMessageLists(dbSuspectMsgs, liveScan.byAuthor.get(userID1) || [], 60)
+  const candidateMessages = mergeMessageLists(dbCandidateMsgs, liveScan.byAuthor.get(userID2) || [], 60)
+
   let suspectCentroid = null
   let candidateCentroid = null
   if (suspectMessages.length >= 3 && candidateMessages.length >= 3) {
@@ -1340,16 +2035,28 @@ async function compareUsers (guild, userID1, userID2, { now = new Date() } = {})
     candidateProfile,
     suspectMessageCount: suspectMessages.length,
     candidateMessageCount: candidateMessages.length,
+    channelsScanned: liveScan.channelsScanned,
     heuristic,
     ai
   }
 }
 
-// Scans the server for suspicious alt-account pairs (BAN/kick evasion and/or same-person
-// existing members). Stage 1 runs in memory at zero AI cost; Stage 2 Gemini analysis runs
-// on the top suspicious pair(s) so moderators get precision verdicts without runaway token cost.
-async function scanServer (guild, { scope = 'all', limit = 5, aiVerifyTop = 2, minScore = 25, now = new Date() } = {}) {
-  const stored = await altDB.getCandidateProfiles(guild.id, '', { limit: 200 }).catch(() => [])
+// Scans the server for suspicious alt-account pairs (BAN/kick/offender evasion and/or same-person
+// existing members) across both stored DB history and all live readable guild channels. Stage 1
+// runs in memory at zero AI cost; Stage 2 Gemini analysis runs on the top suspicious pair(s).
+async function scanServer (guild, { scope = 'all', limit = 5, aiVerifyTop = 2, minScore = 25, now = new Date(), fetchLiveChannels = true } = {}) {
+  const [stored, dbRecentMsgsByAuthor, liveScan] = await Promise.all([
+    altDB.getCandidateProfiles(guild.id, '', { limit: 200 }).catch(() => []),
+    altDB.getRecentAuthorsMessages(guild.id, '', {
+      authorLimit: 40,
+      perAuthor: 30,
+      days: 30
+    }).catch(() => new Map()),
+    fetchLiveChannels
+      ? fetchAllGuildChannelMessages(guild)
+      : Promise.resolve({ byAuthor: new Map(), authors: new Map(), channelsScanned: 0, totalMessages: 0 })
+  ])
+
   const profileMap = new Map()
   for (const p of stored) {
     if (p?.userID) profileMap.set(p.userID, p)
@@ -1367,13 +2074,19 @@ async function scanServer (guild, { scope = 'all', limit = 5, aiVerifyTop = 2, m
     }
   }
 
-  const recentMsgsByAuthor = await altDB.getRecentAuthorsMessages(guild.id, '', {
-    authorLimit: 40,
-    perAuthor: 30,
-    days: 30
-  }).catch(() => new Map())
+  for (const [authorID, authorProfile] of liveScan.authors) {
+    if (!authorID || !authorProfile) continue
+    const existing = profileMap.get(authorID)
+    profileMap.set(authorID, existing ? mergeProfiles(existing, authorProfile) : authorProfile)
+  }
 
-  for (const authorID of recentMsgsByAuthor.keys()) {
+  const msgsByUser = new Map(dbRecentMsgsByAuthor)
+  for (const [authorID, liveMsgs] of liveScan.byAuthor) {
+    const merged = mergeMessageLists(msgsByUser.get(authorID) || [], liveMsgs, 50)
+    if (merged.length) msgsByUser.set(authorID, merged)
+  }
+
+  for (const authorID of msgsByUser.keys()) {
     if (!profileMap.has(authorID)) {
       profileMap.set(authorID, {
         userID: authorID,
@@ -1396,9 +2109,8 @@ async function scanServer (guild, { scope = 'all', limit = 5, aiVerifyTop = 2, m
   const activeProfiles = allProfiles.filter(p => p.status === 'active')
   const formerProfiles = allProfiles.filter(p => p.status !== 'active')
 
-  // Load historical messages for the most recent banned/kicked/left profiles so writing-style
-  // matching works even if their ban occurred more than 30 days ago.
-  const msgsByUser = new Map(recentMsgsByAuthor)
+  // Load historical messages for the most recent banned/kicked/restricted/left profiles so
+  // writing-style matching works even if their moderation action occurred more than 30 days ago.
   for (const former of formerProfiles.slice(0, 10)) {
     if (!msgsByUser.has(former.userID)) {
       const hist = await altDB.getMemberMessages(guild.id, former.userID, { limit: 30 }).catch(() => [])
@@ -1438,7 +2150,7 @@ async function scanServer (guild, { scope = 'all', limit = 5, aiVerifyTop = 2, m
     }
   }
 
-  // 1. BAN/kick/leave evasion: active members against former (banned/kicked/left) accounts
+  // 1. BAN/kick/offender/leave evasion: active members against former/restricted accounts
   if (scope === 'all' || scope === 'ban_evasion') {
     const activeSlice = activeProfiles.slice(0, 200)
     for (const active of activeSlice) {
@@ -1520,10 +2232,11 @@ async function scanServer (guild, { scope = 'all', limit = 5, aiVerifyTop = 2, m
 
   return {
     scope,
+    channelsScanned: liveScan.channelsScanned,
     scannedProfiles: allProfiles.length,
     scannedActive: activeProfiles.length,
     scannedFormer: formerProfiles.length,
-    scannedActivePosters: recentMsgsByAuthor.size,
+    scannedActivePosters: msgsByUser.size,
     pairs: topPairs.map(({ suspectProfile, candidateProfile, heuristic, ai }) => ({
       suspectProfile,
       candidateProfile,
@@ -1557,8 +2270,14 @@ module.exports = {
   hourHistogram,
   channelOverlap,
   countSimultaneousMessages,
+  repostTextSimilarity,
+  detectCrossAccountDeleteRepost,
+  analyzeSelfDeleteBehavior,
   scorePair,
   resolveProfile,
+  readableChannelsOf,
+  mergeMessageLists,
+  fetchAllGuildChannelMessages,
   findCandidates,
   parseAiJson,
   analyzeWithGemini,
@@ -1574,6 +2293,10 @@ module.exports = {
   onMemberLeave,
   onMemberUpdate,
   onMemberJoin,
+  detectDeletionActorFromAuditLog,
+  onMessageDelete,
+  onMessageDeleteBulk,
+  onMessageEdit,
   onMessage,
   investigateUser,
   compareUsers,

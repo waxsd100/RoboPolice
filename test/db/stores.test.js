@@ -991,12 +991,44 @@ describe('stores', { skip: !database.available && 'needs PGHOST' }, () => {
       assert.equal(msgs.length, 3)
       assert.equal(msgs[0].content, '今日も寝不足で草')
 
-      const recentMap = await altDB.getRecentAuthorsMessages('g_alt', 'u_suspect')
-      assert.equal(recentMap.get('u_banned')?.length, 3)
-
       const centroid = await altDB.getAuthorEmbeddingCentroid('g_alt', 'u_banned')
       assert.equal(centroid.length, 512)
       assert.ok(Math.abs(centroid[0] - 1) < 0.01)
+
+      // Snapshot before bulk delete preserves deleted messages even after hard deletion from `messages`
+      const snapshotted = await altDB.snapshotMessagesBeforeDelete(['alt_m1'], { deletedBy: 'moderator', moderatorID: 'mod_1' })
+      assert.equal(snapshotted.length, 1)
+      assert.equal(snapshotted[0].content, 'それマジ草なんだが')
+      assert.equal(snapshotted[0].deletedBy, 'moderator')
+      assert.equal(snapshotted[0].moderatorID, 'mod_1')
+      await q("DELETE FROM messages WHERE id = 'alt_m1'")
+      await altDB.recordMessageSnapshot('g_alt', {
+        messageID: 'alt_m_self',
+        authorID: 'u_banned',
+        channelID: 'c1',
+        eventType: 'deleted',
+        deletedBy: 'unknown',
+        content: '自己削除のテスト発言',
+        originalTs: new Date()
+      })
+      assert.equal(await altDB.updateSnapshotDeletionActor('g_alt', 'alt_m_self', { deletedBy: 'self' }), true)
+      await altDB.recordMessageSnapshot('g_alt', {
+        messageID: 'alt_m_edit',
+        authorID: 'u_banned',
+        channelID: 'c1',
+        eventType: 'edited',
+        content: '編集前の危険な発言',
+        originalTs: new Date()
+      })
+      const withDeleted = await altDB.getMemberMessages('g_alt', 'u_banned')
+      assert.ok(withDeleted.some(m => m.deleted && m.deletedBy === 'moderator' && m.moderatorID === 'mod_1' && m.content === 'それマジ草なんだが'), 'mod-deleted message still returned with actor')
+      assert.ok(withDeleted.some(m => m.deleted && m.deletedBy === 'self' && m.content === '自己削除のテスト発言'), 'self-deleted message updated with actor')
+      assert.ok(withDeleted.some(m => m.editedBefore && m.content === '編集前の危険な発言'), 'pre-edit snapshot returned')
+      const withoutDeleted = await altDB.getMemberMessages('g_alt', 'u_banned', { includeDeleted: false })
+      assert.ok(!withoutDeleted.some(m => m.deleted))
+
+      const recentMap = await altDB.getRecentAuthorsMessages('g_alt', 'u_suspect')
+      assert.ok(recentMap.get('u_banned')?.some(m => m.deleted && m.content === 'それマジ草なんだが'))
 
       assert.equal(await altDB.hasRecentAlert('g_alt', 'u_suspect', 'u_banned', 24), false)
       const recorded = await altDB.recordAlert('g_alt', {
@@ -1032,6 +1064,7 @@ describe('stores', { skip: !database.available && 'needs PGHOST' }, () => {
 
       await q("DELETE FROM guilds WHERE id = 'g_alt'")
       assert.deepEqual(await altDB.getRecentAlerts('g_alt'), [], 'deleting guild cascades alt_alerts')
+      assert.deepEqual(await q("SELECT id FROM alt_message_snapshots WHERE guild_id = 'g_alt'"), [], 'deleting guild cascades alt_message_snapshots')
     })
   })
 })

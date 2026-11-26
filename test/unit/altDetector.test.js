@@ -427,53 +427,135 @@ describe('altDetector Stage 2 Gemini analysis, event hooks, and /altcheck comman
 
     const runCmd = async (subName, options = [], locale = 'ja') => {
       const sent = []
+      const deferFlags = []
       const interaction = {
         locale,
         guildID: 'g_cmd',
         member: { user: { id: 'mod1', username: 'mod', discriminator: '0', avatarURL: 'a', dynamicAvatarURL: () => 'a' } },
         data: { options: [{ type: 1, name: subName, options }] },
-        defer: async () => {},
+        defer: async flags => { deferFlags.push(flags) },
         createMessage: async m => sent.push(m),
         editOriginalMessage: async m => sent.push(m)
       }
       await altcheck.func(interaction)
-      return sent[0]
+      return { msg: sent[0], deferFlags }
     }
 
-    // 1. /altcheck find
-    const findMsg = await runCmd('find', [{ name: 'user', value: '200000000000000002' }])
+    // 1. /altcheck find (public in mod channel, no ephemeral flag, mentions suppressed)
+    const { msg: findMsg, deferFlags: findDefer } = await runCmd('find', [{ name: 'user', value: '200000000000000002' }])
+    assert.equal(findDefer[0], undefined, '/altcheck find defers visibly in channel')
+    assert.equal(findMsg.flags, undefined)
+    assert.deepEqual(findMsg.allowedMentions, { everyone: false, roles: false, users: false })
     assert.match(findMsg.embeds[0].title, /サブ垢候補の調査結果/)
     assert.ok(findMsg.embeds[0].fields.some(f => f.value.includes('find 判定')))
 
     // 2. /altcheck scan
-    const scanMsg = await runCmd('scan', [{ name: 'scope', value: 'all' }, { name: 'limit', value: 5 }])
+    const { msg: scanMsg, deferFlags: scanDefer } = await runCmd('scan', [{ name: 'scope', value: 'all' }, { name: 'limit', value: 5 }])
+    assert.equal(scanDefer[0], undefined, '/altcheck scan defers visibly in channel')
     assert.match(scanMsg.embeds[0].title, /スキャン結果/)
     assert.ok(scanMsg.embeds[0].fields.some(f => f.value.includes('scan 判定')))
 
     // 3. /altcheck compare
-    const cmpMsg = await runCmd('compare', [
+    const { msg: cmpMsg, deferFlags: cmpDefer } = await runCmd('compare', [
       { name: 'user1', value: '200000000000000002' },
       { name: 'user2', value: '200000000000000001' }
     ])
+    assert.equal(cmpDefer[0], undefined, '/altcheck compare defers visibly in channel')
     assert.match(cmpMsg.embeds[0].title, /サブ垢比較/)
     assert.ok(cmpMsg.embeds[0].fields.some(f => f.value.includes('compare 判定')))
 
-    // 4. /altcheck compare rejects same user
-    const sameMsg = await runCmd('compare', [
+    // 4. /altcheck compare rejects same user (input error stays ephemeral)
+    const { msg: sameMsg } = await runCmd('compare', [
       { name: 'user1', value: '200000000000000002' },
       { name: 'user2', value: '200000000000000002' }
     ])
     assert.match(sameMsg.content, /同じアカウント同士は比較できません/)
 
-    // 5. /altcheck config toggles auto-detection and shows offender role 882586674717138954
-    const cfgOn = await runCmd('config', [{ name: 'enabled', value: true }])
+    // 5. /altcheck config toggles auto-detection visibly and shows offender role 882586674717138954
+    const { msg: cfgOn } = await runCmd('config', [{ name: 'enabled', value: true }])
+    assert.equal(cfgOn.flags, undefined)
     assert.match(cfgOn.embeds[0].description, /有効（オン）/)
     assert.match(cfgOn.embeds[0].description, /882586674717138954/)
 
-    // 6. /altcheck alerts lists history
-    const alertsMsg = await runCmd('alerts', [{ name: 'limit', value: 5 }])
+    // 6. /altcheck alerts lists history visibly
+    const { msg: alertsMsg } = await runCmd('alerts', [{ name: 'limit', value: 5 }])
+    assert.equal(alertsMsg.flags, undefined)
     assert.match(alertsMsg.embeds[0].title, /直近 1 件/)
     assert.match(alertsMsg.embeds[0].description, /BAN直後の再参加/)
+  })
+
+  test('investigateUser, compareUsers, and scanServer read messages across all readable guild channels and active threads', async () => {
+    delete process.env.CLOUDFLARE_ACCOUNT_ID
+    delete process.env.CLOUDFLARE_AI_GATEWAY_ID
+    const guild = createGuild({ id: 'g_allch' })
+    makeBotWithLogs(guild)
+    const readablePerm = { has: name => name === 'viewChannel' || name === 'readMessageHistory' }
+    const hiddenPerm = { has: () => false }
+    guild.channels.set('ch_general', { id: 'ch_general', name: 'general', type: 0, permissionsOf: () => readablePerm })
+    guild.channels.set('ch_ignored', { id: 'ch_ignored', name: 'ignored-chat', type: 0, permissionsOf: () => readablePerm })
+    guild.channels.set('ch_secret_no_access', { id: 'ch_secret_no_access', name: 'no-access', type: 0, permissionsOf: () => hiddenPerm })
+    guild.channels.set('ch_cat', { id: 'ch_cat', name: 'category', type: 4, permissionsOf: () => readablePerm })
+    guild.threads = new Map([
+      ['th_active', { id: 'th_active', name: 'thread-1', type: 11, permissionsOf: () => readablePerm }]
+    ])
+
+    const styleSamples = [
+      'それマジで草なんだが〜！？今日も配信楽しみすぎるw',
+      'いや普通にそれ草でしょ〜！あとこのゲーム神ゲーすぎw',
+      'わかる〜！まじで眠いけど夜更かししちゃう草w',
+      'おおーマジか！？それ絶対面白いじゃん草w',
+      '今起きたけど配信間に合ってよかった〜！草w'
+    ]
+    const tA = Date.parse('2026-11-20T13:00:00Z')
+    const tB = Date.parse('2026-11-10T13:00:00Z')
+    const chanMsgs = {
+      ch_general: [
+        { id: 'lg1', author: { id: '400000000000000001', username: 'user_alpha' }, content: styleSamples[0], timestamp: tA },
+        { id: 'lg2', author: { id: '400000000000000002', username: 'user_beta' }, content: styleSamples[0], timestamp: tB }
+      ],
+      ch_ignored: [
+        { id: 'li1', author: { id: '400000000000000001', username: 'user_alpha' }, content: styleSamples[1], timestamp: tA + 3600000 },
+        { id: 'li2', author: { id: '400000000000000001', username: 'user_alpha' }, content: styleSamples[2], timestamp: tA + 7200000 },
+        { id: 'li3', author: { id: '400000000000000002', username: 'user_beta' }, content: styleSamples[1], timestamp: tB + 3600000 },
+        { id: 'li4', author: { id: '400000000000000002', username: 'user_beta' }, content: styleSamples[2], timestamp: tB + 7200000 }
+      ],
+      th_active: [
+        { id: 'lt1', author: { id: '400000000000000001', username: 'user_alpha' }, content: styleSamples[3], timestamp: tA + 10800000 },
+        { id: 'lt2', author: { id: '400000000000000001', username: 'user_alpha' }, content: styleSamples[4], timestamp: tA + 14400000 },
+        { id: 'lt3', author: { id: '400000000000000002', username: 'user_beta' }, content: styleSamples[3], timestamp: tB + 10800000 },
+        { id: 'lt4', author: { id: '400000000000000002', username: 'user_beta' }, content: styleSamples[4], timestamp: tB + 14400000 }
+      ]
+    }
+    const fetchedChannels = []
+    global.bot.getMessages = async channelID => {
+      fetchedChannels.push(channelID)
+      return chanMsgs[channelID] || []
+    }
+
+    // DB has 0 stored messages — everything must come from live all-channel scanning
+    installAltDetectionStore({ enabled: { g_allch: false }, profiles: [], messages: [] })
+
+    const findRes = await altDetector.investigateUser(guild, '400000000000000001')
+    assert.ok(fetchedChannels.includes('ch_general'))
+    assert.ok(fetchedChannels.includes('ch_ignored'), 'scans audit-ignored channels too')
+    assert.ok(fetchedChannels.includes('th_active'), 'scans active threads too')
+    assert.ok(!fetchedChannels.includes('ch_secret_no_access'), 'skips unreadable channels')
+    assert.ok(!fetchedChannels.includes('ch_cat'), 'skips category channels')
+    assert.equal(findRes.channelsScanned, 3)
+    assert.equal(findRes.suspectMessageCount, 5)
+    assert.equal(findRes.topCandidate.candidateProfile.userID, '400000000000000002')
+    assert.ok(findRes.topCandidate.heuristic.score >= 50)
+
+    const cmpRes = await altDetector.compareUsers(guild, '400000000000000001', '400000000000000002')
+    assert.equal(cmpRes.channelsScanned, 3)
+    assert.equal(cmpRes.suspectMessageCount, 5)
+    assert.equal(cmpRes.candidateMessageCount, 5)
+    assert.ok(cmpRes.heuristic.score >= 50)
+
+    const scanRes = await altDetector.scanServer(guild, { scope: 'members', aiVerifyTop: 0 })
+    assert.equal(scanRes.channelsScanned, 3)
+    assert.equal(scanRes.pairs.length, 1)
+    assert.ok(scanRes.pairs[0].heuristic.score >= 50)
   })
 
   test('members with offender role 882586674717138954 are treated as restricted offenders like banned/kicked accounts', async (t) => {
@@ -549,5 +631,194 @@ describe('altDetector Stage 2 Gemini analysis, event hooks, and /altcheck comman
     assert.equal(cleared.updated, true)
     assert.equal(cleared.status, 'active')
     assert.equal(storeState.profiles.get('g_off:300000000000000001').status, 'active')
+  })
+
+  test('preserves mod-deleted and self-deleted/edited messages and detects cross-account delete-and-repost immediately', async (t) => {
+    configureGateway()
+    const guild = createGuild({ id: 'g_del' })
+    const executed = makeBotWithLogs(guild)
+    t.mock.method(webhookCache, 'getWebhook', async () => 'wh1|tok1')
+    const storeState = installAltDetectionStore({
+      enabled: { g_del: true },
+      profiles: [
+        { guildID: 'g_del', userID: '500000000000000001', username: 'acc_one', status: 'restricted' },
+        { guildID: 'g_del', userID: '500000000000000002', username: 'acc_two', status: 'active' }
+      ]
+    })
+    const requests = installGemini([
+      [{
+        text: JSON.stringify({
+          verdict: 'likely_alt',
+          confidence: 94,
+          summary: 'アカウントAが削除した危険語句含む長文を、2分後にアカウントBがほぼそのまま再投稿しています。',
+          matching_evidence: ['削除から2分以内に別アカウントで同一文面を再投稿'],
+          counter_evidence: []
+        })
+      }]
+    ])
+
+    const t0 = new Date('2026-11-25T10:00:00Z')
+    const tDel = new Date('2026-11-25T10:01:00Z')
+    const tRepost = new Date('2026-11-25T10:03:00Z')
+
+    // 1. Account A posts a dangerous message (even in an ignored channel -> captured via ring buffer)
+    await altDetector.onMessage({
+      id: 'm_evade_1',
+      content: 'これは危険語句を含む特徴的な問題発言のテスト文面だぞコラ',
+      timestamp: t0.getTime(),
+      author: { id: '500000000000000001', bot: false, username: 'acc_one' },
+      member: { id: '500000000000000001', joinedAt: Date.parse('2025-01-01T00:00:00Z') },
+      channel: { id: 'ch1', guild }
+    }, { now: t0 })
+
+    // 2. Account A edits a message -> pre-edit original is preserved
+    await altDetector.onMessage({
+      id: 'm_edit_1',
+      content: '編集前の危険な暴言テスト発言だぞ',
+      timestamp: t0.getTime(),
+      author: { id: '500000000000000001', bot: false, username: 'acc_one' },
+      channel: { id: 'ch1', guild }
+    }, { now: t0 })
+    const editSaved = await altDetector.onMessageEdit({
+      id: 'm_edit_1',
+      content: '無害な文面に書き換えました',
+      author: { id: '500000000000000001', bot: false },
+      channel: { id: 'ch1', guild }
+    }, null, { at: tDel })
+    assert.equal(editSaved.saved, true)
+    assert.ok(storeState.snapshots.some(s => s.messageID === 'm_edit_1' && s.eventType === 'edited' && s.content.includes('編集前の危険な暴言')))
+
+    // 3. Moderator (or user) deletes m_evade_1 -> snapshot preserved in alt_message_snapshots
+    const delSaved = await altDetector.onMessageDelete({ id: 'm_evade_1', channel: { id: 'ch1', guild } }, null, { at: tDel })
+    assert.equal(delSaved.saved, true)
+    assert.ok(storeState.snapshots.some(s => s.messageID === 'm_evade_1' && s.eventType === 'deleted'))
+
+    // 4. Two minutes later, Account B (even an older account on its 1st message!) reposts near-identical text -> instant alert!
+    const repostRes = await altDetector.onMessage({
+      id: 'm_repost_2',
+      content: 'これは危険語句を含む特徴的な問題発言のテスト文面だぞコラ！',
+      timestamp: tRepost.getTime(),
+      author: { id: '500000000000000002', bot: false, username: 'acc_two' },
+      member: { id: '500000000000000002', joinedAt: Date.parse('2025-01-01T00:00:00Z') },
+      channel: { id: 'ch1', guild }
+    }, { now: tRepost })
+    assert.equal(repostRes.checked, true)
+    assert.equal(repostRes.alerted, true)
+    assert.equal(repostRes.reason, 'cross_delete_repost')
+    assert.equal(requests.length, 1)
+    assert.ok(requests[0].body.contents[0].parts[0].text.includes('[削除済み]'), 'Gemini receives [削除済み] tag for deleted evidence')
+    assert.equal(executed.length, 1)
+
+    // 5. Same-account rapid delete-and-repost behavior is tracked in scorePair without triggering alone
+    const selfDelMsgs = [
+      { id: 'd1:deleted', authorID: 'uX', content: '消す発言1テスト文面', ts: t0, eventTs: new Date(t0.getTime() + 30000), deleted: true, deletedBy: 'self' },
+      { id: 'p1', authorID: 'uX', content: '再投稿1テスト文面', ts: new Date(t0.getTime() + 60000), deleted: false },
+      { id: 'd2:deleted', authorID: 'uX', content: '消す発言2テスト文面', ts: new Date(t0.getTime() + 120000), eventTs: new Date(t0.getTime() + 150000), deleted: true, deletedBy: 'self' },
+      { id: 'p2', authorID: 'uX', content: '再投稿2テスト文面', ts: new Date(t0.getTime() + 180000), deleted: false }
+    ]
+    const behavior = altDetector.analyzeSelfDeleteBehavior(selfDelMsgs)
+    assert.equal(behavior.deletedCount, 2)
+    assert.equal(behavior.rapidDeleteCount, 2)
+    assert.equal(behavior.selfDeleteRepostCount, 2)
+  })
+
+  test('distinguishes moderator-deleted vs self-deleted messages via audit log (including repeat extra.count) and never misattributes mod deletes as self-scrubbing', async (t) => {
+    configureGateway()
+    const guild = createGuild({ id: 'g_moddel', botPerms: ['viewAuditLog'] })
+    makeBotWithLogs(guild)
+    t.mock.method(webhookCache, 'getWebhook', async () => 'wh1|tok1')
+    const storeState = installAltDetectionStore({
+      enabled: { g_moddel: true },
+      profiles: [
+        { guildID: 'g_moddel', userID: '600000000000000001', username: 'danger_user', status: 'restricted' },
+        { guildID: 'g_moddel', userID: '600000000000000002', username: 'danger_alt', status: 'active' }
+      ]
+    })
+
+    const t0 = new Date('2026-11-25T12:00:00Z')
+    const tDel1 = new Date('2026-11-25T12:00:10Z')
+    const tDel2 = new Date('2026-11-25T12:01:00Z')
+    const tSelfDel = new Date('2026-11-25T12:01:30Z')
+    const toSnowflake = d => String((BigInt(d.getTime() - 1420070400000) << 22n) + 1n)
+    const auditEntryID = toSnowflake(tDel1)
+
+    let auditEntries = []
+    guild.getAuditLog = async () => ({ entries: auditEntries })
+
+    // 1. Moderator deletes message #1 -> audit log has fresh entry with count 1
+    await altDetector.onMessage({
+      id: 'md1',
+      content: '危険語句を含む問題発言その1テスト文面',
+      timestamp: t0.getTime(),
+      author: { id: '600000000000000001', bot: false, username: 'danger_user' },
+      channel: { id: 'ch1', guild }
+    }, { now: t0 })
+    auditEntries = [{ id: auditEntryID, actionType: 72, targetID: '600000000000000001', user: { id: 'mod999' }, extra: { channel: { id: 'ch1' }, count: 1 } }]
+    const res1 = await altDetector.onMessageDelete({ id: 'md1', channel: { id: 'ch1', guild } }, null, { at: tDel1, auditDelayMs: 0 })
+    assert.equal(res1.deletedBy, 'moderator')
+    assert.equal(res1.moderatorID, 'mod999')
+
+    // 2. Same moderator deletes message #2 a minute later -> Discord reuses entry ID and increments count to 2
+    await altDetector.onMessage({
+      id: 'md2',
+      content: '危険語句を含む問題発言その2テスト文面',
+      timestamp: t0.getTime(),
+      author: { id: '600000000000000001', bot: false, username: 'danger_user' },
+      channel: { id: 'ch1', guild }
+    }, { now: t0 })
+    auditEntries = [{ id: auditEntryID, actionType: 72, targetID: '600000000000000001', user: { id: 'mod999' }, extra: { channel: { id: 'ch1' }, count: 2 } }]
+    const res2 = await altDetector.onMessageDelete({ id: 'md2', channel: { id: 'ch1', guild } }, null, { at: tDel2, auditDelayMs: 0 })
+    assert.equal(res2.deletedBy, 'moderator')
+    assert.equal(res2.moderatorID, 'mod999')
+
+    // 3. Author deletes message #3 themselves -> audit log count stays at 2 -> classified as self
+    await altDetector.onMessage({
+      id: 'sd3',
+      content: '自分で消したテスト発言その3文面',
+      timestamp: t0.getTime(),
+      author: { id: '600000000000000001', bot: false, username: 'danger_user' },
+      channel: { id: 'ch1', guild }
+    }, { now: t0 })
+    const res3 = await altDetector.onMessageDelete({ id: 'sd3', channel: { id: 'ch1', guild } }, null, { at: tSelfDel, auditDelayMs: 0 })
+    assert.equal(res3.deletedBy, 'self')
+    assert.equal(res3.moderatorID, null)
+
+    // 4. Verify snapshots stored both moderator & self actors, and mod deletes do NOT inflate rapidDeleteCount/selfDeleteRepostCount
+    assert.equal(storeState.snapshots.find(s => s.messageID === 'md1').deletedBy, 'moderator')
+    assert.equal(storeState.snapshots.find(s => s.messageID === 'md2').deletedBy, 'moderator')
+    assert.equal(storeState.snapshots.find(s => s.messageID === 'sd3').deletedBy, 'self')
+
+    const modOnlyMsgs = [
+      { id: 'md1:deleted', authorID: '600000000000000001', content: '危険語句1テスト', ts: t0, eventTs: tDel1, deleted: true, deletedBy: 'moderator' },
+      { id: 'md2:deleted', authorID: '600000000000000001', content: '危険語句2テスト', ts: t0, eventTs: tDel2, deleted: true, deletedBy: 'moderator' },
+      { id: 'md3:deleted', authorID: '600000000000000001', content: '危険語句3テスト', ts: t0, eventTs: tDel2, deleted: true, deletedBy: 'moderator' }
+    ]
+    const modBehavior = altDetector.analyzeSelfDeleteBehavior(modOnlyMsgs)
+    assert.equal(modBehavior.modDeletedCount, 3)
+    assert.equal(modBehavior.rapidDeleteCount, 0, 'mod deletes do not count as self rapid deletes')
+    assert.equal(modBehavior.selfDeleteRepostCount, 0, 'mod deletes do not count as self delete-reposts')
+
+    // 5. Cross-account repost after MODERATOR deletion triggers instant alert labeled [モデレーター削除済み]
+    const requests = installGemini([
+      [{
+        text: JSON.stringify({
+          verdict: 'likely_alt',
+          confidence: 95,
+          summary: 'モデレーターが削除した危険語句発言を、別アカウントで直後に再投稿しています。',
+          matching_evidence: ['モデレーター削除直後に別垢で同一文面を再投稿'],
+          counter_evidence: []
+        })
+      }]
+    ])
+    const repostAfterModDel = await altDetector.onMessage({
+      id: 'alt_rp_1',
+      content: '危険語句を含む問題発言その2テスト文面！',
+      timestamp: tSelfDel.getTime() + 30000,
+      author: { id: '600000000000000002', bot: false, username: 'danger_alt' },
+      channel: { id: 'ch1', guild }
+    }, { now: new Date(tSelfDel.getTime() + 30000) })
+    assert.equal(repostAfterModDel.alerted, true)
+    assert.ok(repostAfterModDel.candidate.heuristic.signals.some(s => s.includes('モデレーター削除→別アカウントで再投稿')))
+    assert.ok(requests[0].body.contents[0].parts[0].text.includes('[モデレーター削除済み]'))
   })
 })

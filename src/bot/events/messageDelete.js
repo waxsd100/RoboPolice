@@ -5,6 +5,7 @@ const deleteMessage = require('../../db/interfaces/postgres/delete').deleteMessa
 const cacheGuild = require('../utils/cacheGuild')
 const { getRetentionDays, isBeyondRetention, messageTimestamp } = require('../utils/retention')
 const discordKnowledge = require('../modules/discordKnowledge')
+const altDetector = require('../modules/altDetector')
 
 module.exports = {
   name: 'messageDelete',
@@ -30,6 +31,11 @@ module.exports = {
         cachedMessage = await getMessageFromDB(message.id)
       }
     }
+
+    // Preserve deleted message text (mod-deleted or self-deleted) before deleting from `messages`.
+    await altDetector.onMessageDelete(message, cachedMessage).catch(e => {
+      global.logger?.warn?.(`[ALT]: onMessageDelete failed: ${e.message}`)
+    })
 
     const evict = messageBatcher.evictMessage || messageBatcher.removeMessage
     if (typeof evict === 'function') {
