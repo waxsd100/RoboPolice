@@ -2246,6 +2246,25 @@ function buildAlertEmbed ({ suspectProfile, candidateProfile, heuristic, ai, tri
       value: counter.map(s => `・${s}`).join('\n')
     })
   }
+  if (suspectProfile?.userID && (verdict === 'likely_alt' || MOD_STATUSES.has(candidateProfile?.status))) {
+    const { formatWickSlashCommand } = require('./wickModeration')
+    const candID = candidateProfile?.userID || '不明'
+    const isSevere = verdict === 'likely_alt' && (candidateProfile?.status === 'banned' || candidateProfile?.status === 'kicked')
+    const primaryCmd = isSevere
+      ? formatWickSlashCommand('ban', {
+        user: suspectProfile.userID,
+        reason: lang === 'en' ? `Alt / ban evasion suspected (matched: ${candID})` : `BAN回避・サブ垢の疑い (一致候補: ${candID})`
+      })
+      : formatWickSlashCommand('quarantine', {
+        user: suspectProfile.userID,
+        reason: lang === 'en' ? `Suspected alt account under review (matched: ${candID})` : `サブ垢疑いのため確認中 (一致候補: ${candID})`
+      })
+    const casesCmd = formatWickSlashCommand('cases', { user: suspectProfile.userID })
+    fields.push({
+      name: lang === 'en' ? 'Wick Slash Command (Copy & Paste)' : 'Wick コマンド候補（コピペ用）',
+      value: `\`\`\`\n${primaryCmd}\n\`\`\`\n${lang === 'en' ? 'Check cases:' : '履歴確認:'} \`${casesCmd}\``
+    })
+  }
 
   return {
     title: lang === 'en' ? '⚠️ Alt-Account Alert (Staff Review Only)' : '⚠️ サブ垢検知アラート（要スタッフ確認）',
