@@ -711,14 +711,114 @@ describe('altDetector Stage 2 Gemini analysis, event hooks, and /altcheck comman
 
     // 5. Same-account rapid delete-and-repost behavior is tracked in scorePair without triggering alone
     const selfDelMsgs = [
-      { id: 'd1:deleted', authorID: 'uX', content: '消す発言1テスト文面', ts: t0, eventTs: new Date(t0.getTime() + 30000), deleted: true },
+      { id: 'd1:deleted', authorID: 'uX', content: '消す発言1テスト文面', ts: t0, eventTs: new Date(t0.getTime() + 30000), deleted: true, deletedBy: 'self' },
       { id: 'p1', authorID: 'uX', content: '再投稿1テスト文面', ts: new Date(t0.getTime() + 60000), deleted: false },
-      { id: 'd2:deleted', authorID: 'uX', content: '消す発言2テスト文面', ts: new Date(t0.getTime() + 120000), eventTs: new Date(t0.getTime() + 150000), deleted: true },
+      { id: 'd2:deleted', authorID: 'uX', content: '消す発言2テスト文面', ts: new Date(t0.getTime() + 120000), eventTs: new Date(t0.getTime() + 150000), deleted: true, deletedBy: 'self' },
       { id: 'p2', authorID: 'uX', content: '再投稿2テスト文面', ts: new Date(t0.getTime() + 180000), deleted: false }
     ]
     const behavior = altDetector.analyzeSelfDeleteBehavior(selfDelMsgs)
     assert.equal(behavior.deletedCount, 2)
     assert.equal(behavior.rapidDeleteCount, 2)
     assert.equal(behavior.selfDeleteRepostCount, 2)
+  })
+
+  test('distinguishes moderator-deleted vs self-deleted messages via audit log (including repeat extra.count) and never misattributes mod deletes as self-scrubbing', async (t) => {
+    configureGateway()
+    const guild = createGuild({ id: 'g_moddel', botPerms: ['viewAuditLog'] })
+    makeBotWithLogs(guild)
+    t.mock.method(webhookCache, 'getWebhook', async () => 'wh1|tok1')
+    const storeState = installAltDetectionStore({
+      enabled: { g_moddel: true },
+      profiles: [
+        { guildID: 'g_moddel', userID: '600000000000000001', username: 'danger_user', status: 'restricted' },
+        { guildID: 'g_moddel', userID: '600000000000000002', username: 'danger_alt', status: 'active' }
+      ]
+    })
+
+    const t0 = new Date('2026-11-25T12:00:00Z')
+    const tDel1 = new Date('2026-11-25T12:00:10Z')
+    const tDel2 = new Date('2026-11-25T12:01:00Z')
+    const tSelfDel = new Date('2026-11-25T12:01:30Z')
+    const toSnowflake = d => String((BigInt(d.getTime() - 1420070400000) << 22n) + 1n)
+    const auditEntryID = toSnowflake(tDel1)
+
+    let auditEntries = []
+    guild.getAuditLog = async () => ({ entries: auditEntries })
+
+    // 1. Moderator deletes message #1 -> audit log has fresh entry with count 1
+    await altDetector.onMessage({
+      id: 'md1',
+      content: '危険語句を含む問題発言その1テスト文面',
+      timestamp: t0.getTime(),
+      author: { id: '600000000000000001', bot: false, username: 'danger_user' },
+      channel: { id: 'ch1', guild }
+    }, { now: t0 })
+    auditEntries = [{ id: auditEntryID, actionType: 72, targetID: '600000000000000001', user: { id: 'mod999' }, extra: { channel: { id: 'ch1' }, count: 1 } }]
+    const res1 = await altDetector.onMessageDelete({ id: 'md1', channel: { id: 'ch1', guild } }, null, { at: tDel1, auditDelayMs: 0 })
+    assert.equal(res1.deletedBy, 'moderator')
+    assert.equal(res1.moderatorID, 'mod999')
+
+    // 2. Same moderator deletes message #2 a minute later -> Discord reuses entry ID and increments count to 2
+    await altDetector.onMessage({
+      id: 'md2',
+      content: '危険語句を含む問題発言その2テスト文面',
+      timestamp: t0.getTime(),
+      author: { id: '600000000000000001', bot: false, username: 'danger_user' },
+      channel: { id: 'ch1', guild }
+    }, { now: t0 })
+    auditEntries = [{ id: auditEntryID, actionType: 72, targetID: '600000000000000001', user: { id: 'mod999' }, extra: { channel: { id: 'ch1' }, count: 2 } }]
+    const res2 = await altDetector.onMessageDelete({ id: 'md2', channel: { id: 'ch1', guild } }, null, { at: tDel2, auditDelayMs: 0 })
+    assert.equal(res2.deletedBy, 'moderator')
+    assert.equal(res2.moderatorID, 'mod999')
+
+    // 3. Author deletes message #3 themselves -> audit log count stays at 2 -> classified as self
+    await altDetector.onMessage({
+      id: 'sd3',
+      content: '自分で消したテスト発言その3文面',
+      timestamp: t0.getTime(),
+      author: { id: '600000000000000001', bot: false, username: 'danger_user' },
+      channel: { id: 'ch1', guild }
+    }, { now: t0 })
+    const res3 = await altDetector.onMessageDelete({ id: 'sd3', channel: { id: 'ch1', guild } }, null, { at: tSelfDel, auditDelayMs: 0 })
+    assert.equal(res3.deletedBy, 'self')
+    assert.equal(res3.moderatorID, null)
+
+    // 4. Verify snapshots stored both moderator & self actors, and mod deletes do NOT inflate rapidDeleteCount/selfDeleteRepostCount
+    assert.equal(storeState.snapshots.find(s => s.messageID === 'md1').deletedBy, 'moderator')
+    assert.equal(storeState.snapshots.find(s => s.messageID === 'md2').deletedBy, 'moderator')
+    assert.equal(storeState.snapshots.find(s => s.messageID === 'sd3').deletedBy, 'self')
+
+    const modOnlyMsgs = [
+      { id: 'md1:deleted', authorID: '600000000000000001', content: '危険語句1テスト', ts: t0, eventTs: tDel1, deleted: true, deletedBy: 'moderator' },
+      { id: 'md2:deleted', authorID: '600000000000000001', content: '危険語句2テスト', ts: t0, eventTs: tDel2, deleted: true, deletedBy: 'moderator' },
+      { id: 'md3:deleted', authorID: '600000000000000001', content: '危険語句3テスト', ts: t0, eventTs: tDel2, deleted: true, deletedBy: 'moderator' }
+    ]
+    const modBehavior = altDetector.analyzeSelfDeleteBehavior(modOnlyMsgs)
+    assert.equal(modBehavior.modDeletedCount, 3)
+    assert.equal(modBehavior.rapidDeleteCount, 0, 'mod deletes do not count as self rapid deletes')
+    assert.equal(modBehavior.selfDeleteRepostCount, 0, 'mod deletes do not count as self delete-reposts')
+
+    // 5. Cross-account repost after MODERATOR deletion triggers instant alert labeled [モデレーター削除済み]
+    const requests = installGemini([
+      [{
+        text: JSON.stringify({
+          verdict: 'likely_alt',
+          confidence: 95,
+          summary: 'モデレーターが削除した危険語句発言を、別アカウントで直後に再投稿しています。',
+          matching_evidence: ['モデレーター削除直後に別垢で同一文面を再投稿'],
+          counter_evidence: []
+        })
+      }]
+    ])
+    const repostAfterModDel = await altDetector.onMessage({
+      id: 'alt_rp_1',
+      content: '危険語句を含む問題発言その2テスト文面！',
+      timestamp: tSelfDel.getTime() + 30000,
+      author: { id: '600000000000000002', bot: false, username: 'danger_alt' },
+      channel: { id: 'ch1', guild }
+    }, { now: new Date(tSelfDel.getTime() + 30000) })
+    assert.equal(repostAfterModDel.alerted, true)
+    assert.ok(repostAfterModDel.candidate.heuristic.signals.some(s => s.includes('モデレーター削除→別アカウントで再投稿')))
+    assert.ok(requests[0].body.contents[0].parts[0].text.includes('[モデレーター削除済み]'))
   })
 })

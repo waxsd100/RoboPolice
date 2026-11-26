@@ -85,6 +85,8 @@ CREATE TABLE IF NOT EXISTS alt_message_snapshots (
   author_id TEXT NOT NULL,
   channel_id TEXT,
   event_type TEXT NOT NULL CHECK (event_type IN ('deleted', 'edited')),
+  deleted_by TEXT NOT NULL DEFAULT 'unknown' CHECK (deleted_by IN ('self', 'moderator', 'unknown')),
+  moderator_id TEXT,
   content TEXT NOT NULL,
   original_ts TIMESTAMPTZ,
   event_ts TIMESTAMPTZ NOT NULL DEFAULT now()
@@ -104,6 +106,8 @@ COMMENT ON COLUMN alt_message_snapshots.message_id IS '元のDiscordメッセー
 COMMENT ON COLUMN alt_message_snapshots.author_id IS '送信者のDiscordユーザーID';
 COMMENT ON COLUMN alt_message_snapshots.channel_id IS '送信されたチャンネルID';
 COMMENT ON COLUMN alt_message_snapshots.event_type IS '種別（deleted: 削除済み / edited: 編集前の原文）';
+COMMENT ON COLUMN alt_message_snapshots.deleted_by IS '削除主体（self: 本人削除 / moderator: モデレーター・一括削除 / unknown: 不明または編集）';
+COMMENT ON COLUMN alt_message_snapshots.moderator_id IS 'モデレーター削除時に監査ログから特定した実行者のDiscordユーザーID';
 COMMENT ON COLUMN alt_message_snapshots.content IS '削除・編集前のメッセージ本文';
 COMMENT ON COLUMN alt_message_snapshots.original_ts IS '元のメッセージ送信日時';
 COMMENT ON COLUMN alt_message_snapshots.event_ts IS '削除または編集が検知された日時';

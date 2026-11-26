@@ -125,10 +125,21 @@ async function getCandidateProfiles (guildID, excludeUserID, { limit = 200 } = {
   return rows.map(rowToProfile)
 }
 
-async function recordMessageSnapshot (guildID, { messageID, authorID, channelID = null, eventType = 'deleted', content, originalTs = null, eventTs = new Date() }) {
+async function recordMessageSnapshot (guildID, {
+  messageID,
+  authorID,
+  channelID = null,
+  eventType = 'deleted',
+  deletedBy = 'unknown',
+  moderatorID = null,
+  content,
+  originalTs = null,
+  eventTs = new Date()
+}) {
   const clean = String(content || '').trim()
   if (!guildID || !messageID || !authorID || !clean) return false
   await ensureGuild(guildID)
+  const validDeletedBy = ['self', 'moderator', 'unknown'].includes(deletedBy) ? deletedBy : 'unknown'
   if (eventType === 'deleted') {
     const { rows } = await pool.query(
       'SELECT 1 FROM alt_message_snapshots WHERE guild_id = $1 AND message_id = $2 AND event_type = \'deleted\' LIMIT 1',
@@ -138,14 +149,16 @@ async function recordMessageSnapshot (guildID, { messageID, authorID, channelID 
   }
   await pool.query(
     `INSERT INTO alt_message_snapshots
-       (guild_id, message_id, author_id, channel_id, event_type, content, original_ts, event_ts)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+       (guild_id, message_id, author_id, channel_id, event_type, deleted_by, moderator_id, content, original_ts, event_ts)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
     [
       guildID,
       messageID,
       authorID,
       channelID || null,
       eventType === 'edited' ? 'edited' : 'deleted',
+      eventType === 'edited' ? 'unknown' : validDeletedBy,
+      moderatorID || null,
       toStoredContent(clean),
       originalTs ? new Date(originalTs) : null,
       eventTs ? new Date(eventTs) : new Date()
@@ -154,15 +167,28 @@ async function recordMessageSnapshot (guildID, { messageID, authorID, channelID 
   return true
 }
 
+async function updateSnapshotDeletionActor (guildID, messageID, { deletedBy = 'unknown', moderatorID = null } = {}) {
+  if (!guildID || !messageID) return false
+  const validDeletedBy = ['self', 'moderator', 'unknown'].includes(deletedBy) ? deletedBy : 'unknown'
+  const { rowCount } = await pool.query(
+    `UPDATE alt_message_snapshots
+     SET deleted_by = $3, moderator_id = COALESCE($4, moderator_id)
+     WHERE guild_id = $1 AND message_id = $2 AND event_type = 'deleted'`,
+    [guildID, messageID, validDeletedBy, moderatorID || null]
+  )
+  return rowCount > 0
+}
+
 // Copies messages that are about to be deleted from `messages` into `alt_message_snapshots`
 // in a single SQL query (preserves moderator-deleted and bulk-deleted messages for alt detection).
-async function snapshotMessagesBeforeDelete (messageIDs, { eventTs = new Date() } = {}) {
+async function snapshotMessagesBeforeDelete (messageIDs, { deletedBy = 'unknown', moderatorID = null, eventTs = new Date() } = {}) {
   const ids = Array.isArray(messageIDs) ? messageIDs.filter(Boolean) : []
   if (!ids.length) return []
+  const validDeletedBy = ['self', 'moderator', 'unknown'].includes(deletedBy) ? deletedBy : 'unknown'
   const { rows } = await pool.query(
     `INSERT INTO alt_message_snapshots
-       (guild_id, message_id, author_id, channel_id, event_type, content, original_ts, event_ts)
-     SELECT m.guild_id, m.id, m.author_id, m.channel_id, 'deleted', m.content, m.ts, $2
+       (guild_id, message_id, author_id, channel_id, event_type, deleted_by, moderator_id, content, original_ts, event_ts)
+     SELECT m.guild_id, m.id, m.author_id, m.channel_id, 'deleted', $2, $3, m.content, m.ts, $4
      FROM messages m
      WHERE m.id = ANY($1::text[])
        AND m.guild_id IS NOT NULL
@@ -172,8 +198,8 @@ async function snapshotMessagesBeforeDelete (messageIDs, { eventTs = new Date() 
          SELECT 1 FROM alt_message_snapshots s
          WHERE s.guild_id = m.guild_id AND s.message_id = m.id AND s.event_type = 'deleted'
        )
-     RETURNING guild_id, message_id, author_id, channel_id, content, original_ts, event_ts`,
-    [ids, eventTs ? new Date(eventTs) : new Date()]
+     RETURNING guild_id, message_id, author_id, channel_id, deleted_by, moderator_id, content, original_ts, event_ts`,
+    [ids, validDeletedBy, moderatorID || null, eventTs ? new Date(eventTs) : new Date()]
   )
   return rows.map(r => ({
     guildID: r.guild_id,
@@ -184,6 +210,8 @@ async function snapshotMessagesBeforeDelete (messageIDs, { eventTs = new Date() 
     ts: r.original_ts ? new Date(r.original_ts) : (r.event_ts ? new Date(r.event_ts) : new Date(0)),
     eventTs: r.event_ts ? new Date(r.event_ts) : null,
     deleted: true,
+    deletedBy: r.deleted_by || 'unknown',
+    moderatorID: r.moderator_id || null,
     editedBefore: false
   })).filter(m => m.content)
 }
@@ -205,19 +233,21 @@ async function getMemberMessages (guildID, userID, { limit = 60, includeDeleted 
       content: fromStoredContent(r.content),
       ts: r.ts ? new Date(r.ts) : new Date(0),
       deleted: false,
+      deletedBy: null,
+      moderatorID: null,
       editedBefore: false,
       eventTs: null
     })).filter(m => m.content)
   }
 
   const { rows } = await pool.query(
-    `SELECT id, author_id, channel_id, content, ts, event_type, event_ts
+    `SELECT id, author_id, channel_id, content, ts, event_type, deleted_by, moderator_id, event_ts
      FROM (
-       SELECT id, author_id, channel_id, content, ts, NULL::text AS event_type, NULL::timestamptz AS event_ts
+       SELECT id, author_id, channel_id, content, ts, NULL::text AS event_type, NULL::text AS deleted_by, NULL::text AS moderator_id, NULL::timestamptz AS event_ts
        FROM messages
        WHERE guild_id = $1 AND author_id = $2 AND content IS NOT NULL AND content <> ''
        UNION ALL
-       SELECT message_id AS id, author_id, channel_id, content, COALESCE(original_ts, event_ts) AS ts, event_type, event_ts
+       SELECT message_id AS id, author_id, channel_id, content, COALESCE(original_ts, event_ts) AS ts, event_type, deleted_by, moderator_id, event_ts
        FROM alt_message_snapshots
        WHERE guild_id = $1 AND author_id = $2 AND content IS NOT NULL AND content <> ''
      ) combined
@@ -233,6 +263,8 @@ async function getMemberMessages (guildID, userID, { limit = 60, includeDeleted 
     content: fromStoredContent(r.content),
     ts: r.ts ? new Date(r.ts) : new Date(0),
     deleted: r.event_type === 'deleted',
+    deletedBy: r.event_type === 'deleted' ? (r.deleted_by || 'unknown') : null,
+    moderatorID: r.moderator_id || null,
     editedBefore: r.event_type === 'edited',
     eventTs: r.event_ts ? new Date(r.event_ts) : null
   })).filter(m => m.content)
@@ -242,14 +274,14 @@ async function getMemberMessages (guildID, userID, { limit = 60, includeDeleted 
 async function getRecentAuthorsMessages (guildID, excludeUserID, { authorLimit = 30, perAuthor = 30, days = 30, includeDeleted = true } = {}) {
   const since = new Date(Date.now() - days * 86400 * 1000)
   const sourceSql = includeDeleted
-    ? `SELECT id, author_id, channel_id, content, ts, NULL::text AS event_type, NULL::timestamptz AS event_ts
+    ? `SELECT id, author_id, channel_id, content, ts, NULL::text AS event_type, NULL::text AS deleted_by, NULL::text AS moderator_id, NULL::timestamptz AS event_ts
        FROM messages
        WHERE guild_id = $1 AND author_id <> $2 AND ts >= $3 AND content IS NOT NULL AND content <> ''
        UNION ALL
-       SELECT message_id AS id, author_id, channel_id, content, COALESCE(original_ts, event_ts) AS ts, event_type, event_ts
+       SELECT message_id AS id, author_id, channel_id, content, COALESCE(original_ts, event_ts) AS ts, event_type, deleted_by, moderator_id, event_ts
        FROM alt_message_snapshots
        WHERE guild_id = $1 AND author_id <> $2 AND event_ts >= $3 AND content IS NOT NULL AND content <> ''`
-    : `SELECT id, author_id, channel_id, content, ts, NULL::text AS event_type, NULL::timestamptz AS event_ts
+    : `SELECT id, author_id, channel_id, content, ts, NULL::text AS event_type, NULL::text AS deleted_by, NULL::text AS moderator_id, NULL::timestamptz AS event_ts
        FROM messages
        WHERE guild_id = $1 AND author_id <> $2 AND ts >= $3 AND content IS NOT NULL AND content <> ''`
 
@@ -266,12 +298,12 @@ async function getRecentAuthorsMessages (guildID, excludeUserID, { authorLimit =
        LIMIT $4
      ),
      ranked_msgs AS (
-       SELECT m.id, m.author_id, m.channel_id, m.content, m.ts, m.event_type, m.event_ts,
+       SELECT m.id, m.author_id, m.channel_id, m.content, m.ts, m.event_type, m.deleted_by, m.moderator_id, m.event_ts,
               row_number() OVER (PARTITION BY m.author_id ORDER BY m.ts DESC) AS rn
        FROM all_msgs m
        JOIN ranked_authors a ON a.author_id = m.author_id
      )
-     SELECT id, author_id, channel_id, content, ts, event_type, event_ts
+     SELECT id, author_id, channel_id, content, ts, event_type, deleted_by, moderator_id, event_ts
      FROM ranked_msgs
      WHERE rn <= $5
      ORDER BY author_id, ts DESC`,
@@ -290,6 +322,8 @@ async function getRecentAuthorsMessages (guildID, excludeUserID, { authorLimit =
       content,
       ts: r.ts ? new Date(r.ts) : new Date(0),
       deleted: r.event_type === 'deleted',
+      deletedBy: r.event_type === 'deleted' ? (r.deleted_by || 'unknown') : null,
+      moderatorID: r.moderator_id || null,
       editedBefore: r.event_type === 'edited',
       eventTs: r.event_ts ? new Date(r.event_ts) : null
     })
@@ -396,6 +430,7 @@ module.exports = {
   getMemberProfile,
   getCandidateProfiles,
   recordMessageSnapshot,
+  updateSnapshotDeletionActor,
   snapshotMessagesBeforeDelete,
   getMemberMessages,
   getRecentAuthorsMessages,
