@@ -1060,5 +1060,28 @@ describe('altDetector Stage 2 Gemini analysis, event hooks, and /altcheck comman
     })
     assert.ok(diffRes.metrics.impostorsScore <= 0.15, `unrelated user should fail General Impostors, got ${diffRes.metrics.impostorsScore}`)
     assert.ok(diffRes.score < 30, `unrelated user should score low, got ${diffRes.score}`)
+
+    // Symmetric direction check: `/altcheck find <bannedMain>` or `/altcheck compare <oldMain> <laterCreatedAlt>`
+    // scores identically regardless of which account is passed first even when creation dates are years apart.
+    const oldMain = {
+      userID: '800000000000000001',
+      username: 'old_main_2020',
+      accountCreatedAt: new Date('2020-01-01T00:00:00Z'),
+      joinedAt: new Date('2022-01-01T00:00:00Z'),
+      status: 'banned',
+      statusAt: new Date('2026-11-25T10:00:00Z')
+    }
+    const laterAlt = {
+      userID: '800000000000000002',
+      username: 'fresh_disguise',
+      accountCreatedAt: new Date('2026-11-25T10:15:00Z'), // created 6+ years later, right after BAN
+      joinedAt: new Date('2026-11-25T10:30:00Z'),
+      status: 'active'
+    }
+    const fwd = altDetector.scorePair({ suspectProfile: laterAlt, candidateProfile: oldMain, now })
+    const rev = altDetector.scorePair({ suspectProfile: oldMain, candidateProfile: laterAlt, now })
+    assert.equal(fwd.score, rev.score, 'scorePair must be symmetric regardless of (main, alt) vs (alt, main) order')
+    assert.equal(rev.metrics.createdAfterMod, true)
+    assert.ok(rev.score >= 65, `expected strong score for later-created alt from banned main lookup, got ${rev.score}`)
   })
 })

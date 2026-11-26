@@ -969,37 +969,77 @@ function scorePair ({
     simultaneousMinutes: 0
   }
 
-  const joinedAt = suspectProfile?.joinedAt ? new Date(suspectProfile.joinedAt) : null
-  const createdAt = suspectProfile?.accountCreatedAt ? new Date(suspectProfile.accountCreatedAt) : null
-  const candStatusAt = candidateProfile?.statusAt ? new Date(candidateProfile.statusAt) : null
+  const suspIsMod = MOD_STATUSES.has(suspectProfile?.status)
   const candIsMod = MOD_STATUSES.has(candidateProfile?.status)
+  const suspIsFormer = suspIsMod || suspectProfile?.status === 'left'
+  const candIsFormer = candIsMod || candidateProfile?.status === 'left'
 
-  // 1. BAN / kick / leave timing proximity
-  if (joinedAt && candStatusAt) {
-    const delta = joinedAt.getTime() - candStatusAt.getTime()
+  // Determine direction symmetrically so `/altcheck find <bannedMain>` and
+  // `/altcheck compare <oldMain> <newAlt>` score identically regardless of argument order.
+  let modProfile = null
+  let altProfile = suspectProfile
+  if (candIsMod && !suspIsMod) {
+    modProfile = candidateProfile
+    altProfile = suspectProfile
+  } else if (suspIsMod && !candIsMod) {
+    modProfile = suspectProfile
+    altProfile = candidateProfile
+  } else if (candIsFormer && !suspIsFormer) {
+    modProfile = candidateProfile
+    altProfile = suspectProfile
+  } else if (suspIsFormer && !candIsFormer) {
+    modProfile = suspectProfile
+    altProfile = candidateProfile
+  } else {
+    // Both have the same status class: treat the more recently joined (or more recently created)
+    // account as the potential newer alt when inspecting post-event timing & account age at join.
+    const tJoinS = suspectProfile?.joinedAt ? new Date(suspectProfile.joinedAt).getTime() : null
+    const tJoinC = candidateProfile?.joinedAt ? new Date(candidateProfile.joinedAt).getTime() : null
+    const tCreS = suspectProfile?.accountCreatedAt ? new Date(suspectProfile.accountCreatedAt).getTime() : null
+    const tCreC = candidateProfile?.accountCreatedAt ? new Date(candidateProfile.accountCreatedAt).getTime() : null
+    if (tJoinS != null && tJoinC != null && tJoinC > tJoinS) {
+      modProfile = candIsFormer ? suspectProfile : null
+      altProfile = candidateProfile
+    } else if (tJoinS == null && tJoinC == null && tCreS != null && tCreC != null && tCreC > tCreS) {
+      modProfile = candIsFormer ? suspectProfile : null
+      altProfile = candidateProfile
+    } else if (candIsFormer) {
+      modProfile = candidateProfile
+      altProfile = suspectProfile
+    }
+  }
+
+  const joinedAt = altProfile?.joinedAt ? new Date(altProfile.joinedAt) : null
+  const createdAt = altProfile?.accountCreatedAt ? new Date(altProfile.accountCreatedAt) : null
+  const modStatusAt = modProfile?.statusAt ? new Date(modProfile.statusAt) : null
+  const modIsOffender = MOD_STATUSES.has(modProfile?.status)
+
+  // 1. BAN / kick / offender-role / leave timing proximity
+  if (joinedAt && modStatusAt) {
+    const delta = joinedAt.getTime() - modStatusAt.getTime()
     metrics.timingDeltaMs = delta
     if (delta >= -60 * 1000) {
       const clampedDelta = Math.max(0, delta)
-      if (candIsMod) {
-        const actionLabel = candidateProfile.status === 'banned'
+      if (modIsOffender) {
+        const actionLabel = modProfile.status === 'banned'
           ? 'BAN'
-          : (candidateProfile.status === 'kicked' ? 'キック' : '違反者ロール付与')
+          : (modProfile.status === 'kicked' ? 'キック' : '違反者ロール付与')
         if (clampedDelta <= 2 * 3600 * 1000) {
           raw += 35
-          signals.push(`候補の${actionLabel}から${formatDurationJa(clampedDelta)}後に参加（極めて近接）`)
+          signals.push(`処分側（${actionLabel}）から${formatDurationJa(clampedDelta)}後に他方が参加（極めて近接）`)
         } else if (clampedDelta <= 24 * 3600 * 1000) {
           raw += 25
-          signals.push(`候補の${actionLabel}から${formatDurationJa(clampedDelta)}後に参加`)
+          signals.push(`処分側（${actionLabel}）から${formatDurationJa(clampedDelta)}後に他方が参加`)
         } else if (clampedDelta <= 7 * 86400 * 1000) {
           raw += 15
-          signals.push(`候補の${actionLabel}から${formatDurationJa(clampedDelta)}後に参加`)
+          signals.push(`処分側（${actionLabel}）から${formatDurationJa(clampedDelta)}後に他方が参加`)
         } else if (clampedDelta <= 30 * 86400 * 1000) {
           raw += 8
-          signals.push(`候補の${actionLabel}から${formatDurationJa(clampedDelta)}後に参加`)
+          signals.push(`処分側（${actionLabel}）から${formatDurationJa(clampedDelta)}後に他方が参加`)
         }
-      } else if (candidateProfile?.status === 'left' && clampedDelta <= 24 * 3600 * 1000) {
+      } else if (modProfile?.status === 'left' && clampedDelta <= 24 * 3600 * 1000) {
         raw += 12
-        signals.push(`候補の退出から${formatDurationJa(clampedDelta)}以内に参加`)
+        signals.push(`一方の退出から${formatDurationJa(clampedDelta)}以内に他方が参加`)
       }
     }
   }
@@ -1020,12 +1060,12 @@ function scorePair ({
       signals.push(`参加時点でアカウント作成から30日未満（${formatDurationJa(ageMs)}）`)
     }
 
-    if (candIsMod && candStatusAt) {
-      const createdAfter = createdAt.getTime() - candStatusAt.getTime()
+    if (modIsOffender && modStatusAt) {
+      const createdAfter = createdAt.getTime() - modStatusAt.getTime()
       if (createdAfter >= -60 * 1000 && createdAfter <= 14 * 86400 * 1000) {
         metrics.createdAfterMod = true
         raw += 10
-        signals.push('候補のBAN/キック/違反者ロール付与後に新規作成されたアカウント')
+        signals.push('BAN/キック/違反者ロール付与後に新規作成されたアカウント')
       }
     }
   }
@@ -1291,7 +1331,7 @@ function scorePair ({
         } else if (handover.gapMs <= 7 * 86400 * 1000) {
           raw += 12
           signals.push(`活動期間の入れ替わりあり（一方の停止から${formatDurationJa(handover.gapMs)}後に他方が活動開始・重複なし）`)
-        } else if (handover.gapMs <= 30 * 86400 * 1000 && (candIsMod || candidateProfile?.status === 'left')) {
+        } else if (handover.gapMs <= 30 * 86400 * 1000 && (suspIsFormer || candIsFormer)) {
           raw += 8
           signals.push(`処分・退出側の活動停止後に他方が活動開始（間隔 ${formatDurationJa(handover.gapMs)}・重複なし）`)
         }
