@@ -7,6 +7,7 @@ const { isGatewayConfigured } = require('../utils/aiGateway')
 const { langOf, pick } = require('../utils/i18n')
 
 const EPHEMERAL = Eris.Constants.MessageFlags.EPHEMERAL
+const NO_PINGS = { everyone: false, roles: false, users: false }
 
 function parseUserID (raw) {
   if (!raw) return null
@@ -25,10 +26,11 @@ function getOption (sub, name) {
 }
 
 async function sendReply (interaction, payload, deferred) {
+  const safePayload = { allowedMentions: NO_PINGS, ...payload }
   if (deferred && typeof interaction.editOriginalMessage === 'function') {
-    return interaction.editOriginalMessage(payload).catch(() => {})
+    return interaction.editOriginalMessage(safePayload).catch(() => {})
   }
-  return interaction.createMessage({ ...payload, flags: EPHEMERAL }).catch(() => {})
+  return interaction.createMessage(safePayload).catch(() => {})
 }
 
 function clamp (str, max) {
@@ -62,14 +64,17 @@ async function handleFind (interaction, guild, sub) {
 
   let deferred = false
   if (typeof interaction.defer === 'function') {
-    await interaction.defer(EPHEMERAL).catch(() => {})
+    await interaction.defer().catch(() => {})
     deferred = true
   }
 
   const res = await altDetector.investigateUser(guild, userID)
+  const chanNote = res.channelsScanned > 0
+    ? (lang === 'en' ? ` / Scanned all ${res.channelsScanned} readable channel(s)` : ` ／ 全 ${res.channelsScanned} チャンネルを横断確認`)
+    : ''
   const fields = [{
     name: lang === 'en' ? 'Target account' : '調査対象アカウント',
-    value: clamp(`${altDetector.formatUserLine(res.suspectProfile, lang)}\n${lang === 'en' ? `Stored messages analyzed: ${res.suspectMessageCount}` : `分析対象の保存メッセージ数: ${res.suspectMessageCount} 件`}`, 1024)
+    value: clamp(`${altDetector.formatUserLine(res.suspectProfile, lang)}\n${lang === 'en' ? `Messages analyzed: ${res.suspectMessageCount}${chanNote}` : `分析対象のメッセージ数: ${res.suspectMessageCount} 件${chanNote}`}`, 1024)
   }]
 
   if (!res.candidates.length || res.topCandidate.heuristic.score === 0) {
@@ -78,7 +83,7 @@ async function handleFind (interaction, guild, sub) {
       color: EMBED_COLORS.GREEN,
       description: lang === 'en'
         ? 'No suspicious matching accounts were found among recorded banned/kicked/left or active members.'
-        : '記録されている BAN・キック・退出済みアカウントおよび既存メンバーの中に、一致度の高いサブ垢候補は見つかりませんでした。',
+        : '記録されている BAN・キック・違反者ロール・退出済みアカウントおよび全チャンネルの発言者の中に、一致度の高いサブ垢候補は見つかりませんでした。',
       fields,
       footer: getEmbedFooter(global.bot.user),
       timestamp: new Date()
@@ -137,22 +142,25 @@ async function handleScan (interaction, guild, sub) {
 
   let deferred = false
   if (typeof interaction.defer === 'function') {
-    await interaction.defer(EPHEMERAL).catch(() => {})
+    await interaction.defer().catch(() => {})
     deferred = true
   }
 
   const res = await altDetector.scanServer(guild, { scope, limit, aiVerifyTop: 2 })
   const scopeLabel = lang === 'en'
     ? ({ all: 'All (BAN/kick evasion + existing members)', ban_evasion: 'BAN/kick/leave evasion', members: 'Existing members' }[scope] || scope)
-    : ({ all: 'すべて（BAN/キック回避＋既存メンバー同士）', ban_evasion: 'BAN・キック・退出アカウントとの照合', members: '既存メンバー同士の同一人物チェック' }[scope] || scope)
+    : ({ all: 'すべて（BAN/キック/違反者回避＋既存メンバー同士）', ban_evasion: 'BAN・キック・違反者ロール・退出アカウントとの照合', members: '既存メンバー同士の同一人物チェック' }[scope] || scope)
+  const chanPart = res.channelsScanned > 0
+    ? (lang === 'en' ? ` across **${res.channelsScanned}** channel(s)` : `（全 **${res.channelsScanned}** チャンネルを横断確認）`)
+    : ''
 
   if (!res.pairs.length) {
     const embed = {
       title: lang === 'en' ? '🔎 Server Alt-Account Scan' : '🔎 サーバー内サブ垢スキャン結果',
       color: EMBED_COLORS.GREEN,
       description: lang === 'en'
-        ? `Scanned **${res.scannedProfiles}** profiles (${res.scannedActive} active, ${res.scannedFormer} former) and **${res.scannedActivePosters}** recent posters.\nNo suspicious alt-account pairs exceeded the threshold.`
-        : `**${res.scannedProfiles} 件**のプロフィール（在籍 ${res.scannedActive} ／ BAN・キック・退出 ${res.scannedFormer}）および最近の発言者 **${res.scannedActivePosters} 人**をスキャンしました。\nしきい値を超えるサブ垢候補ペアは見つかりませんでした。`,
+        ? `Scanned **${res.scannedProfiles}** profiles (${res.scannedActive} active, ${res.scannedFormer} former/restricted) and **${res.scannedActivePosters}** posters${chanPart}.\nNo suspicious alt-account pairs exceeded the threshold.`
+        : `**${res.scannedProfiles} 件**のプロフィール（在籍 ${res.scannedActive} ／ BAN・キック・違反者・退出 ${res.scannedFormer}）および発言者 **${res.scannedActivePosters} 人**をスキャンしました${chanPart}。\nしきい値を超えるサブ垢候補ペアは見つかりませんでした。`,
       fields: [{ name: lang === 'en' ? 'Scope' : 'スキャン対象', value: scopeLabel }],
       footer: getEmbedFooter(global.bot.user),
       timestamp: new Date()
@@ -193,8 +201,8 @@ async function handleScan (interaction, guild, sub) {
     title: lang === 'en' ? '🔎 Server Alt-Account Scan' : '🔎 サーバー内サブ垢スキャン結果',
     color,
     description: lang === 'en'
-      ? `Scope: **${scopeLabel}**\nScanned **${res.scannedProfiles}** profiles & **${res.scannedActivePosters}** recent posters. Top ${Math.min(2, res.pairs.length)} suspicious pair(s) were precision-reviewed by AI.\nRun \`/altcheck compare\` for a full breakdown of any pair.`
-      : `対象: **${scopeLabel}**\n**${res.scannedProfiles} 件**のプロフィールと最近の発言者 **${res.scannedActivePosters} 人**をスキャンし、上位候補を AI で精密判定しました。\n気になるペアは \`/altcheck compare\` で詳細比較できます（自動処罰は行いません）。`,
+      ? `Scope: **${scopeLabel}**\nScanned **${res.scannedProfiles}** profiles & **${res.scannedActivePosters}** posters${chanPart}. Top ${Math.min(2, res.pairs.length)} suspicious pair(s) were precision-reviewed by AI.\nRun \`/altcheck compare\` for a full breakdown of any pair.`
+      : `対象: **${scopeLabel}**\n**${res.scannedProfiles} 件**のプロフィールと発言者 **${res.scannedActivePosters} 人**をスキャンし${chanPart}、上位候補を AI で精密判定しました。\n気になるペアは \`/altcheck compare\` で詳細比較できます（自動処罰は行いません）。`,
     fields,
     footer: getEmbedFooter(global.bot.user),
     timestamp: new Date()
@@ -227,11 +235,14 @@ async function handleCompare (interaction, guild, sub) {
 
   let deferred = false
   if (typeof interaction.defer === 'function') {
-    await interaction.defer(EPHEMERAL).catch(() => {})
+    await interaction.defer().catch(() => {})
     deferred = true
   }
 
   const res = await altDetector.compareUsers(guild, id1, id2)
+  const chanNote = res.channelsScanned > 0
+    ? (lang === 'en' ? ` across all **${res.channelsScanned}** readable channel(s)` : `（全 **${res.channelsScanned}** チャンネル横断）`)
+    : ''
   const embed = altDetector.buildAlertEmbed({
     suspectProfile: res.suspectProfile,
     candidateProfile: res.candidateProfile,
@@ -242,8 +253,8 @@ async function handleCompare (interaction, guild, sub) {
   })
   embed.title = lang === 'en' ? '⚖️ Alt-Account Comparison Result' : '⚖️ サブ垢比較・同一人物判定結果'
   embed.description = lang === 'en'
-    ? `Compared **${res.suspectMessageCount}** stored message(s) of A vs **${res.candidateMessageCount}** stored message(s) of B. Results are advisory for staff review.`
-    : `アカウント A（保存発言 ${res.suspectMessageCount} 件）とアカウント B（保存発言 ${res.candidateMessageCount} 件）を比較しました。スタッフ確認用の参考情報です（自動処罰なし）。`
+    ? `Compared **${res.suspectMessageCount}** message(s) of A vs **${res.candidateMessageCount}** message(s) of B${chanNote}. Results are advisory for staff review.`
+    : `アカウント A（発言 ${res.suspectMessageCount} 件）とアカウント B（発言 ${res.candidateMessageCount} 件）を比較しました${chanNote}。スタッフ確認用の参考情報です（自動処罰なし）。`
   embed.footer = getEmbedFooter(global.bot.user)
   return sendReply(interaction, { embeds: [embed] }, deferred)
 }
@@ -301,16 +312,16 @@ async function handleConfig (interaction, guild, sub) {
       name: lang === 'en' ? 'Available Commands' : '使えるコマンド',
       value: lang === 'en'
         ? [
-            '・`/altcheck find user:<target>` — Search for alt candidates for a user',
-            '・`/altcheck scan` — Scan the server for suspicious alt pairs',
-            '・`/altcheck compare user1:<A> user2:<B>` — Directly compare two accounts',
+            '・`/altcheck find user:<target>` — Search for alt candidates for a user across all channels',
+            '・`/altcheck scan` — Scan all channels in the server for suspicious alt pairs',
+            '・`/altcheck compare user1:<A> user2:<B>` — Directly compare two accounts across all channels',
             '・`/altcheck alerts` — View recent alert history',
             '・`/altcheck config enabled:<True/False>` — Toggle automatic detection'
           ].join('\n')
         : [
-            '・`/altcheck find user:<対象>` — 特定ユーザーのサブ垢候補を探す',
-            '・`/altcheck scan` — サーバー全体をスキャンしてサブ垢候補ペアを探す',
-            '・`/altcheck compare user1:<A> user2:<B>` — 2つのアカウントを直接比較する',
+            '・`/altcheck find user:<対象>` — 全チャンネルを横断して特定ユーザーのサブ垢候補を探す',
+            '・`/altcheck scan` — 全チャンネルを横断スキャンしてサブ垢候補ペアを探す',
+            '・`/altcheck compare user1:<A> user2:<B>` — 全チャンネルの発言をもとに2つのアカウントを直接比較する',
             '・`/altcheck alerts` — 最近のアラート履歴を表示する',
             '・`/altcheck config enabled:<True/False>` — 自動検知のオン／オフを切り替える'
           ].join('\n')
@@ -318,7 +329,7 @@ async function handleConfig (interaction, guild, sub) {
     footer: getEmbedFooter(global.bot.user),
     timestamp: new Date()
   }
-  return interaction.createMessage({ embeds: [embed], flags: EPHEMERAL }).catch(() => {})
+  return interaction.createMessage({ embeds: [embed], allowedMentions: NO_PINGS }).catch(() => {})
 }
 
 async function handleAlerts (interaction, guild, sub) {
@@ -337,7 +348,7 @@ async function handleAlerts (interaction, guild, sub) {
           : 'このサーバーではまだサブ垢検知アラートの履歴がありません。',
         footer: getEmbedFooter(global.bot.user)
       }],
-      flags: EPHEMERAL
+      allowedMentions: NO_PINGS
     }).catch(() => {})
   }
 
@@ -356,7 +367,7 @@ async function handleAlerts (interaction, guild, sub) {
       footer: getEmbedFooter(global.bot.user),
       timestamp: new Date()
     }],
-    flags: EPHEMERAL
+    allowedMentions: NO_PINGS
   }).catch(() => {})
 }
 

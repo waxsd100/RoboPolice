@@ -1,6 +1,7 @@
 const send = require('../modules/webhooksender')
 const { EMBED_COLORS } = require('../utils/constants')
 const discordKnowledge = require('../modules/discordKnowledge')
+const altDetector = require('../modules/altDetector')
 const messageBatcher = require('../../db/messageBatcher')
 const deleteDB = require('../../db/interfaces/postgres/delete')
 const cacheGuild = require('../utils/cacheGuild')
@@ -14,6 +15,10 @@ module.exports = {
     for (const id of ids) {
       discordKnowledge.onDelete(id).catch(e => global.logger.warn(`[DISCORD]: ${e.message}`))
     }
+
+    await altDetector.onMessageDeleteBulk(messages).catch(e => {
+      global.logger?.warn?.(`[ALT]: onMessageDeleteBulk failed: ${e.message}`)
+    })
 
     const evict = messageBatcher.evictMessage || messageBatcher.removeMessage
     if (typeof evict === 'function') {
