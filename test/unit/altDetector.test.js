@@ -1157,4 +1157,94 @@ describe('altDetector Stage 2 Gemini analysis, event hooks, and /altcheck comman
     assert.ok(promptText.includes('犬・猫'), 'generic-motif base-rate guard included')
     assert.ok(req.contents[0].parts.some(p => p.inlineData?.mimeType === 'image/png'), 'single-sided custom avatar attached even though banned main had default avatar')
   })
+
+  test('routes automatic alerts to Discord Server Settings moderator channel (publicUpdatesChannelID / safety_alerts_channel_id) and enforces join/daily AI cost guards', async (t) => {
+    configureGateway()
+    const now = new Date('2026-11-26T05:00:00Z')
+
+    // 1. Discord Server Settings: publicUpdatesChannelID (モデレーター専用チャンネル)
+    const guildWithMod = createGuild({ id: 'g_modch' })
+    guildWithMod.publicUpdatesChannelID = 'mod_only_ch_1'
+    makeBotWithLogs(guildWithMod)
+    const createdMsgs = []
+    global.bot.createMessage = async (chID, payload) => {
+      createdMsgs.push({ chID, payload })
+      return { id: 'sent_1' }
+    }
+    installAltDetectionStore({ enabled: { g_modch: true } })
+
+    const deliv1 = await altDetector.sendAltAlert(guildWithMod, {
+      suspectProfile: { userID: 'u_sub', username: 'sub1', status: 'active' },
+      candidateProfile: { userID: 'u_ban', username: 'ban1', status: 'banned' },
+      heuristic: { score: 80, signals: ['BAN直後参加'], counterSignals: [] },
+      ai: { verdict: 'likely_alt', confidence: 90, summary: 'テスト検知', matchingEvidence: ['根拠1'], counterEvidence: [] },
+      trigger: 'join'
+    })
+    assert.equal(deliv1.sent, true)
+    assert.equal(deliv1.channelID, 'mod_only_ch_1')
+    assert.equal(deliv1.source, 'public_updates')
+    assert.equal(createdMsgs.length, 1)
+    assert.equal(createdMsgs[0].chID, 'mod_only_ch_1')
+    assert.deepEqual(createdMsgs[0].payload.allowedMentions, { everyone: false, roles: false, users: false })
+
+    // 2. Discord Server Settings: REST safety_alerts_channel_id when publicUpdatesChannelID is unset
+    const guildSafety = createGuild({ id: 'g_safety' })
+    makeBotWithLogs(guildSafety)
+    global.bot.createMessage = async (chID, payload) => {
+      createdMsgs.push({ chID, payload })
+      return { id: 'sent_2' }
+    }
+    global.bot.requestHandler = {
+      request: async (method, path) => {
+        if (method === 'GET' && path === '/guilds/g_safety') {
+          return { public_updates_channel_id: null, safety_alerts_channel_id: 'safety_alert_ch_2' }
+        }
+        return {}
+      }
+    }
+    const destSafety = await altDetector.resolveAlertDestination(guildSafety)
+    assert.equal(destSafety.kind, 'mod_channel')
+    assert.equal(destSafety.channelID, 'safety_alert_ch_2')
+    assert.equal(destSafety.source, 'safety_alerts')
+
+    // 3. Cost guard: ordinary new member joining triggers 0 Gemini API calls
+    altDetector.resetRuntimeState()
+    installAltDetectionStore({
+      enabled: { g_modch: true },
+      profiles: [{
+        guildID: 'g_modch',
+        userID: 'u_ban_old',
+        username: 'old_troll',
+        status: 'banned',
+        statusAt: new Date(now.getTime() - 10 * 86400 * 1000)
+      }]
+    })
+    const requests = installGemini([
+      [{ text: JSON.stringify({ verdict: 'possible_alt', confidence: 75, summary: 'ok', matching_evidence: [], counter_evidence: [] }) }]
+    ])
+    const normalJoiner = {
+      id: '910000000000000001',
+      joinedAt: now.getTime(),
+      roles: [],
+      user: { id: '910000000000000001', bot: false, username: 'ordinary_fan' },
+      createdAt: now.getTime() - 180 * 86400 * 1000
+    }
+    const normalRes = await altDetector.onMemberJoin(guildWithMod, normalJoiner, { now })
+    assert.equal(normalRes.alerted, false)
+    assert.equal(requests.length, 0, 'ordinary user join must make 0 AI calls')
+
+    // 4. Daily auto-AI budget cap protects against join raids
+    const prevCap = process.env.ALT_MAX_DAILY_AUTO_AI
+    process.env.ALT_MAX_DAILY_AUTO_AI = '1'
+    try {
+      altDetector.resetRuntimeState()
+      assert.equal(altDetector.consumeAutoAiBudget('g_raid', now), true)
+      assert.equal(altDetector.consumeAutoAiBudget('g_raid', now), false, 'second auto AI call in same day is capped')
+      const nextDay = new Date(now.getTime() + 86400 * 1000)
+      assert.equal(altDetector.consumeAutoAiBudget('g_raid', nextDay), true, 'budget resets on next UTC day')
+    } finally {
+      if (prevCap === undefined) delete process.env.ALT_MAX_DAILY_AUTO_AI
+      else process.env.ALT_MAX_DAILY_AUTO_AI = prevCap
+    }
+  })
 })
