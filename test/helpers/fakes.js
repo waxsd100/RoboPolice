@@ -1018,7 +1018,17 @@ function installAltDetectionStore ({ enabled = {}, profiles = [], messages = [],
       .sort((a, b) => rank(a.status) - rank(b.status))
       .slice(0, limit)
   }
-  store.recordMessageSnapshot = async (guildID, { messageID, authorID, channelID = null, eventType = 'deleted', content, originalTs = null, eventTs = new Date() }) => {
+  store.recordMessageSnapshot = async (guildID, {
+    messageID,
+    authorID,
+    channelID = null,
+    eventType = 'deleted',
+    deletedBy = 'unknown',
+    moderatorID = null,
+    content,
+    originalTs = null,
+    eventTs = new Date()
+  }) => {
     const clean = String(content || '').trim()
     if (!guildID || !messageID || !authorID || !clean) return false
     if (eventType === 'deleted' && state.snapshots.some(s => s.guildID === guildID && s.messageID === messageID && s.eventType === 'deleted')) {
@@ -1030,13 +1040,26 @@ function installAltDetectionStore ({ enabled = {}, profiles = [], messages = [],
       authorID,
       channelID,
       eventType: eventType === 'edited' ? 'edited' : 'deleted',
+      deletedBy: eventType === 'edited' ? 'unknown' : (deletedBy || 'unknown'),
+      moderatorID: moderatorID || null,
       content: clean,
       originalTs: originalTs ? new Date(originalTs) : null,
       eventTs: eventTs ? new Date(eventTs) : new Date()
     })
     return true
   }
-  store.snapshotMessagesBeforeDelete = async (messageIDs, { eventTs = new Date() } = {}) => {
+  store.updateSnapshotDeletionActor = async (guildID, messageID, { deletedBy = 'unknown', moderatorID = null } = {}) => {
+    let updated = false
+    for (const s of state.snapshots) {
+      if (s.guildID === guildID && s.messageID === messageID && s.eventType === 'deleted') {
+        s.deletedBy = deletedBy || 'unknown'
+        if (moderatorID) s.moderatorID = moderatorID
+        updated = true
+      }
+    }
+    return updated
+  }
+  store.snapshotMessagesBeforeDelete = async (messageIDs, { deletedBy = 'unknown', moderatorID = null, eventTs = new Date() } = {}) => {
     const ids = new Set((messageIDs || []).filter(Boolean))
     const captured = []
     for (const m of state.messages) {
@@ -1046,6 +1069,8 @@ function installAltDetectionStore ({ enabled = {}, profiles = [], messages = [],
         authorID: m.authorID,
         channelID: m.channelID,
         eventType: 'deleted',
+        deletedBy,
+        moderatorID,
         content: m.content,
         originalTs: m.ts,
         eventTs
@@ -1060,6 +1085,8 @@ function installAltDetectionStore ({ enabled = {}, profiles = [], messages = [],
           ts: m.ts ? new Date(m.ts) : new Date(eventTs),
           eventTs: new Date(eventTs),
           deleted: true,
+          deletedBy: deletedBy || 'unknown',
+          moderatorID: moderatorID || null,
           editedBefore: false
         })
       }
@@ -1069,7 +1096,7 @@ function installAltDetectionStore ({ enabled = {}, profiles = [], messages = [],
   const combinedForGuild = (guildID, includeDeleted) => {
     const live = state.messages
       .filter(m => m.guildID === guildID && m.content)
-      .map(m => ({ ...m, deleted: Boolean(m.deleted), editedBefore: Boolean(m.editedBefore), eventTs: m.eventTs || null }))
+      .map(m => ({ ...m, deleted: Boolean(m.deleted), deletedBy: m.deletedBy || null, moderatorID: m.moderatorID || null, editedBefore: Boolean(m.editedBefore), eventTs: m.eventTs || null }))
     if (!includeDeleted) return live
     const snaps = state.snapshots
       .filter(s => s.guildID === guildID && s.content)
@@ -1082,6 +1109,8 @@ function installAltDetectionStore ({ enabled = {}, profiles = [], messages = [],
         content: s.content,
         ts: s.originalTs ? new Date(s.originalTs) : new Date(s.eventTs),
         deleted: s.eventType === 'deleted',
+        deletedBy: s.eventType === 'deleted' ? (s.deletedBy || 'unknown') : null,
+        moderatorID: s.moderatorID || null,
         editedBefore: s.eventType === 'edited',
         eventTs: s.eventTs ? new Date(s.eventTs) : null
       }))

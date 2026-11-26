@@ -48,12 +48,17 @@ const recentSeenMessages = new Map() // messageID -> { id, guildID, authorID, ch
 // Recent deleted messages per guild for real-time cross-account delete->repost detection.
 const MAX_RECENT_DELETED_PER_GUILD = 100
 const RECENT_DELETED_TTL_MS = 30 * 60 * 1000
-const recentDeletedByGuild = new Map() // guildID -> Array<{ id, authorID, channelID, content, originalTs, deletedTs }>
+const recentDeletedByGuild = new Map() // guildID -> Array<{ id, authorID, channelID, content, originalTs, deletedTs, deletedBy, moderatorID }>
+// Tracks Discord MESSAGE_DELETE (actionType 72) audit log extra.count so repeat deletions by the
+// same moderator of the same author in the same channel are recognized accurately.
+const MAX_AUDIT_COUNT_ENTRIES = 1000
+const lastModDeleteCounts = new Map() // `${guildID}:${entryID}` -> number
 
 function resetRuntimeState () {
   messageCounters.clear()
   recentSeenMessages.clear()
   recentDeletedByGuild.clear()
+  lastModDeleteCounts.clear()
 }
 
 function rememberSeenMessage ({ id, guildID, authorID, channelID = null, content, ts = new Date() }) {
@@ -75,21 +80,25 @@ function rememberSeenMessage ({ id, guildID, authorID, channelID = null, content
 }
 
 function rememberDeletedMessage (guildID, entry, now = new Date()) {
-  if (!guildID || !entry?.authorID || !entry?.content) return
+  if (!guildID || !entry?.authorID || !entry?.content) return null
   const cutoff = now.getTime() - RECENT_DELETED_TTL_MS
   const list = (recentDeletedByGuild.get(guildID) || []).filter(e => e.deletedTs.getTime() >= cutoff)
-  list.push({
+  const record = {
     id: entry.id || entry.messageID || null,
     authorID: entry.authorID,
     channelID: entry.channelID || null,
     content: String(entry.content).trim(),
     originalTs: entry.originalTs ? new Date(entry.originalTs) : (entry.ts ? new Date(entry.ts) : now),
-    deletedTs: entry.deletedTs ? new Date(entry.deletedTs) : now
-  })
+    deletedTs: entry.deletedTs ? new Date(entry.deletedTs) : now,
+    deletedBy: entry.deletedBy || 'unknown',
+    moderatorID: entry.moderatorID || null
+  }
+  list.push(record)
   if (list.length > MAX_RECENT_DELETED_PER_GUILD) {
     list.splice(0, list.length - MAX_RECENT_DELETED_PER_GUILD)
   }
   recentDeletedByGuild.set(guildID, list)
+  return record
 }
 
 function envNumber (name, fallback, min = 0, max = Infinity) {
@@ -631,17 +640,28 @@ function scorePair ({
   if (crossDeleteReposts.length > 0) {
     const best = crossDeleteReposts[0]
     raw += 45
-    signals.push(`アカウント間での「削除→再投稿」を検知（${formatDurationJa(Math.max(60000, best.deltaMs))}以内に類似度${Math.round(best.similarity * 100)}%の内容を再投稿）`)
+    const delKind = best.deletionActor === 'moderator'
+      ? 'モデレーター削除→別アカウントで再投稿'
+      : (best.deletionActor === 'self' ? '本人削除→別アカウントで再投稿' : '削除→別アカウントで再投稿')
+    signals.push(`アカウント間での「${delKind}」を検知（${formatDurationJa(Math.max(60000, best.deltaMs))}以内に類似度${Math.round(best.similarity * 100)}%の内容を再投稿）`)
   }
 
   const suspectDel = analyzeSelfDeleteBehavior(suspectMessages)
   const candDel = analyzeSelfDeleteBehavior(candidateMessages)
   metrics.deletedMessageCount = suspectDel.deletedCount + candDel.deletedCount
+  metrics.modDeletedMessageCount = suspectDel.modDeletedCount + candDel.modDeletedCount
   metrics.selfDeleteRepostCount = suspectDel.selfDeleteRepostCount
   metrics.rapidDeleteCount = suspectDel.rapidDeleteCount
+  metrics.modDeletedRepostCount = suspectDel.modDeletedRepostCount
   if (suspectDel.selfDeleteRepostCount >= 2 || suspectDel.rapidDeleteCount >= 3) {
     if (raw >= 15) raw += 8
-    signals.push(`調査対象に削除→再投稿・投稿直後の削除を複数回確認（削除 ${suspectDel.deletedCount} 件 / 履歴隠滅・検知回避の傾向）`)
+    signals.push(`調査対象に本人削除→再投稿・投稿直後の自己削除を複数回確認（本人削除等 ${suspectDel.selfOrUnknownDeletedCount} 件 / 履歴隠滅・検知回避の傾向）`)
+  }
+  if (suspectDel.modDeletedCount > 0 || candDel.modDeletedCount > 0) {
+    const parts = []
+    if (suspectDel.modDeletedCount > 0) parts.push(`調査対象 ${suspectDel.modDeletedCount} 件`)
+    if (candDel.modDeletedCount > 0) parts.push(`候補 ${candDel.modDeletedCount} 件`)
+    signals.push(`モデレーターによる削除済み発言を照合対象に含めています（${parts.join('・')}）`)
   }
 
   const score = Math.max(0, Math.min(100, Math.round(raw)))
@@ -678,8 +698,8 @@ function deleteTimeMs (m) {
   return msgTimeMs(m)
 }
 
-// Detects when one account deleted a message and the other account posted identical or near-identical
-// text within 10 minutes (e.g. accidental alt post deleted & reposted on the other account).
+// Detects when one account's message was deleted (by self or by a moderator) and the other account
+// posted identical or near-identical text within 10 minutes.
 function detectCrossAccountDeleteRepost (msgsA = [], msgsB = [], windowMs = CROSS_DELETE_REPOST_WINDOW_MS) {
   const matches = []
   const scan = (deletedSource, postedSource) => {
@@ -697,6 +717,7 @@ function detectCrossAccountDeleteRepost (msgsA = [], msgsB = [], windowMs = CROS
         if (sim >= 0.75) {
           matches.push({
             deletedBy: del.authorID || null,
+            deletionActor: del.deletedBy || 'unknown',
             repostedBy: post.authorID || null,
             similarity: Number(sim.toFixed(3)),
             deltaMs: Math.abs(delta),
@@ -713,22 +734,34 @@ function detectCrossAccountDeleteRepost (msgsA = [], msgsB = [], windowMs = CROS
   return matches
 }
 
+// Separates moderator-deleted messages from self-deleted messages so moderator cleanup of
+// rule-breaking posts is never misattributed as self-scrubbing evasion.
 function analyzeSelfDeleteBehavior (messages = []) {
   let deletedCount = 0
+  let modDeletedCount = 0
+  let selfOrUnknownDeletedCount = 0
   let editedCount = 0
   let rapidDeleteCount = 0
   let selfDeleteRepostCount = 0
-  const deletedList = []
+  let modDeletedRepostCount = 0
+  const selfDeletedList = []
+  const modDeletedList = []
   const liveList = []
   for (const m of messages || []) {
     if (!m) continue
     if (m.deleted) {
       deletedCount++
-      deletedList.push(m)
-      const orig = msgTimeMs(m)
-      const delAt = m.eventTs ? new Date(m.eventTs).getTime() : null
-      if (orig != null && delAt != null && delAt >= orig && (delAt - orig) <= RAPID_DELETE_WINDOW_MS) {
-        rapidDeleteCount++
+      if (m.deletedBy === 'moderator') {
+        modDeletedCount++
+        modDeletedList.push(m)
+      } else {
+        selfOrUnknownDeletedCount++
+        selfDeletedList.push(m)
+        const orig = msgTimeMs(m)
+        const delAt = m.eventTs ? new Date(m.eventTs).getTime() : null
+        if (orig != null && delAt != null && delAt >= orig && (delAt - orig) <= RAPID_DELETE_WINDOW_MS) {
+          rapidDeleteCount++
+        }
       }
     } else if (m.editedBefore) {
       editedCount++
@@ -736,16 +769,29 @@ function analyzeSelfDeleteBehavior (messages = []) {
       liveList.push(m)
     }
   }
-  for (const del of deletedList) {
+  const hasQuickRepost = del => {
     const delAt = deleteTimeMs(del)
-    if (delAt == null) continue
-    const reposted = liveList.some(post => {
+    if (delAt == null) return false
+    return liveList.some(post => {
       const postAt = msgTimeMs(post)
       return postAt != null && postAt >= delAt - 10 * 1000 && (postAt - delAt) <= SELF_DELETE_REPOST_WINDOW_MS
     })
-    if (reposted) selfDeleteRepostCount++
   }
-  return { deletedCount, editedCount, rapidDeleteCount, selfDeleteRepostCount }
+  for (const del of selfDeletedList) {
+    if (hasQuickRepost(del)) selfDeleteRepostCount++
+  }
+  for (const del of modDeletedList) {
+    if (hasQuickRepost(del)) modDeletedRepostCount++
+  }
+  return {
+    deletedCount,
+    modDeletedCount,
+    selfOrUnknownDeletedCount,
+    editedCount,
+    rapidDeleteCount,
+    selfDeleteRepostCount,
+    modDeletedRepostCount
+  }
 }
 
 // --- Candidate discovery ---
@@ -1097,7 +1143,14 @@ function formatMessagesBlock (messages, source) {
   if (!Array.isArray(messages) || messages.length === 0) return '（保存された発言サンプルなし）'
   const sample = messages.slice(0, 25).map(m => {
     const ts = m.ts ? formatDateIso(m.ts) : '不明'
-    const tag = m.deleted ? '[削除済み] ' : (m.editedBefore ? '[編集前] ' : '')
+    let tag = ''
+    if (m.deleted) {
+      tag = m.deletedBy === 'moderator'
+        ? '[モデレーター削除済み] '
+        : (m.deletedBy === 'self' ? '[本人削除済み] ' : '[削除済み] ')
+    } else if (m.editedBefore) {
+      tag = '[編集前] '
+    }
     const text = String(m.content || '').replace(/\s+/g, ' ').trim().slice(0, 200)
     return `[${ts}] ${tag}(ch:${m.channelID || '?'}) ${text}`
   }).join('\n')
@@ -1510,7 +1563,55 @@ function findRecentCrossDeleteMatch (guildID, authorID, content, now = new Date(
   return best
 }
 
-async function onMessageDelete (message, cachedMessage = null, { at = new Date() } = {}) {
+function recordAuditDeleteCount (key, count) {
+  if (lastModDeleteCounts.has(key)) lastModDeleteCounts.delete(key)
+  if (lastModDeleteCounts.size >= MAX_AUDIT_COUNT_ENTRIES) {
+    const oldest = lastModDeleteCounts.keys().next().value
+    lastModDeleteCounts.delete(oldest)
+  }
+  lastModDeleteCounts.set(key, count)
+}
+
+// Determines whether a single message deletion was performed by a moderator (Discord audit log
+// MESSAGE_DELETE, actionType 72) or by the author themselves (no audit log entry is emitted when
+// users delete their own messages). Handles Discord's extra.count batching for repeat mod deletes.
+async function detectDeletionActorFromAuditLog (guild, { authorID, channelID = null, at = new Date() } = {}) {
+  if (!guild || !authorID || typeof guild.getAuditLog !== 'function') {
+    return { deletedBy: 'unknown', moderatorID: null }
+  }
+  const canViewAudit = guild.members?.get?.(global.bot?.user?.id)?.permissions?.has?.('viewAuditLog') !== false
+  if (!canViewAudit) return { deletedBy: 'unknown', moderatorID: null }
+
+  const logs = await guild.getAuditLog({ limit: 5, actionType: 72 }).catch(() => null)
+  if (!logs || !Array.isArray(logs.entries)) return { deletedBy: 'unknown', moderatorID: null }
+
+  const atMs = at instanceof Date ? at.getTime() : new Date(at).getTime()
+  for (const e of logs.entries) {
+    if (!e || e.targetID !== authorID) continue
+    const entryChannelID = e.extra?.channel?.id || e.options?.channel_id || e.channelID || null
+    if (channelID && entryChannelID && entryChannelID !== channelID) continue
+    const count = Math.max(1, Number(e.extra?.count ?? e.options?.count ?? 1) || 1)
+    const key = `${guild.id}:${e.id}`
+    const prevCount = lastModDeleteCounts.get(key)
+    const entryTs = snowflakeToDate(e.id)?.getTime()
+    const isFresh = entryTs != null && Math.abs(atMs - entryTs) < 20 * 1000
+    const isCountIncrement = prevCount !== undefined && count > prevCount
+    const isFirstSeenFresh = prevCount === undefined && isFresh
+
+    if (isCountIncrement || isFirstSeenFresh) {
+      recordAuditDeleteCount(key, count)
+      const modID = e.user?.id || e.userID || null
+      if (modID && modID === authorID) {
+        return { deletedBy: 'self', moderatorID: null }
+      }
+      return { deletedBy: 'moderator', moderatorID: modID }
+    }
+    if (prevCount === undefined) recordAuditDeleteCount(key, count)
+  }
+  return { deletedBy: 'self', moderatorID: null }
+}
+
+async function onMessageDelete (message, cachedMessage = null, { at = new Date(), auditDelayMs = 800 } = {}) {
   if (!message?.id) return { saved: false }
   const seen = recentSeenMessages.get(message.id) || null
   recentSeenMessages.delete(message.id)
@@ -1522,43 +1623,78 @@ async function onMessageDelete (message, cachedMessage = null, { at = new Date()
   const isBot = Boolean(message.author?.bot)
   if (isBot) return { saved: false }
 
+  const guild = message.channel?.guild || (guildID ? global.bot?.guilds?.get?.(guildID) : null)
+  const applyActor = async (targetGuildID, targetMsgID, targetAuthorID, targetChannelID, memRecord) => {
+    const targetGuild = guild || (targetGuildID ? global.bot?.guilds?.get?.(targetGuildID) : null)
+    const actor = await detectDeletionActorFromAuditLog(targetGuild, {
+      authorID: targetAuthorID,
+      channelID: targetChannelID,
+      at
+    })
+    if (memRecord) {
+      memRecord.deletedBy = actor.deletedBy
+      memRecord.moderatorID = actor.moderatorID
+    }
+    if (actor.deletedBy !== 'unknown') {
+      await altDB.updateSnapshotDeletionActor(targetGuildID, targetMsgID, actor).catch(() => {})
+    }
+    return actor
+  }
+
+  const scheduleOrRunActor = async (targetGuildID, targetMsgID, targetAuthorID, targetChannelID, memRecord) => {
+    if (auditDelayMs <= 0) {
+      return applyActor(targetGuildID, targetMsgID, targetAuthorID, targetChannelID, memRecord)
+    }
+    const timer = setTimeout(() => {
+      applyActor(targetGuildID, targetMsgID, targetAuthorID, targetChannelID, memRecord).catch(() => {})
+    }, auditDelayMs)
+    timer.unref?.()
+    return { deletedBy: 'unknown', moderatorID: null }
+  }
+
   if (guildID && authorID && content) {
     const origRaw = cachedMessage?.ts || seen?.ts || message.timestamp || null
     const originalTs = origRaw ? new Date(origRaw) : null
-    rememberDeletedMessage(guildID, {
+    const memRecord = rememberDeletedMessage(guildID, {
       id: message.id,
       authorID,
       channelID,
       content,
       originalTs,
-      deletedTs: at
+      deletedTs: at,
+      deletedBy: 'unknown'
     }, at)
     await altDB.recordMessageSnapshot(guildID, {
       messageID: message.id,
       authorID,
       channelID,
       eventType: 'deleted',
+      deletedBy: 'unknown',
       content,
       originalTs,
       eventTs: at
     }).catch(e => global.logger?.warn?.(`[ALT]: recordMessageSnapshot(delete) failed: ${e.message}`))
-    return { saved: true, guildID, authorID }
+    const actor = await scheduleOrRunActor(guildID, message.id, authorID, channelID, memRecord)
+    return { saved: true, guildID, authorID, deletedBy: actor.deletedBy, moderatorID: actor.moderatorID }
   }
 
   // Fallback for messages not in memory (e.g. older messages in ignored channels): copy from DB
   // right before `deleteMessage` removes the row.
-  const copied = await altDB.snapshotMessagesBeforeDelete([message.id], { eventTs: at }).catch(() => [])
+  const copied = await altDB.snapshotMessagesBeforeDelete([message.id], { deletedBy: 'unknown', eventTs: at }).catch(() => [])
+  let lastActor = { deletedBy: 'unknown', moderatorID: null }
   for (const row of copied) {
-    rememberDeletedMessage(row.guildID, {
+    const memRecord = rememberDeletedMessage(row.guildID, {
       id: row.id,
       authorID: row.authorID,
       channelID: row.channelID,
       content: row.content,
       originalTs: row.ts,
-      deletedTs: at
+      deletedTs: at,
+      deletedBy: 'unknown'
     }, at)
+    lastActor = await scheduleOrRunActor(row.guildID, row.id, row.authorID, row.channelID, memRecord)
   }
-  return { saved: copied.length > 0, copied: copied.length }
+  return { saved: copied.length > 0, copied: copied.length, deletedBy: lastActor.deletedBy, moderatorID: lastActor.moderatorID }
 }
 
 async function onMessageDeleteBulk (messages, { at = new Date() } = {}) {
@@ -1566,9 +1702,8 @@ async function onMessageDeleteBulk (messages, { at = new Date() } = {}) {
   const ids = messages.map(m => m?.id).filter(Boolean)
   let saved = 0
 
-  // 1. Copy any already-persisted rows from `messages` in a single SQL query (catches mod purges
-  //    and BAN-with-delete-messages even when messages weren't in memory).
-  const copied = await altDB.snapshotMessagesBeforeDelete(ids, { eventTs: at }).catch(() => [])
+  // Bulk deletion requires Manage Messages (moderator purge / BAN message delete), so classify as moderator.
+  const copied = await altDB.snapshotMessagesBeforeDelete(ids, { deletedBy: 'moderator', eventTs: at }).catch(() => [])
   const copiedIds = new Set()
   for (const row of copied) {
     copiedIds.add(row.id)
@@ -1579,12 +1714,13 @@ async function onMessageDeleteBulk (messages, { at = new Date() } = {}) {
       channelID: row.channelID,
       content: row.content,
       originalTs: row.ts,
-      deletedTs: at
+      deletedTs: at,
+      deletedBy: 'moderator'
     }, at)
   }
 
-  // 2. Also capture messages still only in our in-memory ring buffer (e.g. ignored channels or
-  //    deleted before messageBatcher flushed).
+  // Also capture messages still only in our in-memory ring buffer (e.g. ignored channels or
+  // deleted before messageBatcher flushed).
   for (const m of messages) {
     if (!m?.id || copiedIds.has(m.id)) continue
     const seen = recentSeenMessages.get(m.id) || null
@@ -1602,13 +1738,15 @@ async function onMessageDeleteBulk (messages, { at = new Date() } = {}) {
       channelID,
       content,
       originalTs,
-      deletedTs: at
+      deletedTs: at,
+      deletedBy: 'moderator'
     }, at)
     const ok = await altDB.recordMessageSnapshot(guildID, {
       messageID: m.id,
       authorID,
       channelID,
       eventType: 'deleted',
+      deletedBy: 'moderator',
       content,
       originalTs,
       eventTs: at
@@ -1680,8 +1818,8 @@ async function onMessage (message, { now = new Date() } = {}) {
 
   const resolvedGuild = guild || global.bot?.guilds?.get?.(guildID)
 
-  // Real-time anti-evasion check: if another account just deleted near-identical text within 10m
-  // and this account reposted it, run immediate verification regardless of join age or milestone.
+  // Real-time anti-evasion check: if another account's message was just deleted (by self or mod)
+  // within 10m and this account reposted near-identical text, verify immediately.
   const crossMatch = findRecentCrossDeleteMatch(guildID, message.author.id, content, now)
   if (crossMatch && resolvedGuild && (await altDB.isAltDetectionEnabled(guildID))) {
     const candID = crossMatch.entry.authorID
@@ -1699,6 +1837,7 @@ async function onMessage (message, { now = new Date() } = {}) {
         content,
         ts: message.timestamp ? new Date(message.timestamp) : now,
         deleted: false,
+        deletedBy: null,
         editedBefore: false,
         eventTs: null
       }
@@ -1709,6 +1848,8 @@ async function onMessage (message, { now = new Date() } = {}) {
         content: crossMatch.entry.content,
         ts: crossMatch.entry.originalTs,
         deleted: true,
+        deletedBy: crossMatch.entry.deletedBy || 'unknown',
+        moderatorID: crossMatch.entry.moderatorID || null,
         editedBefore: false,
         eventTs: crossMatch.entry.deletedTs
       }
@@ -2152,6 +2293,7 @@ module.exports = {
   onMemberLeave,
   onMemberUpdate,
   onMemberJoin,
+  detectDeletionActorFromAuditLog,
   onMessageDelete,
   onMessageDeleteBulk,
   onMessageEdit,
