@@ -821,4 +821,244 @@ describe('altDetector Stage 2 Gemini analysis, event hooks, and /altcheck comman
     assert.ok(repostAfterModDel.candidate.heuristic.signals.some(s => s.includes('モデレーター削除→別アカウントで再投稿')))
     assert.ok(requests[0].body.contents[0].parts[0].text.includes('[モデレーター削除済み]'))
   })
+
+  test('detects completely disguised & sleeper alts with zero avatar/name/ID/join-timing overlap', async (t) => {
+    configureGateway()
+    const now = new Date('2026-11-25T12:00:00Z')
+    // Account B (banned main) and Account A (sleeper alt joined 90 days ago with totally unrelated
+    // username, displayName, avatarHash, and ID)
+    const bannedMain = {
+      userID: '700000000000000001',
+      username: 'crimson_wolf',
+      globalName: '紅狼',
+      avatarHash: 'avatar_wolf_111',
+      accountCreatedAt: new Date('2022-01-01T00:00:00Z'),
+      joinedAt: new Date('2025-01-01T00:00:00Z'),
+      status: 'banned',
+      statusAt: new Date('2026-11-24T10:00:00Z')
+    }
+    const disguisedSleeper = {
+      userID: '799999999999999999',
+      username: 'pastel_cloud',
+      globalName: 'もふもふ',
+      avatarHash: 'avatar_cloud_999',
+      accountCreatedAt: new Date('2023-05-01T00:00:00Z'),
+      joinedAt: new Date('2026-08-25T00:00:00Z'), // joined 90 days ago (sleeper alt)
+      status: 'active'
+    }
+
+    const mainMsgs = [
+      { id: 'd1', authorID: bannedMain.userID, channelID: 'c_gen', ts: new Date('2026-11-24T08:00:00Z'), content: '<@888888888888888881> 例のアルゴリズム解析みた？マジで草だわ〜 <:pepe_smug:12345> https://example-wiki.jp/tier' },
+      { id: 'd2', authorID: bannedMain.userID, channelID: 'c_gen', ts: new Date('2026-11-24T08:00:12Z'), content: 'ベンチマーク結果がバグってるだろ〜 <:pepe_smug:12345> <@888888888888888882>' },
+      { id: 'd3', authorID: bannedMain.userID, channelID: 'c_game', ts: new Date('2026-11-24T08:30:00Z'), content: 'メタ編成のビルド構成も絶対これだわ〜 <:think_cat:67890> https://x.com/niche_dev_acc/status/111' },
+      { id: 'd4', authorID: bannedMain.userID, channelID: 'c_game', ts: new Date('2026-11-24T09:00:00Z'), content: 'というかナーフ調整マジで草だわ〜 普通に意味わからんだろ〜' },
+      { id: 'd5', authorID: bannedMain.userID, channelID: 'c_gen', ts: new Date('2026-11-24T09:50:00Z'), content: 'はい運営アンチ認定で草だわ〜 <:pepe_smug:12345>' }
+    ]
+    // Disguised sleeper starts posting 4 hours after bannedMain's last post (clean handover, zero overlap)
+    const sleeperMsgs = [
+      { id: 's1', authorID: disguisedSleeper.userID, channelID: 'c_gen', ts: new Date('2026-11-24T14:00:00Z'), content: '<@888888888888888881> さっきのアルゴリズム解析の話だけどマジで草だわ〜 <:pepe_smug:12345> https://example-wiki.jp/build' },
+      { id: 's2', authorID: disguisedSleeper.userID, channelID: 'c_gen', ts: new Date('2026-11-24T14:00:10Z'), content: 'あのベンチマーク結果バグってるだろ〜 <:pepe_smug:12345> <@888888888888888882>' },
+      { id: 's3', authorID: disguisedSleeper.userID, channelID: 'c_game', ts: new Date('2026-11-24T14:25:00Z'), content: 'メタ編成のビルド構成やっぱこれだわ〜 <:think_cat:67890> https://x.com/niche_dev_acc/status/222' },
+      { id: 's4', authorID: disguisedSleeper.userID, channelID: 'c_game', ts: new Date('2026-11-24T15:00:00Z'), content: 'ナーフ調整ほんと草だわ〜 意味わからんだろ〜' },
+      { id: 's5', authorID: disguisedSleeper.userID, channelID: 'c_gen', ts: new Date('2026-11-24T15:30:00Z'), content: '運営アンチ扱いで草だわ〜 <:pepe_smug:12345>' }
+    ]
+
+    const res = altDetector.scorePair({
+      suspectProfile: disguisedSleeper,
+      candidateProfile: bannedMain,
+      suspectMessages: sleeperMsgs,
+      candidateMessages: mainMsgs,
+      now
+    })
+    assert.equal(res.metrics.nameSimilarity, 0)
+    assert.equal(res.metrics.avatarHashMatch, false)
+    assert.equal(res.metrics.inviteMatch, false)
+    assert.ok(res.score >= 60, `expected high behavioral score even with 0 name/avatar/join match, got ${res.score}`)
+    assert.ok(res.metrics.sharedTokens.length >= 3)
+    assert.ok(res.metrics.sharedEmojis.length >= 2)
+    assert.equal(res.metrics.sharedMentionTargets.length, 2)
+    assert.ok(res.metrics.sharedUrlDomains.includes('example-wiki.jp'))
+    assert.ok(res.metrics.sharedUrlDomains.includes('x.com/niche_dev_acc'))
+    assert.ok(res.metrics.handoverGapMs != null && res.metrics.handoverGapMs < 24 * 3600 * 1000)
+
+    // Verify findCandidates discovers bannedMain even with 8 decoy banned accounts + pgvector centroid search
+    const decoys = Array.from({ length: 8 }, (_, idx) => ({
+      guildID: 'g1',
+      userID: `71000000000000000${idx}`,
+      username: `decoy_ban_${idx}`,
+      status: 'banned',
+      statusAt: new Date(now.getTime() - (idx + 1) * 3600 * 1000)
+    }))
+    installAltDetectionStore({
+      enabled: { g1: true },
+      profiles: [
+        ...decoys,
+        { guildID: 'g1', ...bannedMain },
+        { guildID: 'g1', ...disguisedSleeper }
+      ],
+      messages: [
+        ...mainMsgs.map(m => ({ ...m, guildID: 'g1', ts: new Date('2026-09-01T00:00:00Z') })), // > 30 days old so only found via offender enrichment + pgvector
+        ...sleeperMsgs.map(m => ({ ...m, guildID: 'g1' }))
+      ],
+      centroids: {
+        [`g1:${bannedMain.userID}`]: [0.95, 0.31, 0],
+        [`g1:${disguisedSleeper.userID}`]: [0.96, 0.28, 0]
+      }
+    })
+    const guild = createGuild({ id: 'g1' })
+    makeBotWithLogs(guild)
+    t.mock.method(webhookCache, 'getWebhook', async () => 'wh1|tok1')
+    const candidates = await altDetector.findCandidates(guild, disguisedSleeper, sleeperMsgs, { trigger: 'messages', now, limit: 3 })
+    assert.ok(candidates.length >= 1)
+    assert.equal(candidates[0].candidateProfile.userID, bannedMain.userID, 'disguised offender ranked #1 despite 8 decoys and 0 name/avatar match')
+    assert.ok(candidates[0].heuristic.metrics.embeddingSimilarity > 0.99)
+    assert.ok(candidates[0].heuristic.score >= 55)
+
+    // Verify sleeper alt automatic trigger in onMessage fires at milestone 10 even though joined 90 days ago
+    altDetector.resetRuntimeState()
+    const requests = installGemini([
+      [{
+        text: JSON.stringify({
+          verdict: 'likely_alt',
+          confidence: 88,
+          summary: 'アバター・名前は完全に別物ですが、固有語彙・絵文字・外部URL・メンション先・文体が強く一致しています。',
+          matching_evidence: ['固有語彙・絵文字・共有URL・語尾の一致'],
+          counter_evidence: []
+        })
+      }]
+    ])
+    const sleeperMember = {
+      id: disguisedSleeper.userID,
+      joinedAt: disguisedSleeper.joinedAt.getTime(),
+      roles: [],
+      user: { id: disguisedSleeper.userID, bot: false, username: disguisedSleeper.username, globalName: disguisedSleeper.globalName, avatar: disguisedSleeper.avatarHash }
+    }
+    let alertedRes = null
+    for (let i = 1; i <= 10; i++) {
+      const sample = sleeperMsgs[(i - 1) % sleeperMsgs.length]
+      const r = await altDetector.onMessage({
+        id: `sl_${i}`,
+        content: sample.content,
+        timestamp: now.getTime() + i * 1000,
+        author: sleeperMember.user,
+        member: sleeperMember,
+        channel: { id: sample.channelID, guild }
+      }, { now: new Date(now.getTime() + i * 1000) })
+      if (i < 10) assert.equal(r.checked, false)
+      else alertedRes = r
+    }
+    assert.equal(alertedRes.checked, true)
+    assert.equal(alertedRes.alerted, true, 'sleeper alt caught automatically at milestone 10 when guild has recent offender')
+    assert.ok(requests[0].body.contents[0].parts[0].text.includes('アバター画像・ユーザー名・表示名・アカウントIDを全く別物に変える'))
+    assert.ok(requests[0].body.contents[0].parts[0].text.includes('example-wiki.jp'))
+  })
+
+  test('cross-topic disguised alt is caught via TextDistortion, Japanese function words, COAV compression, General Impostors, IET-KS, and Circadian JSD', () => {
+    const now = new Date('2026-11-25T15:00:00Z')
+    // Verify Japanese TextDistortion masks topic words while keeping particles & punctuation
+    const distorted = altDetector.distortJapaneseTopic('というか、昨日のラーメン屋なんだけどマジで最高だわ〜！草')
+    assert.ok(distorted.includes('というか'))
+    assert.ok(distorted.includes('なんだけど'))
+    assert.ok(distorted.includes('だわ〜'))
+    assert.ok(!distorted.includes('ラーメン'))
+    assert.ok(!distorted.includes('最高'))
+
+    // Same author writing about TWO COMPLETELY DIFFERENT TOPICS (Topic 1: cooking, Topic 2: cars/trains)
+    // with identical unconscious Japanese grammar, particles, endings, and 15-30s typing cadence
+    const mkSeries = (authorID, baseIso, gapsSec, contents) => {
+      let t = new Date(baseIso).getTime()
+      return contents.map((content, idx) => {
+        if (idx > 0) t += gapsSec[idx - 1] * 1000
+        return { id: `${authorID}_${idx}`, authorID, channelID: authorID === 'u_cook' ? 'ch_a' : 'ch_b', ts: new Date(t), content }
+      })
+    }
+
+    const authorTopic1 = mkSeries('u_cook', '2026-11-23T12:00:00Z', [12, 25, 18, 40, 15, 22], [
+      'というかさ、今日の味噌汁なんだけどマジで塩辛いんだわ〜 草',
+      'てか普通に醤油を足しただけなのに、なんか味が変なんだよな〜',
+      'まあ一応レシピ通りにしたんだけどさ、やっぱ火力が高すぎたかもだわ〜',
+      'そもそも冷蔵庫の豆腐が古かったのが原因なんだろうけどさ、普通に萎えるわ〜 草',
+      'というかフライパン洗うのだるいし、なんかもう出前でいいかなって感じだわ〜',
+      'てか野菜切るのマジで面倒だし、一応明日また挑戦してみるかな〜 草',
+      'まあ普通に食べられたから一応セーフなんだけどさ、やっぱ次は減塩にするわ〜'
+    ])
+    const authorTopic2 = mkSeries('u_drive', '2026-11-24T12:05:00Z', [14, 24, 19, 38, 16, 20], [
+      'というかさ、今朝の電車なんだけどマジで満員すぎたんだわ〜 草',
+      'てか普通に駅前で歩いただけなのに、なんか靴がボロボロなんだよな〜',
+      'まあ一応時刻表通りに乗ったんだけどさ、やっぱ遅延がひどすぎたかもだわ〜',
+      'そもそも改札の機械が壊れてたのが原因なんだろうけどさ、普通に萎えるわ〜 草',
+      'というか駐車場探すのだるいし、なんかもう自転車でいいかなって感じだわ〜',
+      'てか信号待ちマジで面倒だし、一応明日また別の道で行ってみるかな〜 草',
+      'まあ普通に間に合ったから一応セーフなんだけどさ、やっぱ次は早起きするわ〜'
+    ])
+
+    // 4 distinct-style in-domain server impostors (polite, terse, kaomoji/formal, English-mixed)
+    const impostor1 = mkSeries('imp1', '2026-11-24T03:00:00Z', [300, 500, 420, 600, 350, 480], [
+      'おはようございます。本日の予定を確認いたします。',
+      '資料の提出期限は明日の17時となっております。',
+      'ご確認のほど、よろしくお願いいたします。',
+      '承知いたしました。後ほど対応いたします。',
+      '特に問題ございません。ありがとうございます。',
+      '引き続きよろしくお願いいたします。',
+      '本日はこれにて失礼いたします。'
+    ])
+    const impostor2 = mkSeries('imp2', '2026-11-24T05:00:00Z', [120, 180, 240, 150, 210, 190], [
+      'おつかれ！今日も最高だったね！！',
+      'めっちゃ楽しかったよ！！ありがとう！！',
+      'また明日も遊ぼうね！！楽しみ！！',
+      '了解だよ！準備しておくね！',
+      'すごいね！！おめでとう！！',
+      'うんうん！それで大丈夫だよ！！',
+      'おやすみー！またね！！'
+    ])
+    const impostor3 = mkSeries('imp3', '2026-11-24T07:00:00Z', [60, 90, 75, 110, 80, 95], [
+      'わかる（笑）それめっちゃあるあるだよね…',
+      'うーん…どうなんだろう…ちょっと微妙かも（笑）',
+      'なるほどね…確かにそれは言えてる…',
+      'あー…それ忘れてたわ…やらかした（笑）',
+      'とりあえず様子見かな…急ぐ必要ないし…',
+      'まあいいんじゃない…？気長に待とう…',
+      'お疲れ様…ゆっくり休んでね…'
+    ])
+    const impostor4 = mkSeries('imp4', '2026-11-24T09:00:00Z', [500, 700, 650, 800, 550, 620], [
+      'gg wp nice match bro',
+      'wait let me check the patch notes real quick',
+      'honestly that nerf was kinda expected tbh',
+      'anyone down for ranked queue tonight?',
+      'my ping is spiking hard right now lol',
+      'ok restarting router brb 2 mins',
+      'back now ready when you are'
+    ])
+
+    const impostors = [impostor1, impostor2, impostor3, impostor4]
+    const sameRes = altDetector.scorePair({
+      suspectProfile: { userID: 'u_drive', username: 'train_lover', avatarHash: 'av_2', accountCreatedAt: new Date('2022-01-01Z'), joinedAt: new Date('2025-01-01Z'), status: 'active' },
+      candidateProfile: { userID: 'u_cook', username: 'miso_chef', avatarHash: 'av_1', accountCreatedAt: new Date('2021-01-01Z'), joinedAt: new Date('2024-01-01Z'), status: 'banned', statusAt: new Date('2026-11-23T20:00:00Z') },
+      suspectMessages: authorTopic2,
+      candidateMessages: authorTopic1,
+      impostorMessages: impostors,
+      now
+    })
+    assert.equal(sameRes.metrics.nameSimilarity, 0)
+    assert.equal(sameRes.metrics.avatarHashMatch, false)
+    assert.ok(sameRes.metrics.topicAgnosticGrammarSim >= 0.35, `expected high topic-agnostic grammar MinMax, got ${sameRes.metrics.topicAgnosticGrammarSim}`)
+    assert.ok(sameRes.metrics.functionWordSim >= 0.55, `expected high Japanese function-word MinMax, got ${sameRes.metrics.functionWordSim}`)
+    assert.ok(sameRes.metrics.compressionSimilarity >= 0.24, `expected elevated COAV compression sim, got ${sameRes.metrics.compressionSimilarity}`)
+    assert.ok(sameRes.metrics.impostorsScore >= 0.75, `expected high General Impostors win rate, got ${sameRes.metrics.impostorsScore}`)
+    assert.ok(sameRes.metrics.ietKsSimilarity >= 0.70, `expected high IET-KS similarity, got ${sameRes.metrics.ietKsSimilarity}`)
+    assert.ok(sameRes.metrics.hourSimilarity >= 0.75, `expected high circadian JSD similarity, got ${sameRes.metrics.hourSimilarity}`)
+    assert.ok(sameRes.score >= 70, `expected strong cross-topic disguised alt score >= 70, got ${sameRes.score}`)
+
+    // Unrelated polite user vs authorTopic1 must score much lower on General Impostors & grammar
+    const diffRes = altDetector.scorePair({
+      suspectProfile: { userID: 'imp1', username: 'polite_user', avatarHash: 'av_p', accountCreatedAt: new Date('2022-01-01Z'), joinedAt: new Date('2025-01-01Z'), status: 'active' },
+      candidateProfile: { userID: 'u_cook', username: 'miso_chef', avatarHash: 'av_1', accountCreatedAt: new Date('2021-01-01Z'), joinedAt: new Date('2024-01-01Z'), status: 'active' },
+      suspectMessages: impostor1,
+      candidateMessages: authorTopic1,
+      impostorMessages: [authorTopic2, impostor2, impostor3, impostor4],
+      now
+    })
+    assert.ok(diffRes.metrics.impostorsScore <= 0.15, `unrelated user should fail General Impostors, got ${diffRes.metrics.impostorsScore}`)
+    assert.ok(diffRes.score < 30, `unrelated user should score low, got ${diffRes.score}`)
+  })
 })

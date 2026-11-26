@@ -6,15 +6,24 @@ const pool = require('../../clients/postgres')
 const { fromStoredContent, toStoredContent } = require('./create')
 
 const ENABLED_CACHE_TTL_MS = 60 * 1000
+const OFFENDER_CACHE_TTL_MS = 5 * 60 * 1000
 const enabledCache = new Map() // guildID -> { value, expiresAt }
+const recentOffenderCache = new Map() // `${guildID}:${days}` -> { value, expiresAt }
 
 async function ensureGuild (guildID) {
   await require('./read').getGuild(guildID)
 }
 
 function resetCache (guildID = null) {
-  if (guildID) enabledCache.delete(guildID)
-  else enabledCache.clear()
+  if (guildID) {
+    enabledCache.delete(guildID)
+    for (const key of recentOffenderCache.keys()) {
+      if (key.startsWith(`${guildID}:`)) recentOffenderCache.delete(key)
+    }
+  } else {
+    enabledCache.clear()
+    recentOffenderCache.clear()
+  }
 }
 
 async function isAltDetectionEnabled (guildID) {
@@ -74,6 +83,9 @@ async function upsertMemberProfile (guildID, profile) {
 }
 
 async function markMemberStatus (guildID, userID, status, { reason = null, at = new Date(), profile = {} } = {}) {
+  for (const key of recentOffenderCache.keys()) {
+    if (key.startsWith(`${guildID}:`)) recentOffenderCache.delete(key)
+  }
   return upsertMemberProfile(guildID, {
     ...profile,
     userID,
@@ -359,6 +371,66 @@ async function getAuthorEmbeddingCentroid (guildID, userID, { limit = 40 } = {})
   }
 }
 
+// Semantic candidate discovery across all guild authors (including banned/kicked/restricted
+// accounts whose usernames, avatars, and IDs were completely changed on an alt).
+async function findSimilarAuthorsByEmbedding (guildID, excludeUserID, centroid, { limit = 10, minMessages = 3, perAuthor = 40 } = {}) {
+  if (!guildID || !Array.isArray(centroid) || centroid.length === 0) return []
+  if (!centroid.every(Number.isFinite)) return []
+  const literal = `[${centroid.join(',')}]`
+  try {
+    const { rows } = await pool.query(
+      `WITH per_author_msgs AS (
+         SELECT author_id, embedding,
+                row_number() OVER (PARTITION BY author_id ORDER BY ts DESC) AS rn
+         FROM messages
+         WHERE guild_id = $1 AND author_id <> $2 AND embedding IS NOT NULL
+       ),
+       centroids AS (
+         SELECT author_id, avg(embedding) AS centroid, count(*)::int AS cnt
+         FROM per_author_msgs
+         WHERE rn <= $4
+         GROUP BY author_id
+         HAVING count(*) >= $5
+       )
+       SELECT author_id,
+              1 - (centroid <=> $3::halfvec) AS similarity,
+              cnt,
+              centroid::text AS centroid_text
+       FROM centroids
+       ORDER BY centroid <=> $3::halfvec
+       LIMIT $6`,
+      [guildID, excludeUserID || '', literal, perAuthor, minMessages, limit]
+    )
+    return rows.map(r => ({
+      authorID: r.author_id,
+      similarity: Number(r.similarity),
+      messageCount: r.cnt,
+      centroid: parseVectorText(r.centroid_text)
+    })).filter(r => Number.isFinite(r.similarity))
+  } catch (_) {
+    return []
+  }
+}
+
+async function hasRecentOffender (guildID, { days = 30 } = {}) {
+  if (!guildID) return false
+  const cacheKey = `${guildID}:${days}`
+  const cached = recentOffenderCache.get(cacheKey)
+  if (cached && cached.expiresAt > Date.now()) return cached.value
+  const since = new Date(Date.now() - days * 86400 * 1000)
+  const { rows } = await pool.query(
+    `SELECT 1 FROM member_activity_profiles
+     WHERE guild_id = $1
+       AND status IN ('banned', 'kicked', 'restricted')
+       AND (status = 'restricted' OR COALESCE(status_at, updated_at) >= $2)
+     LIMIT 1`,
+    [guildID, since]
+  )
+  const value = rows.length > 0
+  recentOffenderCache.set(cacheKey, { value, expiresAt: Date.now() + OFFENDER_CACHE_TTL_MS })
+  return value
+}
+
 async function hasRecentAlert (guildID, suspectUserID, candidateUserID, cooldownHours = 24) {
   const since = new Date(Date.now() - cooldownHours * 3600 * 1000)
   const { rows } = await pool.query(
@@ -435,6 +507,8 @@ module.exports = {
   getMemberMessages,
   getRecentAuthorsMessages,
   getAuthorEmbeddingCentroid,
+  findSimilarAuthorsByEmbedding,
+  hasRecentOffender,
   hasRecentAlert,
   recordAlert,
   getRecentAlerts

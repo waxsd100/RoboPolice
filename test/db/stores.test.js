@@ -995,6 +995,25 @@ describe('stores', { skip: !database.available && 'needs PGHOST' }, () => {
       assert.equal(centroid.length, 512)
       assert.ok(Math.abs(centroid[0] - 1) < 0.01)
 
+      // Semantic search discovers disguised accounts by author embedding centroid
+      const orthVec = `[${['0', '1', ...Array(510).fill('0')].join(',')}]`
+      await q(`INSERT INTO messages (id, author_id, content, ts, channel_id, guild_id, embedding, embedding_model) VALUES
+        ('alt_o1', 'u_other', $1, now() - interval '2 days', 'c1', 'g_alt', $2::halfvec, 'gemini-embedding-001'),
+        ('alt_o2', 'u_other', $1, now() - interval '1 day', 'c1', 'g_alt', $2::halfvec, 'gemini-embedding-001'),
+        ('alt_o3', 'u_other', $1, now() - interval '6 hours', 'c1', 'g_alt', $2::halfvec, 'gemini-embedding-001')`, [
+        toStoredContent('全く別トピックの発言'),
+        orthVec
+      ])
+      const similarAuthors = await altDB.findSimilarAuthorsByEmbedding('g_alt', 'u_suspect', centroid, { limit: 5 })
+      assert.equal(similarAuthors.length, 2)
+      assert.equal(similarAuthors[0].authorID, 'u_banned')
+      assert.ok(similarAuthors[0].similarity > 0.99)
+      assert.equal(similarAuthors[1].authorID, 'u_other')
+      assert.ok(similarAuthors[1].similarity < 0.1)
+
+      assert.equal(await altDB.hasRecentOffender('g_alt', { days: 30 }), true)
+      assert.equal(await altDB.hasRecentOffender('g_no_offender', { days: 30 }), false)
+
       // Snapshot before bulk delete preserves deleted messages even after hard deletion from `messages`
       const snapshotted = await altDB.snapshotMessagesBeforeDelete(['alt_m1'], { deletedBy: 'moderator', moderatorID: 'mod_1' })
       assert.equal(snapshotted.length, 1)
