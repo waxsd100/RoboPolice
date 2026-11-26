@@ -7,6 +7,7 @@
 //     Stage 1 thresholds (or manual /altcheck). Multimodal (optional avatar visual comparison)
 //     with prompt-injection defense (<untrusted>) and structured JSON verdict.
 // Alert-only to the server's staff log channel: never kicks, bans, or mutes automatically.
+const zlib = require('zlib')
 const altDB = require('../../db/interfaces/postgres/altDetection')
 const send = require('./webhooksender')
 const cacheGuild = require('../utils/cacheGuild')
@@ -19,12 +20,43 @@ const untrusted = require('../utils/untrusted')
 const urlFetcher = require('../utils/urlFetcher')
 
 const DISCORD_EPOCH = 1420070400000
-const MESSAGE_MILESTONES = [5, 15]
+const MESSAGE_MILESTONES = [5, 15, 30]
+const SLEEPER_CHECK_MILESTONES = [10, 30]
 const MAX_COUNTER_ENTRIES = 10000
 const SIMULTANEOUS_WINDOW_MS = 15 * 1000
+const BURST_WINDOW_MS = 20 * 1000
 const DEFAULT_OFFENDER_ROLE_IDS = ['882586674717138954']
 const MOD_STATUSES = new Set(['banned', 'kicked', 'restricted'])
 const ALERT_EVENT_PRIORITY = ['guildBanAdd', 'guildMemberKick', 'guildMemberAdd', 'guildMemberRemove', ...ALL_EVENTS]
+const GENERIC_URL_HOSTS = new Set([
+  'cdn.discordapp.com',
+  'media.discordapp.net',
+  'discord.com',
+  'discordapp.com',
+  'tenor.com',
+  'media.tenor.com',
+  'giphy.com',
+  'media.giphy.com',
+  'imgur.com',
+  'i.imgur.com'
+])
+const COMMON_TOKENS = new Set([
+  'https', 'http', 'www', 'com', 'net', 'org', 'the', 'and', 'for', 'that', 'this',
+  'with', 'from', 'you', 'are', 'not', 'lol', 'www',
+  '今日', '昨日', '明日', '自分', '本当', '普通', '大丈夫', '問題', '時間', '最近',
+  '一応', '結構', '全然', '多分', '最初', '最後', '意味', '理由', '確認', '参加',
+  '動画', '配信', 'ゲーム', 'サーバー', 'チャンネル', 'メッセージ', 'コメント'
+])
+// Topic-agnostic Japanese function words, particles, discourse markers, and pronouns
+// (Jin 2002 particle n-gram stylometry; Halvani TAVeer topic-agnostic feature categories).
+const JAPANESE_FUNCTION_WORDS = [
+  'というか', 'ていうか', 'っていう', 'だけどね', 'ですから', 'なんです', 'なんだけど',
+  'だけど', 'けどさ', 'ですね', 'ですよ', 'だよね', 'やっぱ', 'ちなみ', 'そもそも',
+  '個人的', 'だから', 'なので', 'しかも', 'むしろ', 'せめて', 'さすがに', 'てか',
+  'なんか', 'まあ', '一応', 'マジ', '普通', 'って', 'けど', 'のに', 'から', 'まで',
+  'しか', 'だけ', 'とか', 'ので', 'ため', 'だわ', 'だろ', 'じゃん', 'やん', 'かな',
+  'かも', 'だよ', 'だね', 'です', 'ます', 'やろ', 'なんよ', '俺', '僕', '私', 'わい', 'ワイ'
+]
 
 const ALT_RESPONSE_SCHEMA = {
   type: 'OBJECT',
@@ -303,6 +335,11 @@ function extractStylometry (messages) {
   let totalChars = 0
   let excl = 0
   let quest = 0
+  let fullPunct = 0
+  let halfPunct = 0
+  let comma = 0
+  let ellipsis = 0
+  let brackets = 0
   let period = 0
   let tilde = 0
   let newline = 0
@@ -318,6 +355,11 @@ function extractStylometry (messages) {
     totalChars += t.length
     if (/[!！]/.test(t)) excl++
     if (/[?？]/.test(t)) quest++
+    if (/[！？（）]/.test(t)) fullPunct++
+    if (/[!?()]/.test(t)) halfPunct++
+    if (/、/.test(t)) comma++
+    if (/…|\.{2,}|。。/.test(t)) ellipsis++
+    if (/[「」『』（）()]/.test(t)) brackets++
     if (/[。.]\s*$/.test(t)) period++
     if (/[〜~ー]{2,}|[〜~]/.test(t)) tilde++
     if (t.includes('\n')) newline++
@@ -333,12 +375,30 @@ function extractStylometry (messages) {
       else if ((cp >= 0x41 && cp <= 0x5A) || (cp >= 0x61 && cp <= 0x7A)) ascii++
     }
   }
+  // Consecutive rapid-burst posting rate (splitting thoughts into multiple short messages)
+  const dated = messages
+    .map(m => ({ ch: m.channelID || '', t: m.ts instanceof Date ? m.ts.getTime() : new Date(m.ts).getTime() }))
+    .filter(x => Number.isFinite(x.t))
+    .sort((a, b) => a.t - b.t)
+  let burstCount = 0
+  for (let i = 1; i < dated.length; i++) {
+    if (dated[i].ch === dated[i - 1].ch && (dated[i].t - dated[i - 1].t) <= BURST_WINDOW_MS) {
+      burstCount++
+    }
+  }
+  const burstRatio = dated.length >= 2 ? burstCount / (dated.length - 1) : 0
+
   const n = texts.length
   const charDenom = Math.max(1, totalChars)
   return [
     Math.min(1, (totalChars / n) / 80),
     excl / n,
     quest / n,
+    fullPunct / n,
+    halfPunct / n,
+    comma / n,
+    ellipsis / n,
+    brackets / n,
     period / n,
     tilde / n,
     newline / n,
@@ -346,6 +406,7 @@ function extractStylometry (messages) {
     laughW / n,
     laughKanji / n,
     emoji / n,
+    burstRatio,
     hira / charDenom,
     kata / charDenom,
     kanji / charDenom,
@@ -369,6 +430,37 @@ function cosineSimilarity (vecA, vecB) {
   return dot / (Math.sqrt(normA) * Math.sqrt(normB))
 }
 
+function mapCosineSimilarity (mapA, mapB) {
+  if (!mapA || !mapB || mapA.size === 0 || mapB.size === 0) return 0
+  let dot = 0
+  let normA = 0
+  let normB = 0
+  for (const [k, a] of mapA) {
+    normA += a * a
+    const b = mapB.get(k)
+    if (b) dot += a * b
+  }
+  for (const b of mapB.values()) normB += b * b
+  if (normA === 0 || normB === 0) return 0
+  return dot / (Math.sqrt(normA) * Math.sqrt(normB))
+}
+
+function setIntersection (setA, setB) {
+  if (!setA || !setB || setA.size === 0 || setB.size === 0) return []
+  const [small, large] = setA.size <= setB.size ? [setA, setB] : [setB, setA]
+  const out = []
+  for (const item of small) {
+    if (large.has(item)) out.push(item)
+  }
+  return out
+}
+
+function overlapCoefficient (setA, setB) {
+  if (!setA || !setB || setA.size === 0 || setB.size === 0) return 0
+  const inter = setIntersection(setA, setB).length
+  return inter / Math.min(setA.size, setB.size)
+}
+
 function characterNgrams (messages, n = 3) {
   const grams = new Set()
   if (!Array.isArray(messages)) return grams
@@ -381,6 +473,398 @@ function characterNgrams (messages, n = 3) {
     }
   }
   return grams
+}
+
+function extractEmojis (messages) {
+  const all = new Set()
+  const custom = new Set()
+  if (!Array.isArray(messages)) return { all, custom }
+  for (const m of messages) {
+    const text = String(m?.content || '')
+    const customMatches = text.match(/<a?:\w+:\d+>/g) || []
+    for (const c of customMatches) {
+      custom.add(c)
+      all.add(c)
+    }
+    const stripped = text.replace(/<a?:\w+:\d+>/g, ' ')
+    const uniMatches = stripped.match(/\p{Extended_Pictographic}/gu) || []
+    for (const u of uniMatches) all.add(u)
+  }
+  return { all, custom }
+}
+
+function extractMentionedUsers (messages, excludeIds = []) {
+  const excluded = new Set((excludeIds || []).filter(Boolean).map(String))
+  const targets = new Set()
+  if (!Array.isArray(messages)) return targets
+  for (const m of messages) {
+    const text = String(m?.content || '')
+    const re = /<@!?(\d{15,22})>/g
+    let match
+    while ((match = re.exec(text)) !== null) {
+      if (!excluded.has(match[1])) targets.add(match[1])
+    }
+  }
+  return targets
+}
+
+function normalizeUrlAnchor (rawUrl) {
+  try {
+    const u = new URL(rawUrl.replace(/[)>.,!?！？「」『』]+$/g, ''))
+    const host = u.hostname.toLowerCase().replace(/^www\./, '').replace(/^m\./, '')
+    if (!host || GENERIC_URL_HOSTS.has(host)) return null
+    const segments = u.pathname.split('/').filter(Boolean).map(s => s.toLowerCase())
+    if (host === 'x.com' || host === 'twitter.com') {
+      const skip = new Set(['i', 'home', 'search', 'explore', 'hashtag', 'intent', 'share'])
+      if (segments[0] && !skip.has(segments[0])) return `x.com/${segments[0]}`
+      return null
+    }
+    if (host === 'youtube.com') {
+      if (segments[0]?.startsWith('@')) return `youtube.com/${segments[0]}`
+      if ((segments[0] === 'channel' || segments[0] === 'c') && segments[1]) return `youtube.com/${segments[0]}/${segments[1]}`
+      const v = u.searchParams.get('v')
+      if (v) return `youtube.com/watch?v=${v.toLowerCase()}`
+      return null
+    }
+    if (host === 'youtu.be') {
+      return segments[0] ? `youtube.com/watch?v=${segments[0]}` : null
+    }
+    if (host === 'twitch.tv' || host === 'github.com') {
+      return segments[0] ? `${host}/${segments[0]}` : host
+    }
+    return host
+  } catch (_) {
+    return null
+  }
+}
+
+function extractUrlDomains (messages) {
+  const domains = new Set()
+  if (!Array.isArray(messages)) return domains
+  for (const m of messages) {
+    const text = String(m?.content || '')
+    const urls = text.match(/https?:\/\/[^\s<>()]+/gi) || []
+    for (const raw of urls) {
+      const anchor = normalizeUrlAnchor(raw)
+      if (anchor) domains.add(anchor)
+    }
+  }
+  return domains
+}
+
+// Extracts harder-to-fake vocabulary tokens (katakana words, kanji compounds, alphanumeric slang)
+// while filtering out common everyday words.
+function extractDistinctiveTokens (messages) {
+  const tokens = new Set()
+  if (!Array.isArray(messages)) return tokens
+  for (const m of messages) {
+    const clean = stripNoise(m?.content || '').normalize('NFKC').toLowerCase()
+    if (!clean) continue
+    const matches = clean.match(/[ァ-ヴー]{3,}|[一-龯々]{2,}|[a-z][a-z0-9_]{2,}/g) || []
+    for (const tok of matches) {
+      if (COMMON_TOKENS.has(tok)) continue
+      tokens.add(tok)
+      if (tokens.size >= 500) return tokens
+    }
+  }
+  return tokens
+}
+
+// Extracts Japanese/Discord sentence-ending habits (語尾), which remain highly consistent even
+// when an offender deliberately changes avatar, username, and ID.
+function extractSentenceEndings (messages) {
+  const endings = new Map()
+  if (!Array.isArray(messages)) return endings
+  for (const m of messages) {
+    const lines = stripNoise(m?.content || '').normalize('NFKC').toLowerCase().split(/[\n。!?！？]+/)
+    for (const line of lines) {
+      const trimmed = line.replace(/[\s、,.…~〜ー「」『』()（）]+$/g, '').trim()
+      if (trimmed.length < 3) continue
+      const tail2 = trimmed.slice(-2)
+      const tail3 = trimmed.length >= 4 ? trimmed.slice(-3) : null
+      endings.set(tail2, (endings.get(tail2) || 0) + 1)
+      if (tail3) endings.set(tail3, (endings.get(tail3) || 0) + 1.5)
+    }
+  }
+  return endings
+}
+
+// Detects clean account-to-account activity handover (Account X stops posting -> Account Y starts
+// posting with zero temporal overlap), catching disguised & pre-aged "sleeper" alts.
+function analyzeActivityHandover (msgsA = [], msgsB = []) {
+  if (!Array.isArray(msgsA) || !Array.isArray(msgsB) || msgsA.length < 3 || msgsB.length < 3) {
+    return { disjoint: false, gapMs: null, direction: null, earlierLastTs: null, laterFirstTs: null }
+  }
+  const timesA = msgsA.map(m => (m.ts instanceof Date ? m.ts.getTime() : new Date(m.ts).getTime())).filter(Number.isFinite)
+  const timesB = msgsB.map(m => (m.ts instanceof Date ? m.ts.getTime() : new Date(m.ts).getTime())).filter(Number.isFinite)
+  if (timesA.length < 3 || timesB.length < 3) {
+    return { disjoint: false, gapMs: null, direction: null, earlierLastTs: null, laterFirstTs: null }
+  }
+  const minA = Math.min(...timesA)
+  const maxA = Math.max(...timesA)
+  const minB = Math.min(...timesB)
+  const maxB = Math.max(...timesB)
+  const graceMs = 5 * 60 * 1000
+  if (minA >= maxB - graceMs) {
+    return {
+      disjoint: true,
+      gapMs: Math.max(0, minA - maxB),
+      direction: 'B_to_A',
+      earlierLastTs: new Date(maxB),
+      laterFirstTs: new Date(minA)
+    }
+  }
+  if (minB >= maxA - graceMs) {
+    return {
+      disjoint: true,
+      gapMs: Math.max(0, minB - maxA),
+      direction: 'A_to_B',
+      earlierLastTs: new Date(maxA),
+      laterFirstTs: new Date(minB)
+    }
+  }
+  return { disjoint: false, gapMs: null, direction: null, earlierLastTs: null, laterFirstTs: null }
+}
+
+// Topic-agnostic Japanese TextDistortion (adapted from Stamatatos 2018 & Halvani POSNoise):
+// masks topic/content stems (kanji compounds, katakana loanwords, alphanumeric words, numbers)
+// while preserving hiragana particles, auxiliary endings, punctuation, newlines, and laugh habits.
+function distortJapaneseTopic (text) {
+  return stripNoise(text)
+    .normalize('NFKC')
+    .toLowerCase()
+    .replace(/[一-龯々]{2,}/g, 'K')
+    .replace(/[ァ-ヴー]{3,}/g, 'T')
+    .replace(/(?<![a-z0-9_])(?!w+(?![a-z0-9_]))[a-z][a-z0-9_]{2,}/g, 'E')
+    .replace(/\d{2,}/g, '#')
+    .replace(/\s+/g, ' ')
+    .trim()
+}
+
+// Ružička (MinMax) similarity (Koppel & Winter 2014; Kestemont et al. 2016):
+// sum_i min(x_i, y_i) / sum_i max(x_i, y_i). Optionally evaluated on a feature subset (for GI).
+function ruzickaSimilarity (mapA, mapB, subset = null) {
+  if (!mapA || !mapB || mapA.size === 0 || mapB.size === 0) return 0
+  let num = 0
+  let den = 0
+  if (subset) {
+    for (const k of subset) {
+      const a = mapA.get(k) || 0
+      const b = mapB.get(k) || 0
+      if (a === 0 && b === 0) continue
+      num += a < b ? a : b
+      den += a > b ? a : b
+    }
+    return den === 0 ? 0 : num / den
+  }
+  for (const [k, a] of mapA) {
+    const b = mapB.get(k) || 0
+    num += a < b ? a : b
+    den += a > b ? a : b
+  }
+  for (const [k, b] of mapB) {
+    if (!mapA.has(k)) den += b
+  }
+  return den === 0 ? 0 : num / den
+}
+
+function normalizeFreqMap (counts) {
+  let total = 0
+  for (const v of counts.values()) total += v
+  if (total <= 0) return new Map()
+  const out = new Map()
+  for (const [k, v] of counts) out.set(k, v / total)
+  return out
+}
+
+// Relative-frequency character n-gram profile over topic-distorted Japanese text.
+function topicAgnosticNgramFreq (messages, n = 3) {
+  const counts = new Map()
+  if (!Array.isArray(messages)) return counts
+  for (const m of messages) {
+    const clean = distortJapaneseTopic(m?.content || '').replace(/\s+/g, ' ')
+    if (clean.length < n) continue
+    for (let i = 0; i <= clean.length - n; i++) {
+      const g = clean.slice(i, i + n)
+      counts.set(g, (counts.get(g) || 0) + 1)
+      if (counts.size >= 3000) break
+    }
+  }
+  return normalizeFreqMap(counts)
+}
+
+// Japanese particle, auxiliary, pronoun & discourse-marker frequency profile (Jin 2002).
+function extractJapaneseFunctionWords (messages) {
+  const counts = new Map()
+  let hits = 0
+  if (!Array.isArray(messages)) return { freq: counts, hits: 0 }
+  for (const m of messages) {
+    const clean = stripNoise(m?.content || '').normalize('NFKC').toLowerCase()
+    if (!clean) continue
+    for (const fw of JAPANESE_FUNCTION_WORDS) {
+      let idx = clean.indexOf(fw)
+      while (idx !== -1) {
+        counts.set(fw, (counts.get(fw) || 0) + 1)
+        hits++
+        idx = clean.indexOf(fw, idx + fw.length)
+      }
+    }
+  }
+  return { freq: normalizeFreqMap(counts), hits }
+}
+
+// Balanced Compression-Based Authorship Verification (COAV / symmetric NCD via deflate,
+// Halvani et al. 2017–2021). Equalizes byte lengths to eliminate length bias.
+function compressionSimilarity (msgsA, msgsB, { maxBytes = 4096, minBytes = 120 } = {}) {
+  if (!Array.isArray(msgsA) || !Array.isArray(msgsB) || msgsA.length < 3 || msgsB.length < 3) return null
+  const textA = msgsA.map(m => stripNoise(m?.content || '').normalize('NFKC').toLowerCase()).filter(Boolean).join('\n')
+  const textB = msgsB.map(m => stripNoise(m?.content || '').normalize('NFKC').toLowerCase()).filter(Boolean).join('\n')
+  const fullA = Buffer.from(textA, 'utf8')
+  const fullB = Buffer.from(textB, 'utf8')
+  const len = Math.min(fullA.length, fullB.length, maxBytes)
+  if (len < minBytes) return null
+  const bufA = fullA.subarray(0, len)
+  const bufB = fullB.subarray(0, len)
+  const cA = zlib.deflateRawSync(bufA, { level: 9 }).length
+  const cB = zlib.deflateRawSync(bufB, { level: 9 }).length
+  if (cA === 0 || cB === 0) return null
+  const cAB = zlib.deflateRawSync(Buffer.concat([bufA, bufB]), { level: 9 }).length
+  const cBA = zlib.deflateRawSync(Buffer.concat([bufB, bufA]), { level: 9 }).length
+  const cJoint = (cAB + cBA) / 2
+  const ncd = (cJoint - Math.min(cA, cB)) / Math.max(cA, cB)
+  return Math.max(0, Math.min(1, 1 - ncd))
+}
+
+function combinedAvFeatureMap (messages) {
+  const out = new Map()
+  const grams = topicAgnosticNgramFreq(messages, 3)
+  for (const [k, v] of grams) out.set(`g:${k}`, v)
+  const { freq: fws } = extractJapaneseFunctionWords(messages)
+  for (const [k, v] of fws) out.set(`f:${k}`, v * 1.5)
+  const endings = extractSentenceEndings(messages)
+  const normEndings = normalizeFreqMap(endings)
+  for (const [k, v] of normEndings) out.set(`e:${k}`, v * 1.2)
+  return out
+}
+
+function hashSeed (str) {
+  let h = 2166136261 >>> 0
+  for (let i = 0; i < str.length; i++) {
+    h ^= str.charCodeAt(i)
+    h = Math.imul(h, 16777619) >>> 0
+  }
+  return h || 1
+}
+
+function mulberry32 (seed) {
+  let a = seed >>> 0
+  return () => {
+    a = (a + 0x6D2B79F5) >>> 0
+    let t = Math.imul(a ^ (a >>> 15), 1 | a)
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296
+  }
+}
+
+// General Impostors (GI) statistical authorship verification test (Koppel & Winter 2014;
+// Seidman PAN-2013; Kestemont et al. 2016 Ružička metric). Tests whether candidate B consistently
+// outranks in-domain server impostors across random 50% feature subsamples.
+function generalImpostorsScore (msgsA, msgsB, impostorMsgLists = [], { rounds = 25, seedKey = 'gi' } = {}) {
+  const validImpostors = (impostorMsgLists || []).filter(list => Array.isArray(list) && list.length >= 3).slice(0, 15)
+  if (!Array.isArray(msgsA) || !Array.isArray(msgsB) || msgsA.length < 3 || msgsB.length < 3 || validImpostors.length < 3) {
+    return null
+  }
+  const vecA = combinedAvFeatureMap(msgsA)
+  const vecB = combinedAvFeatureMap(msgsB)
+  if (vecA.size < 10 || vecB.size < 10) return null
+  const impVecs = validImpostors.map(list => combinedAvFeatureMap(list)).filter(m => m.size >= 10)
+  if (impVecs.length < 3) return null
+
+  const vocabSet = new Set([...vecA.keys(), ...vecB.keys()])
+  for (const iv of impVecs) {
+    for (const k of iv.keys()) vocabSet.add(k)
+  }
+  const vocab = [...vocabSet]
+  if (vocab.length < 12) return null
+
+  const rand = mulberry32(hashSeed(seedKey))
+  let wins = 0
+  let totalChecks = 0
+  for (let r = 0; r < rounds; r++) {
+    const subset = []
+    for (let i = 0; i < vocab.length; i++) {
+      if (rand() < 0.5) subset.push(vocab[i])
+    }
+    if (subset.length < 6) continue
+    const simAB = ruzickaSimilarity(vecA, vecB, subset)
+    let maxAImp = -1
+    let maxBImp = -1
+    for (const iv of impVecs) {
+      const sA = ruzickaSimilarity(vecA, iv, subset)
+      if (sA > maxAImp) maxAImp = sA
+      const sB = ruzickaSimilarity(vecB, iv, subset)
+      if (sB > maxBImp) maxBImp = sB
+    }
+    if (simAB > maxAImp) wins++
+    if (simAB > maxBImp) wins++
+    totalChecks += 2
+  }
+  if (totalChecks === 0) return null
+  return { score: wins / totalChecks, impostorCount: impVecs.length }
+}
+
+// Log-scale active-session inter-event times (arXiv:2407.04350, 2024): captures an individual's
+// unconscious typing/posting cadence independently of message content or profile metadata.
+function extractInterEventTimes (messages, { minSec = 1, maxSec = 3600 } = {}) {
+  if (!Array.isArray(messages) || messages.length < 3) return []
+  const times = messages
+    .map(m => (m.ts instanceof Date ? m.ts.getTime() : new Date(m.ts).getTime()))
+    .filter(Number.isFinite)
+    .sort((a, b) => a - b)
+  const iets = []
+  for (let i = 1; i < times.length; i++) {
+    const sec = (times[i] - times[i - 1]) / 1000
+    if (sec >= minSec && sec <= maxSec) iets.push(Math.log10(sec))
+  }
+  return iets.sort((a, b) => a - b)
+}
+
+// Exact two-sample Kolmogorov-Smirnov similarity (1 - D_KS) in [0, 1].
+function ksSimilarity (sortedA, sortedB) {
+  if (!Array.isArray(sortedA) || !Array.isArray(sortedB) || sortedA.length < 5 || sortedB.length < 5) return null
+  const nA = sortedA.length
+  const nB = sortedB.length
+  let i = 0
+  let j = 0
+  let maxDiff = 0
+  while (i < nA && j < nB) {
+    const v = Math.min(sortedA[i], sortedB[j])
+    while (i < nA && sortedA[i] <= v) i++
+    while (j < nB && sortedB[j] <= v) j++
+    const diff = Math.abs(i / nA - j / nB)
+    if (diff > maxDiff) maxDiff = diff
+  }
+  return Math.max(0, Math.min(1, 1 - maxDiff))
+}
+
+// Laplace-smoothed Jensen-Shannon similarity (1 - sqrt(JSD)) over 24-hour JST circadian histograms.
+function jensenShannonSimilarity (histA, histB, alpha = 0.25) {
+  if (!Array.isArray(histA) || !Array.isArray(histB) || histA.length !== histB.length || histA.length === 0) return 0
+  const n = histA.length
+  const sumA = histA.reduce((acc, v) => acc + v, 0) + alpha * n
+  const sumB = histB.reduce((acc, v) => acc + v, 0) + alpha * n
+  if (sumA <= alpha * n || sumB <= alpha * n) return 0
+  let klA = 0
+  let klB = 0
+  for (let i = 0; i < n; i++) {
+    const p = (histA[i] + alpha) / sumA
+    const q = (histB[i] + alpha) / sumB
+    const m = 0.5 * (p + q)
+    if (p > 0) klA += p * Math.log2(p / m)
+    if (q > 0) klB += q * Math.log2(q / m)
+  }
+  const jsd = Math.max(0, Math.min(1, 0.5 * (klA + klB)))
+  return 1 - Math.sqrt(jsd)
 }
 
 function jaccardSimilarity (setA, setB) {
@@ -409,7 +893,12 @@ function hourHistogram (messages) {
 function channelOverlap (msgsA, msgsB) {
   const setA = new Set((msgsA || []).map(m => m.channelID).filter(Boolean))
   const setB = new Set((msgsB || []).map(m => m.channelID).filter(Boolean))
-  return { score: jaccardSimilarity(setA, setB), sharedCount: [...setA].filter(c => setB.has(c)).length }
+  const shared = setIntersection(setA, setB)
+  return {
+    score: jaccardSimilarity(setA, setB),
+    overlapCoeff: overlapCoefficient(setA, setB),
+    sharedCount: shared.length
+  }
 }
 
 // Counts distinct 1-minute windows where both accounts posted within windowMs of each other.
@@ -446,6 +935,7 @@ function scorePair ({
   candidateMessages = [],
   suspectCentroid = null,
   candidateCentroid = null,
+  impostorMessages = null,
   now = new Date()
 }) {
   let raw = 0
@@ -460,43 +950,96 @@ function scorePair ({
     nameSimilarity: 0,
     stylometrySimilarity: null,
     ngramSimilarity: null,
+    topicAgnosticGrammarSim: null,
+    functionWordSim: null,
+    compressionSimilarity: null,
+    impostorsScore: null,
+    impostorsCount: 0,
+    distinctiveVocabOverlap: null,
+    sharedTokens: [],
+    endingSimilarity: null,
+    sharedEmojis: [],
+    sharedMentionTargets: [],
+    sharedUrlDomains: [],
+    handoverGapMs: null,
     hourSimilarity: null,
+    ietKsSimilarity: null,
     channelOverlap: null,
     embeddingSimilarity: null,
     simultaneousMinutes: 0
   }
 
-  const joinedAt = suspectProfile?.joinedAt ? new Date(suspectProfile.joinedAt) : null
-  const createdAt = suspectProfile?.accountCreatedAt ? new Date(suspectProfile.accountCreatedAt) : null
-  const candStatusAt = candidateProfile?.statusAt ? new Date(candidateProfile.statusAt) : null
+  const suspIsMod = MOD_STATUSES.has(suspectProfile?.status)
   const candIsMod = MOD_STATUSES.has(candidateProfile?.status)
+  const suspIsFormer = suspIsMod || suspectProfile?.status === 'left'
+  const candIsFormer = candIsMod || candidateProfile?.status === 'left'
 
-  // 1. BAN / kick / leave timing proximity
-  if (joinedAt && candStatusAt) {
-    const delta = joinedAt.getTime() - candStatusAt.getTime()
+  // Determine direction symmetrically so `/altcheck find <bannedMain>` and
+  // `/altcheck compare <oldMain> <newAlt>` score identically regardless of argument order.
+  let modProfile = null
+  let altProfile = suspectProfile
+  if (candIsMod && !suspIsMod) {
+    modProfile = candidateProfile
+    altProfile = suspectProfile
+  } else if (suspIsMod && !candIsMod) {
+    modProfile = suspectProfile
+    altProfile = candidateProfile
+  } else if (candIsFormer && !suspIsFormer) {
+    modProfile = candidateProfile
+    altProfile = suspectProfile
+  } else if (suspIsFormer && !candIsFormer) {
+    modProfile = suspectProfile
+    altProfile = candidateProfile
+  } else {
+    // Both have the same status class: treat the more recently joined (or more recently created)
+    // account as the potential newer alt when inspecting post-event timing & account age at join.
+    const tJoinS = suspectProfile?.joinedAt ? new Date(suspectProfile.joinedAt).getTime() : null
+    const tJoinC = candidateProfile?.joinedAt ? new Date(candidateProfile.joinedAt).getTime() : null
+    const tCreS = suspectProfile?.accountCreatedAt ? new Date(suspectProfile.accountCreatedAt).getTime() : null
+    const tCreC = candidateProfile?.accountCreatedAt ? new Date(candidateProfile.accountCreatedAt).getTime() : null
+    if (tJoinS != null && tJoinC != null && tJoinC > tJoinS) {
+      modProfile = candIsFormer ? suspectProfile : null
+      altProfile = candidateProfile
+    } else if (tJoinS == null && tJoinC == null && tCreS != null && tCreC != null && tCreC > tCreS) {
+      modProfile = candIsFormer ? suspectProfile : null
+      altProfile = candidateProfile
+    } else if (candIsFormer) {
+      modProfile = candidateProfile
+      altProfile = suspectProfile
+    }
+  }
+
+  const joinedAt = altProfile?.joinedAt ? new Date(altProfile.joinedAt) : null
+  const createdAt = altProfile?.accountCreatedAt ? new Date(altProfile.accountCreatedAt) : null
+  const modStatusAt = modProfile?.statusAt ? new Date(modProfile.statusAt) : null
+  const modIsOffender = MOD_STATUSES.has(modProfile?.status)
+
+  // 1. BAN / kick / offender-role / leave timing proximity
+  if (joinedAt && modStatusAt) {
+    const delta = joinedAt.getTime() - modStatusAt.getTime()
     metrics.timingDeltaMs = delta
     if (delta >= -60 * 1000) {
       const clampedDelta = Math.max(0, delta)
-      if (candIsMod) {
-        const actionLabel = candidateProfile.status === 'banned'
+      if (modIsOffender) {
+        const actionLabel = modProfile.status === 'banned'
           ? 'BAN'
-          : (candidateProfile.status === 'kicked' ? 'キック' : '違反者ロール付与')
+          : (modProfile.status === 'kicked' ? 'キック' : '違反者ロール付与')
         if (clampedDelta <= 2 * 3600 * 1000) {
           raw += 35
-          signals.push(`候補の${actionLabel}から${formatDurationJa(clampedDelta)}後に参加（極めて近接）`)
+          signals.push(`処分側（${actionLabel}）から${formatDurationJa(clampedDelta)}後に他方が参加（極めて近接）`)
         } else if (clampedDelta <= 24 * 3600 * 1000) {
           raw += 25
-          signals.push(`候補の${actionLabel}から${formatDurationJa(clampedDelta)}後に参加`)
+          signals.push(`処分側（${actionLabel}）から${formatDurationJa(clampedDelta)}後に他方が参加`)
         } else if (clampedDelta <= 7 * 86400 * 1000) {
           raw += 15
-          signals.push(`候補の${actionLabel}から${formatDurationJa(clampedDelta)}後に参加`)
+          signals.push(`処分側（${actionLabel}）から${formatDurationJa(clampedDelta)}後に他方が参加`)
         } else if (clampedDelta <= 30 * 86400 * 1000) {
           raw += 8
-          signals.push(`候補の${actionLabel}から${formatDurationJa(clampedDelta)}後に参加`)
+          signals.push(`処分側（${actionLabel}）から${formatDurationJa(clampedDelta)}後に他方が参加`)
         }
-      } else if (candidateProfile?.status === 'left' && clampedDelta <= 24 * 3600 * 1000) {
+      } else if (modProfile?.status === 'left' && clampedDelta <= 24 * 3600 * 1000) {
         raw += 12
-        signals.push(`候補の退出から${formatDurationJa(clampedDelta)}以内に参加`)
+        signals.push(`一方の退出から${formatDurationJa(clampedDelta)}以内に他方が参加`)
       }
     }
   }
@@ -517,12 +1060,12 @@ function scorePair ({
       signals.push(`参加時点でアカウント作成から30日未満（${formatDurationJa(ageMs)}）`)
     }
 
-    if (candIsMod && candStatusAt) {
-      const createdAfter = createdAt.getTime() - candStatusAt.getTime()
+    if (modIsOffender && modStatusAt) {
+      const createdAfter = createdAt.getTime() - modStatusAt.getTime()
       if (createdAfter >= -60 * 1000 && createdAfter <= 14 * 86400 * 1000) {
         metrics.createdAfterMod = true
         raw += 10
-        signals.push('候補のBAN/キック/違反者ロール付与後に新規作成されたアカウント')
+        signals.push('BAN/キック/違反者ロール付与後に新規作成されたアカウント')
       }
     }
   }
@@ -555,8 +1098,13 @@ function scorePair ({
     signals.push(`名前に共通部分あり（${Math.round(nameRes.score * 100)}%: ${nameRes.pair[0]} / ${nameRes.pair[1]}）`)
   }
 
-  // 6. Behavioral & linguistic signals (requires >= 3 messages from both accounts)
+  // 6. Identity-independent behavioral, linguistic, content-anchor & timeline signals
+  //    (designed to catch disguised alts even when avatar, username, ID, and topic all change)
   if (suspectMessages.length >= 3 && candidateMessages.length >= 3) {
+    // Anti-false-positive check first so simultaneous conversations suppress handover boosts.
+    const simultaneous = countSimultaneousMessages(suspectMessages, candidateMessages)
+    metrics.simultaneousMinutes = simultaneous
+
     const styloA = extractStylometry(suspectMessages)
     const styloB = extractStylometry(candidateMessages)
     if (styloA && styloB) {
@@ -564,13 +1112,13 @@ function scorePair ({
       metrics.stylometrySimilarity = Number(styloSim.toFixed(3))
       if (styloSim >= 0.94) {
         raw += 20
-        signals.push(`文体特徴が高度に一致（類似度 ${Math.round(styloSim * 100)}%）`)
+        signals.push(`文体・表記クセが高度に一致（類似度 ${Math.round(styloSim * 100)}%）`)
       } else if (styloSim >= 0.88) {
         raw += 12
-        signals.push(`文体特徴が類似（類似度 ${Math.round(styloSim * 100)}%）`)
+        signals.push(`文体・表記クセが類似（類似度 ${Math.round(styloSim * 100)}%）`)
       } else if (styloSim >= 0.82) {
         raw += 6
-        signals.push(`文体特徴にやや類似傾向（類似度 ${Math.round(styloSim * 100)}%）`)
+        signals.push(`文体・表記クセにやや類似傾向（類似度 ${Math.round(styloSim * 100)}%）`)
       }
     }
 
@@ -591,40 +1139,221 @@ function scorePair ({
       }
     }
 
-    if (suspectMessages.length >= 5 && candidateMessages.length >= 5) {
-      const hourSim = cosineSimilarity(hourHistogram(suspectMessages), hourHistogram(candidateMessages))
-      metrics.hourSimilarity = Number(hourSim.toFixed(3))
-      if (hourSim >= 0.80) {
+    // Topic-agnostic grammatical skeleton via Japanese TextDistortion + Ružička MinMax
+    // (Stamatatos 2018 / Halvani POSNoise / Kestemont 2016): matches style even across different topics.
+    const distA = topicAgnosticNgramFreq(suspectMessages, 3)
+    const distB = topicAgnosticNgramFreq(candidateMessages, 3)
+    if (distA.size >= 15 && distB.size >= 15) {
+      const gramSim = ruzickaSimilarity(distA, distB)
+      metrics.topicAgnosticGrammarSim = Number(gramSim.toFixed(3))
+      if (gramSim >= 0.35) {
+        raw += 18
+        signals.push(`話題に依存しない文法骨格（助詞・語尾・句読点構造）が高度に一致（MinMax ${Math.round(gramSim * 100)}%）`)
+      } else if (gramSim >= 0.25) {
         raw += 10
-        signals.push(`活動時間帯（JST）が強く一致（類似度 ${Math.round(hourSim * 100)}%）`)
-      } else if (hourSim >= 0.65) {
+        signals.push(`話題に依存しない文法骨格が類似（MinMax ${Math.round(gramSim * 100)}%）`)
+      }
+    }
+
+    // Japanese function-word / particle / discourse-marker profile (Jin 2002)
+    const fwA = extractJapaneseFunctionWords(suspectMessages)
+    const fwB = extractJapaneseFunctionWords(candidateMessages)
+    if (fwA.hits >= 4 && fwB.hits >= 4) {
+      const fwSim = ruzickaSimilarity(fwA.freq, fwB.freq)
+      metrics.functionWordSim = Number(fwSim.toFixed(3))
+      if (fwSim >= 0.55) {
+        raw += 14
+        signals.push(`日本語の助詞・接続語・機能語の使用分布が強く一致（MinMax ${Math.round(fwSim * 100)}%）`)
+      } else if (fwSim >= 0.38) {
+        raw += 7
+        signals.push(`日本語の助詞・接続語・機能語の使用分布が類似（MinMax ${Math.round(fwSim * 100)}%）`)
+      }
+    }
+
+    // Balanced Compression-Based Authorship Verification (COAV / symmetric NCD, Halvani et al.)
+    const compSim = compressionSimilarity(suspectMessages, candidateMessages)
+    if (compSim != null) {
+      metrics.compressionSimilarity = Number(compSim.toFixed(3))
+      if (compSim >= 0.34) {
+        raw += 14
+        signals.push(`圧縮ベース文体類似度（COAV/NCD）が高い（${Math.round(compSim * 100)}%）`)
+      } else if (compSim >= 0.24) {
+        raw += 7
+        signals.push(`圧縮ベース文体類似度（COAV/NCD）に類似傾向（${Math.round(compSim * 100)}%）`)
+      }
+    }
+
+    // In-domain General Impostors statistical test (Koppel & Winter 2014 / PAN winner)
+    if (Array.isArray(impostorMessages) && impostorMessages.length >= 3) {
+      const seedKey = `${suspectProfile?.userID || 'a'}:${candidateProfile?.userID || 'b'}`
+      const gi = generalImpostorsScore(suspectMessages, candidateMessages, impostorMessages, { seedKey })
+      if (gi) {
+        metrics.impostorsScore = Number(gi.score.toFixed(3))
+        metrics.impostorsCount = gi.impostorCount
+        if (gi.score >= 0.75) {
+          raw += 22
+          signals.push(`General Impostors 統計検定でサーバー内他発言者（${gi.impostorCount}人）を上回る独自文体一致（勝率 ${Math.round(gi.score * 100)}%）`)
+        } else if (gi.score >= 0.55) {
+          raw += 14
+          signals.push(`General Impostors 統計検定で有力な文体一致（勝率 ${Math.round(gi.score * 100)}%／比較 ${gi.impostorCount}人）`)
+        } else if (gi.score >= 0.40) {
+          raw += 7
+          signals.push(`General Impostors 統計検定でやや類似（勝率 ${Math.round(gi.score * 100)}%／比較 ${gi.impostorCount}人）`)
+        } else if (gi.score <= 0.08 && gi.impostorCount >= 5 && nameRes.score < 0.45 && !metrics.avatarHashMatch) {
+          counterSignals.push(`サーバー内他発言者（${gi.impostorCount}人）と比較した General Impostors 検定では文体の独自一致が低い（勝率 ${Math.round(gi.score * 100)}%）`)
+        }
+      }
+    }
+
+    // Distinctive vocabulary overlap (katakana slang, kanji compounds, alphanumeric terms)
+    const tokensA = extractDistinctiveTokens(suspectMessages)
+    const tokensB = extractDistinctiveTokens(candidateMessages)
+    if (tokensA.size >= 4 && tokensB.size >= 4) {
+      const sharedTok = setIntersection(tokensA, tokensB)
+      const tokOverlap = overlapCoefficient(tokensA, tokensB)
+      metrics.distinctiveVocabOverlap = Number(tokOverlap.toFixed(3))
+      metrics.sharedTokens = sharedTok.slice(0, 8)
+      if (sharedTok.length >= 5 && tokOverlap >= 0.25) {
+        raw += 14
+        signals.push(`固有語彙・キーワードの重複が高い（${sharedTok.length}語一致: ${sharedTok.slice(0, 4).join('・')}）`)
+      } else if (sharedTok.length >= 3 && tokOverlap >= 0.18) {
+        raw += 8
+        signals.push(`固有語彙・キーワードに共通点あり（${sharedTok.length}語一致: ${sharedTok.slice(0, 4).join('・')}）`)
+      }
+    }
+
+    // Sentence-ending habits (語尾)
+    const endingsA = extractSentenceEndings(suspectMessages)
+    const endingsB = extractSentenceEndings(candidateMessages)
+    if (endingsA.size >= 4 && endingsB.size >= 4) {
+      const endSim = mapCosineSimilarity(endingsA, endingsB)
+      metrics.endingSimilarity = Number(endSim.toFixed(3))
+      if (endSim >= 0.65) {
+        raw += 12
+        signals.push(`語尾・文末表現のクセが強く一致（類似度 ${Math.round(endSim * 100)}%）`)
+      } else if (endSim >= 0.45) {
+        raw += 6
+        signals.push(`語尾・文末表現のクセが類似（類似度 ${Math.round(endSim * 100)}%）`)
+      }
+    }
+
+    // Shared emoji palette (custom Discord emojis + Unicode emojis)
+    const emojisA = extractEmojis(suspectMessages)
+    const emojisB = extractEmojis(candidateMessages)
+    if (emojisA.all.size > 0 && emojisB.all.size > 0) {
+      const sharedAll = setIntersection(emojisA.all, emojisB.all)
+      const sharedCustom = setIntersection(emojisA.custom, emojisB.custom)
+      const emojiOverlap = overlapCoefficient(emojisA.all, emojisB.all)
+      metrics.sharedEmojis = sharedAll.slice(0, 6)
+      if (sharedCustom.length >= 2 || (sharedAll.length >= 3 && emojiOverlap >= 0.4)) {
+        raw += 10
+        signals.push(`よく使う絵文字・スタンプが一致（${sharedAll.length}種共通）`)
+      } else if (sharedAll.length >= 2 && emojiOverlap >= 0.35) {
         raw += 5
-        signals.push(`活動時間帯（JST）が類似（類似度 ${Math.round(hourSim * 100)}%）`)
+        signals.push(`使用絵文字に共通点あり（${sharedAll.length}種共通）`)
+      }
+    }
+
+    // Shared mentioned / targeted users (trolls/offenders often keep targeting the same members)
+    const excludeSelf = [suspectProfile?.userID, candidateProfile?.userID].filter(Boolean)
+    const targetsA = extractMentionedUsers(suspectMessages, excludeSelf)
+    const targetsB = extractMentionedUsers(candidateMessages, excludeSelf)
+    if (targetsA.size > 0 && targetsB.size > 0) {
+      const sharedTargets = setIntersection(targetsA, targetsB)
+      metrics.sharedMentionTargets = sharedTargets.slice(0, 5)
+      if (sharedTargets.length >= 2) {
+        raw += 10
+        signals.push(`同じ特定メンバー（${sharedTargets.length}名）へのメンション・絡みが重複`)
+      }
+    }
+
+    // Shared external URL domains / accounts / specific videos
+    const domainsA = extractUrlDomains(suspectMessages)
+    const domainsB = extractUrlDomains(candidateMessages)
+    if (domainsA.size > 0 && domainsB.size > 0) {
+      const sharedDomains = setIntersection(domainsA, domainsB)
+      metrics.sharedUrlDomains = sharedDomains.slice(0, 5)
+      if (sharedDomains.length >= 2) {
+        raw += 14
+        signals.push(`同じ外部URL・リンク先を複数共有（${sharedDomains.slice(0, 3).join(', ')}）`)
+      } else if (sharedDomains.length === 1) {
+        raw += 8
+        signals.push(`同じ外部URL・リンク先を共有（${sharedDomains[0]}）`)
+      }
+    }
+
+    // Circadian 24h JST posting distribution via Laplace-smoothed Jensen-Shannon similarity
+    if (suspectMessages.length >= 5 && candidateMessages.length >= 5) {
+      const hourSim = jensenShannonSimilarity(hourHistogram(suspectMessages), hourHistogram(candidateMessages))
+      metrics.hourSimilarity = Number(hourSim.toFixed(3))
+      if (hourSim >= 0.75) {
+        raw += 10
+        signals.push(`活動時間帯分布（JST・JSD類似度 ${Math.round(hourSim * 100)}%）が強く一致`)
+      } else if (hourSim >= 0.62) {
+        raw += 5
+        signals.push(`活動時間帯分布（JST・JSD類似度 ${Math.round(hourSim * 100)}%）が類似`)
+      }
+    }
+
+    // Inter-Event Time (IET) temporal fingerprint via two-sample Kolmogorov-Smirnov test (arXiv:2407.04350)
+    const ietA = extractInterEventTimes(suspectMessages)
+    const ietB = extractInterEventTimes(candidateMessages)
+    const ietSim = ksSimilarity(ietA, ietB)
+    if (ietSim != null) {
+      metrics.ietKsSimilarity = Number(ietSim.toFixed(3))
+      if (ietSim >= 0.80) {
+        raw += 8
+        signals.push(`投稿間隔（Inter-Event Time）のリズム分布が強く一致（KS類似度 ${Math.round(ietSim * 100)}%）`)
+      } else if (ietSim >= 0.70) {
+        raw += 4
+        signals.push(`投稿間隔（Inter-Event Time）のリズム分布が類似（KS類似度 ${Math.round(ietSim * 100)}%）`)
       }
     }
 
     const chan = channelOverlap(suspectMessages, candidateMessages)
     metrics.channelOverlap = Number(chan.score.toFixed(3))
-    if (chan.score >= 0.5 && chan.sharedCount >= 2) {
+    if (chan.sharedCount >= 3 && (chan.score >= 0.5 || chan.overlapCoeff >= 0.75)) {
+      raw += 10
+      signals.push(`よく発言するチャンネルが強く重複（${chan.sharedCount}チャンネル）`)
+    } else if (chan.sharedCount >= 2 && (chan.score >= 0.5 || chan.overlapCoeff >= 0.65)) {
       raw += 8
       signals.push(`よく発言するチャンネルが重複（${chan.sharedCount}チャンネル）`)
+    }
+
+    // Activity handover / disjoint lifespan (catches disguised & sleeper alts where A stops -> B starts)
+    if (simultaneous === 0) {
+      const handover = analyzeActivityHandover(suspectMessages, candidateMessages)
+      if (handover.disjoint && handover.gapMs != null) {
+        metrics.handoverGapMs = handover.gapMs
+        if (handover.gapMs <= 24 * 3600 * 1000) {
+          raw += 18
+          signals.push(`活動期間の入れ替わりを検知（一方の最終発言から${formatDurationJa(Math.max(60000, handover.gapMs))}後に他方が活動開始・重複なし）`)
+        } else if (handover.gapMs <= 7 * 86400 * 1000) {
+          raw += 12
+          signals.push(`活動期間の入れ替わりあり（一方の停止から${formatDurationJa(handover.gapMs)}後に他方が活動開始・重複なし）`)
+        } else if (handover.gapMs <= 30 * 86400 * 1000 && (suspIsFormer || candIsFormer)) {
+          raw += 8
+          signals.push(`処分・退出側の活動停止後に他方が活動開始（間隔 ${formatDurationJa(handover.gapMs)}・重複なし）`)
+        }
+      }
     }
 
     if (suspectCentroid && candidateCentroid) {
       const embSim = cosineSimilarity(suspectCentroid, candidateCentroid)
       metrics.embeddingSimilarity = Number(embSim.toFixed(3))
-      if (embSim >= 0.82) {
-        raw += 18
-        signals.push(`発言トピックの意味ベクトルが強く類似（${Math.round(embSim * 100)}%）`)
-      } else if (embSim >= 0.72) {
+      if (embSim >= 0.85) {
+        raw += 22
+        signals.push(`発言内容の意味ベクトルが極めて類似（${Math.round(embSim * 100)}%）`)
+      } else if (embSim >= 0.78) {
+        raw += 16
+        signals.push(`発言内容の意味ベクトルが強く類似（${Math.round(embSim * 100)}%）`)
+      } else if (embSim >= 0.70) {
         raw += 10
-        signals.push(`発言トピックの意味ベクトルが類似（${Math.round(embSim * 100)}%）`)
+        signals.push(`発言内容の意味ベクトルが類似（${Math.round(embSim * 100)}%）`)
       }
     }
 
-    // Anti-false-positive: simultaneous messages
-    const simultaneous = countSimultaneousMessages(suspectMessages, candidateMessages)
-    metrics.simultaneousMinutes = simultaneous
+    // Anti-false-positive penalty for simultaneous exchanges
     if (simultaneous >= 3) {
       raw -= 25
       counterSignals.push(`同時刻（15秒以内）に ${simultaneous} 回以上やり取りしており、別人の可能性が高い`)
@@ -951,6 +1680,20 @@ async function fetchAllGuildChannelMessages (guild, { perChannel = 100, concurre
   return { byAuthor, authors, channelsScanned, totalMessages }
 }
 
+function pickImpostorMessages (msgsByAuthor, excludeIds = [], maxImpostors = 15) {
+  if (!msgsByAuthor || typeof msgsByAuthor.entries !== 'function') return []
+  const excluded = new Set((excludeIds || []).filter(Boolean))
+  const lists = []
+  for (const [authorID, msgs] of msgsByAuthor.entries()) {
+    if (!authorID || excluded.has(authorID)) continue
+    if (Array.isArray(msgs) && msgs.length >= 3) {
+      lists.push(msgs)
+      if (lists.length >= maxImpostors) break
+    }
+  }
+  return lists
+}
+
 async function findCandidates (guild, suspectProfile, suspectMessages = [], {
   trigger = 'manual',
   now = new Date(),
@@ -988,7 +1731,7 @@ async function findCandidates (guild, suspectProfile, suspectMessages = [], {
   let recentMsgsByAuthor = new Map()
   if (suspectMessages.length >= 1) {
     recentMsgsByAuthor = await altDB.getRecentAuthorsMessages(guild.id, suspectProfile.userID, {
-      authorLimit: 30,
+      authorLimit: 60,
       perAuthor: 30,
       days: 30
     }).catch(() => new Map())
@@ -999,6 +1742,47 @@ async function findCandidates (guild, suspectProfile, suspectMessages = [], {
       if (!authorID || authorID === suspectProfile.userID) continue
       const merged = mergeMessageLists(recentMsgsByAuthor.get(authorID) || [], liveMsgs, 50)
       if (merged.length) recentMsgsByAuthor.set(authorID, merged)
+    }
+  }
+
+  // Semantic discovery via pgvector: pulls behaviorally/topically similar accounts directly into
+  // the candidate pool even when username, avatar, ID, and join date are completely disguised.
+  let suspectCentroid = null
+  const centroidByAuthor = new Map()
+  if (suspectMessages.length >= 3) {
+    suspectCentroid = await altDB.getAuthorEmbeddingCentroid(guild.id, suspectProfile.userID).catch(() => null)
+    if (suspectCentroid && typeof altDB.findSimilarAuthorsByEmbedding === 'function') {
+      const semMatches = await altDB.findSimilarAuthorsByEmbedding(
+        guild.id,
+        suspectProfile.userID,
+        suspectCentroid,
+        { limit: 10 }
+      ).catch(() => [])
+      for (const m of semMatches) {
+        if (!m?.authorID || m.authorID === suspectProfile.userID) continue
+        if (m.centroid) centroidByAuthor.set(m.authorID, m.centroid)
+        if (!recentMsgsByAuthor.has(m.authorID)) {
+          const hist = await altDB.getMemberMessages(guild.id, m.authorID, { limit: 40 }).catch(() => [])
+          if (hist.length) recentMsgsByAuthor.set(m.authorID, hist)
+        }
+        if (!candidateMap.has(m.authorID)) {
+          const prof = await altDB.getMemberProfile(guild.id, m.authorID).catch(() => null)
+          candidateMap.set(m.authorID, prof || {
+            userID: m.authorID,
+            username: null,
+            globalName: null,
+            nick: null,
+            avatarHash: null,
+            avatarURL: null,
+            accountCreatedAt: snowflakeToDate(m.authorID),
+            joinedAt: null,
+            inviteCode: null,
+            status: 'active',
+            statusAt: null,
+            moderationReason: null
+          })
+        }
+      }
     }
   }
 
@@ -1021,40 +1805,39 @@ async function findCandidates (guild, suspectProfile, suspectMessages = [], {
     }
   }
 
-  // First pass: score every candidate using available profiles and active-author messages.
+  // Always load historical (including mod-deleted & self-deleted) messages of recent offenders
+  // BEFORE ranking, so disguised alts with 0 name/avatar/timing similarity are still compared
+  // against every recent offender's writing style and vocabulary.
+  if (suspectMessages.length >= 1) {
+    const missingOffenders = [...candidateMap.values()]
+      .filter(p => MOD_STATUSES.has(p.status) && !recentMsgsByAuthor.has(p.userID))
+      .sort((a, b) => (b.statusAt ? new Date(b.statusAt).getTime() : 0) - (a.statusAt ? new Date(a.statusAt).getTime() : 0))
+      .slice(0, 25)
+    const missingLeft = [...candidateMap.values()]
+      .filter(p => p.status === 'left' && !recentMsgsByAuthor.has(p.userID))
+      .sort((a, b) => (b.statusAt ? new Date(b.statusAt).getTime() : 0) - (a.statusAt ? new Date(a.statusAt).getTime() : 0))
+      .slice(0, 5)
+    for (const p of [...missingOffenders, ...missingLeft]) {
+      const msgs = await altDB.getMemberMessages(guild.id, p.userID, { limit: 40 }).catch(() => [])
+      if (msgs.length >= 1) recentMsgsByAuthor.set(p.userID, msgs)
+    }
+  }
+
+  // First pass: score every candidate using profiles, messages, and any already-fetched centroids.
   const scored = []
   for (const [candidateID, candidateProfile] of candidateMap) {
     const msgs = recentMsgsByAuthor.get(candidateID) || []
+    const candCentroid = centroidByAuthor.get(candidateID) || null
     const heuristic = scorePair({
       suspectProfile,
       candidateProfile,
       suspectMessages,
       candidateMessages: msgs,
+      suspectCentroid: candCentroid ? suspectCentroid : null,
+      candidateCentroid: candCentroid,
       now
     })
     scored.push({ candidateProfile, candidateMessages: msgs, heuristic })
-  }
-
-  // When the suspect has messages, also check historical (including deleted) messages of top
-  // banned/kicked/restricted/left accounts whose messages may be older than 30 days.
-  if (suspectMessages.length >= 1) {
-    const modToEnrich = scored
-      .filter(item => item.candidateProfile.status !== 'active' && item.candidateMessages.length === 0)
-      .sort((a, b) => b.heuristic.score - a.heuristic.score)
-      .slice(0, 5)
-    for (const item of modToEnrich) {
-      const msgs = await altDB.getMemberMessages(guild.id, item.candidateProfile.userID, { limit: 40 }).catch(() => [])
-      if (msgs.length >= 1) {
-        item.candidateMessages = msgs
-        item.heuristic = scorePair({
-          suspectProfile,
-          candidateProfile: item.candidateProfile,
-          suspectMessages,
-          candidateMessages: msgs,
-          now
-        })
-      }
-    }
   }
 
   scored.sort((a, b) => {
@@ -1064,27 +1847,40 @@ async function findCandidates (guild, suspectProfile, suspectMessages = [], {
     return bMod - aMod
   })
 
-  // Optional pgvector semantic centroid boost for top 3 candidates with >= 3 messages.
-  const top = scored.slice(0, Math.max(limit, 3))
-  if (suspectMessages.length >= 3 && top.some(item => item.candidateMessages.length >= 3)) {
-    const suspectCentroid = await altDB.getAuthorEmbeddingCentroid(guild.id, suspectProfile.userID).catch(() => null)
-    if (suspectCentroid) {
-      for (const item of top.slice(0, 3)) {
-        if (item.candidateMessages.length < 3) continue
-        const candCentroid = await altDB.getAuthorEmbeddingCentroid(guild.id, item.candidateProfile.userID).catch(() => null)
-        if (candCentroid) {
-          item.heuristic = scorePair({
-            suspectProfile,
-            candidateProfile: item.candidateProfile,
-            suspectMessages,
-            candidateMessages: item.candidateMessages,
-            suspectCentroid,
-            candidateCentroid: candCentroid,
-            now
-          })
-        }
+  // Optional pgvector semantic centroid boost + in-domain General Impostors statistical
+  // calibration for top candidates (controls for server-specific slang/memes).
+  const top = scored.slice(0, Math.max(limit, 8))
+  if (suspectMessages.length >= 3) {
+    let rescored = false
+    for (const item of top.slice(0, 8)) {
+      if (item.candidateMessages.length < 3) continue
+      let candCentroid = centroidByAuthor.get(item.candidateProfile.userID) || null
+      if (suspectCentroid && !centroidByAuthor.has(item.candidateProfile.userID)) {
+        candCentroid = await altDB.getAuthorEmbeddingCentroid(guild.id, item.candidateProfile.userID).catch(() => null)
+        if (candCentroid) centroidByAuthor.set(item.candidateProfile.userID, candCentroid)
       }
-      top.sort((a, b) => b.heuristic.score - a.heuristic.score)
+      const impostors = pickImpostorMessages(recentMsgsByAuthor, [suspectProfile.userID, item.candidateProfile.userID])
+      if (candCentroid || impostors.length >= 3) {
+        item.heuristic = scorePair({
+          suspectProfile,
+          candidateProfile: item.candidateProfile,
+          suspectMessages,
+          candidateMessages: item.candidateMessages,
+          suspectCentroid: candCentroid ? suspectCentroid : null,
+          candidateCentroid: candCentroid,
+          impostorMessages: impostors.length >= 3 ? impostors : null,
+          now
+        })
+        rescored = true
+      }
+    }
+    if (rescored) {
+      top.sort((a, b) => {
+        if (b.heuristic.score !== a.heuristic.score) return b.heuristic.score - a.heuristic.score
+        const aMod = MOD_STATUSES.has(a.candidateProfile.status) ? 1 : 0
+        const bMod = MOD_STATUSES.has(b.candidateProfile.status) ? 1 : 0
+        return bMod - aMod
+      })
     }
   }
 
@@ -1165,6 +1961,28 @@ function formatHeuristicBlock (heuristic) {
     for (const s of heuristic.signals) lines.push(`- ${s}`)
   } else {
     lines.push('検出された一致シグナル: なし')
+  }
+  const m = heuristic.metrics || {}
+  const statLines = []
+  if (m.impostorsScore != null) statLines.push(`General Impostors 勝率: ${Math.round(m.impostorsScore * 100)}%（サーバー内インポスター ${m.impostorsCount}人比較）`)
+  if (m.topicAgnosticGrammarSim != null) statLines.push(`話題非依存文法骨格 MinMax: ${Math.round(m.topicAgnosticGrammarSim * 100)}%`)
+  if (m.functionWordSim != null) statLines.push(`日本語助詞・機能語 MinMax: ${Math.round(m.functionWordSim * 100)}%`)
+  if (m.compressionSimilarity != null) statLines.push(`バランス圧縮文体類似度(COAV/NCD): ${Math.round(m.compressionSimilarity * 100)}%`)
+  if (m.ietKsSimilarity != null) statLines.push(`投稿間隔分布(IET) KS類似度: ${Math.round(m.ietKsSimilarity * 100)}%`)
+  if (m.hourSimilarity != null) statLines.push(`活動時間帯(JST) JSD類似度: ${Math.round(m.hourSimilarity * 100)}%`)
+  if (m.embeddingSimilarity != null) statLines.push(`意味ベクトル重心コサイン類似度: ${Math.round(m.embeddingSimilarity * 100)}%`)
+  if (statLines.length) {
+    lines.push('計量文体・行動統計サマリー（話題・アバター・名前に非依存）:')
+    for (const s of statLines) lines.push(`- ${s}`)
+  }
+  const anchors = []
+  if (m.sharedTokens?.length) anchors.push(`共通固有語彙: ${m.sharedTokens.join(', ')}`)
+  if (m.sharedEmojis?.length) anchors.push(`共通絵文字: ${m.sharedEmojis.join(' ')}`)
+  if (m.sharedUrlDomains?.length) anchors.push(`共通外部リンク先: ${m.sharedUrlDomains.join(', ')}`)
+  if (m.sharedMentionTargets?.length) anchors.push(`共通メンション対象ID: ${m.sharedMentionTargets.join(', ')}`)
+  if (anchors.length) {
+    lines.push('抽出された中身・行動アンカー（ユーザー由来データ）:')
+    lines.push(untrusted.wrap('behavioral_anchors', anchors.join('\n')))
   }
   if (heuristic.counterSignals.length) {
     lines.push('反証・誤検知抑止シグナル:')
@@ -1879,26 +2697,39 @@ async function onMessage (message, { now = new Date() } = {}) {
     }
   }
 
-  const member = message.member
-  if (member?.joinedAt) {
-    const joinedAgeMs = now.getTime() - new Date(member.joinedAt).getTime()
-    if (joinedAgeMs > messageWatchDays() * 86400 * 1000) return { checked: false }
-  }
-
   if (!(await altDB.isAltDetectionEnabled(guildID))) return { checked: false }
 
+  const member = message.member
+  const watchMs = messageWatchDays() * 86400 * 1000
+  const isOlderMember = Boolean(member?.joinedAt && (now.getTime() - new Date(member.joinedAt).getTime()) > watchMs)
+  const milestones = isOlderMember ? SLEEPER_CHECK_MILESTONES : MESSAGE_MILESTONES
+
   const entry = bumpMessageCounter(guildID, message.author.id)
-  if (!MESSAGE_MILESTONES.includes(entry.count) || entry.checked.has(entry.count)) {
+  if (!milestones.includes(entry.count) || entry.checked.has(entry.count)) {
     return { checked: false }
+  }
+
+  // For accounts that joined longer than messageWatchDays() ago ("sleeper" alts), only run
+  // automatic behavioral checks when the server has a recent banned/kicked/restricted offender.
+  if (isOlderMember) {
+    const hasOffender = typeof altDB.hasRecentOffender === 'function'
+      ? await altDB.hasRecentOffender(guildID, { days: 30 }).catch(() => false)
+      : false
+    if (!hasOffender) return { checked: false }
   }
   entry.checked.add(entry.count)
 
   if (!resolvedGuild) return { checked: false }
 
   const suspectProfile = await resolveProfile(resolvedGuild, message.author.id)
-  if (suspectProfile.joinedAt) {
+  if (!isOlderMember && suspectProfile.joinedAt) {
     const joinedAgeMs = now.getTime() - new Date(suspectProfile.joinedAt).getTime()
-    if (joinedAgeMs > messageWatchDays() * 86400 * 1000) return { checked: false }
+    if (joinedAgeMs > watchMs) {
+      const hasOffender = typeof altDB.hasRecentOffender === 'function'
+        ? await altDB.hasRecentOffender(guildID, { days: 30 }).catch(() => false)
+        : false
+      if (!hasOffender || !SLEEPER_CHECK_MILESTONES.includes(entry.count)) return { checked: false }
+    }
   }
 
   const storedMsgs = await altDB.getMemberMessages(guildID, message.author.id, { limit: 40 }).catch(() => [])
@@ -2006,11 +2837,23 @@ async function compareUsers (guild, userID1, userID2, { now = new Date(), fetchL
 
   let suspectCentroid = null
   let candidateCentroid = null
+  let impostors = null
   if (suspectMessages.length >= 3 && candidateMessages.length >= 3) {
-    ;[suspectCentroid, candidateCentroid] = await Promise.all([
+    const [cA, cB, dbRecent] = await Promise.all([
       altDB.getAuthorEmbeddingCentroid(guild.id, userID1).catch(() => null),
-      altDB.getAuthorEmbeddingCentroid(guild.id, userID2).catch(() => null)
+      altDB.getAuthorEmbeddingCentroid(guild.id, userID2).catch(() => null),
+      altDB.getRecentAuthorsMessages(guild.id, '', { authorLimit: 20, perAuthor: 25, days: 30 }).catch(() => new Map())
     ])
+    suspectCentroid = cA
+    candidateCentroid = cB
+    const impostorMap = new Map(dbRecent)
+    for (const [authorID, liveMsgs] of liveScan.byAuthor) {
+      if (authorID === userID1 || authorID === userID2) continue
+      const merged = mergeMessageLists(impostorMap.get(authorID) || [], liveMsgs, 30)
+      if (merged.length) impostorMap.set(authorID, merged)
+    }
+    const picked = pickImpostorMessages(impostorMap, [userID1, userID2])
+    if (picked.length >= 3) impostors = picked
   }
   const heuristic = scorePair({
     suspectProfile,
@@ -2019,6 +2862,7 @@ async function compareUsers (guild, userID1, userID2, { now = new Date(), fetchL
     candidateMessages,
     suspectCentroid,
     candidateCentroid,
+    impostorMessages: impostors,
     now
   })
   const ai = await analyzeWithGemini({
@@ -2048,7 +2892,7 @@ async function scanServer (guild, { scope = 'all', limit = 5, aiVerifyTop = 2, m
   const [stored, dbRecentMsgsByAuthor, liveScan] = await Promise.all([
     altDB.getCandidateProfiles(guild.id, '', { limit: 200 }).catch(() => []),
     altDB.getRecentAuthorsMessages(guild.id, '', {
-      authorLimit: 40,
+      authorLimit: 60,
       perAuthor: 30,
       days: 30
     }).catch(() => new Map()),
@@ -2109,11 +2953,11 @@ async function scanServer (guild, { scope = 'all', limit = 5, aiVerifyTop = 2, m
   const activeProfiles = allProfiles.filter(p => p.status === 'active')
   const formerProfiles = allProfiles.filter(p => p.status !== 'active')
 
-  // Load historical messages for the most recent banned/kicked/restricted/left profiles so
-  // writing-style matching works even if their moderation action occurred more than 30 days ago.
-  for (const former of formerProfiles.slice(0, 10)) {
+  // Load historical messages (including mod-deleted & self-deleted snapshots) for up to 25 recent
+  // banned/kicked/restricted/left profiles so disguised alts with 0 name/avatar match are caught.
+  for (const former of formerProfiles.slice(0, 25)) {
     if (!msgsByUser.has(former.userID)) {
-      const hist = await altDB.getMemberMessages(guild.id, former.userID, { limit: 30 }).catch(() => [])
+      const hist = await altDB.getMemberMessages(guild.id, former.userID, { limit: 40 }).catch(() => [])
       if (hist.length) msgsByUser.set(former.userID, hist)
     }
   }
@@ -2188,7 +3032,7 @@ async function scanServer (guild, { scope = 'all', limit = 5, aiVerifyTop = 2, m
 
   const topPairs = pairs.slice(0, Math.max(1, Math.min(10, limit)))
 
-  // Stage 2 Gemini precision verification for top suspicious pairs
+  // Calibrate top pairs with pgvector centroids + in-domain General Impostors, then run Stage 2 AI.
   const centroidCache = new Map()
   const getCentroid = async userID => {
     if (centroidCache.has(userID)) return centroidCache.get(userID)
@@ -2206,14 +3050,16 @@ async function scanServer (guild, { scope = 'all', limit = 5, aiVerifyTop = 2, m
         getCentroid(item.suspectProfile.userID),
         getCentroid(item.candidateProfile.userID)
       ])
-      if (cA && cB) {
+      const impostors = pickImpostorMessages(msgsByUser, [item.suspectProfile.userID, item.candidateProfile.userID])
+      if ((cA && cB) || impostors.length >= 3) {
         item.heuristic = scorePair({
           suspectProfile: item.suspectProfile,
           candidateProfile: item.candidateProfile,
           suspectMessages: item.suspectMessages,
           candidateMessages: item.candidateMessages,
-          suspectCentroid: cA,
-          candidateCentroid: cB,
+          suspectCentroid: cA && cB ? cA : null,
+          candidateCentroid: cA && cB ? cB : null,
+          impostorMessages: impostors.length >= 3 ? impostors : null,
           now
         })
       }
@@ -2248,6 +3094,7 @@ async function scanServer (guild, { scope = 'all', limit = 5, aiVerifyTop = 2, m
 
 module.exports = {
   MESSAGE_MILESTONES,
+  SLEEPER_CHECK_MILESTONES,
   DEFAULT_OFFENDER_ROLE_IDS,
   isGlobalEnabled,
   offenderRoleIds,
@@ -2266,6 +3113,21 @@ module.exports = {
   extractStylometry,
   cosineSimilarity,
   characterNgrams,
+  distortJapaneseTopic,
+  ruzickaSimilarity,
+  topicAgnosticNgramFreq,
+  extractJapaneseFunctionWords,
+  compressionSimilarity,
+  generalImpostorsScore,
+  extractInterEventTimes,
+  ksSimilarity,
+  jensenShannonSimilarity,
+  extractEmojis,
+  extractMentionedUsers,
+  extractUrlDomains,
+  extractDistinctiveTokens,
+  extractSentenceEndings,
+  analyzeActivityHandover,
   jaccardSimilarity,
   hourHistogram,
   channelOverlap,
