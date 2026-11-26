@@ -1,5 +1,6 @@
 const send = require('../modules/webhooksender')
 const altDetector = require('../modules/altDetector')
+const crossServerBan = require('../modules/crossServerBan')
 
 module.exports = {
   name: 'guildBanAdd',
@@ -46,6 +47,9 @@ module.exports = {
       if (!logs || !Array.isArray(logs.entries)) {
         global.logger.warn(`Guild Ban Add was unable to fetch audit logs in guild ${guild.name} (${guild.id})`)
         await send(guildBanAddEvent)
+        crossServerBan.onGuildBan(guild, user, { reason: null, at: bannedAt }).catch(e => {
+          global.logger?.warn(`[XBAN]: onGuildBan failed in ${guild.id}: ${e.message}`)
+        })
         return
       }
       const log = logs.entries.find(e => {
@@ -59,6 +63,9 @@ module.exports = {
       if (!log) {
         global.logger.warn(`Guild Ban Add on ${guild.name} (${guild.id}) was not able to match a log.`)
         await send(guildBanAddEvent)
+        crossServerBan.onGuildBan(guild, user, { reason: null, at: bannedAt }).catch(e => {
+          global.logger?.warn(`[XBAN]: onGuildBan failed in ${guild.id}: ${e.message}`)
+        })
         return
       }
       const perp = log.user
@@ -74,6 +81,9 @@ module.exports = {
         }
       }
       await send(guildBanAddEvent)
+      crossServerBan.onGuildBan(guild, user, { reason: log.reason || null, at: bannedAt }).catch(e => {
+        global.logger?.warn(`[XBAN]: onGuildBan failed in ${guild.id}: ${e.message}`)
+      })
     }, 5000)
     timer.unref?.()
   }

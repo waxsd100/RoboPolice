@@ -1018,6 +1018,36 @@ function installAltDetectionStore ({ enabled = {}, profiles = [], messages = [],
       .sort((a, b) => rank(a.status) - rank(b.status))
       .slice(0, limit)
   }
+  store.getCrossGuildBans = async (userID, excludeGuildID = '') => [...state.profiles.values()]
+    .filter(p => p.userID === userID && p.guildID !== excludeGuildID && p.status === 'banned')
+    .map(p => ({
+      guildID: p.guildID,
+      guildName: p.guildName || null,
+      userID: p.userID,
+      username: p.username || null,
+      bannedAt: p.statusAt ? new Date(p.statusAt) : (p.updatedAt ? new Date(p.updatedAt) : null),
+      reason: p.moderationReason || null,
+      source: 'db'
+    }))
+    .sort((a, b) => (b.bannedAt?.getTime() || 0) - (a.bannedAt?.getTime() || 0))
+  store.getCrossGuildBansForUsers = async (userIDs, excludeGuildID = '') => {
+    const set = new Set((userIDs || []).filter(Boolean))
+    const grouped = new Map()
+    for (const p of state.profiles.values()) {
+      if (!set.has(p.userID) || p.guildID === excludeGuildID || p.status !== 'banned') continue
+      if (!grouped.has(p.userID)) grouped.set(p.userID, [])
+      grouped.get(p.userID).push({
+        guildID: p.guildID,
+        guildName: p.guildName || null,
+        userID: p.userID,
+        username: p.username || null,
+        bannedAt: p.statusAt ? new Date(p.statusAt) : (p.updatedAt ? new Date(p.updatedAt) : null),
+        reason: p.moderationReason || null,
+        source: 'db'
+      })
+    }
+    return grouped
+  }
   store.recordMessageSnapshot = async (guildID, {
     messageID,
     authorID,

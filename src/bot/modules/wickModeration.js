@@ -760,11 +760,13 @@ async function buildModerationDossier (guild, who) {
 
   const targetUsername = liveMember?.username || liveMember?.user?.username || profile?.username || null
 
-  const [wickResult, auditResult, dbMessages, recentAlerts] = await Promise.all([
+  const crossServerBan = require('./crossServerBan')
+  const [wickResult, auditResult, dbMessages, recentAlerts, otherGuildBans] = await Promise.all([
     fetchWickModLogs(guild, userID, { targetUsername }).catch(() => ({ wickPresent: isWickPresent(guild), wickLogsSeen: false, scannedChannels: [], entries: [] })),
     fetchAuditModerationHistory(guild, userID).catch(() => ({ auditReadable: false, entries: [], currentBan: null })),
     altDB.getMemberMessages(guild.id, userID, { limit: 25, includeDeleted: true }).catch(() => []),
-    altDB.getRecentAlerts(guild.id, { limit: 30 }).catch(() => [])
+    altDB.getRecentAlerts(guild.id, { limit: 30 }).catch(() => []),
+    crossServerBan.findOtherGuildBans(userID, guild.id, { includeLiveCheck: true }).catch(() => [])
   ])
 
   const relatedAlerts = (recentAlerts || []).filter(a => a.suspectUserID === userID || a.candidateUserID === userID).slice(0, 5)
@@ -795,8 +797,21 @@ async function buildModerationDossier (guild, who) {
     hasOffenderRole ? '- ⚠️ 要注意・制限ロールが付与されています' : '',
     isTimedOutNow ? `- 🔇 現在タイムアウト中（解除予定: ${formatJstDate(timeoutUntil)}）` : '',
     auditResult.currentBan ? `- 🔨 現在サーバーBAN中（BAN理由: ${auditResult.currentBan.reason || '理由未記載'}）` : '',
+    otherGuildBans.length ? `- 🚨 他サーバーでBANされています（${otherGuildBans.length}件）` : '',
     profile ? `- RoboPolice DB 記録ステータス: ${STATUS_LABELS[profile.status] || profile.status}${profile.statusAt ? `（${formatJstDate(profile.statusAt)}）` : ''}${profile.moderationReason ? ` / 理由: ${profile.moderationReason}` : ''}` : ''
   ].filter(Boolean)
+
+  // Cross-server BAN records
+  lines.push('', '## 他サーバーでのBAN履歴（BOT導入済みサーバー横断照合）')
+  if (otherGuildBans.length > 0) {
+    for (const b of otherGuildBans.slice(0, 10)) {
+      const label = b.guildName && b.guildName !== b.guildID ? `${b.guildName} (${b.guildID})` : b.guildID
+      const src = b.source === 'live' ? 'リアルタイム確認' : 'BOT記録'
+      lines.push(`- 🚨 ${label} [${src}]${b.bannedAt ? ` / ${formatJstDate(b.bannedAt)}` : ''} / 理由: ${b.reason || '記載なし'}`)
+    }
+  } else {
+    lines.push('- BOT導入済みの他サーバーでのBAN履歴は見つかりませんでした')
+  }
 
   // Wick Bot modlogs
   lines.push('', '## Wick Bot 処罰・ケース履歴（サーバー内ログチャンネルより取得）')

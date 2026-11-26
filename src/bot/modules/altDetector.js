@@ -2357,25 +2357,10 @@ async function resolveAlertDestination (guild) {
   return { kind: 'log_webhook', channelID, eventName, source: 'log_channel' }
 }
 
-async function sendAltAlert (guild, { suspectProfile, candidateProfile, heuristic, ai, trigger }) {
-  const verdict = ai?.verdict || 'possible_alt'
-  const summary = ai?.summary || heuristic.signals.join(' / ').slice(0, 400)
-  const signals = ai?.matchingEvidence?.length ? ai.matchingEvidence : heuristic.signals
-  await altDB.recordAlert(guild.id, {
-    suspectUserID: suspectProfile.userID,
-    candidateUserID: candidateProfile.userID,
-    trigger,
-    heuristicScore: heuristic.score,
-    aiConfidence: ai ? ai.confidence : null,
-    verdict,
-    summary,
-    signals
-  }).catch(e => global.logger?.warn(`[ALT]: Failed to record alert in guild ${guild.id}: ${e.message}`))
-
+async function postModeratorAlert (guild, embed) {
   const dest = await resolveAlertDestination(guild)
   if (!dest) return { sent: false, reason: 'no_alert_channel' }
 
-  const embed = buildAlertEmbed({ suspectProfile, candidateProfile, heuristic, ai, trigger, lang: 'ja' })
   if (dest.kind === 'mod_channel' && typeof global.bot?.createMessage === 'function') {
     try {
       await global.bot.createMessage(dest.channelID, {
@@ -2405,6 +2390,25 @@ async function sendAltAlert (guild, { suspectProfile, candidateProfile, heuristi
   return { sent: false, reason: 'no_alert_channel' }
 }
 
+async function sendAltAlert (guild, { suspectProfile, candidateProfile, heuristic, ai, trigger }) {
+  const verdict = ai?.verdict || 'possible_alt'
+  const summary = ai?.summary || heuristic.signals.join(' / ').slice(0, 400)
+  const signals = ai?.matchingEvidence?.length ? ai.matchingEvidence : heuristic.signals
+  await altDB.recordAlert(guild.id, {
+    suspectUserID: suspectProfile.userID,
+    candidateUserID: candidateProfile.userID,
+    trigger,
+    heuristicScore: heuristic.score,
+    aiConfidence: ai ? ai.confidence : null,
+    verdict,
+    summary,
+    signals
+  }).catch(e => global.logger?.warn(`[ALT]: Failed to record alert in guild ${guild.id}: ${e.message}`))
+
+  const embed = buildAlertEmbed({ suspectProfile, candidateProfile, heuristic, ai, trigger, lang: 'ja' })
+  return postModeratorAlert(guild, embed)
+}
+
 function shouldAlertFromResult ({ ai, heuristic, candidateProfile }) {
   if (ai) {
     return (ai.verdict === 'likely_alt' || ai.verdict === 'possible_alt') && ai.confidence >= alertConfidence()
@@ -2420,6 +2424,17 @@ async function onMemberBan (guild, user, { reason = null, at = new Date() } = {}
   if (!guild?.id || !user?.id || user.bot) return
   await altDB.markMemberStatus(guild.id, user.id, 'banned', {
     reason: reason || null,
+    at,
+    profile: profileFromUser(user) || { userID: user.id }
+  })
+}
+
+async function onMemberUnban (guild, user, { reason = null, at = new Date() } = {}) {
+  if (!guild?.id || !user?.id || user.bot) return
+  const existing = await altDB.getMemberProfile(guild.id, user.id).catch(() => null)
+  if (!existing || existing.status !== 'banned') return
+  await altDB.markMemberStatus(guild.id, user.id, 'left', {
+    reason: reason ? `BAN解除: ${reason}` : 'BAN解除',
     at,
     profile: profileFromUser(user) || { userID: user.id }
   })
@@ -3338,6 +3353,7 @@ module.exports = {
   analyzeWithGemini,
   pickAlertEventName,
   resolveAlertDestination,
+  postModeratorAlert,
   verdictLabel,
   triggerLabel,
   statusLabelJa,
@@ -3346,6 +3362,7 @@ module.exports = {
   buildAlertEmbed,
   sendAltAlert,
   onMemberBan,
+  onMemberUnban,
   onMemberLeave,
   onMemberUpdate,
   onMemberJoin,
