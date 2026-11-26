@@ -137,6 +137,54 @@ async function getCandidateProfiles (guildID, excludeUserID, { limit = 200 } = {
   return rows.map(rowToProfile)
 }
 
+async function getCrossGuildBans (userID, excludeGuildID = '') {
+  if (!userID) return []
+  const { rows } = await pool.query(
+    `SELECT m.guild_id, g.name AS guild_name, m.user_id, m.username, m.status_at, m.moderation_reason, m.updated_at
+     FROM member_activity_profiles m
+     LEFT JOIN guilds g ON g.id = m.guild_id
+     WHERE m.user_id = $1 AND m.guild_id <> $2 AND m.status = 'banned'
+     ORDER BY COALESCE(m.status_at, m.updated_at) DESC`,
+    [userID, excludeGuildID || '']
+  )
+  return rows.map(r => ({
+    guildID: r.guild_id,
+    guildName: r.guild_name || null,
+    userID: r.user_id,
+    username: r.username || null,
+    bannedAt: r.status_at ? new Date(r.status_at) : (r.updated_at ? new Date(r.updated_at) : null),
+    reason: r.moderation_reason || null,
+    source: 'db'
+  }))
+}
+
+async function getCrossGuildBansForUsers (userIDs, excludeGuildID = '') {
+  const ids = [...new Set((Array.isArray(userIDs) ? userIDs : []).filter(Boolean))]
+  if (!ids.length) return new Map()
+  const { rows } = await pool.query(
+    `SELECT m.guild_id, g.name AS guild_name, m.user_id, m.username, m.status_at, m.moderation_reason, m.updated_at
+     FROM member_activity_profiles m
+     LEFT JOIN guilds g ON g.id = m.guild_id
+     WHERE m.user_id = ANY($1::text[]) AND m.guild_id <> $2 AND m.status = 'banned'
+     ORDER BY COALESCE(m.status_at, m.updated_at) DESC`,
+    [ids, excludeGuildID || '']
+  )
+  const grouped = new Map()
+  for (const r of rows) {
+    if (!grouped.has(r.user_id)) grouped.set(r.user_id, [])
+    grouped.get(r.user_id).push({
+      guildID: r.guild_id,
+      guildName: r.guild_name || null,
+      userID: r.user_id,
+      username: r.username || null,
+      bannedAt: r.status_at ? new Date(r.status_at) : (r.updated_at ? new Date(r.updated_at) : null),
+      reason: r.moderation_reason || null,
+      source: 'db'
+    })
+  }
+  return grouped
+}
+
 async function recordMessageSnapshot (guildID, {
   messageID,
   authorID,
@@ -501,6 +549,8 @@ module.exports = {
   markMemberStatus,
   getMemberProfile,
   getCandidateProfiles,
+  getCrossGuildBans,
+  getCrossGuildBansForUsers,
   recordMessageSnapshot,
   updateSnapshotDeletionActor,
   snapshotMessagesBeforeDelete,

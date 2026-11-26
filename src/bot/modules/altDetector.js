@@ -2246,6 +2246,25 @@ function buildAlertEmbed ({ suspectProfile, candidateProfile, heuristic, ai, tri
       value: counter.map(s => `・${s}`).join('\n')
     })
   }
+  if (suspectProfile?.userID && (verdict === 'likely_alt' || MOD_STATUSES.has(candidateProfile?.status))) {
+    const { formatWickSlashCommand } = require('./wickModeration')
+    const candID = candidateProfile?.userID || '不明'
+    const isSevere = verdict === 'likely_alt' && (candidateProfile?.status === 'banned' || candidateProfile?.status === 'kicked')
+    const primaryCmd = isSevere
+      ? formatWickSlashCommand('ban', {
+        user: suspectProfile.userID,
+        reason: lang === 'en' ? `Alt / ban evasion suspected (matched: ${candID})` : `BAN回避・サブ垢の疑い (一致候補: ${candID})`
+      })
+      : formatWickSlashCommand('quarantine', {
+        user: suspectProfile.userID,
+        reason: lang === 'en' ? `Suspected alt account under review (matched: ${candID})` : `サブ垢疑いのため確認中 (一致候補: ${candID})`
+      })
+    const casesCmd = formatWickSlashCommand('cases', { user: suspectProfile.userID })
+    fields.push({
+      name: lang === 'en' ? 'Wick Slash Command (Copy & Paste)' : 'Wick コマンド候補（コピペ用）',
+      value: `\`\`\`\n${primaryCmd}\n\`\`\`\n${lang === 'en' ? 'Check cases:' : '履歴確認:'} \`${casesCmd}\``
+    })
+  }
 
   return {
     title: lang === 'en' ? '⚠️ Alt-Account Alert (Staff Review Only)' : '⚠️ サブ垢検知アラート（要スタッフ確認）',
@@ -2338,25 +2357,10 @@ async function resolveAlertDestination (guild) {
   return { kind: 'log_webhook', channelID, eventName, source: 'log_channel' }
 }
 
-async function sendAltAlert (guild, { suspectProfile, candidateProfile, heuristic, ai, trigger }) {
-  const verdict = ai?.verdict || 'possible_alt'
-  const summary = ai?.summary || heuristic.signals.join(' / ').slice(0, 400)
-  const signals = ai?.matchingEvidence?.length ? ai.matchingEvidence : heuristic.signals
-  await altDB.recordAlert(guild.id, {
-    suspectUserID: suspectProfile.userID,
-    candidateUserID: candidateProfile.userID,
-    trigger,
-    heuristicScore: heuristic.score,
-    aiConfidence: ai ? ai.confidence : null,
-    verdict,
-    summary,
-    signals
-  }).catch(e => global.logger?.warn(`[ALT]: Failed to record alert in guild ${guild.id}: ${e.message}`))
-
+async function postModeratorAlert (guild, embed) {
   const dest = await resolveAlertDestination(guild)
   if (!dest) return { sent: false, reason: 'no_alert_channel' }
 
-  const embed = buildAlertEmbed({ suspectProfile, candidateProfile, heuristic, ai, trigger, lang: 'ja' })
   if (dest.kind === 'mod_channel' && typeof global.bot?.createMessage === 'function') {
     try {
       await global.bot.createMessage(dest.channelID, {
@@ -2386,6 +2390,25 @@ async function sendAltAlert (guild, { suspectProfile, candidateProfile, heuristi
   return { sent: false, reason: 'no_alert_channel' }
 }
 
+async function sendAltAlert (guild, { suspectProfile, candidateProfile, heuristic, ai, trigger }) {
+  const verdict = ai?.verdict || 'possible_alt'
+  const summary = ai?.summary || heuristic.signals.join(' / ').slice(0, 400)
+  const signals = ai?.matchingEvidence?.length ? ai.matchingEvidence : heuristic.signals
+  await altDB.recordAlert(guild.id, {
+    suspectUserID: suspectProfile.userID,
+    candidateUserID: candidateProfile.userID,
+    trigger,
+    heuristicScore: heuristic.score,
+    aiConfidence: ai ? ai.confidence : null,
+    verdict,
+    summary,
+    signals
+  }).catch(e => global.logger?.warn(`[ALT]: Failed to record alert in guild ${guild.id}: ${e.message}`))
+
+  const embed = buildAlertEmbed({ suspectProfile, candidateProfile, heuristic, ai, trigger, lang: 'ja' })
+  return postModeratorAlert(guild, embed)
+}
+
 function shouldAlertFromResult ({ ai, heuristic, candidateProfile }) {
   if (ai) {
     return (ai.verdict === 'likely_alt' || ai.verdict === 'possible_alt') && ai.confidence >= alertConfidence()
@@ -2401,6 +2424,17 @@ async function onMemberBan (guild, user, { reason = null, at = new Date() } = {}
   if (!guild?.id || !user?.id || user.bot) return
   await altDB.markMemberStatus(guild.id, user.id, 'banned', {
     reason: reason || null,
+    at,
+    profile: profileFromUser(user) || { userID: user.id }
+  })
+}
+
+async function onMemberUnban (guild, user, { reason = null, at = new Date() } = {}) {
+  if (!guild?.id || !user?.id || user.bot) return
+  const existing = await altDB.getMemberProfile(guild.id, user.id).catch(() => null)
+  if (!existing || existing.status !== 'banned') return
+  await altDB.markMemberStatus(guild.id, user.id, 'left', {
+    reason: reason ? `BAN解除: ${reason}` : 'BAN解除',
     at,
     profile: profileFromUser(user) || { userID: user.id }
   })
@@ -3319,6 +3353,7 @@ module.exports = {
   analyzeWithGemini,
   pickAlertEventName,
   resolveAlertDestination,
+  postModeratorAlert,
   verdictLabel,
   triggerLabel,
   statusLabelJa,
@@ -3327,6 +3362,7 @@ module.exports = {
   buildAlertEmbed,
   sendAltAlert,
   onMemberBan,
+  onMemberUnban,
   onMemberLeave,
   onMemberUpdate,
   onMemberJoin,

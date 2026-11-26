@@ -2,6 +2,7 @@ const commandHandler = require('../modules/commandhandler')
 const mentionEvent = require('../modules/mentionEvent')
 const discordKnowledge = require('../modules/discordKnowledge')
 const altDetector = require('../modules/altDetector')
+const wickModeration = require('../modules/wickModeration')
 const cacheMessage = require('../../db/interfaces/postgres/create').cacheMessage
 const cacheGuild = require('../utils/cacheGuild')
 
@@ -9,7 +10,11 @@ module.exports = {
   name: 'messageCreate',
   type: 'on',
   handle: async message => {
-    if (message.type === 23 || message.type === 24 || !message.author || !message.member) return // do not log automod actions
+    if (message.type === 23 || message.type === 24 || !message.author) return // do not log automod actions
+    if (message.channel?.guild?.id && wickModeration.isWickMessage(message)) {
+      wickModeration.onWickMessage(message).catch(e => global.logger.warn(`[WICK]: ${e.message}`))
+    }
+    if (!message.member) return
     if (!message.author.bot) {
       await commandHandler(message)
       mentionEvent.handle(message).catch(e => global.logger.error(e))

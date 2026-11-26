@@ -26,6 +26,7 @@ const embeddingStore = require('../../db/interfaces/postgres/embeddings')
 const { isGatewayConfigured } = require('../utils/aiGateway')
 const { embeddableText } = require('../utils/messageNoise')
 const { ownerGuildIDs } = require('../utils/priority')
+const wickModeration = require('./wickModeration')
 
 const MAX_RECENT_MESSAGES = 50
 const MAX_QUESTIONS = 3
@@ -50,6 +51,9 @@ const SEARCH_SERVER_MESSAGES = tool('search_server_messages', { parameters: OBJE
 const ABOUT_MEMBER = tool('about_member', { parameters: OBJECT({ member: STRING }, ['member']) })
 const MAX_MEMBER_MESSAGES = 30
 const MAX_MEMBER_MATCHES = 5
+
+const GET_SERVER_RULES = tool('get_server_rules')
+const GET_MODERATION_DOSSIER = tool('get_moderation_dossier', { parameters: OBJECT({ member: STRING }, ['member']) })
 
 const FIND_GAME = tool('find_game', { parameters: OBJECT({ name: STRING, name_en: STRING }, ['name']) })
 
@@ -419,13 +423,30 @@ function createTools ({ guild, member, ask, progress = () => {}, streamerPersona
       const meta = await lookupYouTubeVideo(videoID)
       const metaLine = meta ? `動画情報: ${formatVideo({ ...meta, description: '', summary: null }).replace(/^- /, '')}\n` : ''
       return `${metaLine}${link} の内容の要約${cached ? '（保存済み）' : ''}:\n${linkTimestamps(sanitizeUntrustedLines(summary), videoID)}`
+    },
+    async get_server_rules () {
+      const rules = await wickModeration.fetchServerRules(guild, { requester: member })
+      for (const ch of rules.channels) sources.push(`<#${ch.id}>`)
+      if (!rules.text) return 'このサーバーで閲覧可能なルールチャンネル（またはルール本文）は見つかりませんでした。サーバー設定のルールチャンネルや #ルール / #rules チャンネルの有無・閲覧権限を確認してください。'
+      return `このサーバーのルール（${rules.channels.map(c => `<#${c.id}>`).join(', ')} より取得）:\n${rules.text}`
+    },
+    async get_moderation_dossier ({ member: who }) {
+      if (!wickModeration.isModerator(member, guild)) {
+        throw new Error('モデレーション履歴・処罰情報の照会にはモデレーター以上の権限が必要です')
+      }
+      if (!String(who || '').trim()) throw new Error('対象ユーザー（member）を指定してください')
+      return wickModeration.buildModerationDossier(guild, who)
     }
   }
 
   // Errors go back to the model as the tool result, so it can tell the user what it couldn't read
   // instead of the whole draft failing.
+  const canModerate = wickModeration.isModerator(member, guild)
   async function call (name, args) {
     if (!executors[name] || (!streamerMode && STREAMER_TOOLS.has(name))) return { error: `不明なツールです: ${name}` }
+    if (name === 'get_moderation_dossier' && !canModerate) {
+      return { error: 'モデレーション履歴・処罰情報の照会にはモデレーター以上の権限が必要です' }
+    }
     try {
       const result = String(await executors[name](args || {})).slice(0, MAX_RESULT_CHARS)
       // Whatever a tool read was written by someone else: marked off as data (untrusted.js).
@@ -443,6 +464,8 @@ function createTools ({ guild, member, ask, progress = () => {}, streamerPersona
     ...baseDeclarations,
     FIND_GAME,
     ABOUT_MEMBER,
+    GET_SERVER_RULES,
+    ...(canModerate ? [GET_MODERATION_DOSSIER] : []),
     ...(messageEmbeddingsEnabled() ? [SEARCH_SERVER_MESSAGES] : []),
     ...((streamerMode && wikiKnowledge.searchable()) ? [SEARCH_WIKI] : [])
   ]

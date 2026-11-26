@@ -1,10 +1,16 @@
 const send = require('../modules/webhooksender')
+const altDetector = require('../modules/altDetector')
+const crossServerBan = require('../modules/crossServerBan')
 
 module.exports = {
   name: 'guildBanRemove',
   type: 'on',
   handle: async (guild, user) => {
     if (!guild || !user) return
+    crossServerBan.onGuildUnban(guild, user)
+    altDetector.onMemberUnban(guild, user).catch(e => {
+      global.logger?.warn(`[ALT]: onMemberUnban failed in ${guild.id}: ${e.message}`)
+    })
     const guildBanRemoveEvent = {
       guildID: guild.id,
       eventName: 'guildBanRemove',

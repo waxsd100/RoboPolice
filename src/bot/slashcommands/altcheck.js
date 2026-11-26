@@ -1,5 +1,6 @@
 const Eris = require('eris')
 const altDetector = require('../modules/altDetector')
+const crossServerBan = require('../modules/crossServerBan')
 const altDB = require('../../db/interfaces/postgres/altDetection')
 const { EMBED_COLORS } = require('../utils/constants')
 const { getEmbedFooter } = require('../utils/embeds')
@@ -68,7 +69,10 @@ async function handleFind (interaction, guild, sub) {
     deferred = true
   }
 
-  const res = await altDetector.investigateUser(guild, userID)
+  const [res, otherBans] = await Promise.all([
+    altDetector.investigateUser(guild, userID),
+    crossServerBan.findOtherGuildBans(userID, guild.id, { includeLiveCheck: true }).catch(() => [])
+  ])
   const chanNote = res.channelsScanned > 0
     ? (lang === 'en' ? ` / Scanned all ${res.channelsScanned} readable channel(s)` : ` ／ 全 ${res.channelsScanned} チャンネルを横断確認`)
     : ''
@@ -77,13 +81,24 @@ async function handleFind (interaction, guild, sub) {
     value: clamp(`${altDetector.formatUserLine(res.suspectProfile, lang)}\n${lang === 'en' ? `Messages analyzed: ${res.suspectMessageCount}${chanNote}` : `分析対象のメッセージ数: ${res.suspectMessageCount} 件${chanNote}`}`, 1024)
   }]
 
+  if (otherBans.length > 0) {
+    fields.push({
+      name: lang === 'en' ? `🚨 Banned in Other Server(s) (${otherBans.length})` : `🚨 他サーバーでのBAN履歴（${otherBans.length}件）`,
+      value: clamp(otherBans.slice(0, 5).map(b => crossServerBan.formatBanLine(b, lang)).join('\n'), 1024)
+    })
+  }
+
   if (!res.candidates.length || res.topCandidate.heuristic.score === 0) {
     const embed = {
       title: lang === 'en' ? '🔍 Alt-Account Search Result' : '🔍 サブ垢候補の調査結果',
-      color: EMBED_COLORS.GREEN,
+      color: otherBans.length > 0 ? EMBED_COLORS.RED : EMBED_COLORS.GREEN,
       description: lang === 'en'
-        ? 'No suspicious matching accounts were found among recorded banned/kicked/left or active members.'
-        : '記録されている BAN・キック・違反者ロール・退出済みアカウントおよび全チャンネルの発言者の中に、一致度の高いサブ垢候補は見つかりませんでした。',
+        ? (otherBans.length > 0
+            ? 'No same-server alt candidates were found, **but this user is banned in other server(s) listed below**.'
+            : 'No suspicious matching accounts were found among recorded banned/kicked/left or active members.')
+        : (otherBans.length > 0
+            ? 'このサーバー内のサブ垢候補は見つかりませんでしたが、**他サーバーでのBAN履歴が検出されました。**'
+            : '記録されている BAN・キック・違反者ロール・退出済みアカウントおよび全チャンネルの発言者の中に、一致度の高いサブ垢候補は見つかりませんでした。'),
       fields,
       footer: getEmbedFooter(global.bot.user),
       timestamp: new Date()
@@ -93,7 +108,7 @@ async function handleFind (interaction, guild, sub) {
 
   const top = res.topCandidate
   const ai = res.ai
-  const color = ai?.verdict === 'likely_alt'
+  const color = (ai?.verdict === 'likely_alt' || otherBans.length > 0)
     ? EMBED_COLORS.RED
     : (ai?.verdict === 'possible_alt' || top.heuristic.score >= 50 ? EMBED_COLORS.YELLOW_ORANGE : EMBED_COLORS.PURPLED_BLUE)
 
@@ -146,7 +161,10 @@ async function handleScan (interaction, guild, sub) {
     deferred = true
   }
 
-  const res = await altDetector.scanServer(guild, { scope, limit, aiVerifyTop: 2 })
+  const [res, crossBanHits] = await Promise.all([
+    altDetector.scanServer(guild, { scope, limit, aiVerifyTop: 2 }),
+    crossServerBan.scanGuildForCrossServerBans(guild, { limit: 10 }).catch(() => [])
+  ])
   const scopeLabel = lang === 'en'
     ? ({ all: 'All (BAN/kick evasion + existing members)', ban_evasion: 'BAN/kick/leave evasion', members: 'Existing members' }[scope] || scope)
     : ({ all: 'すべて（BAN/キック/違反者回避＋既存メンバー同士）', ban_evasion: 'BAN・キック・違反者ロール・退出アカウントとの照合', members: '既存メンバー同士の同一人物チェック' }[scope] || scope)
@@ -154,14 +172,29 @@ async function handleScan (interaction, guild, sub) {
     ? (lang === 'en' ? ` across **${res.channelsScanned}** channel(s)` : `（全 **${res.channelsScanned}** チャンネルを横断確認）`)
     : ''
 
+  const crossBanField = crossBanHits.length > 0
+    ? {
+        name: lang === 'en'
+          ? `🚨 Members Banned in Other Server(s) (${crossBanHits.length})`
+          : `🚨 他サーバーでBANされている在籍メンバー（${crossBanHits.length}人）`,
+        value: clamp(crossBanHits.slice(0, 8).map(hit => {
+          const uname = hit.member?.username || hit.member?.user?.username || hit.userID
+          const servers = hit.bans.slice(0, 2).map(b => `${b.guildName}${b.reason ? ` (${b.reason.slice(0, 40)})` : ''}`).join(' / ')
+          return `・<@${hit.userID}> (${uname}) — ${servers}`
+        }).join('\n'), 1024)
+      }
+    : null
+
   if (!res.pairs.length) {
+    const fields = [{ name: lang === 'en' ? 'Scope' : 'スキャン対象', value: scopeLabel }]
+    if (crossBanField) fields.push(crossBanField)
     const embed = {
       title: lang === 'en' ? '🔎 Server Alt-Account Scan' : '🔎 サーバー内サブ垢スキャン結果',
-      color: EMBED_COLORS.GREEN,
+      color: crossBanField ? EMBED_COLORS.RED : EMBED_COLORS.GREEN,
       description: lang === 'en'
-        ? `Scanned **${res.scannedProfiles}** profiles (${res.scannedActive} active, ${res.scannedFormer} former/restricted) and **${res.scannedActivePosters}** posters${chanPart}.\nNo suspicious alt-account pairs exceeded the threshold.`
-        : `**${res.scannedProfiles} 件**のプロフィール（在籍 ${res.scannedActive} ／ BAN・キック・違反者・退出 ${res.scannedFormer}）および発言者 **${res.scannedActivePosters} 人**をスキャンしました${chanPart}。\nしきい値を超えるサブ垢候補ペアは見つかりませんでした。`,
-      fields: [{ name: lang === 'en' ? 'Scope' : 'スキャン対象', value: scopeLabel }],
+        ? `Scanned **${res.scannedProfiles}** profiles (${res.scannedActive} active, ${res.scannedFormer} former/restricted) and **${res.scannedActivePosters}** posters${chanPart}.\n${crossBanField ? 'No same-server alt pairs exceeded the threshold, **but members with BAN records in other servers were found**.' : 'No suspicious alt-account pairs exceeded the threshold.'}`
+        : `**${res.scannedProfiles} 件**のプロフィール（在籍 ${res.scannedActive} ／ BAN・キック・違反者・退出 ${res.scannedFormer}）および発言者 **${res.scannedActivePosters} 人**をスキャンしました${chanPart}。\n${crossBanField ? 'サブ垢候補ペアは見つかりませんでしたが、**他サーバーでBANされている在籍メンバーが検出されました。**' : 'しきい値を超えるサブ垢候補ペアは見つかりませんでした。'}`,
+      fields,
       footer: getEmbedFooter(global.bot.user),
       timestamp: new Date()
     }
@@ -170,7 +203,7 @@ async function handleScan (interaction, guild, sub) {
 
   const hasLikely = res.pairs.some(p => p.ai?.verdict === 'likely_alt')
   const hasPossible = res.pairs.some(p => p.ai?.verdict === 'possible_alt' || p.heuristic.score >= 50)
-  const color = hasLikely ? EMBED_COLORS.RED : (hasPossible ? EMBED_COLORS.YELLOW_ORANGE : EMBED_COLORS.PURPLED_BLUE)
+  const color = (hasLikely || crossBanField) ? EMBED_COLORS.RED : (hasPossible ? EMBED_COLORS.YELLOW_ORANGE : EMBED_COLORS.PURPLED_BLUE)
 
   const fields = res.pairs.map((pair, idx) => {
     const a = pair.suspectProfile
@@ -196,6 +229,7 @@ async function handleScan (interaction, guild, sub) {
       value: clamp(lines.join('\n'), 1024)
     }
   })
+  if (crossBanField) fields.unshift(crossBanField)
 
   const embed = {
     title: lang === 'en' ? '🔎 Server Alt-Account Scan' : '🔎 サーバー内サブ垢スキャン結果',

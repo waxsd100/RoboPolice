@@ -1,6 +1,7 @@
 const send = require('../modules/webhooksender')
 const inviteCache = require('../modules/invitecache')
 const altDetector = require('../modules/altDetector')
+const crossServerBan = require('../modules/crossServerBan')
 
 module.exports = {
   name: 'guildMemberAdd',
@@ -87,6 +88,9 @@ module.exports = {
     await send(GMAEvent)
     altDetector.onMemberJoin(guild, member, { inviteCode: usedInviteCode }).catch(e => {
       global.logger?.warn(`[ALT]: onMemberJoin failed in ${guild.id}: ${e.message}`)
+    })
+    crossServerBan.onMemberJoin(guild, member).catch(e => {
+      global.logger?.warn(`[XBAN]: onMemberJoin failed in ${guild.id}: ${e.message}`)
     })
   }
 }
