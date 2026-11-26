@@ -2024,23 +2024,37 @@ function parseAiJson (rawText) {
   return { verdict, confidence, summary, matchingEvidence, counterEvidence }
 }
 
-async function fetchAvatarPair (suspectProfile, candidateProfile) {
-  if (!suspectProfile?.avatarHash || !candidateProfile?.avatarHash) return null
-  if (!suspectProfile.avatarURL || !candidateProfile.avatarURL) return null
-  if (suspectProfile.avatarHash === candidateProfile.avatarHash) return null
+async function fetchSingleAvatar (profile) {
+  if (!profile?.avatarHash || !profile?.avatarURL) return null
   try {
-    const [imgA, imgB] = await Promise.all([
-      urlFetcher.fetchImage(suspectProfile.avatarURL),
-      urlFetcher.fetchImage(candidateProfile.avatarURL)
-    ])
-    const mime = ct => (String(ct || '').split(';')[0].trim() || 'image/png')
-    return [
-      { inlineData: { mimeType: mime(imgA.contentType), data: imgA.buffer.toString('base64') } },
-      { inlineData: { mimeType: mime(imgB.contentType), data: imgB.buffer.toString('base64') } }
-    ]
+    const img = await urlFetcher.fetchImage(profile.avatarURL)
+    if (!img?.buffer) return null
+    const mime = String(img.contentType || '').split(';')[0].trim() || 'image/png'
+    return { inlineData: { mimeType: mime, data: img.buffer.toString('base64') } }
   } catch (_) {
     return null
   }
+}
+
+// Fetches whichever custom avatar(s) exist (both, only A, only B, or shared) so Gemini can
+// perform cross-modal judgment (e.g., Account A's messages mentioning a specific creator/fandom
+// linked to Account B's custom avatar, even when A uses a default avatar).
+async function fetchAvatarsForAnalysis (suspectProfile, candidateProfile) {
+  const sameHash = Boolean(
+    suspectProfile?.avatarHash &&
+    candidateProfile?.avatarHash &&
+    suspectProfile.avatarHash === candidateProfile.avatarHash
+  )
+  if (sameHash) {
+    const shared = await fetchSingleAvatar(suspectProfile) || await fetchSingleAvatar(candidateProfile)
+    return shared ? { a: shared, b: null, sameHash: true } : null
+  }
+  const [a, b] = await Promise.all([
+    fetchSingleAvatar(suspectProfile),
+    fetchSingleAvatar(candidateProfile)
+  ])
+  if (!a && !b) return null
+  return { a, b, sameHash: false }
 }
 
 async function analyzeWithGemini ({
@@ -2054,18 +2068,36 @@ async function analyzeWithGemini ({
   fetchAvatars = true
 }) {
   if (!isGatewayConfigured()) return null
-  const avatars = fetchAvatars ? await fetchAvatarPair(suspectProfile, candidateProfile) : null
+  const avatars = fetchAvatars ? await fetchAvatarsForAnalysis(suspectProfile, candidateProfile) : null
+  let avatarAttachmentNote = ''
+  if (avatars) {
+    if (avatars.sameHash) {
+      avatarAttachmentNote = '上記のテキストに続き、調査対象 A と候補 B でハッシュ完全一致している共通アバター画像1枚を添付します（ありふれた汎用画像か、固有・ニッチなモチーフかも確認してください）。'
+    } else if (avatars.a && avatars.b) {
+      avatarAttachmentNote = '上記のテキストに続き、1枚目が調査対象 A のアバター画像、2枚目が候補 B のアバター画像です。'
+    } else if (avatars.a) {
+      avatarAttachmentNote = '上記のテキストに続き、調査対象 A のアバター画像（1枚のみ。候補 B はデフォルトまたは未取得）を添付します。候補 B の発言・プロフィール内容と調査対象 A のアイコンとのクロスモーダルな関連性を確認してください。'
+    } else if (avatars.b) {
+      avatarAttachmentNote = '上記のテキストに続き、候補 B のアバター画像（1枚のみ。調査対象 A はデフォルトまたは未取得）を添付します。調査対象 A の発言・プロフィール内容と候補 B のアイコンとのクロスモーダルな関連性を確認してください。'
+    }
+  }
   const promptText = prompts.render('alt/analyze', {
     heuristicSummary: formatHeuristicBlock(heuristic),
     suspectProfile: untrusted.wrap('suspect_profile', formatProfileBlock(suspectProfile)),
     candidateProfile: untrusted.wrap('candidate_profile', formatProfileBlock(candidateProfile)),
     suspectMessages: formatMessagesBlock(suspectMessages, 'suspect_messages'),
     candidateMessages: formatMessagesBlock(candidateMessages, 'candidate_messages'),
-    avatarsAttached: Boolean(avatars)
+    avatarsAttached: Boolean(avatars),
+    avatarAttachmentNote
   })
   const parts = [{ text: promptText }]
   if (avatars) {
-    parts.push({ text: '調査対象 A のアバター画像:' }, avatars[0], { text: '候補 B のアバター画像:' }, avatars[1])
+    if (avatars.sameHash && avatars.a) {
+      parts.push({ text: '調査対象 A・候補 B 共通のアバター画像:' }, avatars.a)
+    } else {
+      if (avatars.a) parts.push({ text: '調査対象 A のアバター画像:' }, avatars.a)
+      if (avatars.b) parts.push({ text: '候補 B のアバター画像:' }, avatars.b)
+    }
   }
   const { model, thinking, flex } = await resolveTaskConfig('light', guildID)
   const invoke = () => callGemini(model, {
@@ -2074,7 +2106,7 @@ async function analyzeWithGemini ({
       temperature: 0.1,
       responseMimeType: 'application/json',
       responseSchema: ALT_RESPONSE_SCHEMA,
-      ...(avatars ? { mediaResolution: 'MEDIA_RESOLUTION_LOW' } : {}),
+      ...(avatars ? { mediaResolution: 'MEDIA_RESOLUTION_MEDIUM' } : {}),
       ...thinking
     }
   }, {
@@ -2325,12 +2357,16 @@ async function onMemberJoin (guild, member, { inviteCode = null, now = new Date(
     if (cand.heuristic.score < threshold) continue
     if (await altDB.hasRecentAlert(guild.id, profile.userID, cand.candidateProfile.userID, alertCooldownHours())) continue
 
+    let candMsgs = cand.candidateMessages
+    if (!candMsgs || candMsgs.length === 0) {
+      candMsgs = await altDB.getMemberMessages(guild.id, cand.candidateProfile.userID, { limit: 40 }).catch(() => [])
+    }
     const ai = await analyzeWithGemini({
       guildID: guild.id,
       suspectProfile: profile,
       candidateProfile: cand.candidateProfile,
       suspectMessages: [],
-      candidateMessages: cand.candidateMessages,
+      candidateMessages: candMsgs,
       heuristic: cand.heuristic,
       background: true
     })
@@ -2800,12 +2836,16 @@ async function investigateUser (guild, userID, { now = new Date(), fetchLiveChan
   const topCandidate = candidates[0] || null
   let ai = null
   if (topCandidate && topCandidate.heuristic.score >= 15) {
+    let candMsgs = topCandidate.candidateMessages
+    if (!candMsgs || candMsgs.length === 0) {
+      candMsgs = await altDB.getMemberMessages(guild.id, topCandidate.candidateProfile.userID, { limit: 40 }).catch(() => [])
+    }
     ai = await analyzeWithGemini({
       guildID: guild.id,
       suspectProfile,
       candidateProfile: topCandidate.candidateProfile,
       suspectMessages,
-      candidateMessages: topCandidate.candidateMessages,
+      candidateMessages: candMsgs,
       heuristic: topCandidate.heuristic,
       background: false
     })
