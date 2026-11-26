@@ -969,12 +969,13 @@ const realAltDetectionStore = { ...require('../../src/db/interfaces/postgres/alt
 function restoreAltDetectionStore () {
   Object.assign(require('../../src/db/interfaces/postgres/altDetection'), realAltDetectionStore)
 }
-function installAltDetectionStore ({ enabled = {}, profiles = [], messages = [], centroids = {}, alerts = [] } = {}) {
+function installAltDetectionStore ({ enabled = {}, profiles = [], messages = [], snapshots = [], centroids = {}, alerts = [] } = {}) {
   const store = require('../../src/db/interfaces/postgres/altDetection')
   const state = {
     enabled: { ...enabled },
     profiles: new Map(profiles.map(p => [`${p.guildID}:${p.userID}`, { ...p }])),
     messages: messages.map(m => ({ ...m })),
+    snapshots: snapshots.map(s => ({ ...s })),
     centroids: { ...centroids },
     alerts: alerts.map(a => ({ ...a }))
   }
@@ -1017,22 +1018,92 @@ function installAltDetectionStore ({ enabled = {}, profiles = [], messages = [],
       .sort((a, b) => rank(a.status) - rank(b.status))
       .slice(0, limit)
   }
-  store.getMemberMessages = async (guildID, userID, { limit = 60 } = {}) => state.messages
-    .filter(m => m.guildID === guildID && m.authorID === userID && m.content)
+  store.recordMessageSnapshot = async (guildID, { messageID, authorID, channelID = null, eventType = 'deleted', content, originalTs = null, eventTs = new Date() }) => {
+    const clean = String(content || '').trim()
+    if (!guildID || !messageID || !authorID || !clean) return false
+    if (eventType === 'deleted' && state.snapshots.some(s => s.guildID === guildID && s.messageID === messageID && s.eventType === 'deleted')) {
+      return false
+    }
+    state.snapshots.push({
+      guildID,
+      messageID,
+      authorID,
+      channelID,
+      eventType: eventType === 'edited' ? 'edited' : 'deleted',
+      content: clean,
+      originalTs: originalTs ? new Date(originalTs) : null,
+      eventTs: eventTs ? new Date(eventTs) : new Date()
+    })
+    return true
+  }
+  store.snapshotMessagesBeforeDelete = async (messageIDs, { eventTs = new Date() } = {}) => {
+    const ids = new Set((messageIDs || []).filter(Boolean))
+    const captured = []
+    for (const m of state.messages) {
+      if (!ids.has(m.id) || !m.guildID || !m.content) continue
+      const added = await store.recordMessageSnapshot(m.guildID, {
+        messageID: m.id,
+        authorID: m.authorID,
+        channelID: m.channelID,
+        eventType: 'deleted',
+        content: m.content,
+        originalTs: m.ts,
+        eventTs
+      })
+      if (added) {
+        captured.push({
+          guildID: m.guildID,
+          id: m.id,
+          authorID: m.authorID,
+          channelID: m.channelID,
+          content: m.content,
+          ts: m.ts ? new Date(m.ts) : new Date(eventTs),
+          eventTs: new Date(eventTs),
+          deleted: true,
+          editedBefore: false
+        })
+      }
+    }
+    return captured
+  }
+  const combinedForGuild = (guildID, includeDeleted) => {
+    const live = state.messages
+      .filter(m => m.guildID === guildID && m.content)
+      .map(m => ({ ...m, deleted: Boolean(m.deleted), editedBefore: Boolean(m.editedBefore), eventTs: m.eventTs || null }))
+    if (!includeDeleted) return live
+    const snaps = state.snapshots
+      .filter(s => s.guildID === guildID && s.content)
+      .map(s => ({
+        id: `${s.messageID}:${s.eventType}`,
+        messageID: s.messageID,
+        guildID: s.guildID,
+        authorID: s.authorID,
+        channelID: s.channelID,
+        content: s.content,
+        ts: s.originalTs ? new Date(s.originalTs) : new Date(s.eventTs),
+        deleted: s.eventType === 'deleted',
+        editedBefore: s.eventType === 'edited',
+        eventTs: s.eventTs ? new Date(s.eventTs) : null
+      }))
+    return [...live, ...snaps]
+  }
+  store.getMemberMessages = async (guildID, userID, { limit = 60, includeDeleted = true } = {}) => combinedForGuild(guildID, includeDeleted)
+    .filter(m => m.authorID === userID)
     .sort((a, b) => new Date(b.ts) - new Date(a.ts))
     .slice(0, limit)
-  store.getRecentAuthorsMessages = async (guildID, excludeUserID, { authorLimit = 30, perAuthor = 30, days = 30 } = {}) => {
+  store.getRecentAuthorsMessages = async (guildID, excludeUserID, { authorLimit = 30, perAuthor = 30, days = 30, includeDeleted = true } = {}) => {
     const since = Date.now() - days * 86400 * 1000
     const byAuthor = new Map()
-    for (const m of state.messages) {
-      if (m.guildID !== guildID || m.authorID === excludeUserID || !m.content) continue
-      if (new Date(m.ts).getTime() < since) continue
+    for (const m of combinedForGuild(guildID, includeDeleted)) {
+      if (m.authorID === excludeUserID || !m.content) continue
+      const refTime = m.eventTs ? new Date(m.eventTs).getTime() : new Date(m.ts).getTime()
+      if (refTime < since) continue
       if (!byAuthor.has(m.authorID)) byAuthor.set(m.authorID, [])
       byAuthor.get(m.authorID).push(m)
     }
     const grouped = new Map()
     for (const [authorID, list] of byAuthor) {
-      if (list.length < 3) continue
+      if (list.length < 3 && !list.some(m => m.deleted)) continue
       grouped.set(authorID, list.sort((a, b) => new Date(b.ts) - new Date(a.ts)).slice(0, perAuthor))
       if (grouped.size >= authorLimit) break
     }

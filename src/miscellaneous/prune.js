@@ -57,7 +57,18 @@ async function prune () {
   if (mentionLogsDeleted) {
     await pool.query('DELETE FROM mention_ai_systems s WHERE NOT EXISTS (SELECT 1 FROM mention_ai_calls a WHERE a.system_hash = s.hash)')
   }
-  return { deleted, mentionLogsDeleted, days }
+  let altSnapshotsDeleted = 0
+  try {
+    for (let i = 0; i < MAX_BATCHES_PER_RUN; i++) {
+      const res = await pool.query(
+        'DELETE FROM alt_message_snapshots WHERE id IN (SELECT id FROM alt_message_snapshots WHERE event_ts < NOW() - ($1::int * INTERVAL \'1 day\') LIMIT $2)',
+        [days, BATCH_SIZE]
+      )
+      altSnapshotsDeleted += res.rowCount
+      if (res.rowCount < BATCH_SIZE) break
+    }
+  } catch (_) {}
+  return { deleted, mentionLogsDeleted, altSnapshotsDeleted, days }
 }
 
 async function sweep () {

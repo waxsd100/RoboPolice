@@ -7,6 +7,7 @@ const escape = require('markdown-escape')
 const cacheGuild = require('../utils/cacheGuild')
 const { getRetentionDays, isBeyondRetention } = require('../utils/retention')
 const discordKnowledge = require('../modules/discordKnowledge')
+const altDetector = require('../modules/altDetector')
 
 // markdown-escape is a single exported function, I probably don't need it as a node module lol
 
@@ -34,11 +35,19 @@ module.exports = {
       await cacheGuild(newMessage.channel.guild.id)
       guildSettings = global.bot.guildSettingsCache?.[newMessage.channel.guild.id]
     }
-    if (!guildSettings || guildSettings.isChannelIgnored(newMessage.channel.id)) return
+    if (!guildSettings || guildSettings.isChannelIgnored(newMessage.channel.id)) {
+      if (!newMessage.author.bot) {
+        altDetector.onMessageEdit(newMessage, oldMessage).catch(e => global.logger?.warn?.(`[ALT]: onMessageEdit failed: ${e.message}`))
+      }
+      return
+    }
     const member = newMessage.channel.guild.members?.get?.(newMessage.author.id) // this member "should" be in cache at all times
     oldMessage = await getMessageFromBatch(newMessage.id)
     if (!oldMessage) {
       oldMessage = await getMessageFromDB(newMessage.id)
+    }
+    if (!newMessage.author.bot) {
+      altDetector.onMessageEdit(newMessage, oldMessage).catch(e => global.logger?.warn?.(`[ALT]: onMessageEdit failed: ${e.message}`))
     }
     if (!oldMessage) {
       // Aged out of retention: report that an edit happened even though the previous text is gone.
