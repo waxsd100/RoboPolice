@@ -269,10 +269,17 @@ async function handleConfig (interaction, guild, sub) {
     enabled = await altDB.isAltDetectionEnabled(guild.id)
   }
 
-  const guildSettings = global.bot?.guildSettingsCache?.[guild.id]
-  const alertEvent = altDetector.pickAlertEventName(guildSettings)
-  const alertChannelId = alertEvent ? guildSettings?.getEventByName?.(alertEvent) : null
+  const dest = await altDetector.resolveAlertDestination(guild)
+  const alertChannelId = dest?.channelID || null
+  const destSourceLabel = dest?.source === 'public_updates'
+    ? (lang === 'en' ? ' (from Discord Server Settings: Moderator-only / Community Updates channel)' : '（Discord サーバー設定「モデレーター専用チャンネル」から自動取得）')
+    : dest?.source === 'safety_alerts'
+      ? (lang === 'en' ? ' (from Discord Server Settings: Safety Alerts channel)' : '（Discord サーバー設定「セーフティ通知チャンネル」から自動取得）')
+      : dest?.source === 'log_channel'
+        ? (lang === 'en' ? ' (fallback: bot log channel)' : '（フォールバック: BOT ログチャンネル設定）')
+        : ''
   const globalOff = !altDetector.isGlobalEnabled()
+  const dailyCap = altDetector.maxDailyAutoAi()
 
   const statusText = enabled
     ? (lang === 'en' ? '✅ **Enabled**' : '✅ **有効（オン）**')
@@ -286,17 +293,17 @@ async function handleConfig (interaction, guild, sub) {
   const lines = [
     lang === 'en' ? `Automatic alt-account detection: ${statusText}` : `自動サブ垢検知: ${statusText}`,
     lang === 'en'
-      ? `Alert destination: ${alertChannelId ? `<#${alertChannelId}>` : '⚠️ No log channel configured (run `/setup via_presets` first)'}`
-      : `アラート通知先: ${alertChannelId ? `<#${alertChannelId}>` : '⚠️ ログチャンネル未設定（先に `/setup via_presets` を実行してください）'}`,
+      ? `Alert destination: ${alertChannelId ? `<#${alertChannelId}>${destSourceLabel}` : '⚠️ Not configured (set a Moderator-only / Safety Alerts channel in Discord Server Settings, or run `/setup via_presets`)'}`
+      : `アラート通知先: ${alertChannelId ? `<#${alertChannelId}>${destSourceLabel}` : '⚠️ 未設定（Discord サーバー設定で「モデレーター専用チャンネル」を設定するか、`/setup via_presets` を実行してください）'}`,
     lang === 'en'
       ? `Offender roles (treated like BAN/kick): ${offenderRolesText}`
       : `違反者扱いロール（BAN/キック同等に照合）: ${offenderRolesText}`,
     lang === 'en'
-      ? `AI precision review: ${isGatewayConfigured() ? 'Available (2-stage hybrid)' : 'Unavailable (heuristic-only fallback)'}`
-      : `AI 精密判定: ${isGatewayConfigured() ? '利用可能（第1段階ルール＋第2段階Geminiのハイブリッド方式）' : '未接続（ルール判定フォールバックのみ）'}`,
+      ? `AI precision review: ${isGatewayConfigured() ? `Available (2-stage hybrid — Stage 1 is 0 AI cost; auto AI cap: ${dailyCap === 0 ? 'unlimited' : `${dailyCap}/day`})` : 'Unavailable (heuristic-only fallback)'}`
+      : `AI 精密判定: ${isGatewayConfigured() ? `利用可能（2段階方式: 第1段階はAIコスト0・自動AI上限 ${dailyCap === 0 ? '無制限' : `1日${dailyCap}回`}）` : '未接続（ルール判定フォールバックのみ）'}`,
     lang === 'en'
-      ? 'Action on detection: **Alert only to staff log channel** (no automatic ban/kick/timeout).'
-      : '検知時の動作: **スタッフ向けログチャンネルへのアラート通知のみ**（自動BAN/キックなし）'
+      ? 'Action on detection: **Alert only to moderator channel** (no automatic ban/kick/timeout).'
+      : '検知時の動作: **モデレーター専用チャンネルへの注意アラート通知のみ**（自動BAN/キックなし）'
   ]
   if (globalOff) {
     lines.push(lang === 'en'

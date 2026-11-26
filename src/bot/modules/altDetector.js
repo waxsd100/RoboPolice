@@ -85,12 +85,20 @@ const recentDeletedByGuild = new Map() // guildID -> Array<{ id, authorID, chann
 // same moderator of the same author in the same channel are recognized accurately.
 const MAX_AUDIT_COUNT_ENTRIES = 1000
 const lastModDeleteCounts = new Map() // `${guildID}:${entryID}` -> number
+// Short-lived cache for REST GET /guilds/:id (to read Discord's safety_alerts_channel_id when
+// Eris 0.17's Guild structure does not expose it directly).
+const MOD_CHANNEL_CACHE_TTL_MS = 10 * 60 * 1000
+const guildModChannelCache = new Map() // guildID -> { publicUpdatesChannelID, safetyAlertsChannelID, expiresAt }
+// Per-guild daily automatic AI call budget (prevents runaway API costs during join raids).
+const autoAiDailyCounts = new Map() // guildID -> { dayKey, count }
 
 function resetRuntimeState () {
   messageCounters.clear()
   recentSeenMessages.clear()
   recentDeletedByGuild.clear()
   lastModDeleteCounts.clear()
+  guildModChannelCache.clear()
+  autoAiDailyCounts.clear()
 }
 
 function rememberSeenMessage ({ id, guildID, authorID, channelID = null, content, ts = new Date() }) {
@@ -161,12 +169,31 @@ function hasOffenderRole (member) {
 }
 
 function joinAiThreshold (isModCandidate = true) {
-  const base = envNumber('ALT_JOIN_AI_THRESHOLD', 35, 0, 100)
+  const base = envNumber('ALT_JOIN_AI_THRESHOLD', 45, 0, 100)
   return isModCandidate ? base : Math.min(100, base + 15)
 }
 
 function messageAiThreshold () {
   return envNumber('ALT_MESSAGE_AI_THRESHOLD', 40, 0, 100)
+}
+
+function maxDailyAutoAi () {
+  return envNumber('ALT_MAX_DAILY_AUTO_AI', 30, 0, 10000)
+}
+
+function consumeAutoAiBudget (guildID, now = new Date()) {
+  const limit = maxDailyAutoAi()
+  if (limit === 0) return true // 0 disables the cap
+  if (!guildID) return false
+  const dayKey = (now instanceof Date ? now : new Date(now)).toISOString().slice(0, 10)
+  const cur = autoAiDailyCounts.get(guildID)
+  if (!cur || cur.dayKey !== dayKey) {
+    autoAiDailyCounts.set(guildID, { dayKey, count: 1 })
+    return true
+  }
+  if (cur.count >= limit) return false
+  cur.count++
+  return true
 }
 
 function alertConfidence () {
@@ -2236,6 +2263,81 @@ function buildAlertEmbed ({ suspectProfile, candidateProfile, heuristic, ai, tri
   }
 }
 
+function canBotSendToChannel (guild, channelID) {
+  if (!channelID) return false
+  const ch = guild?.channels?.get?.(channelID) || null
+  if (!ch) return true // channel not cached yet; let createMessage attempt it and fall back on error
+  const botId = global.bot?.user?.id
+  if (!botId || typeof ch.permissionsOf !== 'function') return true
+  try {
+    const perms = ch.permissionsOf(botId)
+    if (!perms) return true
+    const has = p => (typeof perms.has === 'function' ? perms.has(p) : Boolean(perms.json?.[p]))
+    return has('viewChannel') && has('sendMessages')
+  } catch (_) {
+    return true
+  }
+}
+
+async function fetchRestGuildModChannels (guildID) {
+  if (!guildID || typeof global.bot?.requestHandler?.request !== 'function') return null
+  const cached = guildModChannelCache.get(guildID)
+  if (cached && cached.expiresAt > Date.now()) return cached
+  try {
+    const raw = await global.bot.requestHandler.request('GET', `/guilds/${guildID}`, true)
+    const entry = {
+      publicUpdatesChannelID: raw?.public_updates_channel_id || null,
+      safetyAlertsChannelID: raw?.safety_alerts_channel_id || null,
+      expiresAt: Date.now() + MOD_CHANNEL_CACHE_TTL_MS
+    }
+    guildModChannelCache.set(guildID, entry)
+    return entry
+  } catch (_) {
+    const entry = { publicUpdatesChannelID: null, safetyAlertsChannelID: null, expiresAt: Date.now() + 60 * 1000 }
+    guildModChannelCache.set(guildID, entry)
+    return entry
+  }
+}
+
+// Resolves where automatic alt-account alerts should be posted by reading Discord's Server
+// Settings first:
+//   1. Community -> Overview -> Moderator-only / Community Updates channel (public_updates_channel_id)
+//   2. Safety Setup -> Safety Alerts channel (safety_alerts_channel_id)
+//   3. Fallback: RoboPolice's configured staff log channel (for non-Community servers)
+async function resolveAlertDestination (guild) {
+  if (!guild?.id) return null
+
+  const tryModChannel = (channelID, source) => {
+    if (!channelID) return null
+    if (!canBotSendToChannel(guild, channelID)) return null
+    return { kind: 'mod_channel', channelID, source }
+  }
+
+  const fromPublic = tryModChannel(guild.publicUpdatesChannelID, 'public_updates')
+  if (fromPublic) return fromPublic
+
+  const fromSafetyDirect = tryModChannel(guild.safetyAlertsChannelID, 'safety_alerts')
+  if (fromSafetyDirect) return fromSafetyDirect
+
+  const restMod = await fetchRestGuildModChannels(guild.id)
+  if (restMod) {
+    const restPublic = tryModChannel(restMod.publicUpdatesChannelID, 'public_updates')
+    if (restPublic) return restPublic
+    const restSafety = tryModChannel(restMod.safetyAlertsChannelID, 'safety_alerts')
+    if (restSafety) return restSafety
+  }
+
+  let guildSettings = global.bot?.guildSettingsCache?.[guild.id]
+  if (!guildSettings && global.bot) {
+    await cacheGuild(guild.id).catch(() => {})
+    guildSettings = global.bot?.guildSettingsCache?.[guild.id]
+  }
+  const eventName = pickAlertEventName(guildSettings)
+  if (!eventName) return null
+  const channelID = guildSettings?.getEventByName?.(eventName) || null
+  return { kind: 'log_webhook', channelID, eventName, source: 'log_channel' }
+}
+
 async function sendAltAlert (guild, { suspectProfile, candidateProfile, heuristic, ai, trigger }) {
   const verdict = ai?.verdict || 'possible_alt'
   const summary = ai?.summary || heuristic.signals.join(' / ').slice(0, 400)
@@ -2251,17 +2353,37 @@ async function sendAltAlert (guild, { suspectProfile, candidateProfile, heuristi
     signals
   }).catch(e => global.logger?.warn(`[ALT]: Failed to record alert in guild ${guild.id}: ${e.message}`))
 
-  let guildSettings = global.bot?.guildSettingsCache?.[guild.id]
-  if (!guildSettings && global.bot) {
-    await cacheGuild(guild.id).catch(() => {})
-    guildSettings = global.bot?.guildSettingsCache?.[guild.id]
-  }
-  const eventName = pickAlertEventName(guildSettings)
-  if (!eventName) return { sent: false, reason: 'no_log_channel' }
+  const dest = await resolveAlertDestination(guild)
+  if (!dest) return { sent: false, reason: 'no_alert_channel' }
 
   const embed = buildAlertEmbed({ suspectProfile, candidateProfile, heuristic, ai, trigger, lang: 'ja' })
-  await send({ guildID: guild.id, eventName, embeds: [embed] })
-  return { sent: true, eventName, embed }
+  if (dest.kind === 'mod_channel' && typeof global.bot?.createMessage === 'function') {
+    try {
+      await global.bot.createMessage(dest.channelID, {
+        embeds: [embed],
+        allowedMentions: { everyone: false, roles: false, users: false }
+      })
+      return { sent: true, channelID: dest.channelID, source: dest.source, embed }
+    } catch (e) {
+      global.logger?.warn(`[ALT]: Failed to post alert to mod channel ${dest.channelID} in guild ${guild.id}: ${e.message}`)
+      // Fall back to configured log channel webhook if available
+      let guildSettings = global.bot?.guildSettingsCache?.[guild.id]
+      if (!guildSettings && global.bot) {
+        await cacheGuild(guild.id).catch(() => {})
+        guildSettings = global.bot?.guildSettingsCache?.[guild.id]
+      }
+      const fallbackEvent = pickAlertEventName(guildSettings)
+      if (!fallbackEvent) return { sent: false, reason: 'mod_channel_send_failed' }
+      await send({ guildID: guild.id, eventName: fallbackEvent, embeds: [embed] })
+      return { sent: true, eventName: fallbackEvent, source: 'log_channel', embed }
+    }
+  }
+
+  if (dest.kind === 'log_webhook') {
+    await send({ guildID: guild.id, eventName: dest.eventName, embeds: [embed] })
+    return { sent: true, eventName: dest.eventName, channelID: dest.channelID, source: dest.source, embed }
+  }
+  return { sent: false, reason: 'no_alert_channel' }
 }
 
 function shouldAlertFromResult ({ ai, heuristic, candidateProfile }) {
@@ -2352,24 +2474,30 @@ async function onMemberJoin (guild, member, { inviteCode = null, now = new Date(
   const candidates = await findCandidates(guild, profile, [], { trigger: 'join', now, limit: 3 })
   if (!candidates.length) return { checked: true, alerted: false }
 
-  for (const cand of candidates.slice(0, 2)) {
+  // Cost guard: evaluate only the #1 candidate on join (plus #2 only if it has a very high
+  // direct score >= 65), and enforce the per-guild daily automatic AI budget cap.
+  const toCheck = candidates.slice(0, 2).filter((c, idx) => idx === 0 || c.heuristic.score >= 65)
+  for (const cand of toCheck) {
     const threshold = joinAiThreshold(MOD_STATUSES.has(cand.candidateProfile.status))
     if (cand.heuristic.score < threshold) continue
     if (await altDB.hasRecentAlert(guild.id, profile.userID, cand.candidateProfile.userID, alertCooldownHours())) continue
 
-    let candMsgs = cand.candidateMessages
-    if (!candMsgs || candMsgs.length === 0) {
-      candMsgs = await altDB.getMemberMessages(guild.id, cand.candidateProfile.userID, { limit: 40 }).catch(() => [])
+    let ai = null
+    if (consumeAutoAiBudget(guild.id, now)) {
+      let candMsgs = cand.candidateMessages
+      if (!candMsgs || candMsgs.length === 0) {
+        candMsgs = await altDB.getMemberMessages(guild.id, cand.candidateProfile.userID, { limit: 40 }).catch(() => [])
+      }
+      ai = await analyzeWithGemini({
+        guildID: guild.id,
+        suspectProfile: profile,
+        candidateProfile: cand.candidateProfile,
+        suspectMessages: [],
+        candidateMessages: candMsgs,
+        heuristic: cand.heuristic,
+        background: true
+      })
     }
-    const ai = await analyzeWithGemini({
-      guildID: guild.id,
-      suspectProfile: profile,
-      candidateProfile: cand.candidateProfile,
-      suspectMessages: [],
-      candidateMessages: candMsgs,
-      heuristic: cand.heuristic,
-      background: true
-    })
     if (shouldAlertFromResult({ ai, heuristic: cand.heuristic, candidateProfile: cand.candidateProfile })) {
       const delivery = await sendAltAlert(guild, {
         suspectProfile: profile,
@@ -2710,15 +2838,17 @@ async function onMessage (message, { now = new Date() } = {}) {
       const suspectMessages = mergeMessageLists([liveMsg], dbSuspectMsgs, 40)
       const candidateMessages = mergeMessageLists([deletedMsg], dbCandMsgs, 40)
       const heuristic = scorePair({ suspectProfile, candidateProfile, suspectMessages, candidateMessages, now })
-      const ai = await analyzeWithGemini({
-        guildID,
-        suspectProfile,
-        candidateProfile,
-        suspectMessages,
-        candidateMessages,
-        heuristic,
-        background: true
-      })
+      const ai = consumeAutoAiBudget(guildID, now)
+        ? await analyzeWithGemini({
+          guildID,
+          suspectProfile,
+          candidateProfile,
+          suspectMessages,
+          candidateMessages,
+          heuristic,
+          background: true
+        })
+        : null
       if (shouldAlertFromResult({ ai, heuristic, candidateProfile })) {
         const delivery = await sendAltAlert(resolvedGuild, {
           suspectProfile,
@@ -2790,15 +2920,17 @@ async function onMessage (message, { now = new Date() } = {}) {
     if (cand.heuristic.score < threshold) continue
     if (await altDB.hasRecentAlert(guildID, suspectProfile.userID, cand.candidateProfile.userID, alertCooldownHours())) continue
 
-    const ai = await analyzeWithGemini({
-      guildID,
-      suspectProfile,
-      candidateProfile: cand.candidateProfile,
-      suspectMessages,
-      candidateMessages: cand.candidateMessages,
-      heuristic: cand.heuristic,
-      background: true
-    })
+    const ai = consumeAutoAiBudget(guildID, now)
+      ? await analyzeWithGemini({
+        guildID,
+        suspectProfile,
+        candidateProfile: cand.candidateProfile,
+        suspectMessages,
+        candidateMessages: cand.candidateMessages,
+        heuristic: cand.heuristic,
+        background: true
+      })
+      : null
     if (shouldAlertFromResult({ ai, heuristic: cand.heuristic, candidateProfile: cand.candidateProfile })) {
       const delivery = await sendAltAlert(resolvedGuild, {
         suspectProfile,
@@ -3141,6 +3273,8 @@ module.exports = {
   hasOffenderRole,
   joinAiThreshold,
   messageAiThreshold,
+  maxDailyAutoAi,
+  consumeAutoAiBudget,
   alertConfidence,
   alertCooldownHours,
   messageWatchDays,
@@ -3184,6 +3318,7 @@ module.exports = {
   parseAiJson,
   analyzeWithGemini,
   pickAlertEventName,
+  resolveAlertDestination,
   verdictLabel,
   triggerLabel,
   statusLabelJa,
