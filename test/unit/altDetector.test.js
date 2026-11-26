@@ -1084,4 +1084,77 @@ describe('altDetector Stage 2 Gemini analysis, event hooks, and /altcheck comman
     assert.equal(rev.metrics.createdAfterMod, true)
     assert.ok(rev.score >= 65, `expected strong score for later-created alt from banned main lookup, got ${rev.score}`)
   })
+
+  test('onMemberJoin loads banned account messages and attaches single-sided custom avatar at MEDIUM resolution for cross-modal reasoning', async (t) => {
+    configureGateway()
+    const now = new Date('2026-11-25T16:00:00Z')
+    const guild = createGuild({ id: 'g_xmodal' })
+    makeBotWithLogs(guild)
+    t.mock.method(webhookCache, 'getWebhook', async () => 'wh1|tok1')
+    t.mock.method(urlFetcher, 'fetchImage', async url => ({
+      url,
+      buffer: Buffer.from('kun-related-icon-bytes'),
+      contentType: 'image/png'
+    }))
+
+    // Banned main has NO custom avatar (default avatar) but mentioned specific niche fandom in messages
+    installAltDetectionStore({
+      enabled: { g_xmodal: true },
+      profiles: [{
+        guildID: 'g_xmodal',
+        userID: '900000000000000001',
+        username: 'plain_user_a',
+        avatarHash: null,
+        avatarURL: null,
+        status: 'banned',
+        statusAt: new Date(now.getTime() - 30 * 60 * 1000),
+        moderationReason: '荒らし'
+      }],
+      messages: [{
+        id: 'xm1',
+        guildID: 'g_xmodal',
+        authorID: '900000000000000001',
+        channelID: 'c1',
+        content: '自分KUNキッズです、50人クラフト毎日見てます',
+        ts: new Date(now.getTime() - 2 * 3600 * 1000)
+      }]
+    })
+
+    const requests = installGemini([
+      [{
+        text: JSON.stringify({
+          verdict: 'likely_alt',
+          confidence: 86,
+          summary: 'BAN済みアカウントの発言で言及していた特定界隈と、直後に参加した新規アカウントのアイコンがクロスモーダルに一致しています。',
+          matching_evidence: ['BAN直後の新規作成アカウント参加', 'BAN側の特定界隈発言と新規側のアイコンモチーフが高度に一致'],
+          counter_evidence: ['新規側の発言サンプルはまだ無し']
+        })
+      }]
+    ])
+
+    const newJoiner = {
+      id: '900000000000000002',
+      joinedAt: now.getTime(),
+      roles: [],
+      user: {
+        id: '900000000000000002',
+        bot: false,
+        username: 'totally_unrelated_name',
+        avatar: 'custom_kun_icon_hash',
+        dynamicAvatarURL: () => 'https://cdn.discordapp.com/avatars/900000000000000002/custom_kun_icon_hash.png'
+      },
+      createdAt: now.getTime() - 15 * 60 * 1000
+    }
+
+    const res = await altDetector.onMemberJoin(guild, newJoiner, { now })
+    assert.equal(res.alerted, true)
+    assert.equal(requests.length, 1)
+    const req = requests[0].body
+    assert.equal(req.generationConfig.mediaResolution, 'MEDIA_RESOLUTION_MEDIUM')
+    const promptText = req.contents[0].parts[0].text
+    assert.ok(promptText.includes('自分KUNキッズです、50人クラフト毎日見てます'), 'banned account messages loaded even when joiner has 0 messages')
+    assert.ok(promptText.includes('クロスモーダル文脈照合'), 'cross-modal reasoning instructions included')
+    assert.ok(promptText.includes('犬・猫'), 'generic-motif base-rate guard included')
+    assert.ok(req.contents[0].parts.some(p => p.inlineData?.mimeType === 'image/png'), 'single-sided custom avatar attached even though banned main had default avatar')
+  })
 })
