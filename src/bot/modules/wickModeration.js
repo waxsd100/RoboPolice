@@ -761,12 +761,14 @@ async function buildModerationDossier (guild, who) {
   const targetUsername = liveMember?.username || liveMember?.user?.username || profile?.username || null
 
   const crossServerBan = require('./crossServerBan')
-  const [wickResult, auditResult, dbMessages, recentAlerts, otherGuildBans] = await Promise.all([
+  const altDetector = require('./altDetector')
+  const [wickResult, auditResult, dbMessages, recentAlerts, otherGuildBans, crossSimilarBans] = await Promise.all([
     fetchWickModLogs(guild, userID, { targetUsername }).catch(() => ({ wickPresent: isWickPresent(guild), wickLogsSeen: false, scannedChannels: [], entries: [] })),
     fetchAuditModerationHistory(guild, userID).catch(() => ({ auditReadable: false, entries: [], currentBan: null })),
     altDB.getMemberMessages(guild.id, userID, { limit: 25, includeDeleted: true }).catch(() => []),
     altDB.getRecentAlerts(guild.id, { limit: 30 }).catch(() => []),
-    crossServerBan.findOtherGuildBans(userID, guild.id, { includeLiveCheck: true }).catch(() => [])
+    crossServerBan.findOtherGuildBans(userID, guild.id, { includeLiveCheck: true }).catch(() => []),
+    altDetector.findCrossGuildSimilarBans(guild, userID, { minScore: 35, limit: 3 }).catch(() => [])
   ])
 
   const relatedAlerts = (recentAlerts || []).filter(a => a.suspectUserID === userID || a.candidateUserID === userID).slice(0, 5)
@@ -798,6 +800,7 @@ async function buildModerationDossier (guild, who) {
     isTimedOutNow ? `- 🔇 現在タイムアウト中（解除予定: ${formatJstDate(timeoutUntil)}）` : '',
     auditResult.currentBan ? `- 🔨 現在サーバーBAN中（BAN理由: ${auditResult.currentBan.reason || '理由未記載'}）` : '',
     otherGuildBans.length ? `- 🚨 他サーバーでBANされています（${otherGuildBans.length}件）` : '',
+    crossSimilarBans.length ? `- ⚠️ 他サーバーでBANされたユーザーとの類似候補あり（${crossSimilarBans.length}件、最高スコア ${crossSimilarBans[0].heuristic.score}/100）` : '',
     profile ? `- RoboPolice DB 記録ステータス: ${STATUS_LABELS[profile.status] || profile.status}${profile.statusAt ? `（${formatJstDate(profile.statusAt)}）` : ''}${profile.moderationReason ? ` / 理由: ${profile.moderationReason}` : ''}` : ''
   ].filter(Boolean)
 
@@ -810,7 +813,16 @@ async function buildModerationDossier (guild, who) {
       lines.push(`- 🚨 ${label} [${src}]${b.bannedAt ? ` / ${formatJstDate(b.bannedAt)}` : ''} / 理由: ${b.reason || '記載なし'}`)
     }
   } else {
-    lines.push('- BOT導入済みの他サーバーでのBAN履歴は見つかりませんでした')
+    lines.push('- BOT導入済みの他サーバーでの本人IDのBAN履歴は見つかりませんでした')
+  }
+  if (crossSimilarBans.length > 0) {
+    lines.push('', '## 他サーバーBAN者との類似候補（別アカウント・サブ垢の疑い）')
+    for (const item of crossSimilarBans) {
+      const p = item.candidateProfile
+      const gLabel = p.guildName && p.guildName !== p.guildID ? `${p.guildName} (${p.guildID})` : (p.guildID || '他サーバー')
+      const sigs = item.heuristic.signals.slice(0, 3).join(' / ')
+      lines.push(`- ⚠️ 候補: ${p.username || '不明'} (${p.userID}) — 他サーバー「${gLabel}」でBAN済み${p.moderationReason ? `（理由: ${p.moderationReason}）` : ''} / 類似スコア: ${item.heuristic.score}/100${sigs ? ` / 根拠: ${sigs}` : ''}`)
+    }
   }
 
   // Wick Bot modlogs

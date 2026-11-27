@@ -241,7 +241,9 @@ BAN・キック・違反者ロール付与の回避を目的とした再参加�
   - **Wick Bot 処罰・ケースログ連携**: サーバー内の Wick ログチャンネル（`#wick-logs` / `#modlogs` 等）の埋め込みをリアルタイム受信（`messageCreate`）＋オンデマンド走査で解析し、過去の Warn / Timeout / Kick / Ban / Quarantine / AutoMod 履歴を抽出します。Wick による隔離（Quarantine）・タイムアウト・キック・BAN はサブ垢検知用プロフィール DB にも自動連携されます。
   - **Discord 監査ログ＋RoboPolice DB**: Wick Bot や人間モデレーターが実行した BAN・キック・タイムアウト・メッセージ削除、サブ垢検知アラート、モデレーター削除済み・本人削除済みメッセージスナップショットを照合します。
 - **コピペ用 Wick Bot V5 スラッシュコマンド出力**: `/ban add`・`/timeout add`・`/kick`・`/warn`・`/quarantine add`・`/cases view`・`/notes add` 等、公式 V5 スラッシュコマンド構文に実際の対象ユーザー ID と違反ルール入りの `reason:` を埋めた形で提示します（高リスクなサブ垢検知アラートにもコピペ用 Wick コマンド候補を自動添付します）。※Discord の仕様上 BOT から他 BOT のスラッシュコマンドを直接実行できないため、履歴・ルール連携＋コピペ用コマンド生成で安全に運用できます。
-- **他サーバーBAN自動警告（`src/bot/modules/crossServerBan.js`・AIコストゼロ）**: BOT が導入されている複数サーバー間で BAN 状態を照合（DB `member_activity_profiles` ＋ BAN権限がある他サーバーへの Discord API リアルタイム確認、BAN解除時は自動同期で除外）し、①**他サーバーでBAN済みのユーザーが新規参加したとき**、②**在籍中のメンバーが他サーバーでBANされたとき**に、Discord サーバー設定のモデレーター専用チャンネルへ即座に警告とコピペ用 Wick スラッシュコマンドを通知します（自動処罰なし。`CROSS_GUILD_BAN_ALERT=false` で無効化可）。AI モデレーション相談（`get_moderation_dossier`）および `/altcheck find`・`/altcheck scan` でも他サーバーBAN履歴を自動表示します。
+- **他サーバーBAN自動警告＆他サーバーBAN者との類似アカウント検知（`src/bot/modules/crossServerBan.js`・`src/bot/modules/altDetector.js`）**:
+  - **本人IDの他サーバーBAN警告（AIコストゼロ）**: BOT が導入されている複数サーバー間で BAN 状態を照合（DB `member_activity_profiles` ＋ BAN権限がある他サーバーへの Discord API リアルタイム確認、BAN解除時は自動同期で除外）し、①**他サーバーでBAN済みのユーザーが新規参加したとき**、②**在籍中のメンバーが他サーバーでBANされたとき**に、Discord サーバー設定のモデレーター専用チャンネルへ即座に警告とコピペ用 Wick スラッシュコマンドを通知します（自動処罰なし。`CROSS_GUILD_BAN_ALERT=false` で無効化可）。
+  - **他サーバーBAN者との類似・別垢（サブ垢）検知**: 他サーバーでBANされているユーザー（DB履歴＋他サーバーBANリストの1時間キャッシュ）のプロフィール・アバター・**他サーバーでの過去発言（モデレーター削除済み含む）**・pgvector 意味ベクトルも照合対象に含め、別アカウントで参加・発言した類似人物を自動検知します（別サーバー間でタイミングだけが偶然近い一般新規ユーザーを誤検知しないよう、名前・アバター・文体・行動・意味のいずれかの一致根拠を必須化。`CROSS_GUILD_ALT_DETECTION=false` で無効化可）。AI モデレーション相談（`get_moderation_dossier`）および `/altcheck find`・`/altcheck scan`・`/altcheck compare` でも他サーバーBAN本人と類似候補の両方を自動表示します。
 
 ## 動作要件
 

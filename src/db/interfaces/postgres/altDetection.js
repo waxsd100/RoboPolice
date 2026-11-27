@@ -185,6 +185,23 @@ async function getCrossGuildBansForUsers (userIDs, excludeGuildID = '') {
   return grouped
 }
 
+async function getOtherGuildBannedProfiles (excludeGuildID = '', { limit = 150 } = {}) {
+  const { rows } = await pool.query(
+    `SELECT m.*, g.name AS guild_name
+     FROM member_activity_profiles m
+     LEFT JOIN guilds g ON g.id = m.guild_id
+     WHERE m.guild_id <> $1 AND m.status = 'banned'
+     ORDER BY COALESCE(m.status_at, m.updated_at) DESC
+     LIMIT $2`,
+    [excludeGuildID || '', limit]
+  )
+  return rows.map(r => ({
+    ...rowToProfile(r),
+    guildName: r.guild_name || null,
+    crossGuild: true
+  }))
+}
+
 async function recordMessageSnapshot (guildID, {
   messageID,
   authorID,
@@ -460,20 +477,86 @@ async function findSimilarAuthorsByEmbedding (guildID, excludeUserID, centroid, 
   }
 }
 
-async function hasRecentOffender (guildID, { days = 30 } = {}) {
+async function findSimilarBannedAuthorsAcrossGuilds (excludeGuildID, excludeUserID, centroid, { limit = 8, minMessages = 3, perAuthor = 40 } = {}) {
+  if (!Array.isArray(centroid) || centroid.length === 0) return []
+  if (!centroid.every(Number.isFinite)) return []
+  const literal = `[${centroid.join(',')}]`
+  try {
+    const { rows } = await pool.query(
+      `WITH banned_profiles AS (
+         SELECT guild_id, user_id
+         FROM member_activity_profiles
+         WHERE guild_id <> $1 AND user_id <> $2 AND status = 'banned'
+         ORDER BY COALESCE(status_at, updated_at) DESC
+         LIMIT 150
+       ),
+       centroids AS (
+         SELECT b.guild_id,
+                b.user_id AS author_id,
+                avg(m.embedding) AS centroid,
+                count(*)::int AS cnt
+         FROM banned_profiles b
+         JOIN LATERAL (
+           SELECT embedding
+           FROM messages
+           WHERE guild_id = b.guild_id AND author_id = b.user_id AND embedding IS NOT NULL
+           ORDER BY ts DESC
+           LIMIT $4
+         ) m ON true
+         GROUP BY b.guild_id, b.user_id
+         HAVING count(*) >= $5
+       )
+       SELECT guild_id,
+              author_id,
+              1 - (centroid <=> $3::halfvec) AS similarity,
+              cnt,
+              centroid::text AS centroid_text
+       FROM centroids
+       ORDER BY centroid <=> $3::halfvec
+       LIMIT $6`,
+      [excludeGuildID || '', excludeUserID || '', literal, perAuthor, minMessages, limit]
+    )
+    return rows.map(r => ({
+      guildID: r.guild_id,
+      authorID: r.author_id,
+      similarity: Number(r.similarity),
+      messageCount: r.cnt,
+      centroid: parseVectorText(r.centroid_text)
+    })).filter(r => Number.isFinite(r.similarity))
+  } catch (_) {
+    return []
+  }
+}
+
+async function hasRecentOffender (guildID, { days = 30, includeCrossGuild = true } = {}) {
   if (!guildID) return false
-  const cacheKey = `${guildID}:${days}`
+  const cacheKey = `${guildID}:${days}:${includeCrossGuild ? 'x' : 'l'}`
   const cached = recentOffenderCache.get(cacheKey)
   if (cached && cached.expiresAt > Date.now()) return cached.value
   const since = new Date(Date.now() - days * 86400 * 1000)
-  const { rows } = await pool.query(
-    `SELECT 1 FROM member_activity_profiles
-     WHERE guild_id = $1
-       AND status IN ('banned', 'kicked', 'restricted')
-       AND (status = 'restricted' OR COALESCE(status_at, updated_at) >= $2)
-     LIMIT 1`,
-    [guildID, since]
-  )
+  const { rows } = includeCrossGuild
+    ? await pool.query(
+      `SELECT 1 FROM member_activity_profiles
+       WHERE (
+         guild_id = $1
+         AND status IN ('banned', 'kicked', 'restricted')
+         AND (status = 'restricted' OR COALESCE(status_at, updated_at) >= $2)
+       ) OR (
+         guild_id <> $1
+         AND status = 'banned'
+         AND COALESCE(status_at, updated_at) >= $2
+       )
+       LIMIT 1`,
+      [guildID, since]
+    )
+    : await pool.query(
+      `SELECT 1 FROM member_activity_profiles
+       WHERE guild_id = $1
+         AND status IN ('banned', 'kicked', 'restricted')
+         AND (status = 'restricted' OR COALESCE(status_at, updated_at) >= $2)
+       LIMIT 1`,
+      [guildID, since]
+    )
   const value = rows.length > 0
   recentOffenderCache.set(cacheKey, { value, expiresAt: Date.now() + OFFENDER_CACHE_TTL_MS })
   return value
@@ -551,6 +634,7 @@ module.exports = {
   getCandidateProfiles,
   getCrossGuildBans,
   getCrossGuildBansForUsers,
+  getOtherGuildBannedProfiles,
   recordMessageSnapshot,
   updateSnapshotDeletionActor,
   snapshotMessagesBeforeDelete,
@@ -558,6 +642,7 @@ module.exports = {
   getRecentAuthorsMessages,
   getAuthorEmbeddingCentroid,
   findSimilarAuthorsByEmbedding,
+  findSimilarBannedAuthorsAcrossGuilds,
   hasRecentOffender,
   hasRecentAlert,
   recordAlert,

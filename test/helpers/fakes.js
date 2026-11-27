@@ -1048,6 +1048,11 @@ function installAltDetectionStore ({ enabled = {}, profiles = [], messages = [],
     }
     return grouped
   }
+  store.getOtherGuildBannedProfiles = async (excludeGuildID = '', { limit = 150 } = {}) => [...state.profiles.values()]
+    .filter(p => p.guildID !== excludeGuildID && p.status === 'banned')
+    .sort((a, b) => (b.statusAt ? new Date(b.statusAt).getTime() : 0) - (a.statusAt ? new Date(a.statusAt).getTime() : 0))
+    .slice(0, limit)
+    .map(p => ({ ...p, guildName: p.guildName || null, crossGuild: true }))
   store.recordMessageSnapshot = async (guildID, {
     messageID,
     authorID,
@@ -1169,35 +1174,52 @@ function installAltDetectionStore ({ enabled = {}, profiles = [], messages = [],
     return grouped
   }
   store.getAuthorEmbeddingCentroid = async (guildID, userID) => state.centroids[`${guildID}:${userID}`] || null
+  const cosineVec = (a, b) => {
+    if (!Array.isArray(b) || a.length !== b.length) return -1
+    let dot = 0
+    let na = 0
+    let nb = 0
+    for (let i = 0; i < a.length; i++) {
+      dot += a[i] * b[i]
+      na += a[i] * a[i]
+      nb += b[i] * b[i]
+    }
+    return na && nb ? dot / (Math.sqrt(na) * Math.sqrt(nb)) : -1
+  }
   store.findSimilarAuthorsByEmbedding = async (guildID, excludeUserID, centroid, { limit = 10 } = {}) => {
     if (!Array.isArray(centroid) || !centroid.length) return []
-    const cosine = (a, b) => {
-      if (!Array.isArray(b) || a.length !== b.length) return -1
-      let dot = 0
-      let na = 0
-      let nb = 0
-      for (let i = 0; i < a.length; i++) {
-        dot += a[i] * b[i]
-        na += a[i] * a[i]
-        nb += b[i] * b[i]
-      }
-      return na && nb ? dot / (Math.sqrt(na) * Math.sqrt(nb)) : -1
-    }
     const matches = []
     for (const [key, vec] of Object.entries(state.centroids)) {
       const [gId, uId] = key.split(':')
       if (gId !== guildID || uId === excludeUserID) continue
-      const sim = cosine(centroid, vec)
+      const sim = cosineVec(centroid, vec)
       if (sim > -1) matches.push({ authorID: uId, similarity: sim, messageCount: 3, centroid: vec })
     }
     return matches.sort((a, b) => b.similarity - a.similarity).slice(0, limit)
   }
-  store.hasRecentOffender = async (guildID, { days = 30 } = {}) => {
+  store.findSimilarBannedAuthorsAcrossGuilds = async (excludeGuildID, excludeUserID, centroid, { limit = 8 } = {}) => {
+    if (!Array.isArray(centroid) || !centroid.length) return []
+    const matches = []
+    for (const [key, vec] of Object.entries(state.centroids)) {
+      const [gId, uId] = key.split(':')
+      if (gId === excludeGuildID || uId === excludeUserID) continue
+      const prof = state.profiles.get(`${gId}:${uId}`)
+      if (prof?.status !== 'banned') continue
+      const sim = cosineVec(centroid, vec)
+      if (sim > -1) matches.push({ guildID: gId, authorID: uId, similarity: sim, messageCount: 3, centroid: vec })
+    }
+    return matches.sort((a, b) => b.similarity - a.similarity).slice(0, limit)
+  }
+  store.hasRecentOffender = async (guildID, { days = 30, includeCrossGuild = true } = {}) => {
     const since = Date.now() - days * 86400 * 1000
     for (const p of state.profiles.values()) {
-      if (p.guildID !== guildID) continue
-      if (p.status === 'restricted') return true
-      if (p.status === 'banned' || p.status === 'kicked') {
+      if (p.guildID === guildID) {
+        if (p.status === 'restricted') return true
+        if (p.status === 'banned' || p.status === 'kicked') {
+          const ref = p.statusAt ? new Date(p.statusAt).getTime() : (p.updatedAt ? new Date(p.updatedAt).getTime() : Date.now())
+          if (ref >= since) return true
+        }
+      } else if (includeCrossGuild && p.status === 'banned') {
         const ref = p.statusAt ? new Date(p.statusAt).getTime() : (p.updatedAt ? new Date(p.updatedAt).getTime() : Date.now())
         if (ref >= since) return true
       }

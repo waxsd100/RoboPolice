@@ -152,6 +152,10 @@ function isGlobalEnabled () {
   return process.env.ALT_DETECTION !== 'false'
 }
 
+function isCrossGuildAltEnabled () {
+  return process.env.CROSS_GUILD_ALT_DETECTION !== 'false' && process.env.CROSS_GUILD_BAN_ALERT !== 'false'
+}
+
 // Role IDs treated as offenders (same evasion/priority rules as banned/kicked accounts).
 // Unset uses DEFAULT_OFFENDER_ROLE_IDS; set to empty string to disable.
 function offenderRoleIds () {
@@ -968,7 +972,13 @@ function scorePair ({
   let raw = 0
   const signals = []
   const counterSignals = []
+  const isCrossGuild = Boolean(
+    candidateProfile?.crossGuild ||
+    suspectProfile?.crossGuild ||
+    (suspectProfile?.guildID && candidateProfile?.guildID && suspectProfile.guildID !== candidateProfile.guildID)
+  )
   const metrics = {
+    crossGuild: isCrossGuild,
     timingDeltaMs: null,
     accountAgeAtJoinMs: null,
     createdAfterMod: false,
@@ -1049,19 +1059,19 @@ function scorePair ({
       const clampedDelta = Math.max(0, delta)
       if (modIsOffender) {
         const actionLabel = modProfile.status === 'banned'
-          ? 'BAN'
+          ? (isCrossGuild ? '他サーバーでのBAN' : 'BAN')
           : (modProfile.status === 'kicked' ? 'キック' : '違反者ロール付与')
         if (clampedDelta <= 2 * 3600 * 1000) {
-          raw += 35
+          raw += isCrossGuild ? 16 : 35
           signals.push(`処分側（${actionLabel}）から${formatDurationJa(clampedDelta)}後に他方が参加（極めて近接）`)
         } else if (clampedDelta <= 24 * 3600 * 1000) {
-          raw += 25
+          raw += isCrossGuild ? 10 : 25
           signals.push(`処分側（${actionLabel}）から${formatDurationJa(clampedDelta)}後に他方が参加`)
         } else if (clampedDelta <= 7 * 86400 * 1000) {
-          raw += 15
+          raw += isCrossGuild ? 5 : 15
           signals.push(`処分側（${actionLabel}）から${formatDurationJa(clampedDelta)}後に他方が参加`)
         } else if (clampedDelta <= 30 * 86400 * 1000) {
-          raw += 8
+          raw += isCrossGuild ? 3 : 8
           signals.push(`処分側（${actionLabel}）から${formatDurationJa(clampedDelta)}後に他方が参加`)
         }
       } else if (modProfile?.status === 'left' && clampedDelta <= 24 * 3600 * 1000) {
@@ -1091,14 +1101,14 @@ function scorePair ({
       const createdAfter = createdAt.getTime() - modStatusAt.getTime()
       if (createdAfter >= -60 * 1000 && createdAfter <= 14 * 86400 * 1000) {
         metrics.createdAfterMod = true
-        raw += 10
-        signals.push('BAN/キック/違反者ロール付与後に新規作成されたアカウント')
+        raw += isCrossGuild ? 5 : 10
+        signals.push(isCrossGuild ? '他サーバーでのBAN後に新規作成されたアカウント' : 'BAN/キック/違反者ロール付与後に新規作成されたアカウント')
       }
     }
   }
 
-  // 3. Invite code match
-  if (suspectProfile?.inviteCode && candidateProfile?.inviteCode && suspectProfile.inviteCode === candidateProfile.inviteCode) {
+  // 3. Invite code match (same server only)
+  if (!isCrossGuild && suspectProfile?.inviteCode && candidateProfile?.inviteCode && suspectProfile.inviteCode === candidateProfile.inviteCode) {
     metrics.inviteMatch = true
     raw += 15
     signals.push(`同じ招待リンク（${suspectProfile.inviteCode}）から参加`)
@@ -1337,14 +1347,16 @@ function scorePair ({
       }
     }
 
-    const chan = channelOverlap(suspectMessages, candidateMessages)
-    metrics.channelOverlap = Number(chan.score.toFixed(3))
-    if (chan.sharedCount >= 3 && (chan.score >= 0.5 || chan.overlapCoeff >= 0.75)) {
-      raw += 10
-      signals.push(`よく発言するチャンネルが強く重複（${chan.sharedCount}チャンネル）`)
-    } else if (chan.sharedCount >= 2 && (chan.score >= 0.5 || chan.overlapCoeff >= 0.65)) {
-      raw += 8
-      signals.push(`よく発言するチャンネルが重複（${chan.sharedCount}チャンネル）`)
+    if (!isCrossGuild) {
+      const chan = channelOverlap(suspectMessages, candidateMessages)
+      metrics.channelOverlap = Number(chan.score.toFixed(3))
+      if (chan.sharedCount >= 3 && (chan.score >= 0.5 || chan.overlapCoeff >= 0.75)) {
+        raw += 10
+        signals.push(`よく発言するチャンネルが強く重複（${chan.sharedCount}チャンネル）`)
+      } else if (chan.sharedCount >= 2 && (chan.score >= 0.5 || chan.overlapCoeff >= 0.65)) {
+        raw += 8
+        signals.push(`よく発言するチャンネルが重複（${chan.sharedCount}チャンネル）`)
+      }
     }
 
     // Activity handover / disjoint lifespan (catches disguised & sleeper alts where A stops -> B starts)
@@ -1353,13 +1365,13 @@ function scorePair ({
       if (handover.disjoint && handover.gapMs != null) {
         metrics.handoverGapMs = handover.gapMs
         if (handover.gapMs <= 24 * 3600 * 1000) {
-          raw += 18
+          raw += isCrossGuild ? 10 : 18
           signals.push(`活動期間の入れ替わりを検知（一方の最終発言から${formatDurationJa(Math.max(60000, handover.gapMs))}後に他方が活動開始・重複なし）`)
         } else if (handover.gapMs <= 7 * 86400 * 1000) {
-          raw += 12
+          raw += isCrossGuild ? 6 : 12
           signals.push(`活動期間の入れ替わりあり（一方の停止から${formatDurationJa(handover.gapMs)}後に他方が活動開始・重複なし）`)
         } else if (handover.gapMs <= 30 * 86400 * 1000 && (suspIsFormer || candIsFormer)) {
-          raw += 8
+          raw += isCrossGuild ? 4 : 8
           signals.push(`処分・退出側の活動停止後に他方が活動開始（間隔 ${formatDurationJa(handover.gapMs)}・重複なし）`)
         }
       }
@@ -1418,6 +1430,33 @@ function scorePair ({
     if (suspectDel.modDeletedCount > 0) parts.push(`調査対象 ${suspectDel.modDeletedCount} 件`)
     if (candDel.modDeletedCount > 0) parts.push(`候補 ${candDel.modDeletedCount} 件`)
     signals.push(`モデレーターによる削除済み発言を照合対象に含めています（${parts.join('・')}）`)
+  }
+
+  // Cross-guild anti-false-positive gate: across different servers, pure timing + young-account
+  // coincidence without ANY identity or behavioral similarity must never trigger an AI call or alert.
+  if (isCrossGuild) {
+    const hasIdentityLink = Boolean(metrics.avatarHashMatch || metrics.nameSimilarity >= 0.45)
+    const hasBehavioralLink = Boolean(
+      (metrics.stylometrySimilarity != null && metrics.stylometrySimilarity >= 0.82) ||
+      (metrics.ngramSimilarity != null && metrics.ngramSimilarity >= 0.10) ||
+      (metrics.topicAgnosticGrammarSim != null && metrics.topicAgnosticGrammarSim >= 0.25) ||
+      (metrics.functionWordSim != null && metrics.functionWordSim >= 0.72) ||
+      (metrics.compressionSimilarity != null && metrics.compressionSimilarity >= 0.22) ||
+      (metrics.impostorsScore != null && metrics.impostorsScore >= 0.55) ||
+      (metrics.distinctiveVocabOverlap != null && metrics.distinctiveVocabOverlap >= 0.08) ||
+      (metrics.endingSimilarity != null && metrics.endingSimilarity >= 0.70) ||
+      metrics.sharedEmojis.length >= 2 ||
+      metrics.sharedMentionTargets.length >= 2 ||
+      metrics.sharedUrlDomains.length >= 1 ||
+      (metrics.embeddingSimilarity != null && metrics.embeddingSimilarity >= 0.70) ||
+      metrics.crossAccountDeleteReposts > 0
+    )
+    if (!hasIdentityLink && !hasBehavioralLink) {
+      raw = Math.min(raw, 25)
+    } else if (raw >= 25) {
+      const srcGuildName = candidateProfile?.guildName || candidateProfile?.guildID || suspectProfile?.guildName || suspectProfile?.guildID || '他サーバー'
+      signals.push(`他サーバー「${srcGuildName}」でBAN済みのアカウントとの類似一致`)
+    }
   }
 
   const score = Math.max(0, Math.min(100, Math.round(raw)))
@@ -1583,6 +1622,11 @@ async function resolveProfile (guild, userID) {
   const member = guild.members?.get?.(userID) || null
   const liveProfile = member ? profileFromMember(member) : null
   if (dbProfile || liveProfile) return mergeProfiles(dbProfile, liveProfile)
+  if (isCrossGuildAltEnabled()) {
+    const crossServerBan = require('./crossServerBan')
+    const crossBanned = await crossServerBan.findOtherGuildBannedProfile(userID, guild.id).catch(() => null)
+    if (crossBanned) return crossBanned
+  }
   let restUser = null
   if (typeof global.bot?.getRESTUser === 'function') {
     restUser = await global.bot.getRESTUser(userID).catch(() => null)
@@ -1721,15 +1765,67 @@ function pickImpostorMessages (msgsByAuthor, excludeIds = [], maxImpostors = 15)
   return lists
 }
 
+async function loadCrossGuildBannedProfiles (excludeGuildID, excludeUserID = '', { limit = 150, now = new Date() } = {}) {
+  if (!isCrossGuildAltEnabled()) return []
+  const crossServerBan = require('./crossServerBan')
+  const [dbRows, restRows] = await Promise.all([
+    typeof altDB.getOtherGuildBannedProfiles === 'function'
+      ? altDB.getOtherGuildBannedProfiles(excludeGuildID, { limit }).catch(() => [])
+      : Promise.resolve([]),
+    crossServerBan.fetchOtherGuildBannedUsers(excludeGuildID, { now: now instanceof Date ? now.getTime() : Date.now() }).catch(() => [])
+  ])
+
+  const byUser = new Map()
+  const add = (p, fromDB) => {
+    if (!p?.userID || p.userID === excludeUserID || p.guildID === excludeGuildID) return
+    const cachedGuild = global.bot?.guilds?.get?.(p.guildID)
+    const guildName = cachedGuild?.name || p.guildName || p.guildID
+    const prev = byUser.get(p.userID)
+    if (!prev) {
+      byUser.set(p.userID, {
+        ...p,
+        guildName,
+        crossGuild: true,
+        crossGuildNames: [guildName],
+        _fromDB: Boolean(fromDB)
+      })
+      return
+    }
+    if (!prev.crossGuildNames.includes(guildName)) prev.crossGuildNames.push(guildName)
+    if (fromDB && !prev._fromDB) {
+      byUser.set(p.userID, {
+        ...p,
+        guildName,
+        crossGuild: true,
+        crossGuildNames: prev.crossGuildNames,
+        _fromDB: true
+      })
+    } else if (!prev.avatarHash && p.avatarHash) {
+      prev.avatarHash = p.avatarHash
+      prev.avatarURL = prev.avatarURL || p.avatarURL
+    }
+  }
+
+  for (const p of dbRows || []) add(p, true)
+  for (const p of restRows || []) add(p, false)
+  return [...byUser.values()]
+}
+
 async function findCandidates (guild, suspectProfile, suspectMessages = [], {
   trigger = 'manual',
   now = new Date(),
   limit = 5,
   includeGuildMembers = true,
+  includeCrossGuild = true,
   liveMessagesByAuthor = null,
   liveAuthors = null
 } = {}) {
-  const stored = await altDB.getCandidateProfiles(guild.id, suspectProfile.userID, { limit: 200 }).catch(() => [])
+  const [stored, crossBanned] = await Promise.all([
+    altDB.getCandidateProfiles(guild.id, suspectProfile.userID, { limit: 200 }).catch(() => []),
+    includeCrossGuild && isCrossGuildAltEnabled()
+      ? loadCrossGuildBannedProfiles(guild.id, suspectProfile.userID, { limit: 150, now })
+      : Promise.resolve([])
+  ])
   const candidateMap = new Map()
   for (const p of stored) {
     if (p?.userID && p.userID !== suspectProfile.userID) candidateMap.set(p.userID, p)
@@ -1755,6 +1851,12 @@ async function findCandidates (guild, suspectProfile, suspectMessages = [], {
     }
   }
 
+  // Merge banned accounts from OTHER servers without overwriting a same-server profile.
+  for (const p of crossBanned) {
+    if (!p?.userID || p.userID === suspectProfile.userID) continue
+    if (!candidateMap.has(p.userID)) candidateMap.set(p.userID, p)
+  }
+
   let recentMsgsByAuthor = new Map()
   if (suspectMessages.length >= 1) {
     recentMsgsByAuthor = await altDB.getRecentAuthorsMessages(guild.id, suspectProfile.userID, {
@@ -1773,11 +1875,12 @@ async function findCandidates (guild, suspectProfile, suspectMessages = [], {
   }
 
   // Semantic discovery via pgvector: pulls behaviorally/topically similar accounts directly into
-  // the candidate pool even when username, avatar, ID, and join date are completely disguised.
+  // the candidate pool (both same-guild and banned accounts in other guilds) even when username,
+  // avatar, ID, and join date are completely disguised.
   let suspectCentroid = null
   const centroidByAuthor = new Map()
   if (suspectMessages.length >= 3) {
-    suspectCentroid = await altDB.getAuthorEmbeddingCentroid(guild.id, suspectProfile.userID).catch(() => null)
+    suspectCentroid = await altDB.getAuthorEmbeddingCentroid(suspectProfile.guildID || guild.id, suspectProfile.userID).catch(() => null)
     if (suspectCentroid && typeof altDB.findSimilarAuthorsByEmbedding === 'function') {
       const semMatches = await altDB.findSimilarAuthorsByEmbedding(
         guild.id,
@@ -1811,6 +1914,47 @@ async function findCandidates (guild, suspectProfile, suspectMessages = [], {
         }
       }
     }
+
+    if (suspectCentroid && includeCrossGuild && isCrossGuildAltEnabled() && typeof altDB.findSimilarBannedAuthorsAcrossGuilds === 'function') {
+      const crossSem = await altDB.findSimilarBannedAuthorsAcrossGuilds(
+        guild.id,
+        suspectProfile.userID,
+        suspectCentroid,
+        { limit: 8 }
+      ).catch(() => [])
+      for (const m of crossSem) {
+        if (!m?.authorID || m.authorID === suspectProfile.userID || !m.guildID) continue
+        if (m.centroid && !centroidByAuthor.has(m.authorID)) centroidByAuthor.set(m.authorID, m.centroid)
+        if (!recentMsgsByAuthor.has(m.authorID)) {
+          const hist = await altDB.getMemberMessages(m.guildID, m.authorID, { limit: 40 }).catch(() => [])
+          if (hist.length) recentMsgsByAuthor.set(m.authorID, hist)
+        }
+        if (!candidateMap.has(m.authorID)) {
+          const prof = await altDB.getMemberProfile(m.guildID, m.authorID).catch(() => null)
+          const gName = global.bot?.guilds?.get?.(m.guildID)?.name || m.guildID
+          candidateMap.set(m.authorID, prof
+            ? { ...prof, guildName: gName, crossGuild: true, _fromDB: true }
+            : {
+                guildID: m.guildID,
+                guildName: gName,
+                crossGuild: true,
+                _fromDB: true,
+                userID: m.authorID,
+                username: null,
+                globalName: null,
+                nick: null,
+                avatarHash: null,
+                avatarURL: null,
+                accountCreatedAt: snowflakeToDate(m.authorID),
+                joinedAt: null,
+                inviteCode: null,
+                status: 'banned',
+                statusAt: null,
+                moderationReason: null
+              })
+        }
+      }
+    }
   }
 
   for (const authorID of recentMsgsByAuthor.keys()) {
@@ -1833,19 +1977,23 @@ async function findCandidates (guild, suspectProfile, suspectMessages = [], {
   }
 
   // Always load historical (including mod-deleted & self-deleted) messages of recent offenders
-  // BEFORE ranking, so disguised alts with 0 name/avatar/timing similarity are still compared
-  // against every recent offender's writing style and vocabulary.
+  // (both same-guild and cross-guild DB banned accounts) BEFORE ranking, so disguised alts with
+  // 0 name/avatar/timing similarity are still compared against their writing style & vocabulary.
   if (suspectMessages.length >= 1) {
-    const missingOffenders = [...candidateMap.values()]
-      .filter(p => MOD_STATUSES.has(p.status) && !recentMsgsByAuthor.has(p.userID))
+    const missingLocalOffenders = [...candidateMap.values()]
+      .filter(p => !p.crossGuild && MOD_STATUSES.has(p.status) && !recentMsgsByAuthor.has(p.userID))
+      .sort((a, b) => (b.statusAt ? new Date(b.statusAt).getTime() : 0) - (a.statusAt ? new Date(a.statusAt).getTime() : 0))
+      .slice(0, 25)
+    const missingCrossOffenders = [...candidateMap.values()]
+      .filter(p => p.crossGuild && p._fromDB && p.guildID && !recentMsgsByAuthor.has(p.userID))
       .sort((a, b) => (b.statusAt ? new Date(b.statusAt).getTime() : 0) - (a.statusAt ? new Date(a.statusAt).getTime() : 0))
       .slice(0, 25)
     const missingLeft = [...candidateMap.values()]
-      .filter(p => p.status === 'left' && !recentMsgsByAuthor.has(p.userID))
+      .filter(p => !p.crossGuild && p.status === 'left' && !recentMsgsByAuthor.has(p.userID))
       .sort((a, b) => (b.statusAt ? new Date(b.statusAt).getTime() : 0) - (a.statusAt ? new Date(a.statusAt).getTime() : 0))
       .slice(0, 5)
-    for (const p of [...missingOffenders, ...missingLeft]) {
-      const msgs = await altDB.getMemberMessages(guild.id, p.userID, { limit: 40 }).catch(() => [])
+    for (const p of [...missingLocalOffenders, ...missingCrossOffenders, ...missingLeft]) {
+      const msgs = await altDB.getMemberMessages(p.guildID || guild.id, p.userID, { limit: 40 }).catch(() => [])
       if (msgs.length >= 1) recentMsgsByAuthor.set(p.userID, msgs)
     }
   }
@@ -1883,7 +2031,7 @@ async function findCandidates (guild, suspectProfile, suspectMessages = [], {
       if (item.candidateMessages.length < 3) continue
       let candCentroid = centroidByAuthor.get(item.candidateProfile.userID) || null
       if (suspectCentroid && !centroidByAuthor.has(item.candidateProfile.userID)) {
-        candCentroid = await altDB.getAuthorEmbeddingCentroid(guild.id, item.candidateProfile.userID).catch(() => null)
+        candCentroid = await altDB.getAuthorEmbeddingCentroid(item.candidateProfile.guildID || guild.id, item.candidateProfile.userID).catch(() => null)
         if (candCentroid) centroidByAuthor.set(item.candidateProfile.userID, candCentroid)
       }
       const impostors = pickImpostorMessages(recentMsgsByAuthor, [suspectProfile.userID, item.candidateProfile.userID])
@@ -1951,12 +2099,15 @@ function formatProfileBlock (profile) {
     `ユーザー名: ${profile.username || '不明'}`,
     `表示名(globalName): ${profile.globalName || 'なし'}`,
     `サーバーニックネーム: ${profile.nick || 'なし'}`,
-    `ステータス: ${statusLabelJa(profile.status)}`,
+    `ステータス: ${profile.crossGuild ? `他サーバー「${profile.guildName || profile.guildID}」でBAN済み` : statusLabelJa(profile.status)}`,
     `アカウント作成日時: ${formatDateIso(profile.accountCreatedAt)}`,
     `サーバー参加日時: ${formatDateIso(profile.joinedAt)}`,
     `使用招待コード: ${profile.inviteCode || '不明'}`,
     `カスタムアバター設定: ${profile.avatarHash ? 'あり' : 'デフォルト'}`
   ]
+  if (profile.crossGuild) {
+    lines.push(`記録元サーバー: 他サーバー「${profile.guildName || profile.guildID}」(${profile.guildID || '不明'}) ※調査対象とは別サーバーでのBAN記録`)
+  }
   if (profile.statusAt) lines.push(`ステータス更新日時: ${formatDateIso(profile.statusAt)}`)
   if (profile.moderationReason) lines.push(`BAN/キック理由: ${profile.moderationReason}`)
   return lines.join('\n')
@@ -2182,7 +2333,12 @@ function formatUserLine (profile, lang = 'ja') {
   const name = profile.username
     ? `${profile.username}${profile.globalName && profile.globalName !== profile.username ? ` (${profile.globalName})` : ''}`
     : (lang === 'en' ? 'Unknown' : '不明')
-  const status = lang === 'en' ? statusLabelEn(profile.status) : statusLabelJa(profile.status)
+  const baseStatus = lang === 'en' ? statusLabelEn(profile.status) : statusLabelJa(profile.status)
+  const status = profile.crossGuild
+    ? (lang === 'en'
+        ? `Banned in other server (${profile.guildName || profile.guildID})`
+        : `他サーバー「${profile.guildName || profile.guildID}」でBAN済み`)
+    : baseStatus
   const createdTs = profile.accountCreatedAt ? `<t:${Math.floor(new Date(profile.accountCreatedAt).getTime() / 1000)}:R>` : (lang === 'en' ? 'Unknown' : '不明')
   const lines = [
     `<@${profile.userID}> — **${name}** (\`${profile.userID}\`)`,
@@ -2198,6 +2354,8 @@ function formatUserLine (profile, lang = 'ja') {
 
 function buildAlertEmbed ({ suspectProfile, candidateProfile, heuristic, ai, trigger = 'join', lang = 'ja' }) {
   const verdict = ai?.verdict || 'possible_alt'
+  const isCrossGuild = Boolean(candidateProfile?.crossGuild || heuristic?.metrics?.crossGuild)
+  const crossServerName = candidateProfile?.guildName || candidateProfile?.guildID || '他サーバー'
   const color = verdict === 'likely_alt'
     ? EMBED_COLORS.RED
     : (verdict === 'possible_alt' ? EMBED_COLORS.YELLOW_ORANGE : EMBED_COLORS.PURPLED_BLUE)
@@ -2220,7 +2378,9 @@ function buildAlertEmbed ({ suspectProfile, candidateProfile, heuristic, ai, tri
       value: formatUserLine(suspectProfile, lang)
     },
     {
-      name: lang === 'en' ? 'Candidate account (B)' : '一致候補アカウント (B)',
+      name: isCrossGuild
+        ? (lang === 'en' ? 'Cross-server banned candidate (B)' : '他サーバーBANの一致候補 (B)')
+        : (lang === 'en' ? 'Candidate account (B)' : '一致候補アカウント (B)'),
       value: formatUserLine(candidateProfile, lang)
     },
     {
@@ -2250,15 +2410,23 @@ function buildAlertEmbed ({ suspectProfile, candidateProfile, heuristic, ai, tri
     const { formatWickSlashCommand } = require('./wickModeration')
     const candID = candidateProfile?.userID || '不明'
     const isSevere = verdict === 'likely_alt' && (candidateProfile?.status === 'banned' || candidateProfile?.status === 'kicked')
+    const banReason = isCrossGuild
+      ? (lang === 'en'
+          ? `Suspected alt of user banned in ${crossServerName} (matched: ${candID})`
+          : `他鯖(${crossServerName})BAN者(${candID})と類似・サブ垢の疑い`)
+      : (lang === 'en'
+          ? `Alt / ban evasion suspected (matched: ${candID})`
+          : `BAN回避・サブ垢の疑い (一致候補: ${candID})`)
+    const quarantineReason = isCrossGuild
+      ? (lang === 'en'
+          ? `Similar to user banned in ${crossServerName} — under review (${candID})`
+          : `他鯖(${crossServerName})BAN者(${candID})との類似疑いのため確認中`)
+      : (lang === 'en'
+          ? `Suspected alt account under review (matched: ${candID})`
+          : `サブ垢疑いのため確認中 (一致候補: ${candID})`)
     const primaryCmd = isSevere
-      ? formatWickSlashCommand('ban', {
-        user: suspectProfile.userID,
-        reason: lang === 'en' ? `Alt / ban evasion suspected (matched: ${candID})` : `BAN回避・サブ垢の疑い (一致候補: ${candID})`
-      })
-      : formatWickSlashCommand('quarantine', {
-        user: suspectProfile.userID,
-        reason: lang === 'en' ? `Suspected alt account under review (matched: ${candID})` : `サブ垢疑いのため確認中 (一致候補: ${candID})`
-      })
+      ? formatWickSlashCommand('ban', { user: suspectProfile.userID, reason: banReason })
+      : formatWickSlashCommand('quarantine', { user: suspectProfile.userID, reason: quarantineReason })
     const casesCmd = formatWickSlashCommand('cases', { user: suspectProfile.userID })
     fields.push({
       name: lang === 'en' ? 'Wick Slash Command (Copy & Paste)' : 'Wick コマンド候補（コピペ用）',
@@ -2267,11 +2435,17 @@ function buildAlertEmbed ({ suspectProfile, candidateProfile, heuristic, ai, tri
   }
 
   return {
-    title: lang === 'en' ? '⚠️ Alt-Account Alert (Staff Review Only)' : '⚠️ サブ垢検知アラート（要スタッフ確認）',
+    title: isCrossGuild
+      ? (lang === 'en' ? '⚠️ Similar to Cross-Server Banned User (Staff Review Only)' : '⚠️ 他サーバーBAN者との類似アカウント検知（要スタッフ確認）')
+      : (lang === 'en' ? '⚠️ Alt-Account Alert (Staff Review Only)' : '⚠️ サブ垢検知アラート（要スタッフ確認）'),
     color,
-    description: lang === 'en'
-      ? 'A potential alt account was detected. **No automatic punishment was taken** — please review the evidence below before acting.'
-      : '同一人物のサブアカウント（BAN/キック回避等）の疑いが検知されました。**自動処罰は行っていません。** 下記の根拠・反証を確認のうえスタッフがご判断ください。',
+    description: isCrossGuild
+      ? (lang === 'en'
+          ? `An account similar to a user **banned in another server (${crossServerName})** was detected. **No automatic punishment was taken** — please review the evidence below before acting.`
+          : `他サーバー（**${crossServerName}**）でBANされているユーザーと類似するアカウント（サブ垢・同一人物の疑い）が検知されました。**自動処罰は行っていません。** 下記の根拠・反証を確認のうえスタッフがご判断ください。`)
+      : (lang === 'en'
+          ? 'A potential alt account was detected. **No automatic punishment was taken** — please review the evidence below before acting.'
+          : '同一人物のサブアカウント（BAN/キック回避等）の疑いが検知されました。**自動処罰は行っていません。** 下記の根拠・反証を確認のうえスタッフがご判断ください。'),
     fields,
     footer: {
       text: lang === 'en'
@@ -2520,7 +2694,7 @@ async function onMemberJoin (guild, member, { inviteCode = null, now = new Date(
     if (consumeAutoAiBudget(guild.id, now)) {
       let candMsgs = cand.candidateMessages
       if (!candMsgs || candMsgs.length === 0) {
-        candMsgs = await altDB.getMemberMessages(guild.id, cand.candidateProfile.userID, { limit: 40 }).catch(() => [])
+        candMsgs = await altDB.getMemberMessages(cand.candidateProfile.guildID || guild.id, cand.candidateProfile.userID, { limit: 40 }).catch(() => [])
       }
       ai = await analyzeWithGemini({
         guildID: guild.id,
@@ -2982,9 +3156,9 @@ async function onMessage (message, { now = new Date() } = {}) {
 // --- Manual moderator investigations (/altcheck) ---
 
 async function investigateUser (guild, userID, { now = new Date(), fetchLiveChannels = true } = {}) {
-  const [baseProfile, dbMessages, liveScan] = await Promise.all([
-    resolveProfile(guild, userID),
-    altDB.getMemberMessages(guild.id, userID, { limit: 50 }).catch(() => []),
+  const baseProfile = await resolveProfile(guild, userID)
+  const [dbMessages, liveScan] = await Promise.all([
+    altDB.getMemberMessages(baseProfile.guildID || guild.id, userID, { limit: 50 }).catch(() => []),
     fetchLiveChannels
       ? fetchAllGuildChannelMessages(guild)
       : Promise.resolve({ byAuthor: new Map(), authors: new Map(), channelsScanned: 0, totalMessages: 0 })
@@ -3004,7 +3178,7 @@ async function investigateUser (guild, userID, { now = new Date(), fetchLiveChan
   if (topCandidate && topCandidate.heuristic.score >= 15) {
     let candMsgs = topCandidate.candidateMessages
     if (!candMsgs || candMsgs.length === 0) {
-      candMsgs = await altDB.getMemberMessages(guild.id, topCandidate.candidateProfile.userID, { limit: 40 }).catch(() => [])
+      candMsgs = await altDB.getMemberMessages(topCandidate.candidateProfile.guildID || guild.id, topCandidate.candidateProfile.userID, { limit: 40 }).catch(() => [])
     }
     ai = await analyzeWithGemini({
       guildID: guild.id,
@@ -3027,14 +3201,16 @@ async function investigateUser (guild, userID, { now = new Date(), fetchLiveChan
 }
 
 async function compareUsers (guild, userID1, userID2, { now = new Date(), fetchLiveChannels = true } = {}) {
-  const [baseSuspect, baseCandidate, dbSuspectMsgs, dbCandidateMsgs, liveScan] = await Promise.all([
+  const [baseSuspect, baseCandidate, liveScan] = await Promise.all([
     resolveProfile(guild, userID1),
     resolveProfile(guild, userID2),
-    altDB.getMemberMessages(guild.id, userID1, { limit: 50 }).catch(() => []),
-    altDB.getMemberMessages(guild.id, userID2, { limit: 50 }).catch(() => []),
     fetchLiveChannels
       ? fetchAllGuildChannelMessages(guild)
       : Promise.resolve({ byAuthor: new Map(), authors: new Map(), channelsScanned: 0, totalMessages: 0 })
+  ])
+  const [dbSuspectMsgs, dbCandidateMsgs] = await Promise.all([
+    altDB.getMemberMessages(baseSuspect.guildID || guild.id, userID1, { limit: 50 }).catch(() => []),
+    altDB.getMemberMessages(baseCandidate.guildID || guild.id, userID2, { limit: 50 }).catch(() => [])
   ])
   const suspectProfile = liveScan.authors.get(userID1) ? mergeProfiles(baseSuspect, liveScan.authors.get(userID1)) : baseSuspect
   const candidateProfile = liveScan.authors.get(userID2) ? mergeProfiles(baseCandidate, liveScan.authors.get(userID2)) : baseCandidate
@@ -3046,8 +3222,8 @@ async function compareUsers (guild, userID1, userID2, { now = new Date(), fetchL
   let impostors = null
   if (suspectMessages.length >= 3 && candidateMessages.length >= 3) {
     const [cA, cB, dbRecent] = await Promise.all([
-      altDB.getAuthorEmbeddingCentroid(guild.id, userID1).catch(() => null),
-      altDB.getAuthorEmbeddingCentroid(guild.id, userID2).catch(() => null),
+      altDB.getAuthorEmbeddingCentroid(suspectProfile.guildID || guild.id, userID1).catch(() => null),
+      altDB.getAuthorEmbeddingCentroid(candidateProfile.guildID || guild.id, userID2).catch(() => null),
       altDB.getRecentAuthorsMessages(guild.id, '', { authorLimit: 20, perAuthor: 25, days: 30 }).catch(() => new Map())
     ])
     suspectCentroid = cA
@@ -3091,12 +3267,35 @@ async function compareUsers (guild, userID1, userID2, { now = new Date(), fetchL
   }
 }
 
-// Scans the server for suspicious alt-account pairs (BAN/kick/offender evasion and/or same-person
-// existing members) across both stored DB history and all live readable guild channels. Stage 1
-// runs in memory at zero AI cost; Stage 2 Gemini analysis runs on the top suspicious pair(s).
+// Fast Stage 1 (zero AI cost) search specifically for banned accounts in OTHER servers that
+// resemble `userID` (used by AI moderation dossier / staff consultations).
+async function findCrossGuildSimilarBans (guild, userID, { minScore = 35, limit = 3, now = new Date() } = {}) {
+  if (!guild?.id || !userID || !isCrossGuildAltEnabled()) return []
+  const [suspectProfile, suspectMessages] = await Promise.all([
+    resolveProfile(guild, userID),
+    altDB.getMemberMessages(guild.id, userID, { limit: 40 }).catch(() => [])
+  ])
+  const candidates = await findCandidates(guild, suspectProfile, suspectMessages, {
+    trigger: 'manual',
+    now,
+    limit: 10,
+    includeGuildMembers: false,
+    includeCrossGuild: true
+  })
+  return candidates
+    .filter(c => c.candidateProfile?.crossGuild && c.heuristic.score >= minScore)
+    .slice(0, limit)
+}
+
+// Scans the server for suspicious alt-account pairs (BAN/kick/offender evasion — including banned
+// accounts in OTHER servers — and/or same-person existing members) across both stored DB history
+// and all live readable guild channels. Stage 1 runs in memory at zero AI cost; Stage 2 Gemini
+// analysis runs on the top suspicious pair(s).
 async function scanServer (guild, { scope = 'all', limit = 5, aiVerifyTop = 2, minScore = 25, now = new Date(), fetchLiveChannels = true } = {}) {
-  const [stored, dbRecentMsgsByAuthor, liveScan] = await Promise.all([
+  const includeCross = (scope === 'all' || scope === 'ban_evasion') && isCrossGuildAltEnabled()
+  const [stored, crossBanned, dbRecentMsgsByAuthor, liveScan] = await Promise.all([
     altDB.getCandidateProfiles(guild.id, '', { limit: 200 }).catch(() => []),
+    includeCross ? loadCrossGuildBannedProfiles(guild.id, '', { limit: 150, now }) : Promise.resolve([]),
     altDB.getRecentAuthorsMessages(guild.id, '', {
       authorLimit: 60,
       perAuthor: 30,
@@ -3157,13 +3356,22 @@ async function scanServer (guild, { scope = 'all', limit = 5, aiVerifyTop = 2, m
 
   const allProfiles = [...profileMap.values()]
   const activeProfiles = allProfiles.filter(p => p.status === 'active')
-  const formerProfiles = allProfiles.filter(p => p.status !== 'active')
+  const localFormerProfiles = allProfiles.filter(p => p.status !== 'active')
+  const crossFormerProfiles = crossBanned.filter(p => p?.userID && !profileMap.has(p.userID))
+  const formerProfiles = [...localFormerProfiles, ...crossFormerProfiles]
 
   // Load historical messages (including mod-deleted & self-deleted snapshots) for up to 25 recent
-  // banned/kicked/restricted/left profiles so disguised alts with 0 name/avatar match are caught.
-  for (const former of formerProfiles.slice(0, 25)) {
+  // local offenders and 25 cross-guild DB banned accounts so disguised alts with 0 name/avatar match
+  // are caught too.
+  for (const former of localFormerProfiles.slice(0, 25)) {
     if (!msgsByUser.has(former.userID)) {
       const hist = await altDB.getMemberMessages(guild.id, former.userID, { limit: 40 }).catch(() => [])
+      if (hist.length) msgsByUser.set(former.userID, hist)
+    }
+  }
+  for (const former of crossFormerProfiles.filter(p => p._fromDB && p.guildID).slice(0, 25)) {
+    if (!msgsByUser.has(former.userID)) {
+      const hist = await altDB.getMemberMessages(former.guildID, former.userID, { limit: 40 }).catch(() => [])
       if (hist.length) msgsByUser.set(former.userID, hist)
     }
   }
@@ -3200,7 +3408,7 @@ async function scanServer (guild, { scope = 'all', limit = 5, aiVerifyTop = 2, m
     }
   }
 
-  // 1. BAN/kick/offender/leave evasion: active members against former/restricted accounts
+  // 1. BAN/kick/offender/leave evasion (local + cross-server banned accounts)
   if (scope === 'all' || scope === 'ban_evasion') {
     const activeSlice = activeProfiles.slice(0, 200)
     for (const active of activeSlice) {
@@ -3240,10 +3448,11 @@ async function scanServer (guild, { scope = 'all', limit = 5, aiVerifyTop = 2, m
 
   // Calibrate top pairs with pgvector centroids + in-domain General Impostors, then run Stage 2 AI.
   const centroidCache = new Map()
-  const getCentroid = async userID => {
-    if (centroidCache.has(userID)) return centroidCache.get(userID)
-    const vec = await altDB.getAuthorEmbeddingCentroid(guild.id, userID).catch(() => null)
-    centroidCache.set(userID, vec)
+  const getCentroid = async (targetGuildID, userID) => {
+    const cKey = `${targetGuildID}:${userID}`
+    if (centroidCache.has(cKey)) return centroidCache.get(cKey)
+    const vec = await altDB.getAuthorEmbeddingCentroid(targetGuildID, userID).catch(() => null)
+    centroidCache.set(cKey, vec)
     return vec
   }
 
@@ -3253,8 +3462,8 @@ async function scanServer (guild, { scope = 'all', limit = 5, aiVerifyTop = 2, m
     if (item.heuristic.score < 30) break
     if (item.suspectMessages.length >= 3 && item.candidateMessages.length >= 3) {
       const [cA, cB] = await Promise.all([
-        getCentroid(item.suspectProfile.userID),
-        getCentroid(item.candidateProfile.userID)
+        getCentroid(item.suspectProfile.guildID || guild.id, item.suspectProfile.userID),
+        getCentroid(item.candidateProfile.guildID || guild.id, item.candidateProfile.userID)
       ])
       const impostors = pickImpostorMessages(msgsByUser, [item.suspectProfile.userID, item.candidateProfile.userID])
       if ((cA && cB) || impostors.length >= 3) {
@@ -3285,9 +3494,10 @@ async function scanServer (guild, { scope = 'all', limit = 5, aiVerifyTop = 2, m
   return {
     scope,
     channelsScanned: liveScan.channelsScanned,
-    scannedProfiles: allProfiles.length,
+    scannedProfiles: allProfiles.length + crossFormerProfiles.length,
     scannedActive: activeProfiles.length,
     scannedFormer: formerProfiles.length,
+    scannedCrossGuildBanned: crossFormerProfiles.length,
     scannedActivePosters: msgsByUser.size,
     pairs: topPairs.map(({ suspectProfile, candidateProfile, heuristic, ai }) => ({
       suspectProfile,
@@ -3303,6 +3513,7 @@ module.exports = {
   SLEEPER_CHECK_MILESTONES,
   DEFAULT_OFFENDER_ROLE_IDS,
   isGlobalEnabled,
+  isCrossGuildAltEnabled,
   offenderRoleIds,
   hasOffenderRole,
   joinAiThreshold,
@@ -3348,7 +3559,9 @@ module.exports = {
   readableChannelsOf,
   mergeMessageLists,
   fetchAllGuildChannelMessages,
+  loadCrossGuildBannedProfiles,
   findCandidates,
+  findCrossGuildSimilarBans,
   parseAiJson,
   analyzeWithGemini,
   pickAlertEventName,
