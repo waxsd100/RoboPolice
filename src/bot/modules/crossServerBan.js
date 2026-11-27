@@ -18,13 +18,16 @@ const { formatJstDate } = require('../utils/youtube')
 const DEFAULT_COOLDOWN_HOURS = 24
 const DEFAULT_MAX_LIVE_GUILDS = 20
 const LIVE_BAN_CACHE_TTL_MS = 10 * 60 * 1000
+const BAN_LIST_CACHE_TTL_MS = 60 * 60 * 1000
 const MAX_CACHE_ENTRIES = 5000
 
 const liveBanCache = new Map() // `${guildID}:${userID}` -> { banned, reason, user, expiresAt }
+const guildBanListCache = new Map() // guildID -> { profiles, expiresAt }
 const alertCooldowns = new Map() // `${targetGuildID}:${userID}:${scope}` -> expiresAt
 
 function resetRuntimeState () {
   liveBanCache.clear()
+  guildBanListCache.clear()
   alertCooldowns.clear()
 }
 
@@ -415,6 +418,7 @@ async function onGuildBan (sourceGuild, user, { reason = null, at = new Date() }
   if (!sourceGuild?.id || !user?.id || user.bot) return { alertedGuilds: [] }
   const nowMs = at instanceof Date ? at.getTime() : Date.now()
   rememberLiveBan(sourceGuild.id, user.id, { banned: true, reason, user, now: nowMs })
+  guildBanListCache.delete(sourceGuild.id)
   if (!isEnabled()) return { alertedGuilds: [] }
   if (!global.bot?.guilds || typeof global.bot.guilds.values !== 'function') return { alertedGuilds: [] }
 
@@ -459,6 +463,104 @@ async function onGuildBan (sourceGuild, user, { reason = null, at = new Date() }
 function onGuildUnban (sourceGuild, user) {
   if (!sourceGuild?.id || !user?.id) return
   rememberLiveBan(sourceGuild.id, user.id, { banned: false })
+  guildBanListCache.delete(sourceGuild.id)
+}
+
+function avatarUrlForRestUser (user) {
+  if (!user?.id || !user?.avatar) return null
+  const ext = String(user.avatar).startsWith('a_') ? 'gif' : 'png'
+  return `https://cdn.discordapp.com/avatars/${user.id}/${user.avatar}.${ext}?size=256`
+}
+
+function banEntryToProfile (otherGuild, entry) {
+  const u = entry?.user
+  if (!u?.id || u.bot) return null
+  return {
+    guildID: otherGuild.id,
+    guildName: otherGuild.name || otherGuild.id,
+    crossGuild: true,
+    userID: u.id,
+    username: u.username || null,
+    globalName: u.global_name || u.globalName || null,
+    nick: null,
+    avatarHash: u.avatar || null,
+    avatarURL: avatarUrlForRestUser(u),
+    accountCreatedAt: snowflakeToDate(u.id),
+    joinedAt: null,
+    inviteCode: null,
+    status: 'banned',
+    statusAt: null,
+    moderationReason: entry.reason || null
+  }
+}
+
+// Fetches (and caches for 60 minutes) banned user profiles from other guilds where the bot has
+// Ban Members permission so similarity checks can match even historical bans made before DB tracking.
+async function fetchOtherGuildBannedUsers (excludeGuildID, { maxGuilds = 10, limitPerGuild = 500, now = Date.now() } = {}) {
+  if (!isEnabled()) return []
+  if (!global.bot?.guilds || typeof global.bot.guilds.values !== 'function') return []
+  if (typeof global.bot?.requestHandler?.request !== 'function') return []
+
+  const cap = Math.min(maxGuilds, maxLiveGuildChecks())
+  if (cap <= 0) return []
+
+  const otherGuilds = ownerFirst(
+    [...global.bot.guilds.values()].filter(g => g && g.id !== excludeGuildID && canCheckGuildBans(g)),
+    g => g.id
+  ).slice(0, cap)
+
+  const lists = await Promise.all(otherGuilds.map(async otherGuild => {
+    const cached = guildBanListCache.get(otherGuild.id)
+    if (cached && cached.expiresAt > now) return cached.profiles
+    try {
+      const raw = await global.bot.requestHandler.request('GET', `/guilds/${otherGuild.id}/bans?limit=${limitPerGuild}`, true)
+      const profiles = Array.isArray(raw)
+        ? raw.map(entry => banEntryToProfile(otherGuild, entry)).filter(Boolean)
+        : []
+      setBounded(guildBanListCache, otherGuild.id, { profiles, expiresAt: now + BAN_LIST_CACHE_TTL_MS }, 200)
+      return profiles
+    } catch (_) {
+      return []
+    }
+  }))
+
+  return lists.flat()
+}
+
+// Resolves a banned profile for `userID` from another guild (DB first, then cached/live REST ban)
+// so /altcheck compare and /altcheck find work seamlessly on cross-server banned accounts.
+async function findOtherGuildBannedProfile (userID, excludeGuildID, { now = Date.now() } = {}) {
+  if (!userID) return null
+  const dbRows = typeof altDB.getOtherGuildBannedProfiles === 'function'
+    ? await altDB.getOtherGuildBannedProfiles(excludeGuildID, { limit: 150 }).catch(() => [])
+    : []
+  const dbHit = dbRows.find(p => p.userID === userID)
+  if (dbHit) {
+    const cachedGuild = global.bot?.guilds?.get?.(dbHit.guildID)
+    return { ...dbHit, guildName: cachedGuild?.name || dbHit.guildName || dbHit.guildID, crossGuild: true }
+  }
+  const bans = await findOtherGuildBans(userID, excludeGuildID, { includeLiveCheck: true, now }).catch(() => [])
+  if (!bans.length) return null
+  const first = bans[0]
+  const liveCached = getCachedLiveBan(first.guildID, userID, now)
+  const restUser = liveCached?.user || null
+  return {
+    guildID: first.guildID,
+    guildName: first.guildName || first.guildID,
+    crossGuild: true,
+    userID,
+    username: restUser?.username || first.username || null,
+    globalName: restUser?.global_name || restUser?.globalName || null,
+    nick: null,
+    avatarHash: restUser?.avatar || null,
+    avatarURL: restUser ? avatarUrlForRestUser(restUser) : null,
+    accountCreatedAt: snowflakeToDate(userID),
+    joinedAt: null,
+    inviteCode: null,
+    status: 'banned',
+    statusAt: first.bannedAt || null,
+    moderationReason: first.reason || null
+  }
 }
 
 module.exports = {
@@ -468,6 +570,8 @@ module.exports = {
   maxLiveGuildChecks,
   rememberLiveBan,
   findOtherGuildBans,
+  fetchOtherGuildBannedUsers,
+  findOtherGuildBannedProfile,
   scanGuildForCrossServerBans,
   formatBanLine,
   buildCrossServerBanEmbed,

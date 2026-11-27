@@ -39,9 +39,17 @@ function clamp (str, max) {
   return s.length <= max ? s : `${s.slice(0, max - 1)}…`
 }
 
+function formatCandidateStatus (p, lang) {
+  if (p?.crossGuild) {
+    const g = p.guildName || p.guildID || (lang === 'en' ? 'other server' : '他鯖')
+    return lang === 'en' ? `Banned in ${g}` : `他鯖「${g}」でBAN済み`
+  }
+  return lang === 'en' ? altDetector.statusLabelEn(p.status) : altDetector.statusLabelJa(p.status)
+}
+
 function formatCandidateSummary (item, rank, lang) {
   const p = item.candidateProfile
-  const status = lang === 'en' ? altDetector.statusLabelEn(p.status) : altDetector.statusLabelJa(p.status)
+  const status = formatCandidateStatus(p, lang)
   const name = p.username ? `**${p.username}**` : (lang === 'en' ? 'Unknown' : '不明')
   const topSignals = item.heuristic.signals.slice(0, 2).join(' / ')
   const counter = item.heuristic.counterSignals[0] ? ` ⚠️ ${item.heuristic.counterSignals[0]}` : ''
@@ -208,7 +216,7 @@ async function handleScan (interaction, guild, sub) {
   const fields = res.pairs.map((pair, idx) => {
     const a = pair.suspectProfile
     const b = pair.candidateProfile
-    const statusB = lang === 'en' ? altDetector.statusLabelEn(b.status) : altDetector.statusLabelJa(b.status)
+    const statusB = formatCandidateStatus(b, lang)
     const lines = [
       `<@${a.userID}> (${a.username || '?'}) ⇄ <@${b.userID}> (${b.username || '?'}・${statusB})`,
       lang === 'en'
