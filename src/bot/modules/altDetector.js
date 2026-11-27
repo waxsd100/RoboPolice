@@ -3084,10 +3084,10 @@ async function onMessage (message, { now = new Date() } = {}) {
   }
 
   // For accounts that joined longer than messageWatchDays() ago ("sleeper" alts), only run
-  // automatic behavioral checks when the server has a recent banned/kicked/restricted offender.
+  // automatic behavioral checks when the server (or another server) has a recent offender.
   if (isOlderMember) {
     const hasOffender = typeof altDB.hasRecentOffender === 'function'
-      ? await altDB.hasRecentOffender(guildID, { days: 30 }).catch(() => false)
+      ? await altDB.hasRecentOffender(guildID, { days: 30, includeCrossGuild: isCrossGuildAltEnabled() }).catch(() => false)
       : false
     if (!hasOffender) return { checked: false }
   }
@@ -3100,7 +3100,7 @@ async function onMessage (message, { now = new Date() } = {}) {
     const joinedAgeMs = now.getTime() - new Date(suspectProfile.joinedAt).getTime()
     if (joinedAgeMs > watchMs) {
       const hasOffender = typeof altDB.hasRecentOffender === 'function'
-        ? await altDB.hasRecentOffender(guildID, { days: 30 }).catch(() => false)
+        ? await altDB.hasRecentOffender(guildID, { days: 30, includeCrossGuild: isCrossGuildAltEnabled() }).catch(() => false)
         : false
       if (!hasOffender || !SLEEPER_CHECK_MILESTONES.includes(entry.count)) return { checked: false }
     }

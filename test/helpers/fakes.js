@@ -1210,7 +1210,7 @@ function installAltDetectionStore ({ enabled = {}, profiles = [], messages = [],
     }
     return matches.sort((a, b) => b.similarity - a.similarity).slice(0, limit)
   }
-  store.hasRecentOffender = async (guildID, { days = 30, includeCrossGuild = true } = {}) => {
+  store.hasRecentOffender = async (guildID, { days = 30, includeCrossGuild = false } = {}) => {
     const since = Date.now() - days * 86400 * 1000
     for (const p of state.profiles.values()) {
       if (p.guildID === guildID) {

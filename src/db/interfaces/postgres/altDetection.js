@@ -84,7 +84,7 @@ async function upsertMemberProfile (guildID, profile) {
 
 async function markMemberStatus (guildID, userID, status, { reason = null, at = new Date(), profile = {} } = {}) {
   for (const key of recentOffenderCache.keys()) {
-    if (key.startsWith(`${guildID}:`)) recentOffenderCache.delete(key)
+    if (key.startsWith(`${guildID}:`) || key.endsWith(':x')) recentOffenderCache.delete(key)
   }
   return upsertMemberProfile(guildID, {
     ...profile,
@@ -528,7 +528,7 @@ async function findSimilarBannedAuthorsAcrossGuilds (excludeGuildID, excludeUser
   }
 }
 
-async function hasRecentOffender (guildID, { days = 30, includeCrossGuild = true } = {}) {
+async function hasRecentOffender (guildID, { days = 30, includeCrossGuild = false } = {}) {
   if (!guildID) return false
   const cacheKey = `${guildID}:${days}:${includeCrossGuild ? 'x' : 'l'}`
   const cached = recentOffenderCache.get(cacheKey)

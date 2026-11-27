@@ -943,14 +943,14 @@ describe('stores', { skip: !database.available && 'needs PGHOST' }, () => {
       altDB.resetCache('g_alt')
       assert.equal(await altDB.isAltDetectionEnabled('g_alt'), true)
 
-      const banTime = new Date('2026-11-20T10:00:00Z')
+      const banTime = new Date(Date.now() - 2 * 86400 * 1000)
       await altDB.upsertMemberProfile('g_alt', {
         userID: 'u_banned',
         username: 'troll_main',
         globalName: 'トロール',
         avatarHash: 'hash_abc',
         inviteCode: 'INV01',
-        joinedAt: new Date('2026-11-01T00:00:00Z'),
+        joinedAt: new Date(banTime.getTime() - 19 * 86400 * 1000),
         status: 'active'
       })
       await altDB.markMemberStatus('g_alt', 'u_banned', 'banned', { reason: '荒らし', at: banTime })
@@ -963,7 +963,7 @@ describe('stores', { skip: !database.available && 'needs PGHOST' }, () => {
         userID: 'u_suspect',
         username: 'troll_sub2',
         inviteCode: 'INV01',
-        joinedAt: new Date('2026-11-20T10:20:00Z'),
+        joinedAt: new Date(banTime.getTime() + 20 * 60 * 1000),
         status: 'active'
       })
 
@@ -1013,6 +1013,27 @@ describe('stores', { skip: !database.available && 'needs PGHOST' }, () => {
 
       assert.equal(await altDB.hasRecentOffender('g_alt', { days: 30 }), true)
       assert.equal(await altDB.hasRecentOffender('g_no_offender', { days: 30 }), false)
+      assert.equal(await altDB.hasRecentOffender('g_no_offender', { days: 30, includeCrossGuild: true }), true)
+
+      const xBans = await altDB.getCrossGuildBans('u_banned', 'g_no_offender')
+      assert.equal(xBans.length, 1)
+      assert.equal(xBans[0].guildID, 'g_alt')
+      assert.equal(xBans[0].reason, '荒らし')
+
+      const xBanMap = await altDB.getCrossGuildBansForUsers(['u_banned', 'u_suspect'], 'g_no_offender')
+      assert.equal(xBanMap.size, 1)
+      assert.equal(xBanMap.get('u_banned')[0].guildID, 'g_alt')
+
+      const otherBannedProfiles = await altDB.getOtherGuildBannedProfiles('g_no_offender')
+      assert.equal(otherBannedProfiles.length, 1)
+      assert.equal(otherBannedProfiles[0].userID, 'u_banned')
+      assert.equal(otherBannedProfiles[0].crossGuild, true)
+
+      const xSemBanned = await altDB.findSimilarBannedAuthorsAcrossGuilds('g_no_offender', 'u_suspect', centroid, { limit: 5 })
+      assert.equal(xSemBanned.length, 1)
+      assert.equal(xSemBanned[0].guildID, 'g_alt')
+      assert.equal(xSemBanned[0].authorID, 'u_banned')
+      assert.ok(xSemBanned[0].similarity > 0.99)
 
       // Snapshot before bulk delete preserves deleted messages even after hard deletion from `messages`
       const snapshotted = await altDB.snapshotMessagesBeforeDelete(['alt_m1'], { deletedBy: 'moderator', moderatorID: 'mod_1' })
