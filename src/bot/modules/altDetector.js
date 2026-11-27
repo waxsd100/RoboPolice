@@ -91,6 +91,12 @@ const MOD_CHANNEL_CACHE_TTL_MS = 10 * 60 * 1000
 const guildModChannelCache = new Map() // guildID -> { publicUpdatesChannelID, safetyAlertsChannelID, expiresAt }
 // Per-guild daily automatic AI call budget (prevents runaway API costs during join raids).
 const autoAiDailyCounts = new Map() // guildID -> { dayKey, count }
+// Short-lived cache for REST GET /users/:id so we can read Discord's global_name (display name)
+// which Eris 0.17's User structure does not store.
+const REST_USER_CACHE_TTL_MS = 30 * 60 * 1000
+const REST_USER_NEG_CACHE_TTL_MS = 5 * 60 * 1000
+const MAX_REST_USER_CACHE = 2000
+const restUserCache = new Map() // userID -> { user, expiresAt }
 
 function resetRuntimeState () {
   messageCounters.clear()
@@ -99,6 +105,7 @@ function resetRuntimeState () {
   lastModDeleteCounts.clear()
   guildModChannelCache.clear()
   autoAiDailyCounts.clear()
+  restUserCache.clear()
 }
 
 function rememberSeenMessage ({ id, guildID, authorID, channelID = null, content, ts = new Date() }) {
@@ -177,6 +184,13 @@ function joinAiThreshold (isModCandidate = true) {
   return isModCandidate ? base : Math.min(100, base + 15)
 }
 
+// Threshold for cross-server banned accounts on join (safely above the 25-pt zero-evidence cap,
+// while catching exact custom avatar matches (35) and identical/near-identical names (30) even on
+// older accounts against historical bans whose BAN timestamp is unknown).
+function crossGuildJoinAiThreshold () {
+  return envNumber('ALT_CROSS_GUILD_JOIN_THRESHOLD', 30, 0, 100)
+}
+
 function messageAiThreshold () {
   return envNumber('ALT_MESSAGE_AI_THRESHOLD', 40, 0, 100)
 }
@@ -227,7 +241,12 @@ function avatarUrlOf (obj) {
   try {
     if (typeof u.dynamicAvatarURL === 'function') return u.dynamicAvatarURL('png', 256)
   } catch (_) {}
-  return u.avatarURL || obj.avatarURL || null
+  if (u.avatarURL || obj.avatarURL) return u.avatarURL || obj.avatarURL
+  if (u.id && u.avatar) {
+    const ext = String(u.avatar).startsWith('a_') ? 'gif' : 'png'
+    return `https://cdn.discordapp.com/avatars/${u.id}/${u.avatar}.${ext}?size=256`
+  }
+  return null
 }
 
 function profileFromUser (user, extra = {}) {
@@ -236,7 +255,7 @@ function profileFromUser (user, extra = {}) {
   return {
     userID: user.id,
     username: user.username || null,
-    globalName: user.globalName || null,
+    globalName: user.globalName || user.global_name || null,
     nick: null,
     avatarHash: user.avatar || null,
     avatarURL: avatarUrlOf(user),
@@ -263,7 +282,7 @@ function profileFromMember (member, extra = {}) {
   return {
     userID,
     username: user.username || member.username || null,
-    globalName: user.globalName || member.globalName || null,
+    globalName: user.globalName || user.global_name || member.globalName || member.global_name || null,
     nick: member.nick || null,
     avatarHash: member.avatar || user.avatar || null,
     avatarURL: avatarUrlOf(member),
@@ -278,16 +297,80 @@ function profileFromMember (member, extra = {}) {
   }
 }
 
+function setBoundedRestUser (userID, entry) {
+  if (restUserCache.has(userID)) restUserCache.delete(userID)
+  if (restUserCache.size >= MAX_REST_USER_CACHE) {
+    const oldest = restUserCache.keys().next().value
+    restUserCache.delete(oldest)
+  }
+  restUserCache.set(userID, entry)
+}
+
+// Fetches raw Discord user JSON via REST GET /users/:id to obtain `global_name` (display name),
+// which Eris 0.17's User structure drops. Cached for 30 minutes and gracefully skipped on error.
+async function fetchRestUserProfile (userID, now = Date.now()) {
+  if (!userID || typeof global.bot?.requestHandler?.request !== 'function') return null
+  const cached = restUserCache.get(userID)
+  if (cached && cached.expiresAt > now) return cached.user
+  try {
+    const raw = await global.bot.requestHandler.request('GET', `/users/${userID}`, true)
+    if (raw && raw.id) {
+      const avatarHash = raw.avatar || null
+      const avatarURL = avatarHash
+        ? `https://cdn.discordapp.com/avatars/${raw.id}/${avatarHash}.${String(avatarHash).startsWith('a_') ? 'gif' : 'png'}?size=256`
+        : null
+      const user = {
+        userID: String(raw.id),
+        username: raw.username || null,
+        globalName: raw.global_name || raw.globalName || null,
+        avatarHash,
+        avatarURL
+      }
+      setBoundedRestUser(userID, { user, expiresAt: now + REST_USER_CACHE_TTL_MS })
+      return user
+    }
+    setBoundedRestUser(userID, { user: null, expiresAt: now + REST_USER_NEG_CACHE_TTL_MS })
+    return null
+  } catch (_) {
+    setBoundedRestUser(userID, { user: null, expiresAt: now + REST_USER_NEG_CACHE_TTL_MS })
+    return null
+  }
+}
+
+async function enrichProfileFromRest (profile, now = Date.now()) {
+  if (!profile?.userID) return profile
+  if (profile.globalName && profile.username) return profile
+  const rest = await fetchRestUserProfile(profile.userID, now)
+  if (!rest) return profile
+  return {
+    ...profile,
+    username: profile.username || rest.username || null,
+    globalName: profile.globalName || rest.globalName || null,
+    avatarHash: profile.avatarHash || rest.avatarHash || null,
+    avatarURL: profile.avatarURL || rest.avatarURL || null
+  }
+}
+
 // --- Stage 1: Deterministic features & heuristic scoring ---
 
+function hasCjkOrKana (s) {
+  return /[\u3040-\u30ff\u3400-\u9fff]/.test(s)
+}
+
+function katakanaToHiragana (s) {
+  return String(s || '').replace(/[\u30a1-\u30f6]/g, ch => String.fromCharCode(ch.charCodeAt(0) - 0x60))
+}
+
 function normalizeName (str) {
-  const nfkc = String(str || '').normalize('NFKC').toLowerCase().trim()
-  const cleaned = nfkc.replace(/[\s_.\-/\\|]+/g, '')
+  const nfkc = katakanaToHiragana(String(str || '').normalize('NFKC').toLowerCase().trim())
+  const cleaned = nfkc.replace(/[\s_.\-/\\|★☆♪♫♡♥❤✨・•·~〜!！?？@＠#＃()（）[\]【】「」『』<>＜＞〈〉《》:：;；,、。+＋=＝*＊^＾$＄%％&＆]+/g, '')
+  const suffixRe = /(?:sub|alt|sab|sabu|2nd|3rd|main|さぶあか|べつあか|ほんあか|うらあか|さぶ|別垢|本垢|裏垢|垢|裏|2代目|二代目|復活)+$/gi
   const stem = cleaned
-    .replace(/(?:sub|alt|sab|sabu|2nd|3rd|main|サブ|裏|別垢|本垢|垢)+$/gi, '')
+    .replace(suffixRe, '')
     .replace(/\d+$/g, '')
-    .replace(/(?:sub|alt|sab|sabu|サブ|裏|別垢|本垢|垢)+$/gi, '')
-  return { cleaned, stem: stem.length >= 3 ? stem : cleaned }
+    .replace(suffixRe, '')
+  const minStemLen = hasCjkOrKana(stem) ? 2 : 3
+  return { cleaned, stem: stem.length >= minStemLen ? stem : cleaned }
 }
 
 function bigrams (s) {
@@ -318,13 +401,18 @@ function stringNameSimilarity (rawA, rawB) {
   const a = normalizeName(rawA)
   const b = normalizeName(rawB)
   if (!a.cleaned || !b.cleaned) return 0
-  if (a.cleaned.length >= 3 && a.cleaned === b.cleaned) return 1
-  if (a.stem.length >= 4 && a.stem === b.stem) return 0.92
+  const minExact = hasCjkOrKana(a.cleaned) ? 2 : 3
+  if (a.cleaned.length >= minExact && a.cleaned === b.cleaned) return 1
+  const minStem = hasCjkOrKana(a.stem) ? 2 : 4
+  if (a.stem.length >= minStem && a.stem === b.stem) return 0.92
   const shorter = a.stem.length <= b.stem.length ? a.stem : b.stem
   const longer = a.stem.length <= b.stem.length ? b.stem : a.stem
-  if (shorter.length >= 4 && longer.includes(shorter)) {
-    const ratio = shorter.length / longer.length
-    if (ratio >= 0.5) return Math.min(0.95, 0.78 + 0.15 * ratio)
+  const ratio = shorter.length / longer.length
+  const canContain = hasCjkOrKana(shorter)
+    ? (shorter.length >= 3 ? ratio >= 0.5 : (shorter.length === 2 && ratio >= 0.65))
+    : (shorter.length >= 4 && ratio >= 0.5)
+  if (canContain && longer.includes(shorter)) {
+    return Math.min(0.95, 0.78 + 0.15 * ratio)
   }
   return Math.max(diceSimilarity(a.cleaned, b.cleaned), diceSimilarity(a.stem, b.stem))
 }
@@ -1621,17 +1709,34 @@ async function resolveProfile (guild, userID) {
   const dbProfile = await altDB.getMemberProfile(guild.id, userID).catch(() => null)
   const member = guild.members?.get?.(userID) || null
   const liveProfile = member ? profileFromMember(member) : null
-  if (dbProfile || liveProfile) return mergeProfiles(dbProfile, liveProfile)
+  if (dbProfile || liveProfile) return enrichProfileFromRest(mergeProfiles(dbProfile, liveProfile))
   if (isCrossGuildAltEnabled()) {
     const crossServerBan = require('./crossServerBan')
     const crossBanned = await crossServerBan.findOtherGuildBannedProfile(userID, guild.id).catch(() => null)
-    if (crossBanned) return crossBanned
+    if (crossBanned) return enrichProfileFromRest(crossBanned)
   }
   let restUser = null
   if (typeof global.bot?.getRESTUser === 'function') {
     restUser = await global.bot.getRESTUser(userID).catch(() => null)
   }
-  if (restUser) return profileFromUser(restUser, { status: 'unknown' })
+  if (restUser) return enrichProfileFromRest(profileFromUser(restUser, { status: 'unknown' }))
+  const rawRest = await fetchRestUserProfile(userID)
+  if (rawRest) {
+    return {
+      userID,
+      username: rawRest.username || null,
+      globalName: rawRest.globalName || null,
+      nick: null,
+      avatarHash: rawRest.avatarHash || null,
+      avatarURL: rawRest.avatarURL || null,
+      accountCreatedAt: snowflakeToDate(userID),
+      joinedAt: null,
+      inviteCode: null,
+      status: 'unknown',
+      statusAt: null,
+      moderationReason: null
+    }
+  }
   return {
     userID,
     username: null,
@@ -1765,7 +1870,7 @@ function pickImpostorMessages (msgsByAuthor, excludeIds = [], maxImpostors = 15)
   return lists
 }
 
-async function loadCrossGuildBannedProfiles (excludeGuildID, excludeUserID = '', { limit = 150, now = new Date() } = {}) {
+async function loadCrossGuildBannedProfiles (excludeGuildID, excludeUserID = '', { limit = 1000, now = new Date() } = {}) {
   if (!isCrossGuildAltEnabled()) return []
   const crossServerBan = require('./crossServerBan')
   const [dbRows, restRows] = await Promise.all([
@@ -1794,15 +1899,28 @@ async function loadCrossGuildBannedProfiles (excludeGuildID, excludeUserID = '',
     if (!prev.crossGuildNames.includes(guildName)) prev.crossGuildNames.push(guildName)
     if (fromDB && !prev._fromDB) {
       byUser.set(p.userID, {
+        ...prev,
         ...p,
+        username: p.username || prev.username || null,
+        globalName: p.globalName || prev.globalName || null,
+        avatarHash: p.avatarHash || prev.avatarHash || null,
+        avatarURL: p.avatarURL || prev.avatarURL || null,
+        statusAt: p.statusAt || prev.statusAt || null,
+        moderationReason: p.moderationReason || prev.moderationReason || null,
         guildName,
         crossGuild: true,
         crossGuildNames: prev.crossGuildNames,
         _fromDB: true
       })
-    } else if (!prev.avatarHash && p.avatarHash) {
-      prev.avatarHash = p.avatarHash
-      prev.avatarURL = prev.avatarURL || p.avatarURL
+    } else {
+      if (!prev.username && p.username) prev.username = p.username
+      if (!prev.globalName && p.globalName) prev.globalName = p.globalName
+      if (!prev.avatarHash && p.avatarHash) {
+        prev.avatarHash = p.avatarHash
+        prev.avatarURL = prev.avatarURL || p.avatarURL
+      }
+      if (!prev.statusAt && p.statusAt) prev.statusAt = p.statusAt
+      if (!prev.moderationReason && p.moderationReason) prev.moderationReason = p.moderationReason
     }
   }
 
@@ -1823,7 +1941,7 @@ async function findCandidates (guild, suspectProfile, suspectMessages = [], {
   const [stored, crossBanned] = await Promise.all([
     altDB.getCandidateProfiles(guild.id, suspectProfile.userID, { limit: 200 }).catch(() => []),
     includeCrossGuild && isCrossGuildAltEnabled()
-      ? loadCrossGuildBannedProfiles(guild.id, suspectProfile.userID, { limit: 150, now })
+      ? loadCrossGuildBannedProfiles(guild.id, suspectProfile.userID, { limit: 1000, now })
       : Promise.resolve([])
   ])
   const candidateMap = new Map()
@@ -1858,12 +1976,55 @@ async function findCandidates (guild, suspectProfile, suspectMessages = [], {
   }
 
   let recentMsgsByAuthor = new Map()
+  let crossBannedMsgsByAuthor = new Map()
   if (suspectMessages.length >= 1) {
-    recentMsgsByAuthor = await altDB.getRecentAuthorsMessages(guild.id, suspectProfile.userID, {
-      authorLimit: 60,
-      perAuthor: 30,
-      days: 30
-    }).catch(() => new Map())
+    const [localMsgs, crossMsgs] = await Promise.all([
+      altDB.getRecentAuthorsMessages(guild.id, suspectProfile.userID, {
+        authorLimit: 60,
+        perAuthor: 30,
+        days: 30
+      }).catch(() => new Map()),
+      includeCrossGuild && isCrossGuildAltEnabled() && typeof altDB.getOtherGuildBannedMessages === 'function'
+        ? altDB.getOtherGuildBannedMessages(guild.id, suspectProfile.userID, {
+          authorLimit: 40,
+          perAuthor: 30
+        }).catch(() => new Map())
+        : Promise.resolve(new Map())
+    ])
+    recentMsgsByAuthor = localMsgs
+    crossBannedMsgsByAuthor = crossMsgs
+  }
+
+  if (crossBannedMsgsByAuthor.size > 0) {
+    for (const [authorID, msgs] of crossBannedMsgsByAuthor) {
+      if (!authorID || authorID === suspectProfile.userID || !msgs?.length) continue
+      if (!recentMsgsByAuthor.has(authorID)) recentMsgsByAuthor.set(authorID, msgs)
+      if (!candidateMap.has(authorID)) {
+        const srcGuildID = msgs[0].guildID
+        const prof = srcGuildID ? await altDB.getMemberProfile(srcGuildID, authorID).catch(() => null) : null
+        const gName = global.bot?.guilds?.get?.(srcGuildID)?.name || srcGuildID || '他サーバー'
+        candidateMap.set(authorID, prof
+          ? { ...prof, guildName: gName, crossGuild: true, _fromDB: true }
+          : {
+              guildID: srcGuildID,
+              guildName: gName,
+              crossGuild: true,
+              _fromDB: true,
+              userID: authorID,
+              username: null,
+              globalName: null,
+              nick: null,
+              avatarHash: null,
+              avatarURL: null,
+              accountCreatedAt: snowflakeToDate(authorID),
+              joinedAt: null,
+              inviteCode: null,
+              status: 'banned',
+              statusAt: null,
+              moderationReason: null
+            })
+      }
+    }
   }
 
   if (liveMessagesByAuthor) {
@@ -1976,18 +2137,29 @@ async function findCandidates (guild, suspectProfile, suspectMessages = [], {
     }
   }
 
-  // Always load historical (including mod-deleted & self-deleted) messages of recent offenders
-  // (both same-guild and cross-guild DB banned accounts) BEFORE ranking, so disguised alts with
-  // 0 name/avatar/timing similarity are still compared against their writing style & vocabulary.
+  // Always load historical (including mod-deleted & self-deleted) messages of recent local
+  // offenders and REST/Audit-discovered cross-guild banned accounts BEFORE ranking, so disguised
+  // alts with 0 name/avatar/timing similarity are still compared against their writing style.
   if (suspectMessages.length >= 1) {
     const missingLocalOffenders = [...candidateMap.values()]
       .filter(p => !p.crossGuild && MOD_STATUSES.has(p.status) && !recentMsgsByAuthor.has(p.userID))
       .sort((a, b) => (b.statusAt ? new Date(b.statusAt).getTime() : 0) - (a.statusAt ? new Date(a.statusAt).getTime() : 0))
       .slice(0, 25)
+    // Also fetch stored messages for cross-guild banned candidates not covered by the batch query
+    // (e.g. discovered via REST /bans or Audit Log before DB ban-sync finishes), prioritizing
+    // candidates with any profile hint or newest BAN timestamp.
     const missingCrossOffenders = [...candidateMap.values()]
-      .filter(p => p.crossGuild && p._fromDB && p.guildID && !recentMsgsByAuthor.has(p.userID))
-      .sort((a, b) => (b.statusAt ? new Date(b.statusAt).getTime() : 0) - (a.statusAt ? new Date(a.statusAt).getTime() : 0))
-      .slice(0, 25)
+      .filter(p => p.crossGuild && p.guildID && !recentMsgsByAuthor.has(p.userID))
+      .map(p => {
+        const avHit = Boolean(suspectProfile?.avatarHash && p.avatarHash && suspectProfile.avatarHash === p.avatarHash)
+        const nameHit = nameSimilarity(suspectProfile, p).score >= 0.45
+        const priority = (avHit ? 2 : 0) + (nameHit ? 1 : 0)
+        const ts = p.statusAt ? new Date(p.statusAt).getTime() : 0
+        return { p, priority, ts }
+      })
+      .sort((a, b) => b.priority - a.priority || b.ts - a.ts)
+      .slice(0, 20)
+      .map(x => x.p)
     const missingLeft = [...candidateMap.values()]
       .filter(p => !p.crossGuild && p.status === 'left' && !recentMsgsByAuthor.has(p.userID))
       .sort((a, b) => (b.statusAt ? new Date(b.statusAt).getTime() : 0) - (a.statusAt ? new Date(a.statusAt).getTime() : 0))
@@ -2596,10 +2768,12 @@ function shouldAlertFromResult ({ ai, heuristic, candidateProfile }) {
 
 async function onMemberBan (guild, user, { reason = null, at = new Date() } = {}) {
   if (!guild?.id || !user?.id || user.bot) return
+  const baseProfile = profileFromUser(user) || { userID: user.id }
+  const enriched = await enrichProfileFromRest(baseProfile).catch(() => baseProfile)
   await altDB.markMemberStatus(guild.id, user.id, 'banned', {
     reason: reason || null,
     at,
-    profile: profileFromUser(user) || { userID: user.id }
+    profile: enriched
   })
 }
 
@@ -2664,13 +2838,15 @@ async function onMemberJoin (guild, member, { inviteCode = null, now = new Date(
   const user = member.user || member
   if (member.bot || user?.bot) return { checked: false }
   const initialStatus = hasOffenderRole(member) ? 'restricted' : 'active'
-  const profile = profileFromMember(member, {
+  const baseProfile = profileFromMember(member, {
     joinedAt: member.joinedAt ? new Date(member.joinedAt) : now,
     inviteCode: inviteCode || null,
     status: initialStatus,
     statusAt: now
   })
-  if (!profile) return { checked: false }
+  if (!baseProfile) return { checked: false }
+  const nowMs = now instanceof Date ? now.getTime() : Date.now()
+  const profile = await enrichProfileFromRest(baseProfile, nowMs).catch(() => baseProfile)
 
   await altDB.upsertMemberProfile(guild.id, profile).catch(e => {
     global.logger?.warn(`[ALT]: Failed to upsert join profile for ${profile.userID} in ${guild.id}: ${e.message}`)
@@ -2679,14 +2855,23 @@ async function onMemberJoin (guild, member, { inviteCode = null, now = new Date(
   if (!isGlobalEnabled()) return { checked: false }
   if (!(await altDB.isAltDetectionEnabled(guild.id))) return { checked: false }
 
-  const candidates = await findCandidates(guild, profile, [], { trigger: 'join', now, limit: 3 })
+  const candidates = await findCandidates(guild, profile, [], { trigger: 'join', now, limit: 5 })
   if (!candidates.length) return { checked: true, alerted: false }
 
-  // Cost guard: evaluate only the #1 candidate on join (plus #2 only if it has a very high
-  // direct score >= 65), and enforce the per-guild daily automatic AI budget cap.
+  // Cost guard: evaluate only the #1 candidate on join (plus #2 if >= 65, and the top
+  // cross-server banned candidate if local candidates would otherwise crowd it out), and
+  // enforce the per-guild daily automatic AI budget cap.
   const toCheck = candidates.slice(0, 2).filter((c, idx) => idx === 0 || c.heuristic.score >= 65)
+  if (!toCheck.some(c => c.candidateProfile?.crossGuild)) {
+    const crossThresh = crossGuildJoinAiThreshold()
+    const topCross = candidates.find(c => c.candidateProfile?.crossGuild && c.heuristic.score >= crossThresh)
+    if (topCross) toCheck.push(topCross)
+  }
+
   for (const cand of toCheck) {
-    const threshold = joinAiThreshold(MOD_STATUSES.has(cand.candidateProfile.status))
+    const threshold = cand.candidateProfile?.crossGuild
+      ? crossGuildJoinAiThreshold()
+      : joinAiThreshold(MOD_STATUSES.has(cand.candidateProfile.status))
     if (cand.heuristic.score < threshold) continue
     if (await altDB.hasRecentAlert(guild.id, profile.userID, cand.candidateProfile.userID, alertCooldownHours())) continue
 
@@ -3120,11 +3305,16 @@ async function onMessage (message, { now = new Date() } = {}) {
 
   if (suspectMessages.length < 3) return { checked: true, alerted: false }
 
-  const candidates = await findCandidates(resolvedGuild, suspectProfile, suspectMessages, { trigger: 'messages', now, limit: 3 })
+  const candidates = await findCandidates(resolvedGuild, suspectProfile, suspectMessages, { trigger: 'messages', now, limit: 5 })
   if (!candidates.length) return { checked: true, alerted: false }
 
   const threshold = messageAiThreshold()
-  for (const cand of candidates.slice(0, 2)) {
+  const toCheck = candidates.slice(0, 2)
+  if (!toCheck.some(c => c.candidateProfile?.crossGuild)) {
+    const topCross = candidates.find(c => c.candidateProfile?.crossGuild && c.heuristic.score >= threshold)
+    if (topCross) toCheck.push(topCross)
+  }
+  for (const cand of toCheck) {
     if (cand.heuristic.score < threshold) continue
     if (await altDB.hasRecentAlert(guildID, suspectProfile.userID, cand.candidateProfile.userID, alertCooldownHours())) continue
 
@@ -3269,7 +3459,7 @@ async function compareUsers (guild, userID1, userID2, { now = new Date(), fetchL
 
 // Fast Stage 1 (zero AI cost) search specifically for banned accounts in OTHER servers that
 // resemble `userID` (used by AI moderation dossier / staff consultations).
-async function findCrossGuildSimilarBans (guild, userID, { minScore = 35, limit = 3, now = new Date() } = {}) {
+async function findCrossGuildSimilarBans (guild, userID, { minScore = 30, limit = 3, now = new Date() } = {}) {
   if (!guild?.id || !userID || !isCrossGuildAltEnabled()) return []
   const [suspectProfile, suspectMessages] = await Promise.all([
     resolveProfile(guild, userID),
@@ -3293,14 +3483,17 @@ async function findCrossGuildSimilarBans (guild, userID, { minScore = 35, limit 
 // analysis runs on the top suspicious pair(s).
 async function scanServer (guild, { scope = 'all', limit = 5, aiVerifyTop = 2, minScore = 25, now = new Date(), fetchLiveChannels = true } = {}) {
   const includeCross = (scope === 'all' || scope === 'ban_evasion') && isCrossGuildAltEnabled()
-  const [stored, crossBanned, dbRecentMsgsByAuthor, liveScan] = await Promise.all([
+  const [stored, crossBanned, dbRecentMsgsByAuthor, crossBannedMsgsByAuthor, liveScan] = await Promise.all([
     altDB.getCandidateProfiles(guild.id, '', { limit: 200 }).catch(() => []),
-    includeCross ? loadCrossGuildBannedProfiles(guild.id, '', { limit: 150, now }) : Promise.resolve([]),
+    includeCross ? loadCrossGuildBannedProfiles(guild.id, '', { limit: 1000, now }) : Promise.resolve([]),
     altDB.getRecentAuthorsMessages(guild.id, '', {
       authorLimit: 60,
       perAuthor: 30,
       days: 30
     }).catch(() => new Map()),
+    includeCross && typeof altDB.getOtherGuildBannedMessages === 'function'
+      ? altDB.getOtherGuildBannedMessages(guild.id, '', { authorLimit: 40, perAuthor: 30 }).catch(() => new Map())
+      : Promise.resolve(new Map()),
     fetchLiveChannels
       ? fetchAllGuildChannelMessages(guild)
       : Promise.resolve({ byAuthor: new Map(), authors: new Map(), channelsScanned: 0, totalMessages: 0 })
@@ -3357,23 +3550,57 @@ async function scanServer (guild, { scope = 'all', limit = 5, aiVerifyTop = 2, m
   const allProfiles = [...profileMap.values()]
   const activeProfiles = allProfiles.filter(p => p.status === 'active')
   const localFormerProfiles = allProfiles.filter(p => p.status !== 'active')
-  const crossFormerProfiles = crossBanned.filter(p => p?.userID && !profileMap.has(p.userID))
+  const crossByUser = new Map()
+  for (const p of crossBanned) {
+    if (p?.userID && !profileMap.has(p.userID)) crossByUser.set(p.userID, p)
+  }
+  for (const [authorID, msgs] of crossBannedMsgsByAuthor) {
+    if (!authorID || !msgs?.length) continue
+    if (!msgsByUser.has(authorID)) msgsByUser.set(authorID, msgs)
+    if (!profileMap.has(authorID) && !crossByUser.has(authorID)) {
+      const srcGuildID = msgs[0].guildID
+      const prof = srcGuildID ? await altDB.getMemberProfile(srcGuildID, authorID).catch(() => null) : null
+      const gName = global.bot?.guilds?.get?.(srcGuildID)?.name || srcGuildID || '他サーバー'
+      crossByUser.set(authorID, prof
+        ? { ...prof, guildName: gName, crossGuild: true, _fromDB: true }
+        : {
+            guildID: srcGuildID,
+            guildName: gName,
+            crossGuild: true,
+            _fromDB: true,
+            userID: authorID,
+            username: null,
+            globalName: null,
+            nick: null,
+            avatarHash: null,
+            avatarURL: null,
+            accountCreatedAt: snowflakeToDate(authorID),
+            joinedAt: null,
+            inviteCode: null,
+            status: 'banned',
+            statusAt: null,
+            moderationReason: null
+          })
+    }
+  }
+  const crossFormerProfiles = [...crossByUser.values()]
   const formerProfiles = [...localFormerProfiles, ...crossFormerProfiles]
 
-  // Load historical messages (including mod-deleted & self-deleted snapshots) for up to 25 recent
-  // local offenders and 25 cross-guild DB banned accounts so disguised alts with 0 name/avatar match
-  // are caught too.
+  // Load historical messages (including mod-deleted & self-deleted snapshots) for recent local
+  // offenders and REST/Audit-discovered cross-guild banned accounts not already covered by batch load.
   for (const former of localFormerProfiles.slice(0, 25)) {
     if (!msgsByUser.has(former.userID)) {
       const hist = await altDB.getMemberMessages(guild.id, former.userID, { limit: 40 }).catch(() => [])
       if (hist.length) msgsByUser.set(former.userID, hist)
     }
   }
-  for (const former of crossFormerProfiles.filter(p => p._fromDB && p.guildID).slice(0, 25)) {
-    if (!msgsByUser.has(former.userID)) {
-      const hist = await altDB.getMemberMessages(former.guildID, former.userID, { limit: 40 }).catch(() => [])
-      if (hist.length) msgsByUser.set(former.userID, hist)
-    }
+  const missingCrossFormer = crossFormerProfiles
+    .filter(p => p.guildID && !msgsByUser.has(p.userID))
+    .sort((a, b) => (b.statusAt ? new Date(b.statusAt).getTime() : 0) - (a.statusAt ? new Date(a.statusAt).getTime() : 0))
+    .slice(0, 20)
+  for (const former of missingCrossFormer) {
+    const hist = await altDB.getMemberMessages(former.guildID, former.userID, { limit: 40 }).catch(() => [])
+    if (hist.length) msgsByUser.set(former.userID, hist)
   }
 
   const seenPairs = new Set()
@@ -3408,11 +3635,81 @@ async function scanServer (guild, { scope = 'all', limit = 5, aiVerifyTop = 2, m
     }
   }
 
-  // 1. BAN/kick/offender/leave evasion (local + cross-server banned accounts)
+  // 1. BAN/kick/offender/leave evasion (local + cross-server banned accounts) via O(A + F)
+  //    inverted prefilter index over ALL active members (so large servers never drop matches > 200).
   if (scope === 'all' || scope === 'ban_evasion') {
-    const activeSlice = activeProfiles.slice(0, 200)
-    for (const active of activeSlice) {
-      for (const former of formerProfiles) {
+    const formerByAvatar = new Map()
+    const formerByInvite = new Map()
+    const formerByExactName = new Map()
+    const formerByBigram = new Map()
+    const formerWithMsgs = []
+
+    const addBucket = (map, key, val) => {
+      if (!key) return
+      let arr = map.get(key)
+      if (!arr) {
+        arr = []
+        map.set(key, arr)
+      }
+      arr.push(val)
+    }
+
+    const nameIndexKeys = profile => {
+      const exact = new Set()
+      const bgs = new Set()
+      for (const rawName of profileNames(profile)) {
+        const norm = normalizeName(rawName)
+        if (norm.cleaned.length >= 2) exact.add(norm.cleaned)
+        if (norm.stem.length >= 2) exact.add(norm.stem)
+        const src = norm.stem.length >= 2 ? norm.stem : norm.cleaned
+        for (let i = 0; i < src.length - 1 && bgs.size < 16; i++) {
+          bgs.add(src.slice(i, i + 2))
+        }
+      }
+      return { exact, bgs }
+    }
+
+    for (const former of formerProfiles) {
+      if (former.avatarHash) addBucket(formerByAvatar, former.avatarHash, former)
+      if (!former.crossGuild && former.inviteCode) addBucket(formerByInvite, former.inviteCode, former)
+      const { exact, bgs } = nameIndexKeys(former)
+      for (const k of exact) addBucket(formerByExactName, k, former)
+      for (const bg of bgs) addBucket(formerByBigram, bg, former)
+      if ((msgsByUser.get(former.userID)?.length || 0) >= 1) formerWithMsgs.push(former)
+    }
+
+    for (const active of activeProfiles) {
+      if (active.avatarHash) {
+        const hits = formerByAvatar.get(active.avatarHash)
+        if (hits) for (const former of hits) evalPair(active, former)
+      }
+      if (active.inviteCode) {
+        const hits = formerByInvite.get(active.inviteCode)
+        if (hits) for (const former of hits) evalPair(active, former)
+      }
+      const { exact, bgs } = nameIndexKeys(active)
+      for (const k of exact) {
+        const hits = formerByExactName.get(k)
+        if (hits) for (const former of hits) evalPair(active, former)
+      }
+      for (const bg of bgs) {
+        const hits = formerByBigram.get(bg)
+        if (hits && hits.length <= 150) {
+          for (const former of hits) evalPair(active, former)
+        }
+      }
+      if ((msgsByUser.get(active.userID)?.length || 0) >= 1) {
+        for (const former of formerWithMsgs) evalPair(active, former)
+      }
+    }
+
+    // Also compare newest 200 active members against local formers for timing/age-only evasion
+    const recentActive = activeProfiles
+      .slice()
+      .sort((a, b) => (b.joinedAt ? new Date(b.joinedAt).getTime() : 0) - (a.joinedAt ? new Date(a.joinedAt).getTime() : 0))
+      .slice(0, 200)
+    for (const active of recentActive) {
+      for (const former of localFormerProfiles) {
         evalPair(active, former)
       }
     }
@@ -3517,6 +3814,7 @@ module.exports = {
   offenderRoleIds,
   hasOffenderRole,
   joinAiThreshold,
+  crossGuildJoinAiThreshold,
   messageAiThreshold,
   maxDailyAutoAi,
   consumeAutoAiBudget,
@@ -3527,6 +3825,8 @@ module.exports = {
   snowflakeToDate,
   profileFromUser,
   profileFromMember,
+  fetchRestUserProfile,
+  enrichProfileFromRest,
   normalizeName,
   nameSimilarity,
   extractStylometry,

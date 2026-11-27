@@ -1070,6 +1070,31 @@ describe('stores', { skip: !database.available && 'needs PGHOST' }, () => {
       const recentMap = await altDB.getRecentAuthorsMessages('g_alt', 'u_suspect')
       assert.ok(recentMap.get('u_banned')?.some(m => m.deleted && m.content === 'それマジ草なんだが'))
 
+      // syncGuildBannedProfiles batch-upserts historical bans, never downgrades rejoined active members,
+      // and reconciles explicit unbans + authoritative ban lists
+      const syncRes = await altDB.syncGuildBannedProfiles('g_alt', [
+        { userID: 'u_banned', username: 'troll_main', globalName: 'トロール改', avatarHash: 'hash_abc', moderationReason: '荒らし' },
+        { userID: 'u_synced_zero_msg', username: 'silent_raider', globalName: '無言荒らし', statusAt: new Date(banTime.getTime() + 60 * 1000), moderationReason: 'スパム' },
+        // Old audit-log ban predating u_suspect's joinedAt -> must NOT overwrite active u_suspect
+        { userID: 'u_suspect', username: 'troll_sub2', statusAt: new Date(banTime.getTime() - 86400 * 1000), moderationReason: '過去の誤BAN' }
+      ])
+      assert.equal(syncRes.upserted, 3)
+      assert.equal((await altDB.getMemberProfile('g_alt', 'u_suspect')).status, 'active', 'rejoined active member stays active')
+      assert.equal((await altDB.getMemberProfile('g_alt', 'u_synced_zero_msg')).status, 'banned')
+
+      // getOtherGuildBannedMessages loads only banned authors who actually have stored/deleted messages
+      const xMsgs = await altDB.getOtherGuildBannedMessages('g_no_offender', 'u_suspect')
+      assert.equal(xMsgs.has('u_synced_zero_msg'), false, '0-message banned user does not occupy a slot')
+      assert.ok(xMsgs.get('u_banned')?.some(m => m.deleted && m.deletedBy === 'moderator' && m.content === 'それマジ草なんだが'))
+      assert.ok(xMsgs.get('u_banned')?.some(m => !m.deleted && m.content === '今日も寝不足で草'))
+
+      // Explicit unban newer than ban timestamp clears banned status
+      const unbanRes = await altDB.syncGuildBannedProfiles('g_alt', [], {
+        unbanned: [{ userID: 'u_synced_zero_msg', at: new Date(banTime.getTime() + 5 * 60 * 1000) }]
+      })
+      assert.equal(unbanRes.unbanned, 1)
+      assert.equal((await altDB.getMemberProfile('g_alt', 'u_synced_zero_msg')).status, 'left')
+
       assert.equal(await altDB.hasRecentAlert('g_alt', 'u_suspect', 'u_banned', 24), false)
       const recorded = await altDB.recordAlert('g_alt', {
         suspectUserID: 'u_suspect',

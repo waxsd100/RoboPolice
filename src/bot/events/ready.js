@@ -50,6 +50,8 @@ module.exports = {
     youtubeSync.startAutoSync()
     // ...and follows their streams, for those that turned stream events on.
     liveWatcher.startWatcher()
+    // Every worker syncs its hosted servers' BAN lists / Audit Log bans into Postgres for cross-server checks.
+    require('../modules/crossServerBan').startBanSync()
     setInterval(() => {
       if (global.bot.shards.filter(shard => shard.latency === Infinity && shard.status === 'disconnected').length !== 0) {
         failedHealthCheckCount++

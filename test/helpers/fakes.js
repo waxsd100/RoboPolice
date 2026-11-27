@@ -1048,11 +1048,76 @@ function installAltDetectionStore ({ enabled = {}, profiles = [], messages = [],
     }
     return grouped
   }
-  store.getOtherGuildBannedProfiles = async (excludeGuildID = '', { limit = 150 } = {}) => [...state.profiles.values()]
+  store.getOtherGuildBannedProfiles = async (excludeGuildID = '', { limit = 1000 } = {}) => [...state.profiles.values()]
     .filter(p => p.guildID !== excludeGuildID && p.status === 'banned')
     .sort((a, b) => (b.statusAt ? new Date(b.statusAt).getTime() : 0) - (a.statusAt ? new Date(a.statusAt).getTime() : 0))
     .slice(0, limit)
     .map(p => ({ ...p, guildName: p.guildName || null, crossGuild: true }))
+  store.syncGuildBannedProfiles = async (guildID, profiles = [], { unbanned = [], authoritative = false } = {}) => {
+    if (!guildID) return { upserted: 0, unbanned: 0 }
+    const activeBanIds = new Set()
+    let upserted = 0
+    for (const p of Array.isArray(profiles) ? profiles : []) {
+      if (!p?.userID) continue
+      const uid = String(p.userID)
+      activeBanIds.add(uid)
+      const key = `${guildID}:${uid}`
+      const prev = state.profiles.get(key)
+      const incomingAt = p.statusAt ? new Date(p.statusAt) : null
+      const keepActive = Boolean(
+        prev?.status === 'active' &&
+        prev.joinedAt &&
+        incomingAt &&
+        new Date(prev.joinedAt).getTime() > incomingAt.getTime()
+      )
+      state.profiles.set(key, {
+        ...(prev || {}),
+        guildID,
+        guildName: p.guildName ?? prev?.guildName ?? null,
+        userID: uid,
+        username: p.username ?? prev?.username ?? null,
+        globalName: p.globalName ?? prev?.globalName ?? null,
+        nick: prev?.nick ?? null,
+        avatarHash: p.avatarHash ?? prev?.avatarHash ?? null,
+        avatarURL: p.avatarURL ?? prev?.avatarURL ?? null,
+        accountCreatedAt: p.accountCreatedAt ? new Date(p.accountCreatedAt) : (prev?.accountCreatedAt || null),
+        joinedAt: prev?.joinedAt || null,
+        inviteCode: prev?.inviteCode ?? null,
+        status: keepActive ? prev.status : 'banned',
+        statusAt: incomingAt || prev?.statusAt || null,
+        moderationReason: p.moderationReason ?? prev?.moderationReason ?? null,
+        updatedAt: new Date()
+      })
+      upserted++
+    }
+    let unbannedCount = 0
+    for (const u of Array.isArray(unbanned) ? unbanned : []) {
+      const uid = typeof u === 'string' ? u : u?.userID
+      if (!uid || activeBanIds.has(String(uid))) continue
+      const key = `${guildID}:${uid}`
+      const prev = state.profiles.get(key)
+      if (!prev || prev.status !== 'banned') continue
+      const unbanAt = typeof u === 'object' && u?.at ? new Date(u.at) : null
+      if (unbanAt && prev.statusAt && new Date(prev.statusAt).getTime() >= unbanAt.getTime()) continue
+      prev.status = 'left'
+      prev.statusAt = unbanAt || new Date()
+      prev.moderationReason = prev.moderationReason || 'BAN解除（自動同期）'
+      prev.updatedAt = new Date()
+      unbannedCount++
+    }
+    if (authoritative) {
+      for (const p of state.profiles.values()) {
+        if (p.guildID === guildID && p.status === 'banned' && !activeBanIds.has(String(p.userID))) {
+          p.status = 'left'
+          p.statusAt = new Date()
+          p.moderationReason = p.moderationReason || 'BAN解除（自動同期）'
+          p.updatedAt = new Date()
+          unbannedCount++
+        }
+      }
+    }
+    return { upserted, unbanned: unbannedCount }
+  }
   store.recordMessageSnapshot = async (guildID, {
     messageID,
     authorID,
@@ -1170,6 +1235,23 @@ function installAltDetectionStore ({ enabled = {}, profiles = [], messages = [],
       if (list.length < 3 && !list.some(m => m.deleted)) continue
       grouped.set(authorID, list.sort((a, b) => new Date(b.ts) - new Date(a.ts)).slice(0, perAuthor))
       if (grouped.size >= authorLimit) break
+    }
+    return grouped
+  }
+  store.getOtherGuildBannedMessages = async (excludeGuildID = '', excludeUserID = '', { authorLimit = 40, perAuthor = 30, includeDeleted = true } = {}) => {
+    const banned = [...state.profiles.values()]
+      .filter(p => p.guildID !== excludeGuildID && p.userID !== excludeUserID && p.status === 'banned')
+      .sort((a, b) => (b.statusAt ? new Date(b.statusAt).getTime() : 0) - (a.statusAt ? new Date(a.statusAt).getTime() : 0))
+    const grouped = new Map()
+    for (const p of banned) {
+      if (grouped.size >= authorLimit) break
+      const msgs = combinedForGuild(p.guildID, includeDeleted)
+        .filter(m => m.authorID === p.userID)
+        .sort((a, b) => new Date(b.ts) - new Date(a.ts))
+        .slice(0, perAuthor)
+      if (!msgs.length) continue
+      const prev = grouped.get(p.userID) || []
+      grouped.set(p.userID, [...prev, ...msgs].sort((a, b) => new Date(b.ts) - new Date(a.ts)).slice(0, perAuthor))
     }
     return grouped
   }
