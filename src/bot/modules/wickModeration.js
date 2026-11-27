@@ -453,7 +453,7 @@ async function onWickMessage (message) {
     const nextStatus = statusMap[parsed.action]
     try {
       const enabled = await altDB.isAltDetectionEnabled(guild.id)
-      if (enabled) {
+      if (enabled || nextStatus === 'banned') {
         const existing = await altDB.getMemberProfile(guild.id, parsed.targetUserID)
         // Do not downgrade an existing banned/kicked status to restricted
         const rank = { active: 0, left: 1, restricted: 2, kicked: 3, banned: 4 }
@@ -768,7 +768,7 @@ async function buildModerationDossier (guild, who) {
     altDB.getMemberMessages(guild.id, userID, { limit: 25, includeDeleted: true }).catch(() => []),
     altDB.getRecentAlerts(guild.id, { limit: 30 }).catch(() => []),
     crossServerBan.findOtherGuildBans(userID, guild.id, { includeLiveCheck: true }).catch(() => []),
-    altDetector.findCrossGuildSimilarBans(guild, userID, { minScore: 35, limit: 3 }).catch(() => [])
+    altDetector.findCrossGuildSimilarBans(guild, userID, { minScore: 30, limit: 3 }).catch(() => [])
   ])
 
   const relatedAlerts = (recentAlerts || []).filter(a => a.suspectUserID === userID || a.candidateUserID === userID).slice(0, 5)
@@ -809,7 +809,7 @@ async function buildModerationDossier (guild, who) {
   if (otherGuildBans.length > 0) {
     for (const b of otherGuildBans.slice(0, 10)) {
       const label = b.guildName && b.guildName !== b.guildID ? `${b.guildName} (${b.guildID})` : b.guildID
-      const src = b.source === 'live' ? 'リアルタイム確認' : 'BOT記録'
+      const src = b.source === 'live' ? 'リアルタイム確認' : (b.source === 'audit_log' ? '監査ログ確認' : 'BOT記録')
       lines.push(`- 🚨 ${label} [${src}]${b.bannedAt ? ` / ${formatJstDate(b.bannedAt)}` : ''} / 理由: ${b.reason || '記載なし'}`)
     }
   } else {

@@ -185,7 +185,7 @@ async function getCrossGuildBansForUsers (userIDs, excludeGuildID = '') {
   return grouped
 }
 
-async function getOtherGuildBannedProfiles (excludeGuildID = '', { limit = 150 } = {}) {
+async function getOtherGuildBannedProfiles (excludeGuildID = '', { limit = 1000 } = {}) {
   const { rows } = await pool.query(
     `SELECT m.*, g.name AS guild_name
      FROM member_activity_profiles m
@@ -200,6 +200,134 @@ async function getOtherGuildBannedProfiles (excludeGuildID = '', { limit = 150 }
     guildName: r.guild_name || null,
     crossGuild: true
   }))
+}
+
+// Batch-syncs banned user profiles discovered from Discord REST (/bans and/or Audit Log
+// action_type=22/23) into member_activity_profiles so every shard worker and pgvector search
+// shares historical and recent cross-server BAN records.
+async function syncGuildBannedProfiles (guildID, profiles = [], { unbanned = [], authoritative = false } = {}) {
+  if (!guildID) return { upserted: 0, unbanned: 0 }
+  const deduped = new Map()
+  for (const p of Array.isArray(profiles) ? profiles : []) {
+    if (!p?.userID) continue
+    deduped.set(String(p.userID), p)
+  }
+  const cleanProfiles = [...deduped.values()]
+  const cleanUnbanned = []
+  const seenUnbanned = new Set()
+  for (const u of Array.isArray(unbanned) ? unbanned : []) {
+    const uid = typeof u === 'string' ? u : u?.userID
+    if (!uid || deduped.has(String(uid)) || seenUnbanned.has(String(uid))) continue
+    seenUnbanned.add(String(uid))
+    const atRaw = typeof u === 'object' && u?.at ? new Date(u.at) : null
+    cleanUnbanned.push({
+      userID: String(uid),
+      at: atRaw && !Number.isNaN(atRaw.getTime()) ? atRaw : null
+    })
+  }
+
+  if (cleanProfiles.length === 0 && cleanUnbanned.length === 0 && !authoritative) {
+    return { upserted: 0, unbanned: 0 }
+  }
+
+  await ensureGuild(guildID)
+
+  let upserted = 0
+  const CHUNK_SIZE = 200
+  for (let i = 0; i < cleanProfiles.length; i += CHUNK_SIZE) {
+    const chunk = cleanProfiles.slice(i, i + CHUNK_SIZE)
+    const userIds = chunk.map(p => String(p.userID))
+    const usernames = chunk.map(p => p.username ?? null)
+    const globalNames = chunk.map(p => p.globalName ?? null)
+    const avatarHashes = chunk.map(p => p.avatarHash ?? null)
+    const avatarUrls = chunk.map(p => p.avatarURL ?? null)
+    const createdAts = chunk.map(p => (p.accountCreatedAt ? new Date(p.accountCreatedAt) : null))
+    const statusAts = chunk.map(p => (p.statusAt ? new Date(p.statusAt) : null))
+    const reasons = chunk.map(p => p.moderationReason ?? null)
+
+    const { rowCount } = await pool.query(
+      `INSERT INTO member_activity_profiles
+         (guild_id, user_id, username, global_name, avatar_hash, avatar_url, account_created_at, status, status_at, moderation_reason, updated_at)
+       SELECT $1, u.user_id, u.username, u.global_name, u.avatar_hash, u.avatar_url, u.account_created_at, 'banned', u.status_at, u.moderation_reason, now()
+       FROM UNNEST(
+         $2::text[], $3::text[], $4::text[], $5::text[], $6::text[], $7::timestamptz[], $8::timestamptz[], $9::text[]
+       ) AS u(user_id, username, global_name, avatar_hash, avatar_url, account_created_at, status_at, moderation_reason)
+       ON CONFLICT (guild_id, user_id) DO UPDATE SET
+         username = COALESCE(EXCLUDED.username, member_activity_profiles.username),
+         global_name = COALESCE(EXCLUDED.global_name, member_activity_profiles.global_name),
+         avatar_hash = COALESCE(EXCLUDED.avatar_hash, member_activity_profiles.avatar_hash),
+         avatar_url = COALESCE(EXCLUDED.avatar_url, member_activity_profiles.avatar_url),
+         account_created_at = COALESCE(EXCLUDED.account_created_at, member_activity_profiles.account_created_at),
+         status = CASE
+           WHEN member_activity_profiles.status = 'active'
+                AND member_activity_profiles.joined_at IS NOT NULL
+                AND EXCLUDED.status_at IS NOT NULL
+                AND member_activity_profiles.joined_at > EXCLUDED.status_at
+           THEN member_activity_profiles.status
+           ELSE 'banned'
+         END,
+         status_at = COALESCE(EXCLUDED.status_at, member_activity_profiles.status_at),
+         moderation_reason = COALESCE(EXCLUDED.moderation_reason, member_activity_profiles.moderation_reason),
+         updated_at = now()`,
+      [guildID, userIds, usernames, globalNames, avatarHashes, avatarUrls, createdAts, statusAts, reasons]
+    )
+    upserted += rowCount || 0
+  }
+
+  let unbannedCount = 0
+  if (cleanUnbanned.length > 0) {
+    const uids = cleanUnbanned.map(u => u.userID)
+    const ats = cleanUnbanned.map(u => u.at)
+    const { rowCount } = await pool.query(
+      `UPDATE member_activity_profiles m
+       SET status = 'left',
+           status_at = COALESCE(u.unban_at, now()),
+           moderation_reason = COALESCE(m.moderation_reason, 'BAN解除（自動同期）'),
+           updated_at = now()
+       FROM UNNEST($2::text[], $3::timestamptz[]) AS u(user_id, unban_at)
+       WHERE m.guild_id = $1
+         AND m.user_id = u.user_id
+         AND m.status = 'banned'
+         AND (u.unban_at IS NULL OR m.status_at IS NULL OR m.status_at < u.unban_at)`,
+      [guildID, uids, ats]
+    )
+    unbannedCount += rowCount || 0
+  }
+
+  if (authoritative) {
+    const activeBanIds = cleanProfiles.map(p => String(p.userID))
+    const { rowCount } = activeBanIds.length > 0
+      ? await pool.query(
+        `UPDATE member_activity_profiles
+         SET status = 'left',
+             status_at = now(),
+             moderation_reason = COALESCE(moderation_reason, 'BAN解除（自動同期）'),
+             updated_at = now()
+         WHERE guild_id = $1
+           AND status = 'banned'
+           AND NOT (user_id = ANY($2::text[]))`,
+        [guildID, activeBanIds]
+      )
+      : await pool.query(
+        `UPDATE member_activity_profiles
+         SET status = 'left',
+             status_at = now(),
+             moderation_reason = COALESCE(moderation_reason, 'BAN解除（自動同期）'),
+             updated_at = now()
+         WHERE guild_id = $1
+           AND status = 'banned'`,
+        [guildID]
+      )
+    unbannedCount += rowCount || 0
+  }
+
+  if (upserted > 0 || unbannedCount > 0) {
+    for (const key of recentOffenderCache.keys()) {
+      if (key.startsWith(`${guildID}:`) || key.endsWith(':x')) recentOffenderCache.delete(key)
+    }
+  }
+
+  return { upserted, unbanned: unbannedCount }
 }
 
 async function recordMessageSnapshot (guildID, {
@@ -408,6 +536,76 @@ async function getRecentAuthorsMessages (guildID, excludeUserID, { authorLimit =
   return grouped
 }
 
+// Loads stored & deleted messages in a single query ONLY for banned users in OTHER servers who
+// actually have messages/snapshots in Postgres (avoids wasting slots on 0-message spammers).
+async function getOtherGuildBannedMessages (excludeGuildID = '', excludeUserID = '', { authorLimit = 40, perAuthor = 30, includeDeleted = true } = {}) {
+  const { rows } = await pool.query(
+    `WITH banned_profiles AS (
+       SELECT guild_id, user_id, COALESCE(status_at, updated_at) AS ref_ts
+       FROM member_activity_profiles
+       WHERE guild_id <> $1 AND user_id <> $2 AND status = 'banned'
+       ORDER BY COALESCE(status_at, updated_at) DESC
+       LIMIT 500
+     ),
+     active_banned AS (
+       SELECT b.guild_id, b.user_id, b.ref_ts
+       FROM banned_profiles b
+       WHERE EXISTS (
+         SELECT 1 FROM messages m
+         WHERE m.guild_id = b.guild_id AND m.author_id = b.user_id AND m.content IS NOT NULL AND m.content <> ''
+       ) OR (
+         $5::boolean AND EXISTS (
+           SELECT 1 FROM alt_message_snapshots s
+           WHERE s.guild_id = b.guild_id AND s.author_id = b.user_id AND s.content IS NOT NULL AND s.content <> ''
+         )
+       )
+       ORDER BY b.ref_ts DESC
+       LIMIT $3
+     )
+     SELECT ab.guild_id, l.id, l.author_id, l.channel_id, l.content, l.ts, l.event_type, l.deleted_by, l.moderator_id, l.event_ts
+     FROM active_banned ab
+     JOIN LATERAL (
+       SELECT id, author_id, channel_id, content, ts, event_type, deleted_by, moderator_id, event_ts
+       FROM (
+         SELECT id, author_id, channel_id, content, ts, NULL::text AS event_type, NULL::text AS deleted_by, NULL::text AS moderator_id, NULL::timestamptz AS event_ts
+         FROM messages
+         WHERE guild_id = ab.guild_id AND author_id = ab.user_id AND content IS NOT NULL AND content <> ''
+         UNION ALL
+         SELECT message_id AS id, author_id, channel_id, content, COALESCE(original_ts, event_ts) AS ts, event_type, deleted_by, moderator_id, event_ts
+         FROM alt_message_snapshots
+         WHERE $5::boolean AND guild_id = ab.guild_id AND author_id = ab.user_id AND content IS NOT NULL AND content <> ''
+       ) combined
+       ORDER BY ts DESC
+       LIMIT $4
+     ) l ON true
+     ORDER BY ab.user_id, l.ts DESC`,
+    [excludeGuildID || '', excludeUserID || '', authorLimit, perAuthor, Boolean(includeDeleted)]
+  )
+  const grouped = new Map()
+  for (const r of rows) {
+    const content = fromStoredContent(r.content)
+    if (!content) continue
+    if (!grouped.has(r.author_id)) grouped.set(r.author_id, [])
+    const list = grouped.get(r.author_id)
+    if (list.length >= perAuthor) continue
+    list.push({
+      id: r.event_type ? `${r.id}:${r.event_type}` : r.id,
+      messageID: r.id,
+      guildID: r.guild_id,
+      authorID: r.author_id,
+      channelID: r.channel_id,
+      content,
+      ts: r.ts ? new Date(r.ts) : new Date(0),
+      deleted: r.event_type === 'deleted',
+      deletedBy: r.event_type === 'deleted' ? (r.deleted_by || 'unknown') : null,
+      moderatorID: r.moderator_id || null,
+      editedBefore: r.event_type === 'edited',
+      eventTs: r.event_ts ? new Date(r.event_ts) : null
+    })
+  }
+  return grouped
+}
+
 function parseVectorText (text) {
   if (!text || typeof text !== 'string') return null
   const trimmed = text.trim()
@@ -488,7 +686,7 @@ async function findSimilarBannedAuthorsAcrossGuilds (excludeGuildID, excludeUser
          FROM member_activity_profiles
          WHERE guild_id <> $1 AND user_id <> $2 AND status = 'banned'
          ORDER BY COALESCE(status_at, updated_at) DESC
-         LIMIT 150
+         LIMIT 500
        ),
        centroids AS (
          SELECT b.guild_id,
@@ -635,11 +833,13 @@ module.exports = {
   getCrossGuildBans,
   getCrossGuildBansForUsers,
   getOtherGuildBannedProfiles,
+  syncGuildBannedProfiles,
   recordMessageSnapshot,
   updateSnapshotDeletionActor,
   snapshotMessagesBeforeDelete,
   getMemberMessages,
   getRecentAuthorsMessages,
+  getOtherGuildBannedMessages,
   getAuthorEmbeddingCentroid,
   findSimilarAuthorsByEmbedding,
   findSimilarBannedAuthorsAcrossGuilds,

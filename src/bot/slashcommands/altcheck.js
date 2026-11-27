@@ -193,6 +193,10 @@ async function handleScan (interaction, guild, sub) {
       }
     : null
 
+  const crossPart = res.scannedCrossGuildBanned > 0
+    ? (lang === 'en' ? ` (incl. **${res.scannedCrossGuildBanned}** cross-server banned)` : `（うち他鯖BAN **${res.scannedCrossGuildBanned} 件**）`)
+    : ''
+
   if (!res.pairs.length) {
     const fields = [{ name: lang === 'en' ? 'Scope' : 'スキャン対象', value: scopeLabel }]
     if (crossBanField) fields.push(crossBanField)
@@ -200,8 +204,8 @@ async function handleScan (interaction, guild, sub) {
       title: lang === 'en' ? '🔎 Server Alt-Account Scan' : '🔎 サーバー内サブ垢スキャン結果',
       color: crossBanField ? EMBED_COLORS.RED : EMBED_COLORS.GREEN,
       description: lang === 'en'
-        ? `Scanned **${res.scannedProfiles}** profiles (${res.scannedActive} active, ${res.scannedFormer} former/restricted) and **${res.scannedActivePosters}** posters${chanPart}.\n${crossBanField ? 'No same-server alt pairs exceeded the threshold, **but members with BAN records in other servers were found**.' : 'No suspicious alt-account pairs exceeded the threshold.'}`
-        : `**${res.scannedProfiles} 件**のプロフィール（在籍 ${res.scannedActive} ／ BAN・キック・違反者・退出 ${res.scannedFormer}）および発言者 **${res.scannedActivePosters} 人**をスキャンしました${chanPart}。\n${crossBanField ? 'サブ垢候補ペアは見つかりませんでしたが、**他サーバーでBANされている在籍メンバーが検出されました。**' : 'しきい値を超えるサブ垢候補ペアは見つかりませんでした。'}`,
+        ? `Scanned **${res.scannedProfiles}** profiles (${res.scannedActive} active, ${res.scannedFormer} former/restricted${crossPart}) and **${res.scannedActivePosters}** posters${chanPart}.\n${crossBanField ? 'No same-server alt pairs exceeded the threshold, **but members with BAN records in other servers were found**.' : 'No suspicious alt-account pairs exceeded the threshold.'}`
+        : `**${res.scannedProfiles} 件**のプロフィール（在籍 ${res.scannedActive} ／ BAN・キック・違反者・退出 ${res.scannedFormer}${crossPart}）および発言者 **${res.scannedActivePosters} 人**をスキャンしました${chanPart}。\n${crossBanField ? 'サブ垢候補ペアは見つかりませんでしたが、**他サーバーでBANされている在籍メンバーが検出されました。**' : 'しきい値を超えるサブ垢候補ペアは見つかりませんでした。'}`,
       fields,
       footer: getEmbedFooter(global.bot.user),
       timestamp: new Date()
@@ -243,8 +247,8 @@ async function handleScan (interaction, guild, sub) {
     title: lang === 'en' ? '🔎 Server Alt-Account Scan' : '🔎 サーバー内サブ垢スキャン結果',
     color,
     description: lang === 'en'
-      ? `Scope: **${scopeLabel}**\nScanned **${res.scannedProfiles}** profiles & **${res.scannedActivePosters}** posters${chanPart}. Top ${Math.min(2, res.pairs.length)} suspicious pair(s) were precision-reviewed by AI.\nRun \`/altcheck compare\` for a full breakdown of any pair.`
-      : `対象: **${scopeLabel}**\n**${res.scannedProfiles} 件**のプロフィールと発言者 **${res.scannedActivePosters} 人**をスキャンし${chanPart}、上位候補を AI で精密判定しました。\n気になるペアは \`/altcheck compare\` で詳細比較できます（自動処罰は行いません）。`,
+      ? `Scope: **${scopeLabel}**\nScanned **${res.scannedProfiles}** profiles${crossPart} & **${res.scannedActivePosters}** posters${chanPart}. Top ${Math.min(2, res.pairs.length)} suspicious pair(s) were precision-reviewed by AI.\nRun \`/altcheck compare\` for a full breakdown of any pair.`
+      : `対象: **${scopeLabel}**\n**${res.scannedProfiles} 件**のプロフィール${crossPart}と発言者 **${res.scannedActivePosters} 人**をスキャンし${chanPart}、上位候補を AI で精密判定しました。\n気になるペアは \`/altcheck compare\` で詳細比較できます（自動処罰は行いません）。`,
     fields,
     footer: getEmbedFooter(global.bot.user),
     timestamp: new Date()
